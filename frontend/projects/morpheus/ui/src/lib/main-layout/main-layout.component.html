@@ -1,0 +1,18 @@
+<div class="layout-wrapper flex flex-column h-screen bg-gray-50 overflow-hidden">
+    <!-- Topbar (Fixed Header) -->
+    <ui-topbar [appName]="appName" class="w-full flex-shrink-0 z-5"></ui-topbar>
+
+    <div class="layout-container flex flex-grow-1 overflow-hidden relative">
+        <!-- Sidebar -->
+        <ui-sidebar 
+            [menuItems]="menuItems" 
+            [isCollapsed]="isSidebarCollapsed" 
+            class="flex-shrink-0 z-4 shadow-1">
+        </ui-sidebar>
+
+        <!-- Main Content (Router Outlet comes through content projection usually, but since this is a wrapper component, we project content here) -->
+        <div class="layout-main flex-grow-1 overflow-auto p-4 md:p-6 pb-8 border-round-tl-xl surface-ground shadow-inset-1">
+            <ng-content></ng-content>
+        </div>
+    </div>
+</div>

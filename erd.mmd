@@ -1,0 +1,29 @@
+erDiagram
+    %% CORE
+    categories ||--|{ categories : parent
+    categories ||--|{ products : classify
+    products ||--|{ product_variants : has
+    product_variants ||--|{ product_barcodes : identify
+    products ||--|{ batches : tract
+
+    %% PHYSICAL
+    facilities ||--|{ warehouses : contain
+    warehouses ||--|{ locations : contain
+    locations ||--|{ locations : parent
+
+    %% MOVES
+    stock_picking_types ||--|{ stock_pickings : differenciate
+    stock_pickings ||--|{ stock_moves : group
+    stock_moves }|--|| product_variants : move
+    stock_moves }|--|| locations : source
+    stock_moves }|--|| locations : dest
+    
+    stock_pickings {
+        string name
+        string origin
+        enum status
+    }
+    stock_moves {
+        decimal quantity
+        enum state
+    }

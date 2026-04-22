@@ -1,0 +1,370 @@
+{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "version": 1,
+  "cli": {
+    "packageManager": "npm"
+  },
+  "newProjectRoot": "projects",
+  "projects": {
+    "morpheus-wms": {
+      "projectType": "application",
+      "schematics": {
+        "@schematics/angular:class": {
+          "skipTests": true
+        },
+        "@schematics/angular:component": {
+          "skipTests": true
+        },
+        "@schematics/angular:directive": {
+          "skipTests": true
+        },
+        "@schematics/angular:guard": {
+          "skipTests": true
+        },
+        "@schematics/angular:interceptor": {
+          "skipTests": true
+        },
+        "@schematics/angular:pipe": {
+          "skipTests": true
+        },
+        "@schematics/angular:resolver": {
+          "skipTests": true
+        },
+        "@schematics/angular:service": {
+          "skipTests": true
+        }
+      },
+      "root": "projects/morpheus-wms",
+      "sourceRoot": "projects/morpheus-wms/src",
+      "prefix": "app",
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:application",
+          "options": {
+            "outputPath": "dist/morpheus-wms",
+            "index": "projects/morpheus-wms/src/index.html",
+            "browser": "projects/morpheus-wms/src/main.ts",
+            "polyfills": [
+              "zone.js"
+            ],
+            "tsConfig": "projects/morpheus-wms/tsconfig.app.json",
+            "assets": [
+              {
+                "glob": "**/*",
+                "input": "projects/morpheus-wms/public"
+              }
+            ],
+            "styles": [
+              "projects/morpheus-wms/src/styles.css"
+            ],
+            "scripts": []
+          },
+          "configurations": {
+            "production": {
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "500kB",
+                  "maximumError": "1MB"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "4kB",
+                  "maximumError": "8kB"
+                }
+              ],
+              "outputHashing": "all"
+            },
+            "development": {
+              "optimization": false,
+              "extractLicenses": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "serve": {
+          "builder": "@angular-devkit/build-angular:dev-server",
+          "configurations": {
+            "production": {
+              "buildTarget": "morpheus-wms:build:production"
+            },
+            "development": {
+              "buildTarget": "morpheus-wms:build:development"
+            }
+          },
+          "defaultConfiguration": "development"
+        },
+        "extract-i18n": {
+          "builder": "@angular-devkit/build-angular:extract-i18n"
+        },
+        "test": {
+          "builder": "@angular-devkit/build-angular:karma",
+          "options": {
+            "polyfills": [
+              "zone.js",
+              "zone.js/testing"
+            ],
+            "tsConfig": "projects/morpheus-wms/tsconfig.spec.json",
+            "assets": [
+              {
+                "glob": "**/*",
+                "input": "projects/morpheus-wms/public"
+              }
+            ],
+            "styles": [
+              "projects/morpheus-wms/src/styles.css"
+            ],
+            "scripts": []
+          }
+        }
+      }
+    },
+    "morpheus-admin": {
+      "projectType": "application",
+      "schematics": {
+        "@schematics/angular:class": {
+          "skipTests": true
+        },
+        "@schematics/angular:component": {
+          "skipTests": true
+        },
+        "@schematics/angular:directive": {
+          "skipTests": true
+        },
+        "@schematics/angular:guard": {
+          "skipTests": true
+        },
+        "@schematics/angular:interceptor": {
+          "skipTests": true
+        },
+        "@schematics/angular:pipe": {
+          "skipTests": true
+        },
+        "@schematics/angular:resolver": {
+          "skipTests": true
+        },
+        "@schematics/angular:service": {
+          "skipTests": true
+        }
+      },
+      "root": "projects/morpheus-admin",
+      "sourceRoot": "projects/morpheus-admin/src",
+      "prefix": "app",
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:application",
+          "options": {
+            "outputPath": "dist/morpheus-admin",
+            "index": "projects/morpheus-admin/src/index.html",
+            "browser": "projects/morpheus-admin/src/main.ts",
+            "polyfills": [
+              "zone.js"
+            ],
+            "tsConfig": "projects/morpheus-admin/tsconfig.app.json",
+            "assets": [
+              {
+                "glob": "**/*",
+                "input": "projects/morpheus-admin/public"
+              }
+            ],
+            "styles": [
+              "projects/morpheus-admin/src/styles.css"
+            ],
+            "scripts": []
+          },
+          "configurations": {
+            "production": {
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "500kB",
+                  "maximumError": "1MB"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "4kB",
+                  "maximumError": "8kB"
+                }
+              ],
+              "outputHashing": "all"
+            },
+            "development": {
+              "optimization": false,
+              "extractLicenses": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "serve": {
+          "builder": "@angular-devkit/build-angular:dev-server",
+          "configurations": {
+            "production": {
+              "buildTarget": "morpheus-admin:build:production"
+            },
+            "development": {
+              "buildTarget": "morpheus-admin:build:development"
+            }
+          },
+          "defaultConfiguration": "development"
+        },
+        "extract-i18n": {
+          "builder": "@angular-devkit/build-angular:extract-i18n"
+        },
+        "test": {
+          "builder": "@angular-devkit/build-angular:karma",
+          "options": {
+            "polyfills": [
+              "zone.js",
+              "zone.js/testing"
+            ],
+            "tsConfig": "projects/morpheus-admin/tsconfig.spec.json",
+            "assets": [
+              {
+                "glob": "**/*",
+                "input": "projects/morpheus-admin/public"
+              }
+            ],
+            "styles": [
+              "projects/morpheus-admin/src/styles.css"
+            ],
+            "scripts": []
+          }
+        }
+      }
+    },
+    "@morpheus/ui": {
+      "projectType": "library",
+      "root": "projects/morpheus/ui",
+      "sourceRoot": "projects/morpheus/ui/src",
+      "prefix": "lib",
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:ng-packagr",
+          "options": {
+            "project": "projects/morpheus/ui/ng-package.json"
+          },
+          "configurations": {
+            "production": {
+              "tsConfig": "projects/morpheus/ui/tsconfig.lib.prod.json"
+            },
+            "development": {
+              "tsConfig": "projects/morpheus/ui/tsconfig.lib.json"
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "test": {
+          "builder": "@angular-devkit/build-angular:karma",
+          "options": {
+            "tsConfig": "projects/morpheus/ui/tsconfig.spec.json",
+            "polyfills": [
+              "zone.js",
+              "zone.js/testing"
+            ]
+          }
+        }
+      }
+    },
+    "@morpheus/auth": {
+      "projectType": "library",
+      "root": "projects/morpheus/auth",
+      "sourceRoot": "projects/morpheus/auth/src",
+      "prefix": "lib",
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:ng-packagr",
+          "options": {
+            "project": "projects/morpheus/auth/ng-package.json"
+          },
+          "configurations": {
+            "production": {
+              "tsConfig": "projects/morpheus/auth/tsconfig.lib.prod.json"
+            },
+            "development": {
+              "tsConfig": "projects/morpheus/auth/tsconfig.lib.json"
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "test": {
+          "builder": "@angular-devkit/build-angular:karma",
+          "options": {
+            "tsConfig": "projects/morpheus/auth/tsconfig.spec.json",
+            "polyfills": [
+              "zone.js",
+              "zone.js/testing"
+            ]
+          }
+        }
+      }
+    },
+    "@morpheus/models": {
+      "projectType": "library",
+      "root": "projects/morpheus/models",
+      "sourceRoot": "projects/morpheus/models/src",
+      "prefix": "lib",
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:ng-packagr",
+          "options": {
+            "project": "projects/morpheus/models/ng-package.json"
+          },
+          "configurations": {
+            "production": {
+              "tsConfig": "projects/morpheus/models/tsconfig.lib.prod.json"
+            },
+            "development": {
+              "tsConfig": "projects/morpheus/models/tsconfig.lib.json"
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "test": {
+          "builder": "@angular-devkit/build-angular:karma",
+          "options": {
+            "tsConfig": "projects/morpheus/models/tsconfig.spec.json",
+            "polyfills": [
+              "zone.js",
+              "zone.js/testing"
+            ]
+          }
+        }
+      }
+    },
+    "@morpheus/core-services": {
+      "projectType": "library",
+      "root": "projects/morpheus/core-services",
+      "sourceRoot": "projects/morpheus/core-services/src",
+      "prefix": "lib",
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:ng-packagr",
+          "options": {
+            "project": "projects/morpheus/core-services/ng-package.json"
+          },
+          "configurations": {
+            "production": {
+              "tsConfig": "projects/morpheus/core-services/tsconfig.lib.prod.json"
+            },
+            "development": {
+              "tsConfig": "projects/morpheus/core-services/tsconfig.lib.json"
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "test": {
+          "builder": "@angular-devkit/build-angular:karma",
+          "options": {
+            "tsConfig": "projects/morpheus/core-services/tsconfig.spec.json",
+            "polyfills": [
+              "zone.js",
+              "zone.js/testing"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

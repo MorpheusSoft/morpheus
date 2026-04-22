@@ -1,0 +1,32 @@
+# Entornos Virtuales
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Node / Frontend
+node_modules/
+dist/
+.next/
+build/
+.turbo/
+
+# Archivos de SO
+.DS_Store
+Thumbs.db
+
+# Variables de Entorno (¡Importante!)
+.env
+.env.local
+
+# Bases de datos locles
+*.sqlite3
+*.db
+
+# Logs
+*.log
+
+# Cargas masivas grandes (Opcional, pero recomendado no subir CSVs gigantes al repo de código vital)
+data_import/*.csv
+data_import/*.xlsx

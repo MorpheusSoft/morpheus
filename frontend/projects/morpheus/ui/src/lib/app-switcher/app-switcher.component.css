@@ -1,0 +1,43 @@
+.app-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+    padding: 0.5rem;
+    width: 280px;
+}
+
+.app-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem 0.5rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    text-align: center;
+    border: 1px solid transparent;
+}
+
+.app-item:hover {
+    background-color: #f3f4f6;
+    border-color: #e5e7eb;
+}
+
+.app-icon {
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    background-color: white;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.app-name {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #374151;
+}

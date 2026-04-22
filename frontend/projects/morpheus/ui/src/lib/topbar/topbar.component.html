@@ -1,0 +1,32 @@
+<p-toolbar styleClass="bg-white border-0 border-b border-gray-200 shadow-sm py-2 px-4 sticky top-0 z-50">
+    <div class="p-toolbar-group-start flex align-items-center gap-3">
+        <div class="logo-container flex align-items-center gap-2 text-primary font-bold text-xl mr-4">
+            <i class="pi pi-box shadow-1 border-round p-1" style="font-size: 1.5rem"></i>
+            <span>{{ appName }}</span>
+        </div>
+        <ui-app-switcher></ui-app-switcher>
+    </div>
+
+    <div class="p-toolbar-group-center hidden md:flex">
+        <p-iconfield class="w-20rem">
+            <p-inputicon class="pi pi-search" />
+            <input pInputText placeholder="Search across all apps..." class="w-full border-round-3xl surface-100 border-none px-5 py-2" />
+        </p-iconfield>
+    </div>
+
+    <div class="p-toolbar-group-end flex align-items-center gap-3">
+        <p-button icon="pi pi-bell" [text]="true" [rounded]="true" severity="secondary">
+            <p-badge value="3" severity="danger" class="absolute top-0 right-0"></p-badge>
+        </p-button>
+        <p-button icon="pi pi-cog" [text]="true" [rounded]="true" severity="secondary"></p-button>
+        
+        <div class="flex align-items-center gap-2 cursor-pointer hover:surface-100 p-2 border-round transition-colors transition-duration-150">
+            <p-avatar image="https://primefaces.org/cdn/primeng/images/avatar/amyelsner.png" shape="circle"></p-avatar>
+            <div class="flex flex-column hidden lg:flex">
+                <span class="font-semibold text-sm">{{ userName }}</span>
+                <span class="text-xs text-500">Admin</span>
+            </div>
+            <i class="pi pi-chevron-down text-xs text-500 hidden lg:block"></i>
+        </div>
+    </div>
+</p-toolbar>

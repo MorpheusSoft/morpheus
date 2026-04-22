@@ -1,0 +1,23 @@
+from fastapi import APIRouter
+from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, orders, inventory_session, suppliers, buyers, mrp, purchase_orders, currencies, wms, jobs, dashboard
+
+api_router = APIRouter()
+api_router.include_router(login.router, tags=["login"])
+api_router.include_router(products.router, prefix="/products", tags=["products"])
+api_router.include_router(catalog.router, tags=["catalog"])
+api_router.include_router(stock.router, prefix="/stock", tags=["stock"])
+api_router.include_router(inventory.router, prefix="/inventory", tags=["inventory"])
+api_router.include_router(inventory_session.router, prefix="/inventory-session", tags=["inventory session"])
+api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
+api_router.include_router(utils.router, prefix="/utils", tags=["utils"])
+api_router.include_router(customers.router, prefix="/customers", tags=["customers"])
+api_router.include_router(inventory_bulk.router, prefix="/inventory-bulk", tags=["inventory bulk"])
+api_router.include_router(orders.router, prefix="/orders", tags=["orders"])
+api_router.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
+api_router.include_router(buyers.router, prefix="/buyers", tags=["buyers"])
+api_router.include_router(mrp.router, prefix="/mrp", tags=["mrp"])
+api_router.include_router(purchase_orders.router, prefix="/purchase-orders", tags=["purchase-orders"])
+api_router.include_router(currencies.router, prefix="/currencies", tags=["currencies"])
+api_router.include_router(wms.router, prefix="/wms", tags=["wms"])
+api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
+api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])

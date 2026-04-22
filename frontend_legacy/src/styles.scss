@@ -1,0 +1,20 @@
+/* Google Fonts - Plus Jakarta Sans */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+
+:root {
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background-color: var(--p-content-background);
+  color: var(--p-text-color);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}

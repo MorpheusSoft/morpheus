@@ -1,0 +1,5 @@
+/* Default styles for topbar component */
+:host {
+    display: block;
+    width: 100%;
+}

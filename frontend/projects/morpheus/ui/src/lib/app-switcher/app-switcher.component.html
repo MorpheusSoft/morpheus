@@ -1,0 +1,12 @@
+<p-button icon="pi pi-th-large" [text]="true" [rounded]="true" (onClick)="op.toggle($event)"></p-button>
+
+<p-overlayPanel #op>
+    <div class="app-grid">
+        <div *ngFor="let app of apps" class="app-item" (click)="navigateTo(app.url, $event)">
+            <div class="app-icon" [style.color]="app.color">
+                <i [class]="app.icon" style="font-size: 1.5rem"></i>
+            </div>
+            <span class="app-name">{{app.name}}</span>
+        </div>
+    </div>
+</p-overlayPanel>
