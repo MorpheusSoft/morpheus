@@ -82,20 +82,38 @@ def delete_variant(
     """
     return ProductService.delete_variant(db, variant_id)
 
-@router.get("/", response_model=List[schemas.Product])
+@router.get("/", response_model=schemas.ProductPaginated)
 def read_products(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
     limit: int = 100,
+    q: str = None
 ) -> Any:
     """
     Retrieve products.
     """
-    # Optimized query to join variants if needed, or lazy load
-    # For now simple query
     try:
-        products = db.query(Product).offset(skip).limit(limit).all()
-        return products
+        from sqlalchemy.orm import selectinload
+        from sqlalchemy import or_
+        
+        query = db.query(Product)
+        if q:
+            query = query.outerjoin(ProductVariant).filter(
+                or_(
+                    Product.name.ilike(f"%{q}%"),
+                    ProductVariant.sku.ilike(f"%{q}%")
+                )
+            )
+            
+        total = query.count()
+        
+        products = query.options(
+            selectinload(Product.variants).selectinload(ProductVariant.barcodes),
+            selectinload(Product.variants).selectinload(ProductVariant.facility_prices),
+            selectinload(Product.packagings)
+        ).offset(skip).limit(limit).all()
+        
+        return {"data": products, "total": total}
     except Exception as e:
         print(f"Error reading products: {e}")
         raise HTTPException(status_code=500, detail=f"Error reading products: {str(e)}")

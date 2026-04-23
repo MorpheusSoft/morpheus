@@ -72,7 +72,7 @@ class SupplierProductBase(BaseModel):
     supplier_sku: Optional[str] = None
     pack_id: Optional[int] = None
     pack_name: Optional[str] = None
-    currency_id: int
+    currency_id: Optional[int] = None
     replacement_cost: Optional[Decimal] = Field(default=Decimal('0.0'), max_digits=19, decimal_places=4)
     min_order_qty: Optional[Decimal] = Field(default=Decimal('1.0'), max_digits=19, decimal_places=4)
     is_active: Optional[bool] = True

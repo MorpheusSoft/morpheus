@@ -14,6 +14,8 @@ export default function FacilitiesPage() {
   const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [visible, setVisible] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  
   const { control, handleSubmit, reset } = useForm({
     defaultValues: { company_id: null, name: '', code: '', address: '', is_active: true }
   });
@@ -36,9 +38,38 @@ export default function FacilitiesPage() {
 
   useEffect(() => { loadData(); }, []);
 
+  const openNew = () => {
+      setEditingId(null);
+      reset({ company_id: null, name: '', code: '', address: '', is_active: true });
+      setVisible(true);
+  };
+
+  const openEdit = (rowData: any) => {
+      setEditingId(rowData.id);
+      reset({
+          company_id: rowData.company_id,
+          name: rowData.name,
+          code: rowData.code || '',
+          address: rowData.address || '',
+          is_active: rowData.is_active
+      });
+      setVisible(true);
+  };
+
   const onSubmit = async (form: any) => {
     try {
-      await CoreService.createFacility(form);
+      // Ensure company_id is present
+      if (!form.company_id) {
+          alert("Debe seleccionar una compañía");
+          return;
+      }
+      
+      if (editingId) {
+          await CoreService.updateFacility(editingId, form);
+      } else {
+          await CoreService.createFacility(form);
+      }
+      
       setVisible(false);
       reset();
       loadData();
@@ -52,6 +83,14 @@ export default function FacilitiesPage() {
       return comp ? (comp as any).name : '---';
   };
 
+  const actionBodyTemplate = (rowData: any) => {
+      return (
+          <div className="flex gap-2">
+              <Button icon="pi pi-pencil" rounded text severity="info" aria-label="Editar" onClick={() => openEdit(rowData)} />
+          </div>
+      );
+  };
+
   return (
     <div className="p-4 md:p-8 w-full max-w-6xl mx-auto">
       <div className="flex justify-between items-center mb-6">
@@ -59,7 +98,7 @@ export default function FacilitiesPage() {
            <h1 className="text-2xl font-extrabold text-slate-800">Sucursales y Localidades</h1>
            <p className="text-slate-500 text-sm">Centros de costo físicos, tiendas o sucursales</p>
          </div>
-         <Button label="Nueva Localidad" icon="pi pi-plus" onClick={() => setVisible(true)} className="!bg-teal-600 hover:!bg-teal-700 !border-none !rounded-xl !shadow-md" />
+         <Button label="Nueva Localidad" icon="pi pi-plus" onClick={openNew} className="!bg-teal-600 hover:!bg-teal-700 !border-none !rounded-xl !shadow-md" />
       </div>
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <DataTable value={data} loading={loading} emptyMessage={<p className="p-8 text-center text-slate-400">Sin datos registrados.</p>}>
@@ -68,10 +107,11 @@ export default function FacilitiesPage() {
           <Column field="code" header="CÓDIGO (COCO)" className="font-bold text-slate-500 px-4"></Column>
           <Column field="name" header="NOMBRE DE SUCURSAL" className="font-bold text-slate-800 px-4"></Column>
           <Column field="address" header="DIRECCIÓN FÍSICA" className="px-4 text-sm text-slate-500 truncate max-w-xs"></Column>
+          <Column body={actionBodyTemplate} exportable={false} style={{ minWidth: '4rem' }}></Column>
         </DataTable>
       </div>
 
-      <Dialog header="Registrar Sucursal Múltiple" visible={visible} style={{ width: '450px' }} onHide={() => setVisible(false)} pt={{ root: { className: '!rounded-2xl shadow-xl border border-slate-100' }}}>
+      <Dialog header={editingId ? "Editar Sucursal" : "Registrar Sucursal Múltiple"} visible={visible} style={{ width: '450px' }} onHide={() => setVisible(false)} pt={{ root: { className: '!rounded-2xl shadow-xl border border-slate-100' }}}>
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4 mt-2 p-2">
            <div>
              <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Compañía Operadora *</label>
@@ -99,7 +139,7 @@ export default function FacilitiesPage() {
                <InputText {...field} required autoComplete="off" className="w-full !rounded-xl border-slate-200 !py-3 !px-4" placeholder="" />
              )} />
            </div>
-           <Button type="submit" label="Crear Sucursal" icon="pi pi-check" className="mt-4 !rounded-xl !bg-teal-600 hover:!bg-teal-700 !border-none !py-3 font-bold" />
+           <Button type="submit" label={editingId ? "Guardar Cambios" : "Crear Sucursal"} icon="pi pi-check" className="mt-4 !rounded-xl !bg-teal-600 hover:!bg-teal-700 !border-none !py-3 font-bold" />
         </form>
       </Dialog>
     </div>

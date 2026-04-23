@@ -20,6 +20,16 @@ class InventoryLineBase(BaseModel):
 class InventoryLineCreate(InventoryLineBase):
     pass
 
+class InventoryLineBulkItem(BaseModel):
+    sku: str
+    location_code: str
+    counted_qty: float
+    notes: Optional[str] = None
+    cost: Optional[float] = None # Para carga inicial
+
+class InventoryLineBulkUpload(BaseModel):
+    lines: List[InventoryLineBulkItem]
+
 class InventoryLine(InventoryLineBase):
     id: int
     session_id: int

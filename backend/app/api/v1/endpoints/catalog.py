@@ -258,6 +258,31 @@ def create_facility(
     db.commit()
     db.refresh(db_obj)
     return db_obj
+
+@router.put("/facilities/{facility_id}", response_model=schemas.Facility)
+def update_facility(
+    *,
+    db: Session = Depends(deps.get_db),
+    facility_id: int,
+    facility_in: schemas.FacilityCreate,
+) -> Any:
+    """
+    Update a Facility.
+    """
+    facility = db.query(Facility).get(facility_id)
+    if not facility:
+        raise HTTPException(status_code=404, detail="Facility not found")
+        
+    facility.company_id = facility_in.company_id
+    facility.name = facility_in.name
+    facility.code = facility_in.code
+    facility.address = facility_in.address
+    facility.is_active = facility_in.is_active
+    
+    db.commit()
+    db.refresh(facility)
+    return facility
+
 # =================
 # TRIBUTES (TAXES)
 # =================

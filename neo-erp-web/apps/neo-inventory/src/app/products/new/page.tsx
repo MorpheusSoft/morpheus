@@ -275,8 +275,7 @@ function ProductFormContent() {
     });
 
     if (editId) {
-      ProductService.getProducts().then(list => {
-        const p = list.find((x: any) => x.id.toString() === editId);
+      ProductService.getProductById(editId).then(p => {
         if (p) {
           setValue('name', p.name);
           setValue('category_id', p.category_id);
@@ -386,7 +385,7 @@ function ProductFormContent() {
         if (suppData) {
             const variantsGrps = Array.from(new Set(suppData.map((s: any) => s.variant_id)));
             // To ensure deletions are synchronized as well, we fetch all native variants
-            const productMaster = await ProductService.getProducts().then(list => list.find((x: any) => x.id.toString() === editId));
+            const productMaster = await ProductService.getProductById(editId);
             const baseVariants = productMaster?.variants || [];
             const allVariantIds = Array.from(new Set([...variantsGrps, ...baseVariants.map((v: any) => v.id)]));
             

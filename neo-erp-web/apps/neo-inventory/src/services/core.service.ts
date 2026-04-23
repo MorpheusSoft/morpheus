@@ -25,4 +25,8 @@ export const CoreService = {
     const { data } = await api.post('/facilities/', payload);
     return data;
   },
+  updateFacility: async (id: number, payload: any) => {
+    const { data } = await api.put(`/facilities/${id}`, payload);
+    return data;
+  },
 };

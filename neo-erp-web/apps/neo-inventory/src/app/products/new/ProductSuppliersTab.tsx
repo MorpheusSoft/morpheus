@@ -30,7 +30,7 @@ const ProductSuppliersTab = forwardRef(({ productId }: { productId: number }, re
       try {
           const [pRes, sRes] = await Promise.all([
              axios.get(`http://localhost:8000/api/v1/products/${productId}`),
-             axios.get('http://localhost:8000/api/v1/suppliers/')
+             axios.get('http://localhost:8000/api/v1/suppliers/?limit=5000')
           ]);
           const pData = pRes.data;
           setAllSuppliers(sRes.data);

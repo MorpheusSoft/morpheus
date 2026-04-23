@@ -166,7 +166,7 @@ class ProductUpdate(ProductBase):
 
 class Product(ProductBase):
     id: int
-    category_id: int
+    category_id: Optional[int] = None
     has_variants: bool
     is_active: bool
     created_at: datetime
@@ -176,3 +176,7 @@ class Product(ProductBase):
 
     class Config:
         from_attributes = True
+
+class ProductPaginated(BaseModel):
+    data: List[Product]
+    total: int

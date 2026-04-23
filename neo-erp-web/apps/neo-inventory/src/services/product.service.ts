@@ -1,8 +1,10 @@
 import api from '@/lib/api';
 
 export const ProductService = {
-  getProducts: async () => {
-    const { data } = await api.get('/products/');
+  getProducts: async (skip: number = 0, limit: number = 10, q?: string) => {
+    const params = new URLSearchParams({ skip: skip.toString(), limit: limit.toString() });
+    if (q) params.append("q", q);
+    const { data } = await api.get(`/products/?${params.toString()}`);
     return data;
   },
   getFacilities: async () => {

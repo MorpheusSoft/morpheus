@@ -11,21 +11,47 @@ import { useRouter } from 'next/navigation';
 export default function ProductsCatalogPage() {
   const router = useRouter();
   const [products, setProducts] = useState([]);
+  const [totalRecords, setTotalRecords] = useState(0);
   const [loading, setLoading] = useState(true);
   const [globalFilterValue, setGlobalFilterValue] = useState('');
-  const [filters, setFilters] = useState({
-    global: { value: null, matchMode: FilterMatchMode.CONTAINS }
+  
+  const [lazyState, setLazyState] = useState({
+      first: 0,
+      rows: 10,
+      page: 0
   });
 
+  const [isMounted, setIsMounted] = useState(false);
+
   useEffect(() => {
-    fetchProducts();
+     setIsMounted(true);
+     if (typeof window !== 'undefined') {
+         const savedFilter = sessionStorage.getItem('dt-products-filter');
+         if (savedFilter) setGlobalFilterValue(savedFilter);
+         
+         const savedLazy = sessionStorage.getItem('dt-products-lazy');
+         if (savedLazy) setLazyState(JSON.parse(savedLazy));
+     }
   }, []);
 
-  const fetchProducts = async () => {
+  useEffect(() => {
+     if (isMounted && typeof window !== 'undefined') {
+         sessionStorage.setItem('dt-products-filter', globalFilterValue);
+     }
+  }, [globalFilterValue, isMounted]);
+
+  useEffect(() => {
+     if (isMounted && typeof window !== 'undefined') {
+         sessionStorage.setItem('dt-products-lazy', JSON.stringify(lazyState));
+     }
+  }, [lazyState, isMounted]);
+
+  const loadLazyData = async (first = lazyState.first, rows = lazyState.rows, filter = globalFilterValue) => {
     try {
       setLoading(true);
-      const data = await ProductService.getProducts();
-      setProducts(data);
+      const response = await ProductService.getProducts(first, rows, filter);
+      setProducts(response?.data || []);
+      setTotalRecords(response?.total || 0);
     } catch (err) {
       console.error(err);
     } finally {
@@ -33,12 +59,27 @@ export default function ProductsCatalogPage() {
     }
   };
 
+  useEffect(() => {
+    loadLazyData(lazyState.first, lazyState.rows, globalFilterValue);
+  }, [lazyState.first, lazyState.rows]);
+
+  useEffect(() => {
+    const delay = setTimeout(() => {
+        if (lazyState.first !== 0) {
+           setLazyState(prev => ({ ...prev, first: 0, page: 0 }));
+        } else {
+           loadLazyData(0, lazyState.rows, globalFilterValue);
+        }
+    }, 500);
+    return () => clearTimeout(delay);
+  }, [globalFilterValue]);
+
+  const onPage = (event: any) => {
+      setLazyState(prev => ({ ...prev, ...event }));
+  };
+
   const onGlobalFilterChange = (e: any) => {
-    const value = e.target.value;
-    let _filters = { ...filters };
-    _filters['global'].value = value;
-    setFilters(_filters);
-    setGlobalFilterValue(value);
+    setGlobalFilterValue(e.target.value);
   };
 
   const statusBodyTemplate = (rowData: any) => {
@@ -155,12 +196,14 @@ export default function ProductsCatalogPage() {
 
           <DataTable 
             value={products} 
+            lazy={true}
+            first={lazyState.first}
+            onPage={onPage}
+            totalRecords={totalRecords}
             paginator 
             rows={10} 
             dataKey="id" 
-            filters={filters} 
             loading={loading}
-            globalFilterFields={['name', 'brand']} 
             emptyMessage={
               <div className="flex flex-col items-center justify-center p-12 text-slate-400">
                 <i className="pi pi-box text-5xl mb-4 opacity-50"></i>
