@@ -14,7 +14,8 @@ export function AppSidebar() {
   ];
 
   const coreItems = [
-    { label: 'Catálogo de Insumos', icon: 'pi pi-list', href: '#catalog' },
+    { label: 'Productos', icon: 'pi pi-box', href: '/products' },
+    { label: 'Categorías', icon: 'pi pi-tags', href: '/categories' },
     { label: 'Perfiles de Compradores', icon: 'pi pi-id-card', href: '/buyers' },
     { label: 'Reglas Logísticas', icon: 'pi pi-cog', href: '#rules' },
   ];

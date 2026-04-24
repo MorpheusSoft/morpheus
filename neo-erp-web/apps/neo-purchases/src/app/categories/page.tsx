@@ -110,7 +110,14 @@ export default function CategoriesPage() {
     );
   };
 
-
+  const actionsTemplate = (node: CategoryNode) => {
+    return (
+      <div className="flex items-center gap-1 opacity-60 hover:opacity-100 transition-opacity justify-end pr-4">
+        <Button icon="pi pi-plus" rounded text onClick={(e) => { e.stopPropagation(); openDialog(node.data.id); }} title="Añadir Subcategoría" className="w-9 h-9 hover:bg-slate-100 text-slate-400 hover:text-emerald-500 transition-colors" />
+        <Button icon="pi pi-pencil" rounded text onClick={(e) => { e.stopPropagation(); openDialog(null, node.data); }} title="Editar Categoría" className="w-9 h-9 hover:bg-slate-100 text-slate-400 hover:text-blue-500 transition-colors" />
+      </div>
+    );
+  };
 
   const header = (
     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
@@ -129,7 +136,12 @@ export default function CategoriesPage() {
              className="w-full !pl-10 !rounded-full !bg-slate-50 border-transparent focus:!border-blue-400 focus:!ring-4 focus:!ring-blue-500/10 transition-all !py-2.5 shadow-sm"
            />
         </span>
-
+        <Button 
+          label="Nueva Categoría" 
+          icon="pi pi-plus" 
+          onClick={() => openDialog()} 
+          className="!bg-blue-600 !border-none !rounded-full !shadow-md hover:!bg-blue-700 hover:!shadow-lg transition-all !px-6 !py-2.5 w-full sm:w-auto shrink-0 whitespace-nowrap font-medium text-sm" 
+        />
       </div>
     </div>
   );
@@ -224,12 +236,106 @@ export default function CategoriesPage() {
           >
             <Column field="name" header="NOMBRE Y JERARQUÍA" body={nameTemplate} expander style={{ width: '60%' }}></Column>
             <Column header="ESTADO" body={statusTemplate} style={{ width: '20%' }}></Column>
-
+            <Column header="ACCIONES" body={actionsTemplate} style={{ width: '20%' }}></Column>
           </TreeTable>
         </div>
       </div>
 
+      <Dialog 
+        visible={displayDialog} 
+        onHide={() => setDisplayDialog(false)} 
+        showHeader={false}
+        modal 
+        className="w-full max-w-2xl shadow-2xl mx-4"
+        contentClassName="p-0 bg-transparent"
+        style={{ borderRadius: '1.25rem', overflow: 'hidden', border: 'none' }}
+      >
+        <div className="bg-white rounded-[1.25rem] overflow-hidden flex flex-col relative w-full">
+          {/* Subtle top border instead of heavy gradient bar to save vertical space */}
+          <div className="h-1 w-full bg-gradient-to-r from-blue-500 to-indigo-500"></div>
+          
+          {/* Header */}
+          <div className="px-8 pt-6 pb-2">
+            <h3 className="text-xl font-extrabold text-slate-900 tracking-tight m-0">
+              {isEditMode ? 'Editar Categoría' : 'Nueva Categoría'}
+            </h3>
+            <p className="text-slate-500 text-xs mt-1">Configura las propiedades de jerarquía en el catálogo.</p>
+          </div>
 
+          {/* Form Body - Reduced padding and gaps to make it less "largo" */}
+          <div className="px-8 py-2 w-full">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 w-full">
+              <div className="flex flex-col gap-1.5 w-full">
+                <label htmlFor="name" className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Nombre <span className="text-rose-500">*</span></label>
+                <InputText 
+                  id="name" 
+                  value={name} 
+                  onChange={(e) => setName(e.target.value)} 
+                  placeholder="Línea Blanca, Avenas..." 
+                  autoComplete="off"
+                  autoFocus 
+                  className="w-full !rounded-lg !border-slate-200 !bg-slate-50 focus:!bg-white focus:!border-blue-500 focus:!ring-2 focus:!ring-blue-500/20 transition-all !py-2.5 !px-3 text-sm text-slate-800 font-medium"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5 w-full">
+                <label htmlFor="parent" className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Dependencia (Padre)</label>
+                <Dropdown 
+                  id="parent" 
+                  value={parentId} 
+                  onChange={(e) => setParentId(e.value)} 
+                  options={flatCategories} 
+                  optionLabel="name" 
+                  optionValue="id" 
+                  showClear 
+                  filter
+                  filterPlaceholder="Buscar..."
+                  placeholder="Ninguna (Categoría Raíz)"
+                  className="w-full !rounded-lg !border-slate-200 !bg-slate-50 focus:!bg-white transition-all shadow-none"
+                  panelClassName="!rounded-xl !shadow-xl !border-slate-100"
+                  pt={{
+                    input: { className: '!py-2.5 !px-3 text-sm text-slate-800 font-medium' },
+                    trigger: { className: 'text-slate-400' }
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Custom Interactive Switch Card */}
+            <div 
+              className={`mt-5 rounded-xl p-4 border transition-all cursor-pointer flex gap-3 items-center select-none ${isLiquor ? 'bg-indigo-50/30 border-indigo-300' : 'bg-white border-slate-200 hover:border-slate-300'}`}
+              onClick={() => setIsLiquor(!isLiquor)}
+            >
+              <div className="pointer-events-none">
+                <Checkbox checked={isLiquor} className={isLiquor ? '!border-indigo-500' : ''} />
+              </div>
+              <div className="flex-1">
+                <p className={`font-bold text-sm leading-none mb-1 ${isLiquor ? 'text-indigo-800' : 'text-slate-700'}`}>Categoría Restringida (Licor, Controlados)</p>
+                <p className={`text-xs ${isLiquor ? 'text-indigo-600/80' : 'text-slate-400'}`}>
+                  Habilita validaciones estrictas y exime de descuentos automáticos a sus productos.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer Actions - Compact height */}
+          <div className="px-8 py-4 mt-4 bg-slate-50/50 border-t border-slate-100 flex justify-end gap-3 w-full">
+            <Button 
+              label="Cerrar Ventana" 
+              onClick={() => setDisplayDialog(false)} 
+              className="!bg-white !text-slate-600 !border !border-slate-200 hover:!bg-slate-100 hover:!text-slate-900 !rounded-lg !px-4 !py-2 text-sm font-bold transition-colors" 
+            />
+            <Button 
+              label="Guardar Categoría" 
+              icon="pi pi-check" 
+              onClick={saveCategory} 
+              loading={isSaving} 
+              disabled={!name.trim()} 
+              className="!bg-gradient-to-br !from-slate-800 !to-slate-900 hover:!from-slate-900 hover:!to-black !border-none !text-white !rounded-lg !px-5 !py-2 !shadow-md transition-all text-sm font-bold whitespace-nowrap disabled:!opacity-50 disabled:!shadow-none" 
+            />
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }

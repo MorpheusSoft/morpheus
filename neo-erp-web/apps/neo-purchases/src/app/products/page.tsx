@@ -102,7 +102,20 @@ export default function ProductsCatalogPage() {
     return <span className="font-extrabold text-slate-700 text-[15px]">${Number(price).toFixed(2)}</span>;
   };
 
-
+  const actionBodyTemplate = (rowData: any) => {
+    return (
+      <div className="flex items-center gap-1 opacity-60 hover:opacity-100 transition-opacity justify-end pr-4">
+        <Button 
+          icon="pi pi-pencil" 
+          rounded 
+          text 
+          onClick={() => router.push('/products/new?id=' + rowData.id)} 
+          title="Editar Producto" 
+          className="w-9 h-9 hover:bg-slate-100 text-slate-400 hover:text-blue-500 transition-colors" 
+        />
+      </div>
+    );
+  };
 
   const renderHeader = () => {
     return (
@@ -123,7 +136,12 @@ export default function ProductsCatalogPage() {
                className="w-full !pl-10 !rounded-full !bg-slate-50 border-transparent focus:!border-blue-400 focus:!ring-4 focus:!ring-blue-500/10 transition-all !py-2.5 shadow-sm"
              />
           </span>
-
+          <Button 
+            label="Nuevo Producto" 
+            icon="pi pi-plus" 
+            onClick={() => router.push('/products/new')} 
+            className="!bg-blue-600 !border-none !rounded-full !shadow-md hover:!bg-blue-700 hover:!shadow-lg transition-all !px-6 !py-2.5 w-full sm:w-auto shrink-0 whitespace-nowrap font-medium text-sm" 
+          />
         </div>
       </div>
     );
@@ -200,7 +218,7 @@ export default function ProductsCatalogPage() {
             <Column field="brand" header="MARCA" sortable style={{ width: '15%', minWidth: '8rem' }} className="text-slate-500 font-medium text-sm"></Column>
             <Column header="PRECIO BASE" body={priceBodyTemplate} sortable style={{ width: '15%', minWidth: '10rem' }}></Column>
             <Column header="ESTADO" body={statusBodyTemplate} style={{ width: '10%', minWidth: '6rem' }}></Column>
-
+            <Column header="ACCIONES" body={actionBodyTemplate} style={{ width: '5%', minWidth: '5rem' }}></Column>
           </DataTable>
         </div>
       </div>

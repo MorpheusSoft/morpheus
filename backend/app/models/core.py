@@ -37,6 +37,33 @@ class User(Base):
     is_superuser = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    roles = relationship("Role", secondary="core.user_roles", backref="users")
+    facilities = relationship("Facility", secondary="core.user_facilities", backref="users")
+
+class Role(Base):
+    __tablename__ = "roles"
+    __table_args__ = {"schema": "core"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
+    description = Column(String)
+    can_use_oracle = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    __table_args__ = {"schema": "core"}
+
+    user_id = Column(Integer, ForeignKey("core.users.id", ondelete="CASCADE"), primary_key=True)
+    role_id = Column(Integer, ForeignKey("core.roles.id", ondelete="CASCADE"), primary_key=True)
+
+class UserFacility(Base):
+    __tablename__ = "user_facilities"
+    __table_args__ = {"schema": "core"}
+
+    user_id = Column(Integer, ForeignKey("core.users.id", ondelete="CASCADE"), primary_key=True)
+    facility_id = Column(Integer, ForeignKey("core.facilities.id", ondelete="CASCADE"), primary_key=True)
+
 class Company(Base):
     __tablename__ = "companies"
     __table_args__ = {"schema": "core"}
