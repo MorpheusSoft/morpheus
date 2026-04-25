@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.api import deps
-from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, orders, inventory_session, suppliers, buyers, mrp, purchase_orders, currencies, wms, jobs, dashboard, facilities
+from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, orders, inventory_session, suppliers, buyers, mrp, purchase_orders, currencies, wms, jobs, dashboard, facilities, pricing_sessions, companies, roles, users
 
 api_router = APIRouter()
 api_router.include_router(login.router, tags=["login"])
@@ -27,4 +27,8 @@ api_router.include_router(wms.router, prefix="/wms", tags=["wms"], dependencies=
 api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"], dependencies=secure_dependencies)
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"], dependencies=secure_dependencies)
 api_router.include_router(facilities.router, prefix="/facilities", tags=["facilities"], dependencies=secure_dependencies)
+api_router.include_router(pricing_sessions.router, prefix="/pricing-sessions", tags=["pricing sessions"], dependencies=secure_dependencies)
+api_router.include_router(companies.router, prefix="/companies", tags=["companies"], dependencies=secure_dependencies)
+api_router.include_router(roles.router, prefix="/roles", tags=["roles"], dependencies=secure_dependencies)
+api_router.include_router(users.router, prefix="/users", tags=["users"], dependencies=secure_dependencies)
 

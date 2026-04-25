@@ -6,6 +6,7 @@ import { redirect } from "next/navigation"
 export async function loginAction(prevState: any, formData: FormData) {
   const email = formData.get("email") as string
   const password = formData.get("password") as string
+  const callbackUrl = formData.get("callbackUrl") as string || "/dashboard"
 
   const res = await fetch("http://127.0.0.1:8000/api/v1/login/access-token", {
     method: "POST",
@@ -26,14 +27,14 @@ export async function loginAction(prevState: any, formData: FormData) {
   
   const cookieStore = await cookies()
   cookieStore.set("access_token", data.access_token, {
-    httpOnly: true,
+    httpOnly: false,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 30, // 30 mins
   })
 
-  redirect("/dashboard")
+  redirect(callbackUrl)
 }
 
 export async function logoutAction() {

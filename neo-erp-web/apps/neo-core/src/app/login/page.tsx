@@ -1,7 +1,7 @@
 import LoginForm from "./LoginForm"
 
 export const metadata = {
-  title: "Login | Morpheus ERP"
+  title: "Login | Neo ERP"
 }
 
 export default function LoginPage() {
@@ -22,7 +22,7 @@ export default function LoginPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4" />
               </svg>
             </div>
-            <h1 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-100 to-purple-200 tracking-tight mb-2">MORPHEUS</h1>
+            <h1 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-100 to-purple-200 tracking-tight mb-2">NEO</h1>
             <p className="text-gray-400 text-sm">Autenticación Segura</p>
           </div>
           
@@ -33,7 +33,7 @@ export default function LoginPage() {
         
         {/* Footer info */}
         <div className="mt-8 text-center text-gray-500 text-xs">
-          <p>&copy; {new Date().getFullYear()} Morpheus Systems. Todos los derechos reservados.</p>
+          <p>&copy; {new Date().getFullYear()} NEO Systems. Todos los derechos reservados.</p>
         </div>
       </div>
     </div>

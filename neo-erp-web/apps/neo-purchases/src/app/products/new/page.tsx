@@ -197,12 +197,12 @@ function ProductFormContent() {
       formData.append('file', file);
       
       try {
-          const response = await fetch('http://localhost:8000/api/v1/utils/upload/', {
-              method: 'POST',
-              body: formData,
+          const apiModule = await import('@/lib/api');
+          const api = apiModule.default;
+          const response = await api.post('/utils/upload/', formData, {
+              headers: { 'Content-Type': 'multipart/form-data' }
           });
-          const data = await response.json();
-          setValue(fieldName, data.url);
+          setValue(fieldName, response.data.url);
       } catch(err) {
           alert('Error uploading file');
       }

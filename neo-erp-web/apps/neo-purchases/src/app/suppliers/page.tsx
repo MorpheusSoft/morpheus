@@ -27,16 +27,17 @@ export default function SuppliersCatalog() {
     const [globalFilter, setGlobalFilter] = useState('');
 
     useEffect(() => {
-        fetch('http://localhost:8000/api/v1/suppliers/')
-            .then(res => res.json())
-            .then(data => {
-                setSuppliers(data);
-                setLoading(false);
-            })
-            .catch(err => {
-                console.error("Error fetching suppliers", err);
-                setLoading(false);
-            });
+        import('@/lib/api').then(({ default: api }) => {
+            api.get('/suppliers/')
+                .then(res => {
+                    setSuppliers(res.data);
+                    setLoading(false);
+                })
+                .catch(err => {
+                    console.error("Error fetching suppliers", err);
+                    setLoading(false);
+                });
+        });
     }, []);
 
     const statusBodyTemplate = (rowData: Supplier) => {

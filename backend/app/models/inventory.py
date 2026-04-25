@@ -275,3 +275,42 @@ class InventoryLine(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
     
     session = relationship("InventorySession", back_populates="lines")
+
+# =================
+# PRICING ENGINE
+# =================
+class PricingSession(Base):
+    __tablename__ = "pricing_sessions"
+    __table_args__ = {"schema": "inv"}
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    source_type = Column(String, default='CSV_UPLOAD') # FILTER_BULK, CSV_UPLOAD, AI_PDF_PARSER
+    status = Column(String, default='DRAFT') # DRAFT, APPLIED, CANCELLED
+    
+    created_by = Column(Integer, ForeignKey("core.users.id"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    applied_at = Column(DateTime(timezone=True))
+    
+    lines = relationship("PricingSessionLine", back_populates="session", cascade="all, delete-orphan")
+
+class PricingSessionLine(Base):
+    __tablename__ = "pricing_session_lines"
+    __table_args__ = {"schema": "inv"}
+    
+    id = Column(BigInteger, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("inv.pricing_sessions.id"), nullable=False)
+    # variant_id CAN be null if it's an unrecognized "foreign" product
+    variant_id = Column(Integer, ForeignKey("inv.product_variants.id"), nullable=True) 
+    
+    external_reference_name = Column(String) # For foreign products from PDFs that don't exist
+    
+    old_cost = Column(Numeric(19, 4), default=0)
+    proposed_cost = Column(Numeric(19, 4), default=0)
+    
+    old_price = Column(Numeric(19, 4), default=0)
+    proposed_price = Column(Numeric(19, 4), default=0)
+    
+    action = Column(String, default='IGNORE') # IGNORE, UPDATE_COST, CREATE_NEW
+    
+    session = relationship("PricingSession", back_populates="lines")

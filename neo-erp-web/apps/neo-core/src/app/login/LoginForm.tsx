@@ -1,20 +1,25 @@
 "use client"
 
-import { useActionState } from "react"
+import { useActionState, Suspense } from "react"
+import { useSearchParams } from "next/navigation"
 import { loginAction } from "../actions/auth"
 
-export default function LoginForm() {
+function LoginFormComponent() {
   const [state, action, isPending] = useActionState(loginAction, null)
+  const searchParams = useSearchParams()
+  const callbackUrl = searchParams.get("callbackUrl") || "/dashboard"
 
   return (
     <form action={action} className="flex flex-col space-y-6">
+      <input type="hidden" name="callbackUrl" value={callbackUrl} />
+      
       <div className="space-y-2">
         <label className="text-sm font-medium text-gray-300">Correo Electrónico</label>
         <input
           name="email"
           type="email"
           required
-          placeholder="admin@morpheus.com"
+          placeholder="admin@neo.com"
           className="w-full px-4 py-3 bg-gray-800/50 border border-gray-700 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-white transition-all placeholder:text-gray-600"
         />
       </div>
@@ -52,5 +57,13 @@ export default function LoginForm() {
         ) : "Acceder al Sistema"}
       </button>
     </form>
+  )
+}
+
+export default function LoginForm() {
+  return (
+    <Suspense fallback={<div className="h-40 w-full animate-pulse bg-gray-800 rounded-xl"></div>}>
+       <LoginFormComponent />
+    </Suspense>
   )
 }
