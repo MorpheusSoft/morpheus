@@ -202,7 +202,7 @@ function ProductFormContent() {
           const response = await api.post('/utils/upload/', formData, {
               headers: { 'Content-Type': 'multipart/form-data' }
           });
-          setValue(fieldName, response.data.url);
+          setValue(fieldName as any, response.data.url);
       } catch(err) {
           alert('Error uploading file');
       }
