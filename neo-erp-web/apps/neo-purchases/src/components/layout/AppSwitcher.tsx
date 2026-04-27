@@ -19,10 +19,10 @@ export function AppSwitcher() {
   }, []);
 
   const apps = [
-    { name: "Neo Core", icon: "pi pi-desktop", color: "text-indigo-600", bg: "bg-indigo-50", href: isProd ? "https://hub.qa.morpheussoft.net/dashboard" : "http://localhost:4000/dashboard" },
-    { name: "Neo Compras", icon: "pi pi-shopping-cart", color: "text-emerald-600", bg: "bg-emerald-50", href: isProd ? "https://compras.qa.morpheussoft.net/" : "http://localhost:4001/" },
-    { name: "Neo Logística", icon: "pi pi-truck", color: "text-purple-600", bg: "bg-purple-50", href: isProd ? "https://logistica.qa.morpheussoft.net/" : "http://localhost:4003/" },
-    { name: "Neo Inventario", icon: "pi pi-box", color: "text-blue-600", bg: "bg-blue-50", href: isProd ? "https://inventario.qa.morpheussoft.net/inventario/products" : "http://localhost:4002/inventario/products" },
+    { name: "Neo Core", icon: "pi pi-desktop", color: "text-indigo-600", bg: "bg-indigo-50", href: isProd ? "http://hub.qa.morpheussoft.net/dashboard" : "http://localhost:4000/dashboard" },
+    { name: "Neo Compras", icon: "pi pi-shopping-cart", color: "text-emerald-600", bg: "bg-emerald-50", href: isProd ? "http://compras.qa.morpheussoft.net/" : "http://localhost:4001/" },
+    { name: "Neo Logística", icon: "pi pi-truck", color: "text-purple-600", bg: "bg-purple-50", href: isProd ? "http://logistica.qa.morpheussoft.net/" : "http://localhost:4003/" },
+    { name: "Neo Inventario", icon: "pi pi-box", color: "text-blue-600", bg: "bg-blue-50", href: isProd ? "http://inventario.qa.morpheussoft.net/inventario/products" : "http://localhost:4002/inventario/products" },
     { name: "Ventas", icon: "pi pi-dollar", color: "text-amber-600", bg: "bg-amber-50", href: "#", disabled: true },
     { name: "Reportes", icon: "pi pi-chart-bar", color: "text-slate-600", bg: "bg-slate-50", href: "#", disabled: true },
   ];

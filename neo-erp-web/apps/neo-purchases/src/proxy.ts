@@ -9,7 +9,7 @@ export function proxy(request: NextRequest) {
     const isProd = host.includes('.morpheussoft.net');
     
     // Construir la URL de Login del Hub Central
-    const loginBase = isProd ? 'https://hub.qa.morpheussoft.net/login' : 'http://localhost:4000/login';
+    const loginBase = isProd ? 'http://hub.qa.morpheussoft.net/login' : 'http://localhost:4000/login';
     
     // Anexar la ruta actual completa como callbackUrl
     const currentUrl = encodeURIComponent(request.url);
