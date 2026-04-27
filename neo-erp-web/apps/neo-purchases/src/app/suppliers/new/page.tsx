@@ -25,7 +25,7 @@ export default function SupplierMaster() {
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [facilities, setFacilities] = useState<any[]>([]);
 
-  const { control, handleSubmit, reset } = useForm({
+  const { control, handleSubmit, reset } = useForm<any>({
     defaultValues: {
       name: '',
       commercial_name: '',
@@ -58,7 +58,7 @@ export default function SupplierMaster() {
 
   const { fields: bankFields, append: appendBank, remove: removeBank } = useFieldArray({
     control,
-    name: "banks"
+    name: "banks" as any
   });
 
   useEffect(() => {
