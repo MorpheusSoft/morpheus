@@ -12,7 +12,7 @@ import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import SupplierCatalogTab from './SupplierCatalogTab';
 import { useRouter, useParams } from 'next/navigation';
-import axios from 'axios';
+import api from '@/lib/api';
 
 interface Currency {
   id: number;
@@ -69,13 +69,23 @@ export default function SupplierEdit() {
 
   useEffect(() => {
     Promise.all([
-      axios.get('http://localhost:8000/api/v1/currencies/'),
-      axios.get('http://localhost:8000/api/v1/facilities/'),
-      axios.get(`http://localhost:8000/api/v1/suppliers/${supplierId}`)
+      api.get('/currencies/'),
+      api.get('/facilities/'),
+      api.get(`/suppliers/${supplierId}`)
     ]).then(([currRes, facRes, suppRes]) => {
       setCurrencies(currRes.data);
       setFacilities(facRes.data);
-      reset(suppRes.data);
+      const parsedData = {
+        ...suppRes.data,
+        commercial_name: suppRes.data.commercial_name || '',
+        international_tax_id: suppRes.data.international_tax_id || '',
+        fiscal_address: suppRes.data.fiscal_address || '',
+        commercial_contact_name: suppRes.data.commercial_contact_name || '',
+        commercial_contact_phone: suppRes.data.commercial_contact_phone || '',
+        financial_contact_name: suppRes.data.financial_contact_name || '',
+        financial_contact_phone: suppRes.data.financial_contact_phone || '',
+      };
+      reset(parsedData);
       setFetching(false);
     }).catch(err => {
       console.error(err);
@@ -87,11 +97,11 @@ export default function SupplierEdit() {
   const onSubmit = async (data: any) => {
     setLoading(true);
     try {
-      await axios.put(`http://localhost:8000/api/v1/suppliers/${supplierId}`, data);
+      await api.put(`/suppliers/${supplierId}`, data);
       
       const catData = catalogRef.current?.getCatalog();
       if (catData) {
-          await axios.put(`http://localhost:8000/api/v1/suppliers/${supplierId}/catalog`, catData);
+          await api.put(`/suppliers/${supplierId}/catalog`, catData);
       }
       
       alert('Proveedor actualizado exitosamente.');

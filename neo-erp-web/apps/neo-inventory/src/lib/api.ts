@@ -40,6 +40,12 @@ api.interceptors.response.use(
   },
   (error) => {
     // Handle global errors here globally (e.g., 401 Unauthorized)
+    if (error.response && error.response.status === 401 && typeof window !== 'undefined') {
+        document.cookie = 'access_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('token');
+        window.location.href = 'http://localhost:4000/login';
+    }
     return Promise.reject(error);
   }
 );

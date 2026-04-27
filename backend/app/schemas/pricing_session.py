@@ -35,11 +35,13 @@ class PricingSessionLineOut(PricingSessionLineBase):
 class PricingSessionBase(BaseModel):
     name: str
     source_type: str = 'CSV_UPLOAD'
+    target_cost_type: str = 'REPLACEMENT'
     status: str = 'DRAFT'
 
 class PricingSessionCreate(BaseModel):
     name: str
     source_type: str = 'CSV_UPLOAD'
+    target_cost_type: str = 'REPLACEMENT'
     lines: Optional[List[PricingSessionLineCreate]] = []
 
 class PricingSessionUploadData(BaseModel):
@@ -58,3 +60,19 @@ class PricingSessionOut(PricingSessionBase):
     lines: List[PricingSessionLineOut] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+class MathRule(BaseModel):
+    action: str = 'KEEP'  # KEEP, SET_FIXED, ADD_FIXED, ADD_PERCENTAGE
+    base_target: str = 'CURRENT_VALUE' # CURRENT_VALUE, NEW_COST
+    value: float = 0.0
+    include_tax: bool = False
+
+class BulkFilters(BaseModel):
+    supplier_ids: Optional[List[int]] = []
+    category_ids: Optional[List[int]] = []
+    search_term: Optional[str] = None
+
+class PricingSessionBulkFilterRequest(BaseModel):
+    filters: BulkFilters
+    cost_rule: MathRule
+    price_rule: MathRule

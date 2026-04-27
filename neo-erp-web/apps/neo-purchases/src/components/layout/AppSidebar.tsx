@@ -15,6 +15,7 @@ export function AppSidebar() {
 
   const coreItems = [
     { label: 'Productos', icon: 'pi pi-box', href: '/products' },
+    { label: 'Auditoría de Precios', icon: 'pi pi-bolt', href: '/pricing' },
     { label: 'Categorías', icon: 'pi pi-tags', href: '/categories' },
     { label: 'Perfiles de Compradores', icon: 'pi pi-id-card', href: '/buyers' },
     { label: 'Reglas Logísticas', icon: 'pi pi-cog', href: '#rules' },

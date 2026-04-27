@@ -3,6 +3,46 @@
 import { useEffect, useState } from "react";
 import { getRoles, createRole, updateRole } from "@/app/actions/roles";
 
+const initialPermissions: any = {
+  neo_core: {
+      companies: { read: false, write: false, delete: false, approve: false },
+      users: { read: false, write: false, delete: false, approve: false },
+      roles: { read: false, write: false, delete: false, approve: false },
+      facilities: { read: false, write: false, delete: false, approve: false },
+      currencies: { read: false, write: false, delete: false, approve: false },
+      jobs: { read: false, write: false, delete: false, approve: false },
+  },
+  neo_inventory: {
+      products: { read: false, write: false, delete: false, approve: false },
+      categories: { read: false, write: false, delete: false, approve: false },
+      warehouses: { read: false, write: false, delete: false, approve: false },
+  },
+  neo_purchases: {
+      suppliers: { read: false, write: false, delete: false, approve: false },
+      orders: { read: false, write: false, delete: false, approve: false },
+      prices: { read: false, write: false, delete: false, approve: false },
+  },
+  neo_logistics: {
+      routes: { read: false, write: false, delete: false, approve: false },
+      vehicles: { read: false, write: false, delete: false, approve: false },
+  }
+};
+
+const moduleNames: any = {
+  neo_core: "Control Maestro (Neo Core)",
+  neo_inventory: "Bodegas e Inventario",
+  neo_purchases: "Compras y Adquisiciones",
+  neo_logistics: "CENDI y Logística",
+};
+
+const featureNames: any = {
+  companies: "Holding y Empresas", users: "Usuarios", roles: "Roles y Seguridad", facilities: "Sucursales", currencies: "Mercado de Divisas", jobs: "Tareas en Segundo Plano (Jobs)",
+  products: "Maestro de Productos", categories: "Categorías", warehouses: "Almacenes",
+  suppliers: "Directorio de Proveedores", orders: "Gestor de Órdenes", prices: "Tarifas de Compra",
+  routes: "Rutas", vehicles: "Flota de Vehículos"
+};
+
+
 export default function RolesPage() {
   const [roles, setRoles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -14,6 +54,43 @@ export default function RolesPage() {
   const [description, setDescription] = useState("");
   const [canUseOracle, setCanUseOracle] = useState(false);
   const [isActive, setIsActive] = useState(true);
+  const [permissions, setPermissions] = useState<any>(JSON.parse(JSON.stringify(initialPermissions)));
+
+  const handlePermissionChange = (modKey: string, featKey: string, permKey: string, val: boolean) => {
+    setPermissions((prev: any) => {
+      const copy = { ...prev };
+      copy[modKey][featKey][permKey] = val;
+
+      // Smart interlocking rules
+      if (permKey === "read" && !val) {
+         // Auto toggle off everything if read is stripped
+         copy[modKey][featKey].write = false;
+         copy[modKey][featKey].delete = false;
+         copy[modKey][featKey].approve = false;
+      }
+      if (["write","delete","approve"].includes(permKey) && val) {
+         // Auto toggle on read if any sub-permission is granted
+         copy[modKey][featKey].read = true;
+      }
+
+      return copy;
+    });
+  };
+
+  const mergePermissions = (savedPerms: any) => {
+    const base = JSON.parse(JSON.stringify(initialPermissions));
+    if (!savedPerms) return base;
+    for (const modKey in savedPerms) {
+      if (base[modKey]) {
+        for (const featKey in savedPerms[modKey]) {
+           if (base[modKey][featKey]) {
+             base[modKey][featKey] = { ...base[modKey][featKey], ...savedPerms[modKey][featKey] };
+           }
+        }
+      }
+    }
+    return base;
+  };
 
   const fetchRoles = async () => {
     setLoading(true);
@@ -37,6 +114,7 @@ export default function RolesPage() {
     setDescription("");
     setCanUseOracle(false);
     setIsActive(true);
+    setPermissions(JSON.parse(JSON.stringify(initialPermissions)));
     setIsModalOpen(true);
   };
 
@@ -46,6 +124,7 @@ export default function RolesPage() {
     setDescription(role.description || "");
     setCanUseOracle(role.can_use_oracle);
     setIsActive(role.is_active);
+    setPermissions(mergePermissions(role.permissions));
     setIsModalOpen(true);
   };
 
@@ -55,6 +134,7 @@ export default function RolesPage() {
        name, 
        description, 
        can_use_oracle: canUseOracle,
+       permissions,
        is_active: isActive
     };
     try {
@@ -146,77 +226,164 @@ export default function RolesPage() {
 
       {/* Modal Form */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-slide-up">
-            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm animate-fade-in p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden animate-slide-up">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
               <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
                  <i className="pi pi-id-card text-indigo-500"></i> 
-                 {editingId ? "Editar Rol" : "Crear Nuevo Rol"}
+                 {editingId ? "Editar Permisos Dinámicos del Rol" : "Definir Nueva Matriz de Privilegios"}
               </h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-red-500 transition-colors">
+              <button type="button" onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-red-500 transition-colors">
                 <i className="pi pi-times"></i>
               </button>
             </div>
             
-            <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-5">
-               <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Nombre del Rol</label>
-                  <input 
-                    type="text" 
-                    required 
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all placeholder:text-slate-400 font-medium text-slate-800"
-                    placeholder="Ej. Gerente Comercial"
-                  />
-               </div>
+            <form onSubmit={handleSubmit} className="flex-1 flex flex-col overflow-hidden">
+               <div className="flex-1 overflow-y-auto p-6">
+                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                   
+                   {/* Left Col: Basics */}
+                   <div className="lg:col-span-4 flex flex-col gap-5">
+                       <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Nombre del Rol</label>
+                          <input 
+                            type="text" 
+                            required 
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all placeholder:text-slate-400 font-bold text-slate-800"
+                            placeholder="Ej. Oficial de Logística"
+                          />
+                       </div>
 
-               <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Descripción (Opcional)</label>
-                  <textarea 
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all placeholder:text-slate-400 resize-none h-20"
-                    placeholder="Acceso total a ventas..."
-                  ></textarea>
-               </div>
+                       <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Misión / Descripción</label>
+                          <textarea 
+                            value={description}
+                            onChange={(e) => setDescription(e.target.value)}
+                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all placeholder:text-slate-400 resize-none h-24 text-sm"
+                            placeholder="Supervisión de depósitos y traslados CENDI..."
+                          ></textarea>
+                       </div>
 
-               <div className="flex flex-col gap-3">
-                 <div className="flex items-center gap-3 bg-gradient-to-r from-purple-50 to-indigo-50 p-4 rounded-xl border border-purple-100">
-                    <div className="flex-1">
-                       <p className="font-bold text-slate-800 text-sm flex items-center gap-1"><i className="pi pi-sparkles text-purple-500"></i> Oráculo AI</p>
-                       <p className="text-xs text-slate-500">Habilita acceso al asistente virtual.</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" className="sr-only peer" checked={canUseOracle} onChange={(e) => setCanUseOracle(e.target.checked)} />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-500"></div>
-                    </label>
+                       <div className="flex items-center gap-3 bg-gradient-to-r from-purple-50 to-indigo-50 p-4 rounded-xl border border-purple-100">
+                          <div className="flex-1">
+                             <p className="font-bold text-slate-800 text-sm flex items-center gap-1"><i className="pi pi-sparkles text-purple-500"></i> IA Oráculo</p>
+                             <p className="text-xs text-slate-500 leading-tight mt-1">Concede token para uso del asistente LLM.</p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" className="sr-only peer" checked={canUseOracle} onChange={(e) => setCanUseOracle(e.target.checked)} />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-500"></div>
+                          </label>
+                       </div>
+
+                       <div className="flex items-center gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                          <div className="flex-1">
+                             <p className="font-bold text-slate-700 text-sm">Estatus Operativo</p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" className="sr-only peer" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                          </label>
+                       </div>
+                   </div>
+
+                   {/* Right Col: RBAC Matrix */}
+                   <div className="lg:col-span-8">
+                      <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+                         <div className="bg-slate-800 px-5 py-3.5 flex items-center justify-between">
+                            <h4 className="font-bold text-white text-sm tracking-wide flex items-center gap-2">
+                               <i className="pi pi-sitemap text-indigo-400"></i> Matriz de Capacidades y Alcances (RBAC)
+                            </h4>
+                         </div>
+                         
+                         <div className="max-h-[500px] overflow-y-auto bg-slate-50">
+                            {Object.keys(permissions).map((modKey) => (
+                               <div key={modKey} className="border-b border-slate-200 last:border-0 bg-white">
+                                  <div className="px-5 py-2.5 bg-slate-100/80 border-b border-slate-200">
+                                     <h5 className="font-bold text-slate-700 text-xs uppercase tracking-widest">{moduleNames[modKey] || modKey}</h5>
+                                  </div>
+                                  <table className="w-full text-left text-sm text-slate-600">
+                                     <thead className="bg-white border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400">
+                                        <tr>
+                                           <th className="px-5 py-3 w-1/3">Sub-módulo / Feature</th>
+                                           <th className="px-3 py-3 text-center">Ver</th>
+                                           <th className="px-3 py-3 text-center">Escribir</th>
+                                           <th className="px-3 py-3 text-center">Eliminar</th>
+                                           <th className="px-3 py-3 text-center">Aprobar</th>
+                                        </tr>
+                                     </thead>
+                                     <tbody className="divide-y divide-slate-50">
+                                        {Object.keys(permissions[modKey]).map((featKey) => {
+                                           const perms = permissions[modKey][featKey];
+                                           const hasRead = perms.read;
+                                           return (
+                                              <tr key={featKey} className="hover:bg-indigo-50/30 transition-colors">
+                                                 <td className="px-5 py-3.5 font-semibold text-slate-700 text-xs">
+                                                    {featureNames[featKey] || featKey}
+                                                 </td>
+                                                 <td className="px-3 py-3 text-center">
+                                                    <input 
+                                                       type="checkbox" 
+                                                       className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                                       checked={hasRead}
+                                                       onChange={(e) => handlePermissionChange(modKey, featKey, "read", e.target.checked)}
+                                                    />
+                                                 </td>
+                                                 <td className="px-3 py-3 text-center">
+                                                    <input 
+                                                       type="checkbox" 
+                                                       className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                                                       checked={perms.write}
+                                                       disabled={!hasRead}
+                                                       onChange={(e) => handlePermissionChange(modKey, featKey, "write", e.target.checked)}
+                                                    />
+                                                 </td>
+                                                 <td className="px-3 py-3 text-center">
+                                                    <input 
+                                                       type="checkbox" 
+                                                       className="w-4 h-4 rounded border-slate-300 text-red-600 focus:ring-red-500 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                                                       checked={perms.delete}
+                                                       disabled={!hasRead}
+                                                       onChange={(e) => handlePermissionChange(modKey, featKey, "delete", e.target.checked)}
+                                                    />
+                                                 </td>
+                                                 <td className="px-3 py-3 text-center">
+                                                    <input 
+                                                       type="checkbox" 
+                                                       className="w-4 h-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                                                       checked={perms.approve}
+                                                       disabled={!hasRead}
+                                                       onChange={(e) => handlePermissionChange(modKey, featKey, "approve", e.target.checked)}
+                                                    />
+                                                 </td>
+                                              </tr>
+                                           );
+                                        })}
+                                     </tbody>
+                                  </table>
+                               </div>
+                            ))}
+                         </div>
+                      </div>
+                   </div>
                  </div>
-
-                 <div className="flex items-center gap-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                    <div className="flex-1">
-                       <p className="font-bold text-slate-700 text-sm">Rol Activo</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" className="sr-only peer" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                    </label>
-                 </div>
                </div>
 
-               <div className="mt-4 flex gap-3">
+               <div className="shrink-0 p-6 bg-slate-50 border-t border-slate-200 flex justify-end gap-3 rounded-b-3xl">
                  <button 
                     type="button" 
                     onClick={() => setIsModalOpen(false)}
-                    className="flex-1 px-4 py-3 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+                    className="px-6 py-2.5 rounded-xl font-bold text-slate-600 bg-white border border-slate-300 hover:bg-slate-100 transition-colors"
                  >
-                    Cancelar
+                    Descartar Edición
                  </button>
                  <button 
                     type="submit" 
-                    className="flex-1 px-4 py-3 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/20 transition-all"
+                    className="px-8 py-2.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/20 transition-all flex items-center gap-2"
                  >
-                    {editingId ? "Actualizar Rol" : "Guardar Rol"}
+                    <i className="pi pi-check" />
+                    {editingId ? "Actualizar Rol con Permisos" : "Crear y Guardar Matriz"}
                  </button>
                </div>
             </form>

@@ -28,7 +28,7 @@ export default function SuppliersCatalog() {
 
     useEffect(() => {
         import('@/lib/api').then(({ default: api }) => {
-            api.get('/suppliers/')
+            api.get('/suppliers/?limit=5000')
                 .then(res => {
                     setSuppliers(res.data);
                     setLoading(false);

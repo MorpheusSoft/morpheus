@@ -5,7 +5,7 @@ import { Button } from 'primereact/button';
 import { Dialog } from 'primereact/dialog';
 import { Dropdown } from 'primereact/dropdown';
 import { InputNumber } from 'primereact/inputnumber';
-import axios from 'axios';
+import api from '@/lib/api';
 
 const ProductSuppliersTab = forwardRef(({ productId }: { productId: number }, ref) => {
   const [suppliers, setSuppliers] = useState<any[]>([]);
@@ -29,8 +29,8 @@ const ProductSuppliersTab = forwardRef(({ productId }: { productId: number }, re
       setLoading(true);
       try {
           const [pRes, sRes] = await Promise.all([
-             axios.get(`http://localhost:8000/api/v1/products/${productId}`),
-             axios.get('http://localhost:8000/api/v1/suppliers/?limit=5000')
+             api.get(`/products/${productId}`),
+             api.get('/suppliers/?limit=5000')
           ]);
           const pData = pRes.data;
           setAllSuppliers(sRes.data);
@@ -42,7 +42,7 @@ const ProductSuppliersTab = forwardRef(({ productId }: { productId: number }, re
           if (v.length > 0) {
               setSelectedVariant(v[0].id);
               // Fetch suppliers for ALL variants concurrently
-              const reqs = v.map((variant: any) => axios.get(`http://localhost:8000/api/v1/products/variants/${variant.id}/suppliers`).then(r => r.data).catch(() => []));
+              const reqs = v.map((variant: any) => api.get(`/products/variants/${variant.id}/suppliers`).then(r => r.data).catch(() => []));
               const resps = await Promise.all(reqs);
               const allSupps = resps.flat();
               setSuppliers(allSupps);

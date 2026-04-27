@@ -87,6 +87,7 @@ class Currency(CurrencyInDBBase):
 class RoleBase(BaseModel):
     name: str
     description: Optional[str] = None
+    permissions: Optional[dict] = {}
     can_use_oracle: Optional[bool] = False
     is_active: Optional[bool] = True
 

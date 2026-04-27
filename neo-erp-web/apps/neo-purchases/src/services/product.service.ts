@@ -12,7 +12,7 @@ export const ProductService = {
     return data;
   },
   getCategories: async () => {
-    const { data } = await api.get('/categories/');
+    const { data } = await api.get('/categories?limit=1000');
     return data;
   },
   getTributes: async () => {

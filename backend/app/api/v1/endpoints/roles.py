@@ -26,6 +26,7 @@ def create_role(
         name=role_in.name,
         description=role_in.description,
         can_use_oracle=role_in.can_use_oracle,
+        permissions=role_in.permissions,
         is_active=role_in.is_active
     )
     db.add(role)

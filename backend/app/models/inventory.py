@@ -285,6 +285,7 @@ class PricingSession(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
+    target_cost_type = Column(String, default='REPLACEMENT') # STANDARD, REPLACEMENT
     source_type = Column(String, default='CSV_UPLOAD') # FILTER_BULK, CSV_UPLOAD, AI_PDF_PARSER
     status = Column(String, default='DRAFT') # DRAFT, APPLIED, CANCELLED
     

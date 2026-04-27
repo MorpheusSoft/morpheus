@@ -44,9 +44,13 @@ def create_user(
         facilities = db.query(Facility).filter(Facility.id.in_(user_in.facility_ids)).all()
         user.facilities = facilities
 
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Database error details: {str(e)}")
     return user
 
 @router.put("/{user_id}", response_model=UserSchema)
@@ -83,7 +87,11 @@ def update_user(
         facilities = db.query(Facility).filter(Facility.id.in_(user_in.facility_ids)).all()
         user.facilities = facilities
         
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Database error details: {str(e)}")
     return user

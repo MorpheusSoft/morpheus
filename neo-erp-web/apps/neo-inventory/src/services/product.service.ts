@@ -38,5 +38,9 @@ export const ProductService = {
   syncVariantSuppliers: async (variantId: string | number, payload: any[]) => {
     const { data } = await api.put(`/products/variants/${variantId}/suppliers`, payload);
     return data;
+  },
+  getProductStockLocations: async (id: string | number) => {
+    const { data } = await api.get(`/products/${id}/stock/locations`);
+    return data;
   }
 };

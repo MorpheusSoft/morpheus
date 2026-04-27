@@ -1,4 +1,5 @@
 from sqlalchemy import Boolean, Column, Integer, String, ForeignKey, DateTime, Text, Numeric
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.base_class import Base
@@ -48,6 +49,7 @@ class Role(Base):
     name = Column(String, unique=True, nullable=False)
     description = Column(String)
     can_use_oracle = Column(Boolean, default=False)
+    permissions = Column(JSONB, server_default='{}')
     is_active = Column(Boolean, default=True)
 
 class UserRole(Base):

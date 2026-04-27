@@ -5,13 +5,15 @@ import { Button } from 'primereact/button';
 import { Dialog } from 'primereact/dialog';
 import { Dropdown } from 'primereact/dropdown';
 import { InputNumber } from 'primereact/inputnumber';
-import axios from 'axios';
+import { InputText } from 'primereact/inputtext';
+import api from '@/lib/api';
 
 const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, ref) => {
   const [catalog, setCatalog] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [globalFilter, setGlobalFilter] = useState("");
   
   const [showAdd, setShowAdd] = useState(false);
   const [selectedVariant, setSelectedVariant] = useState(null);
@@ -45,7 +47,7 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
          const parentProd = products.find(p => p.variants?.some((v: any) => v.id === selectedVariant));
          if (parentProd) {
              // Inyectar fetch en vivo para obtener los empaques reales del producto
-             axios.get(`http://localhost:8000/api/v1/products/${parentProd.id}`).then(res => {
+             api.get(`/products/${parentProd.id}`).then(res => {
                  setPackagings(res.data.packagings || []);
              }).catch(() => setPackagings([]));
          } else {
@@ -59,18 +61,18 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
       setLoading(true);
       try {
           const url = selectedCategory 
-            ? `http://localhost:8000/api/v1/suppliers/${supplierId}/catalog?category_id=${selectedCategory}`
-            : `http://localhost:8000/api/v1/suppliers/${supplierId}/catalog`;
+            ? `/suppliers/${supplierId}/catalog?category_id=${selectedCategory}`
+            : `/suppliers/${supplierId}/catalog`;
             
           const [prodRes, catRes, catResponse] = await Promise.all([
-            axios.get('http://localhost:8000/api/v1/products/?limit=500'),
-            axios.get('http://localhost:8000/api/v1/categories/'),
-            axios.get(url)
+            api.get('/products/?limit=500'),
+            api.get('/categories/'),
+            api.get(url)
           ]);
           
-          setProducts(prodRes.data);
-          setCategories(catRes.data);
-          setCatalog(catResponse.data);
+          setProducts(Array.isArray(prodRes.data) ? prodRes.data : prodRes.data.data || []);
+          setCategories(Array.isArray(catRes.data) ? catRes.data : catRes.data.data || []);
+          setCatalog(Array.isArray(catResponse.data) ? catResponse.data : catResponse.data.data || []);
       } catch (e) {
           console.error(e);
       }
@@ -88,10 +90,13 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
       }
 
       const pack = packagings.find(p => p.id === selectedPack);
+      const vObj = allVariants.find(x => x.id === selectedVariant);
       const newEntry = {
           id: Date.now(), // Ghost ID para React
           supplier_id: supplierId,
           variant_id: selectedVariant,
+          product_name: vObj ? vObj.productName : "Insumo Nuevo",
+          variant_sku: vObj ? vObj.sku : "",
           currency_id: 1, // USD default para MVP
           replacement_cost: replacementCost,
           min_order_qty: minOrderQty,
@@ -108,6 +113,21 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
     if (!confirm("¿Quitar Insumo del borrador actual?")) return;
     setCatalog(catalog.filter(c => c.variant_id !== variantId));
   };
+
+  const header = (
+      <div className="flex justify-between items-center w-full bg-slate-50 p-2">
+         <span className="text-xs text-slate-500 font-bold uppercase tracking-wider pl-2">Ítems Vinculados</span>
+         <div className="relative">
+            <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 z-10 text-sm" />
+            <InputText 
+               type="search" 
+               onInput={(e) => setGlobalFilter(e.currentTarget.value)} 
+               placeholder="Buscar por nombre o sku..." 
+               className="w-full md:w-[20rem] !pl-9 !py-2 !rounded-lg !border-slate-200 text-sm focus:ring-2 focus:ring-emerald-500" 
+            />
+         </div>
+      </div>
+  );
 
   return (
     <div className="pt-4">
@@ -128,8 +148,16 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
         <Button type="button" label="Vincular Insumo" icon="pi pi-plus" onClick={() => setShowAdd(true)} className="p-button-outlined p-button-sm p-button-success" />
       </div>
 
-      <DataTable value={catalog} loading={loading} className="border border-slate-200 rounded-xl overflow-hidden text-sm" emptyMessage="Sin insumos vinculados en este borrador.">
+      <DataTable value={catalog} loading={loading} header={header} globalFilter={globalFilter} className="border border-slate-200 rounded-xl overflow-hidden text-sm" emptyMessage="Sin insumos vinculados en este borrador.">
         <Column header="Insumo Vinculado" body={(r) => {
+            if (r.product_name) {
+                return (
+                   <div className="flex flex-col">
+                       <span className="font-bold text-slate-800">{r.product_name}</span>
+                       <span className="text-[10px] bg-slate-100 text-slate-500 w-fit px-2 py-[2px] rounded-md mt-1 font-mono border border-slate-200">{r.variant_sku || 'S/N'}</span>
+                   </div>
+                );
+            }
             const v = allVariants.find(x => x.id === r.variant_id);
             if (v) return <span className="font-bold text-slate-800">{v.displayName}</span>;
             const fallback = products.find(p => p.id === r.variant_id);
@@ -161,7 +189,7 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
         )} />
         <Column header="Vigencia de Tarifa" body={(r) => {
             const dateStr = r.updated_at || r.created_at;
-            if (!dateStr) return <span className="text-slate-400 italic text-[10px]">Aún no guardado</span>;
+            if (!dateStr) return <span className="bg-emerald-100/50 text-emerald-700 border border-emerald-200 px-2 py-1 rounded text-[10px] font-bold shadow-sm">NUEVO (Borrador)</span>;
             const d = new Date(dateStr);
             return <div className="flex flex-col"><span className="text-slate-700 font-bold text-xs uppercase">{d.toLocaleDateString('es-ES', { month: 'short', day: 'numeric'})}</span><span className="text-slate-400 text-[10px]">{d.toLocaleTimeString('es-ES', { hour: '2-digit', minute:'2-digit' })}</span></div>;
         }} />

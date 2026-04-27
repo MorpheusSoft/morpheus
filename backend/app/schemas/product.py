@@ -101,6 +101,7 @@ class ProductVariant(ProductVariantBase):
     product_id: int
     average_cost: Decimal = 0
     last_cost: Decimal = 0
+    total_stock: Decimal = 0
     is_active: bool
 
     barcodes: List[ProductBarcode] = []
@@ -169,6 +170,7 @@ class Product(ProductBase):
     category_id: Optional[int] = None
     has_variants: bool
     is_active: bool
+    total_stock: Decimal = 0
     created_at: datetime
     
     variants: List[ProductVariant] = []

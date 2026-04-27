@@ -5,6 +5,7 @@ import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { InputText } from 'primereact/inputtext';
 import { Button } from 'primereact/button';
+import { Dialog } from 'primereact/dialog';
 import { ProductService } from '@/services/product.service';
 import { useRouter } from 'next/navigation';
 
@@ -14,6 +15,11 @@ export default function ProductsCatalogPage() {
   const [totalRecords, setTotalRecords] = useState(0);
   const [loading, setLoading] = useState(true);
   const [globalFilterValue, setGlobalFilterValue] = useState('');
+  
+  const [showLocationsDialog, setShowLocationsDialog] = useState(false);
+  const [locationsLoading, setLocationsLoading] = useState(false);
+  const [selectedLocations, setSelectedLocations] = useState<any[]>([]);
+  const [selectedProductTitle, setSelectedProductTitle] = useState('');
   
   const [lazyState, setLazyState] = useState({
       first: 0,
@@ -82,6 +88,20 @@ export default function ProductsCatalogPage() {
     setGlobalFilterValue(e.target.value);
   };
 
+  const showLocations = async (rowData: any) => {
+      setSelectedProductTitle(rowData.name);
+      setShowLocationsDialog(true);
+      setLocationsLoading(true);
+      try {
+          const locs = await ProductService.getProductStockLocations(rowData.id);
+          setSelectedLocations(locs || []);
+      } catch (err) {
+          console.error(err);
+      } finally {
+          setLocationsLoading(false);
+      }
+  };
+
   const statusBodyTemplate = (rowData: any) => {
     const active = rowData.is_active !== false;
     return (
@@ -100,6 +120,16 @@ export default function ProductsCatalogPage() {
   const priceBodyTemplate = (rowData: any) => {
     const price = rowData.variants?.length ? rowData.variants[0].sales_price : 0;
     return <span className="font-extrabold text-slate-700 text-[15px]">${Number(price).toFixed(2)}</span>;
+  };
+
+  const stockBodyTemplate = (rowData: any) => {
+    const stock = Number(rowData.total_stock || 0);
+    return (
+      <div className="flex items-center gap-2">
+         <span className={`font-extrabold text-[15px] tabular-nums ${stock > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>{stock} Und</span>
+         <Button icon="pi pi-map-marker" rounded text severity="info" size="small" tooltip="Ver Desglose en Sucursales" tooltipOptions={{ position: 'top' }} onClick={(e) => { e.preventDefault(); showLocations(rowData); }} />
+      </div>
+    );
   };
 
 
@@ -199,9 +229,19 @@ export default function ProductsCatalogPage() {
             <Column field="name" header="NOMBRE DEL PRODUCTO" sortable style={{ width: '35%', minWidth: '16rem' }} className="font-semibold text-slate-800 text-[15px]"></Column>
             <Column field="brand" header="MARCA" sortable style={{ width: '15%', minWidth: '8rem' }} className="text-slate-500 font-medium text-sm"></Column>
             <Column header="PRECIO BASE" body={priceBodyTemplate} sortable style={{ width: '15%', minWidth: '10rem' }}></Column>
+            <Column header="EXISTENCIA" body={stockBodyTemplate} sortable style={{ width: '15%', minWidth: '10rem' }}></Column>
             <Column header="ESTADO" body={statusBodyTemplate} style={{ width: '10%', minWidth: '6rem' }}></Column>
 
           </DataTable>
+
+          <Dialog header={`Inventario Físico - ${selectedProductTitle}`} visible={showLocationsDialog} style={{ width: '45vw' }} onHide={() => setShowLocationsDialog(false)} className="backdrop-blur-sm">
+             <DataTable value={selectedLocations} loading={locationsLoading} emptyMessage="No hay stock físico registrado de este producto." className="mt-4 border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                <Column field="facility_name" header="SUCURSAL" className="font-bold text-slate-800"></Column>
+                <Column field="variant_sku" header="SKU VARIANTE" className="font-mono text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded w-fit"></Column>
+                <Column field="stock_qty" header="CANTIDAD" body={(r) => <span className="font-black text-blue-700 text-lg tabular-nums">{Number(r.stock_qty)} U</span>}></Column>
+             </DataTable>
+          </Dialog>
+
         </div>
       </div>
     </div>

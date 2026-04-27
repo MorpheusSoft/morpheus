@@ -30,7 +30,15 @@ export async function createUser(data: any) {
   })
   if (!res.ok) {
      const error = await res.json()
-     throw new Error(error.detail || "Failed to create user")
+     let errorMessage = "Failed to create user";
+     if (error.detail) {
+        if (Array.isArray(error.detail)) {
+            errorMessage = error.detail[0].msg;
+        } else {
+            errorMessage = error.detail;
+        }
+     }
+     throw new Error(errorMessage)
   }
   revalidatePath("/dashboard/users")
   return res.json()
@@ -45,7 +53,15 @@ export async function updateUser(id: number, data: any) {
   })
   if (!res.ok) {
      const error = await res.json()
-     throw new Error(error.detail || "Failed to update user")
+     let errorMessage = "Failed to update user";
+     if (error.detail) {
+        if (Array.isArray(error.detail)) {
+            errorMessage = error.detail[0].msg;
+        } else {
+            errorMessage = error.detail;
+        }
+     }
+     throw new Error(errorMessage)
   }
   revalidatePath("/dashboard/users")
   return res.json()

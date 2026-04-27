@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.2.2",
     "axios": "^1.13.6",
     "date-fns": "^4.1.0",
     "next": "16.2.1",
@@ -16,7 +17,8 @@
     "primereact": "^10.9.7",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "react-hook-form": "^7.72.0"
+    "react-hook-form": "^7.72.0",
+    "yup": "^1.7.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
