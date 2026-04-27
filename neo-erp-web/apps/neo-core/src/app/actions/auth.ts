@@ -26,11 +26,14 @@ export async function loginAction(prevState: any, formData: FormData) {
   const data = await res.json()
   
   const cookieStore = await cookies()
+  const isProd = process.env.NODE_ENV === "production"
+  
   cookieStore.set("access_token", data.access_token, {
     httpOnly: false,
-    secure: process.env.NODE_ENV === "production",
+    secure: isProd,
     sameSite: "lax",
     path: "/",
+    domain: isProd ? ".morpheussoft.net" : undefined,
     maxAge: 60 * 30, // 30 mins
   })
 
