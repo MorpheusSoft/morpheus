@@ -26,11 +26,30 @@ export default function SuppliersCatalog() {
     const [loading, setLoading] = useState(true);
     const [globalFilter, setGlobalFilter] = useState('');
 
-    useEffect(() => {
+    const [lazyParams, setLazyParams] = useState({
+        first: 0,
+        rows: 10,
+        page: 0
+    });
+    const [totalRecords, setTotalRecords] = useState(0);
+
+    const loadLazyData = () => {
+        setLoading(true);
         import('@/lib/api').then(({ default: api }) => {
-            api.get('/suppliers/?limit=5000')
+            let url = `/suppliers/?skip=${lazyParams.first}&limit=${lazyParams.rows}`;
+            if (globalFilter) {
+                url += `&q=${encodeURIComponent(globalFilter)}`;
+            }
+            api.get(url)
                 .then(res => {
-                    setSuppliers(res.data);
+                    if (res.data.data) {
+                        setSuppliers(res.data.data);
+                        setTotalRecords(res.data.total);
+                    } else {
+                        // Fallback in case backend not updated yet
+                        setSuppliers(res.data);
+                        setTotalRecords(res.data.length);
+                    }
                     setLoading(false);
                 })
                 .catch(err => {
@@ -38,7 +57,26 @@ export default function SuppliersCatalog() {
                     setLoading(false);
                 });
         });
-    }, []);
+    };
+
+    useEffect(() => {
+        loadLazyData();
+    }, [lazyParams]);
+
+    useEffect(() => {
+        const timeout = setTimeout(() => {
+            if (lazyParams.first !== 0) {
+                setLazyParams(prev => ({ ...prev, first: 0, page: 0 }));
+            } else {
+                loadLazyData();
+            }
+        }, 500);
+        return () => clearTimeout(timeout);
+    }, [globalFilter]);
+
+    const onPage = (event: any) => {
+        setLazyParams(event);
+    };
 
     const statusBodyTemplate = (rowData: Supplier) => {
         return <Tag value={rowData.is_active ? 'Activo' : 'Inactivo'} severity={rowData.is_active ? 'success' : 'danger'}></Tag>;
@@ -73,10 +111,13 @@ export default function SuppliersCatalog() {
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex-1 flex flex-col min-h-0">
                 <DataTable 
                     value={suppliers} 
+                    lazy
                     paginator 
-                    rows={10} 
+                    first={lazyParams.first}
+                    rows={lazyParams.rows} 
+                    totalRecords={totalRecords}
+                    onPage={onPage}
                     dataKey="id" 
-                    filters={{ global: { value: globalFilter, matchMode: 'contains' } }}
                     loading={loading}
                     emptyMessage="No se encontraron proveedores."
                     header={header}

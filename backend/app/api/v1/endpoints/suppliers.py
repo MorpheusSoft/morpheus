@@ -4,8 +4,7 @@ from typing import List, Any
 from app.api.deps import get_db
 from app.models.core import Supplier, SupplierBank
 from app.models.purchasing import SupplierProduct
-from app.schemas.supplier import SupplierCreate, SupplierUpdate, SupplierResponse, SupplierProductResponse, SupplierProductCreate
-
+from app.schemas.supplier import SupplierCreate, SupplierUpdate, SupplierResponse, SupplierProductResponse, SupplierProductCreate, SupplierPaginated
 router = APIRouter()
 
 @router.get("/install_cost_trigger")
@@ -55,9 +54,24 @@ def install_cost_trigger(db: Session = Depends(get_db)):
         db.rollback()
         return {"error": str(e)}
 
-@router.get("/", response_model=List[SupplierResponse])
-def get_suppliers(db: Session = Depends(get_db), skip: int = 0, limit: int = 100) -> Any:
-    return db.query(Supplier).offset(skip).limit(limit).all()
+@router.get("/", response_model=SupplierPaginated)
+def get_suppliers(db: Session = Depends(get_db), skip: int = 0, limit: int = 100, q: str = None) -> Any:
+    from sqlalchemy import or_
+    query = db.query(Supplier)
+    
+    if q:
+        query = query.filter(
+            or_(
+                Supplier.name.ilike(f"%{q}%"),
+                Supplier.tax_id.ilike(f"%{q}%"),
+                Supplier.commercial_email.ilike(f"%{q}%")
+            )
+        )
+        
+    total = query.count()
+    suppliers = query.offset(skip).limit(limit).all()
+    
+    return {"data": suppliers, "total": total}
 
 @router.get("/{supplier_id}", response_model=SupplierResponse)
 def get_supplier(supplier_id: int, db: Session = Depends(get_db)) -> Any:

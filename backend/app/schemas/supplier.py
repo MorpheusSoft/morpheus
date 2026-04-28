@@ -96,3 +96,6 @@ class SupplierProductResponse(SupplierProductBase):
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
+class SupplierPaginated(BaseModel):
+    data: List[SupplierResponse]
+    total: int
