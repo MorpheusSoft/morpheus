@@ -14,6 +14,9 @@ class CartProvider extends ChangeNotifier {
   String? _customerPhone;
   String? _customerEmail;
 
+  // Multiplicador temporal
+  double? _pendingMultiplier;
+
   List<CartItem> get items => List.unmodifiable(_items);
   String? get lastScannedBarcode => _lastScannedBarcode;
   String? get errorMessage => _errorMessage;
@@ -22,6 +25,7 @@ class CartProvider extends ChangeNotifier {
   String? get customerAddress => _customerAddress;
   String? get customerPhone => _customerPhone;
   String? get customerEmail => _customerEmail;
+  double? get pendingMultiplier => _pendingMultiplier;
 
   void setCustomer(String document, String name, {String? address, String? phone, String? email}) {
     _customerDocument = document;
@@ -36,6 +40,18 @@ class CartProvider extends ChangeNotifier {
   double get totalDue => _items.fold(0, (sum, item) => sum + item.subtotal);
   int get totalItems => _items.fold(0, (sum, item) => sum + item.quantity.toInt());
 
+  void setPendingMultiplier(double multiplier) {
+    _pendingMultiplier = multiplier;
+    notifyListeners();
+  }
+
+  void updateLastItemQuantity(double newQuantity) {
+    if (_items.isEmpty) return;
+    // Como ahora insertamos de primeros (index 0), el último escaneado está arriba.
+    _items[0] = _items[0].copyWith(quantity: newQuantity);
+    notifyListeners();
+  }
+
   Future<void> scanProduct(String barcode) async {
     _errorMessage = null;
     final data = await DatabaseHelper.instance.getProductByBarcode(barcode);
@@ -46,22 +62,20 @@ class CartProvider extends ChangeNotifier {
       return;
     }
 
-    final currentItemIndex = _items.indexWhere((item) => item.barcode == barcode);
     final String productName = data['presentation'] != 'Unidad' ? '${data['name']} (${data['presentation']})' : data['name'];
     final double unitMultiplier = data['unit_multiplier'] ?? 1.0;
-    final double productPrice = data['base_price'] * unitMultiplier; // Multiplicamos por presentación
+    final double productPrice = data['base_price'] * unitMultiplier;
     
-    if (currentItemIndex >= 0) {
-      _items[currentItemIndex] = _items[currentItemIndex].copyWith(
-        quantity: _items[currentItemIndex].quantity + 1,
-      );
-    } else {
-      _items.add(
-        CartItem(barcode: barcode, name: productName, quantity: 1, price: productPrice),
-      );
-    }
+    final double qtyToAdd = _pendingMultiplier ?? 1.0;
+    
+    // Siempre agregamos como nueva línea AL PRINCIPIO de la lista
+    // para que el cajero no tenga que hacer scroll y siempre vea lo último que pasó.
+    _items.insert(0, 
+      CartItem(barcode: barcode, name: productName, quantity: qtyToAdd, price: productPrice),
+    );
     
     _lastScannedBarcode = '$barcode - $productName (\$${productPrice.toStringAsFixed(2)})';
+    _pendingMultiplier = null; // Reseteamos el multiplicador después de usarlo
     notifyListeners();
   }
 
@@ -76,6 +90,7 @@ class CartProvider extends ChangeNotifier {
     _customerAddress = null;
     _customerPhone = null;
     _customerEmail = null;
+    _pendingMultiplier = null;
     notifyListeners();
   }
 }

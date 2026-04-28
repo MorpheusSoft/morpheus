@@ -8,6 +8,7 @@ import 'widgets/customer_data_widget.dart';
 import 'widgets/fkey_bottom_bar_widget.dart';
 import 'widgets/scanner_bar_widget.dart';
 import 'widgets/customer_search_dialog.dart';
+import 'widgets/quantity_edit_dialog.dart';
 
 class SupermarketScreen extends StatefulWidget {
   const SupermarketScreen({super.key});
@@ -24,12 +25,20 @@ class _SupermarketScreenState extends State<SupermarketScreen> {
         child: Focus(
           autofocus: false,
           onKeyEvent: (node, event) {
-            if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.f7) {
-              showDialog(
-                context: context,
-                builder: (context) => const CustomerSearchDialog(),
-              );
-              return KeyEventResult.handled;
+            if (event is KeyDownEvent) {
+              if (event.logicalKey == LogicalKeyboardKey.f7) {
+                showDialog(
+                  context: context,
+                  builder: (context) => const CustomerSearchDialog(),
+                );
+                return KeyEventResult.handled;
+              } else if (event.logicalKey == LogicalKeyboardKey.f2) {
+                showDialog(
+                  context: context,
+                  builder: (context) => const QuantityEditDialog(),
+                );
+                return KeyEventResult.handled;
+              }
             }
             return KeyEventResult.ignored;
           },

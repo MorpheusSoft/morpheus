@@ -29,9 +29,13 @@ class _ScannerBarWidgetState extends State<ScannerBarWidget> {
             children: [
               Expanded(
                 child: Text(
-                  cart.errorMessage ?? cart.lastScannedBarcode ?? 'ESPERANDO ESCÁNER...',
+                  cart.pendingMultiplier != null 
+                    ? 'MULTIPLICADOR: ${cart.pendingMultiplier}x | Esperando escáner...' 
+                    : cart.errorMessage ?? cart.lastScannedBarcode ?? 'ESPERANDO ESCÁNER...',
                   style: TextStyle(
-                    color: cart.errorMessage != null ? Colors.redAccent : AppTheme.neonCyan,
+                    color: cart.pendingMultiplier != null 
+                        ? Colors.orangeAccent 
+                        : (cart.errorMessage != null ? Colors.redAccent : AppTheme.neonCyan),
                     fontWeight: FontWeight.bold, fontSize: 18
                   ),
                 ),
@@ -57,6 +61,17 @@ class _ScannerBarWidgetState extends State<ScannerBarWidget> {
                   onSubmitted: (value) async {
                     final text = value.trim();
                     if (text.isNotEmpty) {
+                      if (text.endsWith('*')) {
+                        final qtyStr = text.substring(0, text.length - 1);
+                        final qty = double.tryParse(qtyStr);
+                        if (qty != null && qty > 0) {
+                          context.read<CartProvider>().setPendingMultiplier(qty);
+                          _controller.clear();
+                          _focusNode.requestFocus();
+                          return;
+                        }
+                      }
+
                       if (text.toUpperCase().startsWith('/C ')) {
                         // Comando de Modo Experto para Cliente
                         final doc = text.substring(3).trim();

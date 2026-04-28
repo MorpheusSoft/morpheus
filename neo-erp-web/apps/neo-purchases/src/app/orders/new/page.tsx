@@ -343,6 +343,7 @@ export default function NewOrderPage() {
                 optionValue="id" 
                 placeholder="Seleccione un Proveedor" 
                 filter
+                virtualScrollerOptions={{ itemSize: 38 }}
                 className="w-full border-2 border-slate-200 rounded-xl" 
              />
           </div>
@@ -380,6 +381,7 @@ export default function NewOrderPage() {
                       : "Buscar en todo el Maestro de Inventario..."
                   }
                   filter
+                  virtualScrollerOptions={{ itemSize: 38 }}
                   disabled={searchMode === 'CATALOG' && (!selectedSupplierId || catalog.length === 0)}
                   className="w-full border-2 rounded-xl"
                   emptyMessage="No hay productos disponibles."

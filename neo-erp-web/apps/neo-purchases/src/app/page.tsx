@@ -187,6 +187,7 @@ export default function MRPDashboard() {
                placeholder="Todos los Proveedores" 
                showClear 
                filter
+               virtualScrollerOptions={{ itemSize: 38 }}
                className="w-72 font-semibold shadow-sm border-slate-200"
              />
              <Button onClick={generateOrders} label="Generar ODCs [Borradores]" icon="pi pi-send" severity="success" disabled={data.length === 0 || loading} className="font-bold shadow-md hover:shadow-lg transition-all" />
