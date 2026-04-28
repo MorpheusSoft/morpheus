@@ -20,9 +20,9 @@ export function AppSwitcher() {
 
   const apps = [
     { name: "Neo Core", icon: "pi pi-desktop", color: "text-indigo-600", bg: "bg-indigo-50", href: isProd ? "http://hub.qa.morpheussoft.net/dashboard" : "http://localhost:4000/dashboard" },
-    { name: "Neo Compras", icon: "pi pi-shopping-cart", color: "text-emerald-600", bg: "bg-emerald-50", href: isProd ? "http://compras.qa.morpheussoft.net/" : "http://localhost:4001/" },
+    { name: "Neo Inventario", icon: "pi pi-box", color: "text-blue-600", bg: "bg-blue-50", href: isProd ? "http://inventario.qa.morpheussoft.net/products" : "http://localhost:4001/products" },
+    { name: "Neo Compras", icon: "pi pi-shopping-cart", color: "text-emerald-600", bg: "bg-emerald-50", href: isProd ? "http://compras.qa.morpheussoft.net/" : "http://localhost:4002/" },
     { name: "Neo Logística", icon: "pi pi-truck", color: "text-purple-600", bg: "bg-purple-50", href: isProd ? "http://logistica.qa.morpheussoft.net/" : "http://localhost:4003/" },
-    { name: "Neo Inventario", icon: "pi pi-box", color: "text-blue-600", bg: "bg-blue-50", href: isProd ? "http://inventario.qa.morpheussoft.net/inventario/products" : "http://localhost:4002/inventario/products" },
     { name: "Ventas", icon: "pi pi-dollar", color: "text-amber-600", bg: "bg-amber-50", href: "#", disabled: true },
     { name: "Reportes", icon: "pi pi-chart-bar", color: "text-slate-600", bg: "bg-slate-50", href: "#", disabled: true },
   ];
@@ -50,7 +50,7 @@ export function AppSwitcher() {
 
       {/* Popover Menu */}
       {isOpen && (
-        <div className="absolute right-0 mt-3 w-80 bg-white/95 backdrop-blur-2xl rounded-3xl shadow-2xl border border-gray-200 z-50 origin-top-right overflow-hidden p-4">
+        <div className="absolute left-0 lg:left-auto lg:right-0 mt-3 w-80 bg-white/95 backdrop-blur-2xl rounded-3xl shadow-2xl border border-gray-200 z-50 origin-top-left lg:origin-top-right overflow-hidden p-4">
           <div className="flex items-center justify-between px-2 mb-4">
              <h3 className="font-bold text-slate-800 text-lg">Módulos Neo</h3>
           </div>
@@ -60,7 +60,6 @@ export function AppSwitcher() {
               app.disabled ? (
                 <div key={idx} className="flex flex-col items-center justify-center p-3 rounded-2xl cursor-not-allowed opacity-50 grayscale hover:bg-slate-50 transition-colors" title="Próximamente">
                   <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${app.bg} mb-2 shadow-inner ring-1 ring-black/5`}>
-                     {/* Used generic svg placeholder for disabled ones as Pi Icons might be missing in package */}
                      <span className={`${app.icon} text-xl ${app.color}`}></span>
                   </div>
                   <span className="text-xs font-semibold text-slate-600 text-center">{app.name}</span>
