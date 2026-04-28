@@ -7,7 +7,7 @@ import { Column } from 'primereact/column';
 import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
 import { Tag } from 'primereact/tag';
-import axios from 'axios';
+import api from '@/lib/api';
 import { format } from 'date-fns';
 import { InputTextarea } from 'primereact/inputtextarea';
 import { InputText } from 'primereact/inputtext';
@@ -51,7 +51,7 @@ export default function OrderDetailsPage() {
   const fetchOrder = async () => {
     setLoading(true);
     try {
-      const res = await axios.get(`http://localhost:8000/api/v1/purchase-orders/${orderId}/details`);
+      const res = await api.get(`/purchase-orders/${orderId}/details`);
       setOrder(res.data);
       setLines(res.data.lines);
       
@@ -69,7 +69,7 @@ export default function OrderDetailsPage() {
       if (cid !== 1) {
           setSystemLocalRate(erate);
       } else {
-          axios.get('http://localhost:8000/api/v1/currencies/exchange-rates/latest?currency_id=2')
+          api.get('/currencies/exchange-rates/latest?currency_id=2')
                .then(r => setSystemLocalRate(parseFloat(r.data.rate)))
                .catch(() => setSystemLocalRate(1));
       }
@@ -81,7 +81,7 @@ export default function OrderDetailsPage() {
 
   useEffect(() => {
     if (orderId) fetchOrder();
-    axios.get('http://localhost:8000/api/v1/currencies/').then(res => setCurrencies(res.data)).catch(console.error);
+    api.get('/currencies/').then(res => setCurrencies(res.data)).catch(console.error);
   }, [orderId]);
 
   const calcDiscountCascade = (base: number, str: string) => {
@@ -99,7 +99,7 @@ export default function OrderDetailsPage() {
       const selectedCur = currencies.find(c => c.id === newCurrencyId);
       if (!selectedCur) return;
       try {
-          const res = await axios.get(`http://localhost:8000/api/v1/currencies/exchange-rates/latest?currency_id=${newCurrencyId}`);
+          const res = await api.get(`/currencies/exchange-rates/latest?currency_id=${newCurrencyId}`);
           const newRate = parseFloat(res.data.rate);
           const ratio = newRate / exchangeRate;
           
@@ -123,7 +123,7 @@ export default function OrderDetailsPage() {
 
   const openRegaliaModal = async () => {
       try {
-          const res = await axios.get(`http://localhost:8000/api/v1/suppliers/${order.supplier.id}/catalog`);
+          const res = await api.get(`/suppliers/${order.supplier.id}/catalog`);
           const mapped = res.data.map((opt: any) => ({
               ...opt,
               display_name: `${opt.product_name} (${opt.variant_sku}) - Empaque: ${opt.pack_name}`
@@ -221,7 +221,7 @@ export default function OrderDetailsPage() {
                   line_discount_str: l.line_discount_str || ""
               }))
           };
-          await axios.put(`http://localhost:8000/api/v1/purchase-orders/${orderId}`, payload);
+          await api.put(`/purchase-orders/${orderId}`, payload);
           toast.current?.show({ severity: 'success', summary: 'Guardado', detail: 'Orden actualizada correctamente' });
           fetchOrder();
       } catch(e) {
@@ -252,10 +252,10 @@ export default function OrderDetailsPage() {
                   line_discount_str: l.line_discount_str || ""
               }))
           };
-          await axios.put(`http://localhost:8000/api/v1/purchase-orders/${orderId}`, payload);
+          await api.put(`/purchase-orders/${orderId}`, payload);
           
           // Luego aprobamos autoritativamente
-          await axios.put(`http://localhost:8000/api/v1/purchase-orders/${orderId}/status`, { status: 'approved' });
+          await api.put(`/purchase-orders/${orderId}/status`, { status: 'approved' });
           toast.current?.show({ severity: 'success', summary: '¡APROBADA!', detail: 'La orden ha sido autorizada y sellada.', life: 4000 });
           fetchOrder();
       } catch(e: any) {
@@ -272,7 +272,7 @@ export default function OrderDetailsPage() {
   const triggerMailer = async () => {
       setSaving(true);
       try {
-          await axios.post(`http://localhost:8000/api/v1/purchase-orders/${orderId}/send`);
+          await api.post(`/purchase-orders/${orderId}/send`);
           toast.current?.show({ severity: 'success', summary: '¡Enviada!', detail: 'Se dispararon los correos al proveedor.', life: 4000 });
           fetchOrder(); // Pasará a status=sent
       } catch(e) {
@@ -481,7 +481,7 @@ export default function OrderDetailsPage() {
           <div className="flex justify-end gap-4 p-6 bg-white rounded-2xl shadow-sm border border-orange-200 bg-orange-50 mt-6">
              <span className="flex items-center text-orange-600 font-bold mr-4"><i className="pi pi-lock mr-2"></i> Límite de Compra Excedido. Esperando liberación de Gerencia.</span>
              <Button label="Liberar Orden (Gerencia)" icon="pi pi-key" severity="warning" onClick={() => {
-                 axios.put(`http://localhost:8000/api/v1/purchase-orders/${orderId}/status`, { status: 'approved' })
+                 api.put(`/purchase-orders/${orderId}/status`, { status: 'approved' })
                      .then(() => fetchOrder())
                      .catch(() => toast.current?.show({severity:'error', summary:'Aviso', detail:'Acceso Denegado'}));
              }} className="font-bold px-8 shadow-lg text-lg bg-orange-600 border-none" />

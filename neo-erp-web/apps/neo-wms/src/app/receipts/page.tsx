@@ -6,7 +6,7 @@ import { Column } from 'primereact/column';
 import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
 import { Tag } from 'primereact/tag';
-import axios from 'axios';
+import api from '@/lib/api';
 import { format } from 'date-fns';
 import { useRouter } from 'next/navigation';
 
@@ -19,7 +19,7 @@ export default function WmsReceiptsPage() {
   const fetchOrders = async () => {
     setLoading(true);
     try {
-      const res = await axios.get('http://localhost:8000/api/v1/purchase-orders/');
+      const res = await api.get('/purchase-orders/');
       // Solo ODCs que pueden recibirse físicamente (Que ya pasaron el filtro financiero)
       const recibibles = res.data.filter((o: any) => ['approved', 'sent', 'viewed', 'partial'].includes(o.status));
       setOrders(recibibles);

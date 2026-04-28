@@ -109,7 +109,7 @@ export function AppSidebar() {
       <div className="p-[16px] border-t border-[#1e293b] bg-[#0f172a]">
         <div className="rounded-xl p-[8px] flex items-center gap-[12px] hover:bg-[#1e293b] transition-colors cursor-pointer">
           <div className="w-[36px] h-[36px] rounded-full bg-[#1e293b] border border-slate-700 flex items-center justify-center text-slate-300 font-semibold text-[14px]">
-            LZ
+            {userInitials}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[14px] font-medium text-slate-200 truncate">{userName}</p>

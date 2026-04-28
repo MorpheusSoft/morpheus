@@ -82,8 +82,10 @@ export default function SupplierEdit() {
         fiscal_address: suppRes.data.fiscal_address || '',
         commercial_contact_name: suppRes.data.commercial_contact_name || '',
         commercial_contact_phone: suppRes.data.commercial_contact_phone || '',
+        commercial_email: suppRes.data.commercial_email || '',
         financial_contact_name: suppRes.data.financial_contact_name || '',
         financial_contact_phone: suppRes.data.financial_contact_phone || '',
+        financial_email: suppRes.data.financial_email || '',
       };
       reset(parsedData);
       setFetching(false);

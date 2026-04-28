@@ -9,7 +9,7 @@ import { InputNumber } from 'primereact/inputnumber';
 import { Calendar } from 'primereact/calendar';
 import { Message } from 'primereact/message';
 import { Toast } from 'primereact/toast';
-import axios from 'axios';
+import api from '@/lib/api';
 import { format } from 'date-fns';
 
 export default function ConciliationPanel({ order, currencies, currencyId, onConciliated }: { order: any, currencies: any[], currencyId: number | null, onConciliated: () => void }) {
@@ -98,7 +98,7 @@ export default function ConciliationPanel({ order, currencies, currencyId, onCon
                     new_sales_price: l.new_sales_price !== l.sales_price ? l.new_sales_price : null
                 }))
             };
-            await axios.post(`http://localhost:8000/api/v1/purchase-orders/${order.id}/conciliate`, payload);
+            await api.post(`/purchase-orders/${order.id}/conciliate`, payload);
             toast.current?.show({ severity: 'success', summary: 'Cierre Financiero', detail: 'Conciliación 3-Way Match exitosa. Margenes asegurados.' });
             setTimeout(() => onConciliated(), 1500);
         } catch(e: any) {

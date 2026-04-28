@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import axios from 'axios';
+import api from '@/lib/api';
 import { Card } from 'primereact/card';
 import { InputSwitch } from 'primereact/inputswitch';
 import { Calendar } from 'primereact/calendar';
@@ -17,7 +17,7 @@ export default function CronsSettingsPage() {
     const fetchJobs = async () => {
         setLoading(true);
         try {
-            const res = await axios.get('http://localhost:8000/api/v1/jobs/');
+            const res = await api.get('/jobs/');
             setJobs(res.data.map((j: any) => {
                 // Parse "HH:mm:ss" into Date object for Calendar
                 const [h, m, s] = j.execution_time.split(':');
@@ -41,7 +41,7 @@ export default function CronsSettingsPage() {
         setSaving(true);
         try {
             const timeStr = `${job.timeObj.getHours().toString().padStart(2, '0')}:${job.timeObj.getMinutes().toString().padStart(2, '0')}:00`;
-            await axios.put(`http://localhost:8000/api/v1/jobs/${job.job_code}`, {
+            await api.put(`/jobs/${job.job_code}`, {
                 is_enabled: job.is_enabled,
                 execution_time: timeStr
             });

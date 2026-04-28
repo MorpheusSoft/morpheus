@@ -8,7 +8,7 @@ import { Dialog } from 'primereact/dialog';
 import { MultiSelect } from 'primereact/multiselect';
 import { InputText } from 'primereact/inputtext';
 import { Checkbox } from 'primereact/checkbox';
-import axios from 'axios';
+import api from '@/lib/api';
 
 export default function BuyersPage() {
   const [buyers, setBuyers] = useState<any[]>([]);
@@ -37,8 +37,8 @@ export default function BuyersPage() {
       setLoading(true);
       try {
           const [bRes, cRes] = await Promise.all([
-              axios.get('http://localhost:8000/api/v1/buyers/'),
-              axios.get('http://localhost:8000/api/v1/categories/')
+              api.get('/buyers/'),
+              api.get('/categories/')
           ]);
           setBuyers(bRes.data);
           setCategories(cRes.data);
@@ -83,9 +83,9 @@ export default function BuyersPage() {
 
       try {
           if (isEditing && buyerId) {
-              await axios.put(`http://localhost:8000/api/v1/buyers/${buyerId}`, payload);
+              await api.put(`/buyers/${buyerId}`, payload);
           } else {
-              await axios.post('http://localhost:8000/api/v1/buyers/', payload);
+              await api.post('/buyers/', payload);
           }
           setShowDialog(false);
           loadData();
@@ -97,7 +97,7 @@ export default function BuyersPage() {
   const deleteBuyer = async (id: number) => {
       if (!confirm("¿Deshabilitar o eliminar este perfil de compras?")) return;
       try {
-          await axios.delete(`http://localhost:8000/api/v1/buyers/${id}`);
+          await api.delete(`/buyers/${id}`);
           loadData();
       } catch (e) {
           console.error(e);

@@ -5,7 +5,7 @@ from sqlalchemy.sql import func
 from datetime import datetime
 
 from app.api import deps
-from app.models.inventory import PricingSession, PricingSessionLine, ProductVariant, ProductBarcode, Product
+from app.models.inventory import PricingSession, PricingSessionLine, ProductVariant, ProductBarcode, Product, Category
 from app.models.purchasing import SupplierProduct
 from app.models.core import Tribute
 from app.schemas.pricing_session import (
@@ -272,7 +272,16 @@ def bulk_filter_lines(
         query = query.filter(SupplierProduct.supplier_id.in_(payload.filters.supplier_ids))
         
     if payload.filters.category_ids:
-        query = query.filter(Product.category_id.in_(payload.filters.category_ids))
+        from sqlalchemy import or_
+        cats = db.query(Category).filter(Category.id.in_(payload.filters.category_ids)).all()
+        if cats:
+            query = query.join(Category, Product.category_id == Category.id)
+            cat_conditions = []
+            for c in cats:
+                cat_conditions.append(Category.id == c.id)
+                if c.path:
+                    cat_conditions.append(Category.path.like(f"{c.path}/%"))
+            query = query.filter(or_(*cat_conditions))
         
     if payload.filters.search_term:
         query = query.filter(Product.name.ilike(f"%{payload.filters.search_term}%"))

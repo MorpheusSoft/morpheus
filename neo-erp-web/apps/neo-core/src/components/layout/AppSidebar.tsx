@@ -1,8 +1,35 @@
 'use client';
+import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 export function AppSidebar() {
+
+  // Agregar estado para usuario logueado
+  const [userName, setUserName] = React.useState('Cargando...');
+  const [userRole, setUserRole] = React.useState('Verificando...');
+  const [userInitials, setUserInitials] = React.useState('--');
+
+  React.useEffect(() => {
+      import('@/lib/api').then(({ default: api }) => {
+          api.get('/users/me')
+              .then(res => {
+                  if (res.data && res.data.full_name) {
+                      const nameParts = res.data.full_name.split(' ');
+                      const initials = nameParts.length > 1 ? nameParts[0][0] + nameParts[1][0] : nameParts[0].substring(0, 2);
+                      setUserName(res.data.full_name);
+                      setUserInitials(initials.toUpperCase());
+                      if (res.data.active_role) {
+                          setUserRole(res.data.active_role.name);
+                      } else {
+                          setUserRole("Staff");
+                      }
+                  }
+              })
+              .catch(err => console.error("Error cargando usuario: ", err));
+      });
+  }, []);
+
   const pathname = usePathname() || '';
 
   const dashboardItems = [
@@ -77,13 +104,13 @@ export function AppSidebar() {
       <div className="p-[16px] border-t border-[#1e293b] bg-[#0f172a]">
         <div className="rounded-xl p-[8px] flex items-center gap-[12px] bg-[#1e293b]/50 border border-[#1e293b] hover:bg-[#1e293b] transition-colors cursor-pointer">
           <div className="w-[36px] h-[36px] rounded-full bg-indigo-900 border border-indigo-500/50 flex items-center justify-center text-indigo-200 font-bold text-[14px] shadow-inner shadow-indigo-500/20">
-            AD
+            {userInitials}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[14px] font-semibold text-white truncate">Administrador</p>
+            <p className="text-[14px] font-semibold text-white truncate">{userName}</p>
             <p className="text-[11px] font-medium text-emerald-400 truncate flex items-center gap-1">
                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-               Sesión Activa
+               {userRole}
             </p>
           </div>
         </div>

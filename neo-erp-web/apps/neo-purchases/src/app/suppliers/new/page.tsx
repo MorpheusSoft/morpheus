@@ -11,7 +11,7 @@ import { TabView, TabPanel } from 'primereact/tabview';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { useRouter } from 'next/navigation';
-import axios from 'axios';
+import api from '@/lib/api';
 
 interface Currency {
   id: number;
@@ -63,12 +63,12 @@ export default function SupplierMaster() {
 
   useEffect(() => {
     // Load currencies for the dropdowns
-    axios.get('http://localhost:8000/api/v1/currencies/')
+    api.get('/currencies/')
       .then(res => setCurrencies(res.data))
       .catch(err => console.error(err));
       
     // Load facilities
-    axios.get('http://localhost:8000/api/v1/facilities/')
+    api.get('/facilities/')
       .then(res => setFacilities(res.data))
       .catch(err => console.error(err));
   }, []);
@@ -76,7 +76,7 @@ export default function SupplierMaster() {
   const onSubmit = async (data: any) => {
     setLoading(true);
     try {
-      await axios.post('http://localhost:8000/api/v1/suppliers/', data);
+      await api.post('/suppliers/', data);
       alert('Proveedor registrado exitosamente.');
       router.push('/suppliers');
     } catch (e: any) {

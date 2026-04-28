@@ -411,3 +411,20 @@ def conciliate_purchase_order(
     order.status = 'conciliated'
     db.commit()
     return {"status": "conciliated", "invoice": payload.invoice_number}
+
+@router.delete("/{id}")
+def delete_purchase_order(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+) -> Any:
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden de compra no encontrada")
+    if order.status != 'draft':
+        raise HTTPException(status_code=400, detail="Solo las órdenes en borrador pueden ser eliminadas.")
+    
+    db.query(PurchaseOrderLine).filter(PurchaseOrderLine.order_id == id).delete()
+    db.delete(order)
+    db.commit()
+    return {"status": "deleted"}

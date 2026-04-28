@@ -6,7 +6,7 @@ import { Column } from 'primereact/column';
 import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
 import { Tag } from 'primereact/tag';
-import axios from 'axios';
+import api from '@/lib/api';
 import { format } from 'date-fns';
 import { useRouter } from 'next/navigation';
 
@@ -19,7 +19,7 @@ export default function PurchaseOrdersPage() {
   const fetchOrders = async () => {
     setLoading(true);
     try {
-      const res = await axios.get('http://localhost:8000/api/v1/purchase-orders/');
+      const res = await api.get('/purchase-orders/');
       setOrders(res.data);
     } catch (e) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar las órdenes de compra.' });
@@ -33,11 +33,22 @@ export default function PurchaseOrdersPage() {
 
   const approveOrder = async (id: number) => {
     try {
-        await axios.put(`http://localhost:8000/api/v1/purchase-orders/${id}/status`, { status: 'approved' });
+        await api.put(`/purchase-orders/${id}/status`, { status: 'approved' });
         toast.current?.show({ severity: 'success', summary: 'Aprobada', detail: 'La Autorización Oficial fue registrada.', life: 3000 });
         fetchOrders();
     } catch(e) {
         toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Fallo al autorizar la orden transaccional.' });
+    }
+  };
+
+  const deleteOrder = async (id: number) => {
+    if (!window.confirm("¿Está seguro de eliminar esta orden en borrador? Esta acción no se puede deshacer.")) return;
+    try {
+        await api.delete(`/purchase-orders/${id}`);
+        toast.current?.show({ severity: 'success', summary: 'Eliminada', detail: 'La orden fue eliminada.', life: 3000 });
+        fetchOrders();
+    } catch(e: any) {
+        toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al eliminar la orden.' });
     }
   };
 
@@ -108,7 +119,10 @@ export default function PurchaseOrdersPage() {
              <div className="flex justify-end gap-2">
                  <Button onClick={() => router.push('/orders/' + r.id)} icon="pi pi-eye" rounded severity="secondary" text aria-label="Ver Detalles" tooltip="Examinar Productos" tooltipOptions={{position: 'top', showDelay: 400}} />
                  {r.status === 'draft' && (
-                     <Button onClick={() => approveOrder(r.id)} icon="pi pi-check" rounded severity="success" aria-label="Aprobar" tooltip="Aprobar Oficialmente" tooltipOptions={{position: 'top', showDelay: 400}} className="shadow-md hover:shadow-lg transition-all shadow-emerald-500/30" />
+                     <>
+                        <Button onClick={() => deleteOrder(r.id)} icon="pi pi-trash" rounded severity="danger" text aria-label="Eliminar" tooltip="Eliminar Borrador" tooltipOptions={{position: 'top', showDelay: 400}} />
+                        <Button onClick={() => approveOrder(r.id)} icon="pi pi-check" rounded severity="success" aria-label="Aprobar" tooltip="Aprobar Oficialmente" tooltipOptions={{position: 'top', showDelay: 400}} className="shadow-md hover:shadow-lg transition-all shadow-emerald-500/30" />
+                     </>
                  )}
              </div>
           )} align="center" style={{ width: '8rem' }} />

@@ -33,7 +33,7 @@ const ProductSuppliersTab = forwardRef(({ productId }: { productId: number }, re
              api.get('/suppliers/?limit=5000')
           ]);
           const pData = pRes.data;
-          setAllSuppliers(sRes.data.items || sRes.data || []);
+          setAllSuppliers(sRes.data?.data || sRes.data?.items || (Array.isArray(sRes.data) ? sRes.data : []));
           
           const v = pData.variants || [];
           setVariants(v);

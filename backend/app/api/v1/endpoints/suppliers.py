@@ -134,9 +134,16 @@ def get_supplier_catalog(supplier_id: int, category_id: int = None, db: Session 
         .filter(SupplierProduct.supplier_id == supplier_id)
         
     if category_id:
-        query = query.join(Category, Product.category_id == Category.id).filter(
-            (Category.id == category_id) | (Category.path.like(f"%/{category_id}/%"))
-        )
+        cat = db.query(Category).filter(Category.id == category_id).first()
+        if cat and cat.path:
+            query = query.join(Category, Product.category_id == Category.id).filter(
+                (Category.id == category_id) | 
+                (Category.path.like(f"{cat.path}/%"))
+            )
+        else:
+            query = query.join(Category, Product.category_id == Category.id).filter(
+                Category.id == category_id
+            )
         
     results = query.all()
     

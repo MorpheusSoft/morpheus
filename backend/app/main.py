@@ -42,7 +42,11 @@ app.add_middleware(
         "http://localhost:4003",
         "http://127.0.0.1:4000",
         "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001"
+        "http://127.0.0.1:3001",
+        "https://hub.qa.morpheussoft.net",
+        "https://compras.qa.morpheussoft.net",
+        "https://inventario.qa.morpheussoft.net",
+        "https://logistica.qa.morpheussoft.net"
     ],
     allow_credentials=True,
     allow_methods=["*"],

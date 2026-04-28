@@ -7,7 +7,7 @@ import { Dropdown } from 'primereact/dropdown';
 import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
 import { useRouter } from 'next/navigation';
-import axios from 'axios';
+import api from '@/lib/api';
 
 export default function MRPDashboard() {
   const router = useRouter();
@@ -23,8 +23,8 @@ export default function MRPDashboard() {
 
   const fetchSuppliers = async () => {
     try {
-      const res = await axios.get('http://localhost:8000/api/v1/suppliers/');
-      setSuppliers(res.data.items || res.data || []);
+      const res = await api.get('/suppliers/');
+      setSuppliers(res.data.data || res.data.items || res.data || []);
     } catch (e) {
       console.error(e);
     }
@@ -32,7 +32,7 @@ export default function MRPDashboard() {
 
   const fetchOrdersSummary = async () => {
     try {
-      const res = await axios.get('http://localhost:8000/api/v1/purchase-orders/');
+      const res = await api.get('/purchase-orders/');
       const orders = res.data;
       setOrdersSummary({
         pendingApproval: orders.filter((o: any) => o.status === 'draft' || o.status === 'pending_approval').length,
@@ -41,7 +41,7 @@ export default function MRPDashboard() {
         pendingReceipt: orders.filter((o: any) => o.status === 'viewed').length
       });
       
-      const ceoRes = await axios.get('http://localhost:8000/api/v1/dashboard/ceo-inbox');
+      const ceoRes = await api.get('/dashboard/ceo-inbox');
       setCeoMetrics(ceoRes.data);
     } catch(e) {}
   };
@@ -50,9 +50,9 @@ export default function MRPDashboard() {
     setLoading(true);
     try {
       const url = selectedSupplier 
-        ? `http://localhost:8000/api/v1/mrp/simulator?supplier_id=${selectedSupplier}&facility_id=1`
-        : `http://localhost:8000/api/v1/mrp/simulator?facility_id=1`;
-      const res = await axios.get(url);
+        ? `/mrp/simulator?supplier_id=${selectedSupplier}&facility_id=1`
+        : `/mrp/simulator?facility_id=1`;
+      const res = await api.get(url);
       setData(res.data);
     } catch (e) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Fallo al cargar simulador MRP' });
@@ -75,7 +75,7 @@ export default function MRPDashboard() {
         safety_stock: field === 'safety_stock' ? value : rowData.safety_stock
     };
     try {
-       await axios.put('http://localhost:8000/api/v1/mrp/sync-metrics', payload);
+       await api.put('/mrp/sync-metrics', payload);
        toast.current?.show({ severity: 'success', summary: 'Guardado', detail: 'Métricas recalibradas exitosamente', life: 2000 });
        fetchMRP(); // Refresh full MRP simulation
     } catch (e) {
@@ -99,7 +99,7 @@ export default function MRPDashboard() {
             facility_id: 1, // MVP
             buyer_id: 2 // MVP (Admin/Compras)
         };
-        const res = await axios.post('http://localhost:8000/api/v1/mrp/generate-orders', payload);
+        const res = await api.post('/mrp/generate-orders', payload);
         toast.current?.show({ severity: 'success', summary: '¡Éxito Fricción-Cero!', detail: `Se fabricaron ${res.data.orders_created} Órdenes de Compra (Borrador)`, life: 5000 });
         fetchMRP();
     } catch(e) {
@@ -206,6 +206,9 @@ export default function MRPDashboard() {
           stripedRows 
           rowHover 
           className="text-sm"
+          paginator
+          rows={10}
+          rowsPerPageOptions={[10, 25, 50, 100]}
         >
           <Column selectionMode="multiple" headerStyle={{ width: '3rem' }}></Column>
           <Column header="SKU" field="sku" body={r => <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-600">{r.sku}</span>} />

@@ -10,7 +10,7 @@ import { Toast } from 'primereact/toast';
 import { Dialog } from 'primereact/dialog';
 import { InputText } from 'primereact/inputtext';
 import { SelectButton } from 'primereact/selectbutton';
-import axios from 'axios';
+import api from '@/lib/api';
 
 export default function NewOrderPage() {
   const router = useRouter();
@@ -47,14 +47,15 @@ export default function NewOrderPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    axios.get('http://localhost:8000/api/v1/suppliers/')
-      .then(res => setSuppliers((res.data.items || res.data || []).filter((s: any) => s.is_active)))
+    api.get('/suppliers/')
+      .then(res => setSuppliers((res.data.data || res.data.items || res.data || []).filter((s: any) => s.is_active)))
       .catch(err => console.error(err));
       
-    axios.get('http://localhost:8000/api/v1/products/')
+    api.get('/products/')
       .then(res => {
           const variants: any[] = [];
-          res.data.forEach((p: any) => {
+          const productsList = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
+          productsList.forEach((p: any) => {
               if (p.variants) {
                   p.variants.forEach((v: any) => {
                       variants.push({
@@ -74,18 +75,19 @@ export default function NewOrderPage() {
       })
       .catch(err => console.error(err));
       
-    axios.get('http://localhost:8000/api/v1/facilities/')
-      .then(res => setFacilities(res.data))
+    api.get('/facilities/')
+      .then(res => setFacilities(res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : [])))
       .catch(err => console.error(err));
       
-    axios.get('http://localhost:8000/api/v1/categories/')
-      .then(res => setCategories(res.data))
+    api.get('/categories/')
+      .then(res => setCategories(res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : [])))
       .catch(err => console.error(err));
       
-    axios.get('http://localhost:8000/api/v1/currencies/')
+    api.get('/currencies/')
       .then(res => {
-          setCurrencies(res.data);
-          let usd = res.data.find((c: any) => c.code === 'USD');
+          const list = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
+          setCurrencies(list);
+          let usd = list.find((c: any) => c.code === 'USD');
           if (usd) {
               setNewProductForm(prev => ({ ...prev, currency_id: usd.id }));
           }
@@ -95,7 +97,7 @@ export default function NewOrderPage() {
 
   useEffect(() => {
     if (selectedSupplierId) {
-      axios.get(`http://localhost:8000/api/v1/suppliers/${selectedSupplierId}/catalog`)
+      api.get(`/suppliers/${selectedSupplierId}/catalog`)
         .then(res => {
             const mappedCatalog = res.data.map((opt: any) => ({
                 ...opt,
@@ -126,7 +128,7 @@ export default function NewOrderPage() {
   const reloadCatalog = async () => {
        if(!selectedSupplierId) return;
        try {
-           const res = await axios.get(`http://localhost:8000/api/v1/suppliers/${selectedSupplierId}/catalog`);
+           const res = await api.get(`/suppliers/${selectedSupplierId}/catalog`);
            const mappedCatalog = res.data.map((opt: any) => ({
                 ...opt,
                 display_name: `${opt.variant_sku || ''} - ${opt.product_name} (${opt.pack_name || 'Und.'}) - $${opt.replacement_cost}`
@@ -154,7 +156,7 @@ export default function NewOrderPage() {
               has_variants: false,
               is_active: true
           };
-          const prodRes = await axios.post('http://localhost:8000/api/v1/products/', productPayload);
+          const prodRes = await api.post('/products/', productPayload);
           const newProduct = prodRes.data;
           const defaultVariant = newProduct.variants && newProduct.variants.length > 0 ? newProduct.variants[0] : null;
 
@@ -172,7 +174,7 @@ export default function NewOrderPage() {
               is_active: true
           };
           // endpoint post de catalog individual
-          await axios.post(`http://localhost:8000/api/v1/suppliers/${selectedSupplierId}/catalog`, suppPayload);
+          await api.post(`/suppliers/${selectedSupplierId}/catalog`, suppPayload);
 
           toast.current?.show({ severity: 'success', summary: 'Magia', detail: 'Insumo creado y enlazado al proveedor.' });
           
@@ -292,7 +294,7 @@ export default function NewOrderPage() {
                   unit_cost: l.unit_cost
               }))
           };
-          const res = await axios.post('http://localhost:8000/api/v1/purchase-orders/', payload);
+          const res = await api.post('/purchase-orders/', payload);
           toast.current?.show({ severity: 'success', summary: 'Draft Creado', detail: 'Se ha creado la Orden.', life: 3000 });
           
           setTimeout(() => {

@@ -62,8 +62,12 @@ export default function PricingValidationBoardPage() {
         api.get('/suppliers/?limit=1000'),
         ProductService.getCategories()
       ]);
-      setWizardSupplierOptions(sup.data?.items || sup.data || []);
-      setWizardCategoryOptions(cat || []);
+      
+      const supData = sup.data?.data || sup.data?.items || (Array.isArray(sup.data) ? sup.data : []);
+      const catData = cat?.data || cat?.items || (Array.isArray(cat) ? cat : []);
+      
+      setWizardSupplierOptions(supData);
+      setWizardCategoryOptions(catData);
     } catch(e) { console.error(e); }
   };
 
@@ -143,6 +147,30 @@ export default function PricingValidationBoardPage() {
   useEffect(() => {
     fetchSession();
   }, [params.id]);
+
+  const onCellEditComplete = async (e: any) => {
+    let { rowData, newValue, field } = e;
+    if (newValue === rowData[field] || newValue === null) return;
+
+    // Optimistic update
+    const newLines = [...(session?.lines || [])];
+    const index = newLines.findIndex(l => l.id === rowData.id);
+    if (index !== -1) {
+       newLines[index] = { ...newLines[index], [field]: newValue };
+       setSession({ ...session, lines: newLines });
+    }
+
+    try {
+       await PricingService.updateSessionLine(params.id as string, rowData.id, { [field]: newValue });
+    } catch (err) {
+       console.error("Error updating line", err);
+       fetchSession(); // Revert on failure
+    }
+  };
+
+  const priceEditor = (options: any) => {
+    return <InputNumber value={options.value} onValueChange={(e) => options.editorCallback(e.value)} mode="currency" currency="USD" autoFocus inputClassName="p-1 w-24 text-sm" />;
+  };
 
   const handleApply = async () => {
     try {
@@ -239,12 +267,12 @@ export default function PricingValidationBoardPage() {
                 Esta sesión ya ha sido aplicada a la base de datos y es de solo lectura.
              </div>
           )}
-          <DataTable value={session?.lines || []} loading={loading} emptyMessage="No hay lineas cargadas en este borrador." scrollable scrollHeight="60vh">
+          <DataTable value={session?.lines || []} loading={loading} emptyMessage="No hay lineas cargadas en este borrador." scrollable scrollHeight="60vh" editMode="cell">
              <Column field="external_reference_name" header="REFERENCIA / PRODUCTO" className="font-bold"></Column>
              <Column field="old_cost" header="COSTO ACTUAL" body={(r) => <span className="text-slate-500">${Number(r.old_cost).toFixed(2)}</span>}></Column>
-             <Column field="proposed_cost" header="NUEVO COSTO" body={(r) => <span className="text-blue-600 font-extrabold">${Number(r.proposed_cost).toFixed(2)}</span>}></Column>
+             <Column field="proposed_cost" header="NUEVO COSTO" body={(r) => <span className="text-blue-600 font-extrabold">${Number(r.proposed_cost).toFixed(2)}</span>} editor={session?.status === 'DRAFT' ? priceEditor : undefined} onCellEditComplete={onCellEditComplete} className={session?.status === 'DRAFT' ? 'cursor-pointer hover:bg-slate-50' : ''}></Column>
              <Column field="old_price" header="PVP ACTUAL" body={(r) => <span className="text-slate-500">${Number(r.old_price).toFixed(2)}</span>}></Column>
-             <Column field="proposed_price" header="NUEVO PVP" body={(r) => <span className="text-emerald-600 font-extrabold">${Number(r.proposed_price).toFixed(2)}</span>}></Column>
+             <Column field="proposed_price" header="NUEVO PVP" body={(r) => <span className="text-emerald-600 font-extrabold">${Number(r.proposed_price).toFixed(2)}</span>} editor={session?.status === 'DRAFT' ? priceEditor : undefined} onCellEditComplete={onCellEditComplete} className={session?.status === 'DRAFT' ? 'cursor-pointer hover:bg-slate-50' : ''}></Column>
              <Column header="ACCIÓN" body={statusTemplate} align="center"></Column>
           </DataTable>
        </div>

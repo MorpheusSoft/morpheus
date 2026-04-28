@@ -9,7 +9,7 @@ import { Toast } from 'primereact/toast';
 import { InputText } from 'primereact/inputtext';
 import { InputNumber } from 'primereact/inputnumber';
 import { Calendar } from 'primereact/calendar';
-import axios from 'axios';
+import api from '@/lib/api';
 import { format } from 'date-fns';
 
 export default function ReceiptExecutionPage() {
@@ -26,7 +26,7 @@ export default function ReceiptExecutionPage() {
   const fetchOrder = async () => {
     setLoading(true);
     try {
-      const res = await axios.get(`http://localhost:8000/api/v1/purchase-orders/${orderId}/details`);
+      const res = await api.get(`/purchase-orders/${orderId}/details`);
       setOrder(res.data);
       // Initialize receiving lines based on PO lines
       const initialLines = res.data.lines.map((l: any) => ({
@@ -83,7 +83,7 @@ export default function ReceiptExecutionPage() {
                   expiration_date: l.expiration_date ? format(l.expiration_date, 'yyyy-MM-dd') : null
               }))
           };
-          await axios.post(`http://localhost:8000/api/v1/wms/receipts/${orderId}`, payload);
+          await api.post(`/wms/receipts/${orderId}`, payload);
           toast.current?.show({ severity: 'success', summary: 'Recepción Exitosa', detail: 'Mercancía ingresada al inventario.' });
           setTimeout(() => router.push('/receipts'), 1500);
       } catch(e: any) {

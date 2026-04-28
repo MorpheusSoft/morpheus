@@ -66,7 +66,7 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
             
           const [prodRes, catRes, catResponse] = await Promise.all([
             api.get('/products/?limit=500'),
-            api.get('/categories/'),
+            api.get('/categories/?limit=5000'),
             api.get(url)
           ]);
           
@@ -142,13 +142,15 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
             optionValue="id" 
             placeholder="Filtrar por Categoría (Jerárquico)" 
             showClear 
+            filter
+            virtualScrollerOptions={{ itemSize: 38 }}
             className="w-1/2 border rounded-md" 
           />
         </div>
         <Button type="button" label="Vincular Insumo" icon="pi pi-plus" onClick={() => setShowAdd(true)} className="p-button-outlined p-button-sm p-button-success" />
       </div>
 
-      <DataTable value={catalog} loading={loading} header={header} globalFilter={globalFilter} className="border border-slate-200 rounded-xl overflow-hidden text-sm" emptyMessage="Sin insumos vinculados en este borrador.">
+      <DataTable value={catalog} loading={loading} header={header} globalFilter={globalFilter} paginator rows={10} rowsPerPageOptions={[10, 25, 50, 100]} className="border border-slate-200 rounded-xl overflow-hidden text-sm" emptyMessage="Sin insumos vinculados en este borrador.">
         <Column header="Insumo Vinculado" body={(r) => {
             if (r.product_name) {
                 return (
@@ -224,7 +226,7 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
           <div className="flex gap-4">
             <div className="flex flex-col gap-2 flex-1">
               <label className="font-semibold text-[11px] text-slate-500 uppercase tracking-widest">Insumo del Inventario *</label>
-              <Dropdown value={selectedVariant} onChange={(e) => setSelectedVariant(e.value)} options={allVariants} optionLabel="displayName" optionValue="id" placeholder="Buscar producto..." filter className="w-full !rounded-xl border-slate-200" />
+              <Dropdown value={selectedVariant} onChange={(e) => setSelectedVariant(e.value)} options={allVariants} optionLabel="displayName" optionValue="id" placeholder="Buscar producto..." filter virtualScrollerOptions={{ itemSize: 38 }} className="w-full !rounded-xl border-slate-200" />
             </div>
             <div className="flex flex-col gap-2 flex-1">
               <label className="font-semibold text-[11px] text-slate-500 uppercase tracking-widest">Empaque de Compra (Op)</label>
