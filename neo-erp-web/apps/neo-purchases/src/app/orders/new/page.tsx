@@ -47,11 +47,11 @@ export default function NewOrderPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.get('/suppliers/')
+    api.get('/suppliers/?limit=5000')
       .then(res => setSuppliers((res.data.data || res.data.items || res.data || []).filter((s: any) => s.is_active)))
       .catch(err => console.error(err));
       
-    api.get('/products/')
+    api.get('/products/?limit=5000')
       .then(res => {
           const variants: any[] = [];
           const productsList = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
@@ -75,11 +75,11 @@ export default function NewOrderPage() {
       })
       .catch(err => console.error(err));
       
-    api.get('/facilities/')
+    api.get('/facilities/?limit=1000')
       .then(res => setFacilities(res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : [])))
       .catch(err => console.error(err));
       
-    api.get('/categories/')
+    api.get('/categories/?limit=1000')
       .then(res => setCategories(res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : [])))
       .catch(err => console.error(err));
       

@@ -23,7 +23,7 @@ export default function MRPDashboard() {
 
   const fetchSuppliers = async () => {
     try {
-      const res = await api.get('/suppliers/');
+      const res = await api.get('/suppliers/?limit=5000');
       setSuppliers(res.data.data || res.data.items || res.data || []);
     } catch (e) {
       console.error(e);
