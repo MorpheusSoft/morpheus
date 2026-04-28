@@ -17,6 +17,9 @@ class CartProvider extends ChangeNotifier {
   // Multiplicador temporal
   double? _pendingMultiplier;
 
+  // Tickets en Espera
+  final List<HeldTicket> _heldTickets = [];
+
   List<CartItem> get items => List.unmodifiable(_items);
   String? get lastScannedBarcode => _lastScannedBarcode;
   String? get errorMessage => _errorMessage;
@@ -26,6 +29,7 @@ class CartProvider extends ChangeNotifier {
   String? get customerPhone => _customerPhone;
   String? get customerEmail => _customerEmail;
   double? get pendingMultiplier => _pendingMultiplier;
+  List<HeldTicket> get heldTickets => List.unmodifiable(_heldTickets);
 
   void setCustomer(String document, String name, {String? address, String? phone, String? email}) {
     _customerDocument = document;
@@ -93,4 +97,69 @@ class CartProvider extends ChangeNotifier {
     _pendingMultiplier = null;
     notifyListeners();
   }
+
+  void holdCurrentTicket(String reference) {
+    if (_items.isEmpty) return;
+    
+    final heldTicket = HeldTicket(
+      id: 'HOLD-${DateTime.now().millisecondsSinceEpoch}',
+      heldAt: DateTime.now(),
+      referenceNote: reference,
+      items: List.from(_items),
+      customerDocument: _customerDocument,
+      customerName: _customerName,
+      customerAddress: _customerAddress,
+      customerPhone: _customerPhone,
+      customerEmail: _customerEmail,
+      totalDue: totalDue,
+    );
+    
+    _heldTickets.add(heldTicket);
+    clearCart();
+    // clearCart() ya hace notifyListeners()
+  }
+
+  void restoreTicket(String id) {
+    final index = _heldTickets.indexWhere((t) => t.id == id);
+    if (index >= 0) {
+      final ticket = _heldTickets.removeAt(index);
+      _items.clear();
+      _items.addAll(ticket.items);
+      _customerDocument = ticket.customerDocument;
+      _customerName = ticket.customerName;
+      _customerAddress = ticket.customerAddress;
+      _customerPhone = ticket.customerPhone;
+      _customerEmail = ticket.customerEmail;
+      _lastScannedBarcode = null;
+      _errorMessage = null;
+      _pendingMultiplier = null;
+      notifyListeners();
+    }
+  }
+}
+
+class HeldTicket {
+  final String id;
+  final DateTime heldAt;
+  final String referenceNote;
+  final List<CartItem> items;
+  final String customerDocument;
+  final String customerName;
+  final String? customerAddress;
+  final String? customerPhone;
+  final String? customerEmail;
+  final double totalDue;
+
+  HeldTicket({
+    required this.id,
+    required this.heldAt,
+    required this.referenceNote,
+    required this.items,
+    required this.customerDocument,
+    required this.customerName,
+    this.customerAddress,
+    this.customerPhone,
+    this.customerEmail,
+    required this.totalDue,
+  });
 }

@@ -6,6 +6,8 @@ import 'customer_search_dialog.dart';
 import 'product_search_dialog.dart';
 import 'checkout_dialog.dart';
 import 'quantity_edit_dialog.dart';
+import 'hold_tickets_dialog.dart';
+import 'hold_ticket_prompt_dialog.dart';
 
 class FKeyBottomBarWidget extends StatelessWidget {
   const FKeyBottomBarWidget({super.key});
@@ -21,6 +23,19 @@ class FKeyBottomBarWidget extends StatelessWidget {
         context: context,
         builder: (context) => const QuantityEditDialog(),
       );
+    } else if (fKey == 'F3') {
+      final cart = context.read<CartProvider>();
+      if (cart.items.isNotEmpty) {
+        showDialog(
+          context: context,
+          builder: (context) => const HoldTicketPromptDialog(),
+        );
+      } else {
+        showDialog(
+          context: context,
+          builder: (context) => const HoldTicketsDialog(),
+        );
+      }
     } else if (fKey == 'F5') {
       context.read<CartProvider>().clearCart();
     } else if (fKey == 'F7') {

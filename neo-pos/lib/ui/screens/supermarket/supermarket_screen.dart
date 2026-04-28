@@ -9,6 +9,8 @@ import 'widgets/fkey_bottom_bar_widget.dart';
 import 'widgets/scanner_bar_widget.dart';
 import 'widgets/customer_search_dialog.dart';
 import 'widgets/quantity_edit_dialog.dart';
+import 'widgets/hold_ticket_prompt_dialog.dart';
+import 'widgets/hold_tickets_dialog.dart';
 
 class SupermarketScreen extends StatefulWidget {
   const SupermarketScreen({super.key});
@@ -18,31 +20,48 @@ class SupermarketScreen extends StatefulWidget {
 }
 
 class _SupermarketScreenState extends State<SupermarketScreen> {
+  bool _handleKeyEvent(KeyEvent event) {
+    if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.f7) {
+        showDialog(context: context, builder: (_) => const CustomerSearchDialog());
+        return true;
+      } else if (event.logicalKey == LogicalKeyboardKey.f2) {
+        showDialog(context: context, builder: (_) => const QuantityEditDialog());
+        return true;
+      } else if (event.logicalKey == LogicalKeyboardKey.f3) {
+        final cart = context.read<CartProvider>();
+        if (cart.items.isNotEmpty) {
+          showDialog(context: context, builder: (_) => const HoldTicketPromptDialog());
+        } else {
+          showDialog(context: context, builder: (_) => const HoldTicketsDialog());
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    super.dispose();
+  }
+
+  @override
+  void setState(fn) {
+    if(mounted) super.setState(fn);
+  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Focus(
-          autofocus: false,
-          onKeyEvent: (node, event) {
-            if (event is KeyDownEvent) {
-              if (event.logicalKey == LogicalKeyboardKey.f7) {
-                showDialog(
-                  context: context,
-                  builder: (context) => const CustomerSearchDialog(),
-                );
-                return KeyEventResult.handled;
-              } else if (event.logicalKey == LogicalKeyboardKey.f2) {
-                showDialog(
-                  context: context,
-                  builder: (context) => const QuantityEditDialog(),
-                );
-                return KeyEventResult.handled;
-              }
-            }
-            return KeyEventResult.ignored;
-          },
-          child: Column(
+        child: Column(
             children: [
             Expanded(
               child: Row(
@@ -110,7 +129,6 @@ class _SupermarketScreenState extends State<SupermarketScreen> {
             ),
             const FKeyBottomBarWidget(),
           ],
-        ),
         ),
       ),
     );
