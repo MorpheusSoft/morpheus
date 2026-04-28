@@ -24,7 +24,7 @@ export default function MRPDashboard() {
   const fetchSuppliers = async () => {
     try {
       const res = await axios.get('http://localhost:8000/api/v1/suppliers/');
-      setSuppliers(res.data);
+      setSuppliers(res.data.items || res.data || []);
     } catch (e) {
       console.error(e);
     }

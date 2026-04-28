@@ -1,8 +1,35 @@
 'use client';
+import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 export function AppSidebar() {
+
+  // Agregar estado para usuario logueado
+  const [userName, setUserName] = React.useState('Cargando...');
+  const [userRole, setUserRole] = React.useState('Verificando...');
+  const [userInitials, setUserInitials] = React.useState('--');
+
+  React.useEffect(() => {
+      import('@/lib/api').then(({ default: api }) => {
+          api.get('/users/me')
+              .then(res => {
+                  if (res.data && res.data.full_name) {
+                      const nameParts = res.data.full_name.split(' ');
+                      const initials = nameParts.length > 1 ? nameParts[0][0] + nameParts[1][0] : nameParts[0].substring(0, 2);
+                      setUserName(res.data.full_name);
+                      setUserInitials(initials.toUpperCase());
+                      if (res.data.active_role) {
+                          setUserRole(res.data.active_role.name);
+                      } else {
+                          setUserRole("Staff");
+                      }
+                  }
+              })
+              .catch(err => console.error("Error cargando usuario: ", err));
+      });
+  }, []);
+
   const pathname = usePathname() || '';
 
   const menuItems = [
@@ -85,8 +112,8 @@ export function AppSidebar() {
             LZ
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[14px] font-medium text-slate-200 truncate">Luis Zambrano</p>
-            <p className="text-[12px] text-slate-500 truncate">Administrator</p>
+            <p className="text-[14px] font-medium text-slate-200 truncate">{userName}</p>
+            <p className="text-[12px] text-slate-500 truncate">{userRole}</p>
           </div>
         </div>
       </div>

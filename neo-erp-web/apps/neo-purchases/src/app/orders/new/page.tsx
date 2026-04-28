@@ -48,7 +48,7 @@ export default function NewOrderPage() {
 
   useEffect(() => {
     axios.get('http://localhost:8000/api/v1/suppliers/')
-      .then(res => setSuppliers(res.data.filter((s: any) => s.is_active)))
+      .then(res => setSuppliers((res.data.items || res.data || []).filter((s: any) => s.is_active)))
       .catch(err => console.error(err));
       
     axios.get('http://localhost:8000/api/v1/products/')

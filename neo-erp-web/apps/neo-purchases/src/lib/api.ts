@@ -7,50 +7,25 @@ const api = axios.create({
   },
 });
 
-// Request interceptor for API calls
-api.interceptors.request.use(
-  (config) => {
+api.interceptors.request.use((config) => {
+  if (typeof window !== 'undefined') {
     let token = null;
     
-    // 1. Prioridad absoluta: Cookie de sesión global
-    if (typeof document !== 'undefined') {
-      const match = document.cookie.match(new RegExp('(^| )access_token=([^;]+)'));
-      if (match) token = match[2];
+    // 1. Prioridad: Cookie (Mantenida por Next.js y sincronizada en subdominios)
+    const match = document.cookie.match(/(?:^|;\s*)access_token=([^;]*)/);
+    if (match && match[1]) {
+      token = match[1];
+      // Sincronizar localstorage para que otros tabs viejos no fallen
+      localStorage.setItem('token', token);
+    } else {
+      token = localStorage.getItem('token');
     }
-    
-    // 2. Falback a localStorage si la cookie caducó (y limpiar localStorage si está sucio)
-    if (!token && typeof window !== 'undefined') {
-      token = localStorage.getItem('access_token') || localStorage.getItem('token');
-    }
-    
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
   }
-);
-
-// Response interceptor for API calls
-api.interceptors.response.use(
-  (response) => {
-    return response;
-  },
-  (error) => {
-    // Handle global errors here globally (e.g., 401 Unauthorized)
-    if (error.response && error.response.status === 401 && typeof window !== 'undefined') {
-        // Limpiamos los tokens quemados para evitar un loop de errores
-        document.cookie = 'access_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('token');
-        
-        // Redirigir al Hub (Neo Core) para volver a iniciar sesión
-        window.location.href = 'http://localhost:4000/login';
-    }
-    return Promise.reject(error);
-  }
-);
+  return config;
+});
 
 export default api;

@@ -62,7 +62,7 @@ export default function PricingValidationBoardPage() {
         api.get('/suppliers/?limit=1000'),
         ProductService.getCategories()
       ]);
-      setWizardSupplierOptions(sup.data || []);
+      setWizardSupplierOptions(sup.data?.items || sup.data || []);
       setWizardCategoryOptions(cat || []);
     } catch(e) { console.error(e); }
   };
