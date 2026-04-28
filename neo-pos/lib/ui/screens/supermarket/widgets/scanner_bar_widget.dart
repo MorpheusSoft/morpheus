@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/database/database_helper.dart';
 import 'package:provider/provider.dart';
 import '../../../../core/providers/cart_provider.dart';
 import '../../../theme/app_theme.dart';
@@ -54,8 +55,42 @@ class _ScannerBarWidgetState extends State<ScannerBarWidget> {
                     contentPadding: const EdgeInsets.symmetric(horizontal: 16),
                   ),
                   onSubmitted: (value) async {
-                    if (value.trim().isNotEmpty) {
-                      await context.read<CartProvider>().scanProduct(value.trim());
+                    final text = value.trim();
+                    if (text.isNotEmpty) {
+                      if (text.toUpperCase().startsWith('/C ')) {
+                        // Comando de Modo Experto para Cliente
+                        final doc = text.substring(3).trim();
+                        final customer = await DatabaseHelper.instance.getCustomerByDocument(doc);
+                        
+                        if (customer != null) {
+                          if (context.mounted) {
+                            context.read<CartProvider>().setCustomer(
+                              doc, 
+                              customer['name'],
+                              address: customer['address'],
+                              phone: customer['phone'],
+                              email: customer['email']
+                            );
+                          }
+                        } else {
+                          // Cliente no encontrado
+                          // Lo ideal sería abrir el modal o mostrar un error.
+                          // Por ahora usaremos el errorMessage del Provider (necesita estar expuesto, o simplemente un print/snackbar).
+                          // Si no existe, podemos forzar un error temporal escaneando un producto falso.
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Cliente no encontrado: $doc. Presione F7 para registrarlo.'),
+                                backgroundColor: Colors.redAccent,
+                                duration: const Duration(seconds: 3),
+                              )
+                            );
+                          }
+                        }
+                      } else {
+                        // Escaneo normal de producto
+                        await context.read<CartProvider>().scanProduct(text);
+                      }
                       _controller.clear();
                       _focusNode.requestFocus();
                     }

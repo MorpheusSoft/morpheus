@@ -7,19 +7,28 @@ class CartProvider extends ChangeNotifier {
   String? _lastScannedBarcode;
   String? _errorMessage;
   
-  // Datos del Cliente (Opción B)
-  String _customerDocument = 'V-00000000';
-  String _customerName = 'CLIENTE GENÉRICO';
+  // Datos del Cliente
+  String _customerDocument = 'V-000000000';
+  String _customerName = 'CONSUMIDOR FINAL';
+  String? _customerAddress;
+  String? _customerPhone;
+  String? _customerEmail;
 
   List<CartItem> get items => List.unmodifiable(_items);
   String? get lastScannedBarcode => _lastScannedBarcode;
   String? get errorMessage => _errorMessage;
   String get customerDocument => _customerDocument;
   String get customerName => _customerName;
+  String? get customerAddress => _customerAddress;
+  String? get customerPhone => _customerPhone;
+  String? get customerEmail => _customerEmail;
 
-  void setCustomer(String document, String name) {
+  void setCustomer(String document, String name, {String? address, String? phone, String? email}) {
     _customerDocument = document;
     _customerName = name;
+    _customerAddress = address;
+    _customerPhone = phone;
+    _customerEmail = email;
     notifyListeners();
   }
 
@@ -62,8 +71,11 @@ class CartProvider extends ChangeNotifier {
     _items.clear();
     _lastScannedBarcode = null;
     _errorMessage = null;
-    _customerDocument = 'V-00000000';
-    _customerName = 'CLIENTE GENÉRICO';
+    _customerDocument = 'V-000000000';
+    _customerName = 'CONSUMIDOR FINAL';
+    _customerAddress = null;
+    _customerPhone = null;
+    _customerEmail = null;
     notifyListeners();
   }
 }

@@ -42,6 +42,11 @@ export async function loginAction(prevState: any, formData: FormData) {
 
 export async function logoutAction() {
   const cookieStore = await cookies()
-  cookieStore.delete("access_token")
+  const isProd = process.env.NODE_ENV === "production"
+  cookieStore.set("access_token", "", {
+    maxAge: 0,
+    domain: isProd ? ".morpheussoft.net" : undefined,
+    path: "/"
+  })
   redirect("/login")
 }

@@ -98,6 +98,8 @@ class DatabaseHelper {
         document_id TEXT PRIMARY KEY,
         name TEXT,
         address TEXT,
+        phone TEXT,
+        email TEXT,
         is_loyalty_member INTEGER
       )
     ''');
@@ -201,5 +203,25 @@ class DatabaseHelper {
       $additionalFilter
       LIMIT 20
     ''', ['%$query%']);
+  }
+
+  Future<Map<String, dynamic>?> getCustomerByDocument(String documentId) async {
+    final db = await database;
+    final List<Map<String, dynamic>> result = await db.query(
+      'local_address_book',
+      where: 'document_id = ?',
+      whereArgs: [documentId],
+      limit: 1,
+    );
+    return result.isNotEmpty ? result.first : null;
+  }
+
+  Future<void> saveCustomerLocally(Map<String, dynamic> customerData) async {
+    final db = await database;
+    await db.insert(
+      'local_address_book',
+      customerData,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 }

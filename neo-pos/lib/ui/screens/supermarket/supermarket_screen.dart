@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../../../core/providers/cart_provider.dart';
 import '../../theme/app_theme.dart';
@@ -6,6 +7,7 @@ import 'widgets/receipt_table_widget.dart';
 import 'widgets/customer_data_widget.dart';
 import 'widgets/fkey_bottom_bar_widget.dart';
 import 'widgets/scanner_bar_widget.dart';
+import 'widgets/customer_search_dialog.dart';
 
 class SupermarketScreen extends StatefulWidget {
   const SupermarketScreen({super.key});
@@ -19,8 +21,20 @@ class _SupermarketScreenState extends State<SupermarketScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Column(
-          children: [
+        child: Focus(
+          autofocus: false,
+          onKeyEvent: (node, event) {
+            if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.f7) {
+              showDialog(
+                context: context,
+                builder: (context) => const CustomerSearchDialog(),
+              );
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },
+          child: Column(
+            children: [
             Expanded(
               child: Row(
                 children: [
@@ -87,6 +101,7 @@ class _SupermarketScreenState extends State<SupermarketScreen> {
             ),
             const FKeyBottomBarWidget(),
           ],
+        ),
         ),
       ),
     );

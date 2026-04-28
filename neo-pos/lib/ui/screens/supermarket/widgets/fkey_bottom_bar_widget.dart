@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../../core/providers/cart_provider.dart';
 import '../../../theme/app_theme.dart';
+import 'customer_search_dialog.dart';
 import 'product_search_dialog.dart';
 import 'checkout_dialog.dart';
 
@@ -16,6 +17,11 @@ class FKeyBottomBarWidget extends StatelessWidget {
       );
     } else if (fKey == 'F5') {
       context.read<CartProvider>().clearCart();
+    } else if (fKey == 'F7') {
+      showDialog(
+        context: context,
+        builder: (context) => const CustomerSearchDialog(),
+      );
     } else if (fKey == 'F12') {
       final cart = context.read<CartProvider>();
       if (cart.items.isEmpty) return; // Validación de carro vacío
@@ -39,6 +45,7 @@ class FKeyBottomBarWidget extends StatelessWidget {
           _buildFKey(context, 'F3', 'EN ESPERA'),
           _buildFKey(context, 'F4', 'DESCUENTOS'),
           _buildFKey(context, 'F5', 'ANULAR'),
+          _buildFKey(context, 'F7', 'CLIENTE'),
           const Spacer(),
           _buildFKey(context, 'F12', 'COBRAR', isPrimary: true),
         ],

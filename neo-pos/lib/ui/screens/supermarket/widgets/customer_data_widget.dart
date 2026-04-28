@@ -26,7 +26,7 @@ class CustomerDataWidget extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Consumer<CartProvider>(
           builder: (context, cart, child) {
-            final esGenerico = cart.customerDocument == 'V-00000000';
+            final esGenerico = cart.customerDocument == 'V-000000000';
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
@@ -35,7 +35,7 @@ class CustomerDataWidget extends StatelessWidget {
                   children: [
                     Icon(Icons.person, color: AppTheme.neonCyan),
                     SizedBox(width: 8),
-                    Text('DATOS DEL CLIENTE', style: TextStyle(color: AppTheme.textBody, fontWeight: FontWeight.bold, fontSize: 12)),
+                    Text('DATOS DEL CLIENTE (F7)', style: TextStyle(color: AppTheme.textBody, fontWeight: FontWeight.bold, fontSize: 12)),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -54,6 +54,21 @@ class CustomerDataWidget extends StatelessWidget {
                   'ID/RIF: ${cart.customerDocument}', 
                   style: const TextStyle(color: AppTheme.textBody, fontSize: 14)
                 ),
+                if (cart.customerAddress != null && cart.customerAddress!.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Dir: ${cart.customerAddress}',
+                    style: const TextStyle(color: AppTheme.textBody, fontSize: 12, overflow: TextOverflow.ellipsis),
+                    maxLines: 1,
+                  ),
+                ],
+                if (cart.customerPhone != null && cart.customerPhone!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    'Tel: ${cart.customerPhone}',
+                    style: const TextStyle(color: AppTheme.textBody, fontSize: 12),
+                  ),
+                ]
               ],
             );
           }
