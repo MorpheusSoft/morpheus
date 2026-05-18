@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.api import deps
-from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, orders, inventory_session, suppliers, buyers, mrp, purchase_orders, currencies, wms, jobs, dashboard, facilities, pricing_sessions, companies, roles, users
+from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, inventory_session, suppliers, buyers, mrp, purchase_orders, currencies, wms, jobs, dashboard, facilities, pricing_sessions, companies, roles, users, sync
 
 api_router = APIRouter()
 api_router.include_router(login.router, tags=["login"])
@@ -17,7 +17,7 @@ api_router.include_router(reports.router, prefix="/reports", tags=["reports"], d
 api_router.include_router(utils.router, prefix="/utils", tags=["utils"], dependencies=secure_dependencies)
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"], dependencies=secure_dependencies)
 api_router.include_router(inventory_bulk.router, prefix="/inventory-bulk", tags=["inventory bulk"], dependencies=secure_dependencies)
-api_router.include_router(orders.router, prefix="/orders", tags=["orders"], dependencies=secure_dependencies)
+# api_router.include_router(orders.router, prefix="/orders", tags=["orders"], dependencies=secure_dependencies)
 api_router.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"], dependencies=secure_dependencies)
 api_router.include_router(buyers.router, prefix="/buyers", tags=["buyers"], dependencies=secure_dependencies)
 api_router.include_router(mrp.router, prefix="/mrp", tags=["mrp"], dependencies=secure_dependencies)
@@ -31,4 +31,5 @@ api_router.include_router(pricing_sessions.router, prefix="/pricing-sessions", t
 api_router.include_router(companies.router, prefix="/companies", tags=["companies"], dependencies=secure_dependencies)
 api_router.include_router(roles.router, prefix="/roles", tags=["roles"], dependencies=secure_dependencies)
 api_router.include_router(users.router, prefix="/users", tags=["users"], dependencies=secure_dependencies)
+api_router.include_router(sync.router, prefix="/sync", tags=["sync"]) # Sin auth temporal para pruebas
 

@@ -151,11 +151,6 @@ Para productos perecederos o regulados. Una variante puede tener múltiples lote
 ### 4.5 Tabla Teórica: `inv.product_prices` (Múltiples Precios de Venta)
 Gestiona que cada Sucursal (Localidad) cobre un valor distinto por el mismo SKU.
 
-*Implementación de Utilidad y Merma (Cálculo Dinámico)*
-No es necesario almacenar rígidamente la utilidad (valor total o %), sino calcularla en tiempo de ejecución o de guardado interactuando con los costos (`inv.inventory_snapshot`):
-- **% Utilidad Normal:** Se obtiene calculando `( (Precio Base - Costo Actual) / Precio Base ) * 100` o sobre el costo según estándar contable del cliente.
-- **% Utilidad con Merma:** Se ajusta el costo asumiendo la merma extraída del producto: `Costo Ajustado = Costo Actual / (1 - (shrinkage_percent / 100))`. Conducir el cálculo anterior empleando este nuevo "Costo Ajustado".
-
 | Campo | Tipo | Restricciones | Descripción |
 | :--- | :--- | :--- | :--- |
 | `variant_id` | INT | PK, FK -> `inv.product_variants`| Variante/SKU específico. |
@@ -186,8 +181,8 @@ Centro de la estrella. Tabla inmutable del historial cronológico de entradas y 
 | `id` | BIGINT| PK, Auto-incr | ID de transacción. |
 | `variant_id` | INT | FK -> `inv.product_variants`| SKU o Variante física ingresada/extraída. |
 | `batch_id` | INT | FK -> `inv.batches` | *(Opcional)* Lote movilizado. |
-| `facility_id` | INT | FK -> `core.facilities`| Bodega donde ingresa. |
-| `supplier_id` | INT | FK -> `core.suppliers` | **El Proveedor** al cual se asocia el ingreso histórico. |
+| `facility_id` | INT | FK -> `core.facilities`| Bodega donde ingresa/sale. |
+| `supplier_id` | INT | FK -> `core.suppliers` | **El Proveedor** al cual se asocia el ingreso histórico (si aplica). |
 | `qty_done` | DECIMAL | Not Null | Unidades físicas afectadas. |
 | `unit_cost` | DECIMAL | Not Null | Costo Unitario contable de la factura de este proveedor. |
 | `historic_avg_cost`| DECIMAL| Not Null | Histórico: Captura cómo quedó el Costo Promedio Ponderado en este exacto instante (Tracking de Kardex). |
@@ -229,5 +224,44 @@ Estructura jerárquica de la unidad base (Ej. Unidad -> Caja -> Bulto). Crucial 
 | `expected_base_qty`| DECIMAL | Not Null | Conversión transparente dictaminada: Cantidad calculada en Unidades Base a recibir en inventario para afectar Kardex. |
 | `unit_cost` | DECIMAL | Not Null | Costo unitario pactado proyectado en esta compra particular. |
 
+## 6. Módulo de Ventas (Modelo Estrella Virtual para Análisis AI)
+
+Para permitir que el Copiloto de Inteligencia Artificial responda rápidamente a preguntas de negocio complejas **SIN DUPLICAR DATOS (sin violar la normalización OLTP 3NF)**, Morpheus utiliza el concepto de **Modelo en Estrella Virtual (Views)**.
+
+En la capa transaccional relacional, los datos se separan estrictamente:
+- Las ventas financieras están en `sales.orders`.
+- Los movimientos físicos están en `inv.stock_moves`.
+
+Sin embargo, a nivel de base de datos se crea una vista SQL materializada (o dinámica) llamada `v_fact_sales` que une estas tablas para que la IA la consuma como un Modelo Estrella puro.
+
+### 6.1 Tabla: `sales.orders` (Documento Comercial de Venta)
+Maneja estrictamente la parte financiera y tributaria. Se relaciona 1:1 o 1:N con `inv.stock_pickings` para el rebaje de inventario.
+
+| Campo | Tipo | Restricciones | Descripción |
+| :--- | :--- | :--- | :--- |
+| `id` | BIGINT| PK, Auto-incr | ID interno de la orden. |
+| `facility_id` | INT | FK -> `core.facilities.id`| Sucursal donde ocurrió la venta. |
+| `customer_id` | INT | FK -> `sales.customers.id`| Cliente al que se le vendió. |
+| `seller_id` | INT | FK -> `core.users.id`| Vendedor (para análisis de comisiones). |
+| `currency_id` | INT | FK -> `core.currencies.id`| Moneda pactada en la venta. |
+| `exchange_rate`| DECIMAL| Not Null | Tasa de cambio exacta en el momento de facturar. |
+| `subtotal` | DECIMAL| Not Null | Total antes de impuestos. |
+| `tax_amount` | DECIMAL| Not Null | Total de impuestos aplicados (IVA). |
+| `total_amount` | DECIMAL| Not Null | Total a pagar por el cliente. |
+
+### 6.2 Vista (View): `sales.v_fact_sales` (La Tabla de Hechos para la IA)
+Esta es la vista **Virtual** que la IA consulta. Emula un Modelo en Estrella, pre-uniendo ventas, costos logísticos, fechas y sucursales, garantizando cero redundancia en los datos originales.
+
+| Dimensión (Atributo) | FK Teórica | Descripción en la Vista |
+| :--- | :--- | :--- |
+| `Dimensión Tiempo` | `date_sk` | Año, Mes, Día, Hora extraída de `sales.orders.created_at`. |
+| `Dimensión Producto` | `variant_id`| ID del SKU (Cruza con `inv.product_variants` para saber Talla/Color/Categoría). |
+| `Dimensión Sucursal` | `facility_id`| ID de la tienda (Cruza con `core.facilities` para agrupaciones regionales). |
+| `Dimensión Cliente` | `customer_id`| ID del comprador. |
+| **Métrica (Hecho)** | `quantity` | Cantidad extraída directamente de `inv.stock_moves.qty_done`. |
+| **Métrica (Hecho)** | `sales_amount`| Precio cobrado (Ingreso) normalizado en Moneda Base. |
+| **Métrica (Hecho)** | `cost_amount` | Costo histórico (Egreso) extraído de `inv.stock_moves.historic_avg_cost`. |
+| **Métrica (Hecho)** | `margin_pct` | Rentabilidad bruta pre-calculada (`(sales_amount - cost_amount) / sales_amount`). |
+
 ---
-**Nota**: Este diccionario refleja la estructura transaccional adaptada a las nuevas reglas operativas de Neo ERP. Las secciones 3, 4 y 5 representan el diseño conceptual B2B y Reposición antes de ser construidas físicamente en PostgreSQL y en los modelos Prisma/TypeORM del backend.
+**Nota**: Este diccionario refleja la estructura transaccional adaptada a las nuevas reglas operativas de Neo ERP, incluyendo ahora el Módulo de Ventas (Sección 6) y su conexión con el esquema OLAP Virtual para Inteligencia Artificial.
