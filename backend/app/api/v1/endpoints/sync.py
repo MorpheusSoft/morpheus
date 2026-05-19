@@ -157,7 +157,7 @@ def sync_transactions(
                 vid = get_variant_id(line.SKU)
                 # Definir comportamiento por tipo (Ej: REC entra, TRA mueve, AJU depende de signo)
                 # Para simplificar el MVP, usamos los campos Origen y Destino que trae el JSON
-                loc_src = get_loc_id(line.Almacen_Origen, 'SUPPLIER' if op_type == 'REC' else 'INTERNAL')
+                loc_src = get_loc_id(line.Almacen_Origen, 'VENDOR' if op_type == 'REC' else 'INTERNAL')
                 loc_dest = get_loc_id(line.Almacen_Destino, 'INTERNAL')
                 
                 move = StockMove(
