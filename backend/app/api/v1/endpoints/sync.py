@@ -92,7 +92,9 @@ def sync_transactions(
                 db.add(wh)
                 db.flush()
                 
-            new_loc = Location(code=code, name=code, warehouse_id=wh.id, usage=default_usage)
+            # Si estamos creando la ubicación, forzamos INTERNAL para no chocar con constraints
+            safe_usage = 'INTERNAL' if default_usage not in ['CUSTOMER', 'VENDOR', 'INTERNAL'] else default_usage
+            new_loc = Location(code=code, name=code, warehouse_id=wh.id, usage=safe_usage)
             db.add(new_loc)
             db.flush()
             return new_loc.id
@@ -157,7 +159,7 @@ def sync_transactions(
                 vid = get_variant_id(line.SKU)
                 # Definir comportamiento por tipo (Ej: REC entra, TRA mueve, AJU depende de signo)
                 # Para simplificar el MVP, usamos los campos Origen y Destino que trae el JSON
-                loc_src = get_loc_id(line.Almacen_Origen, 'VENDOR' if op_type == 'REC' else 'INTERNAL')
+                loc_src = get_loc_id(line.Almacen_Origen, 'INTERNAL') # Mantenemos seguro como INTERNAL para compras genéricas
                 loc_dest = get_loc_id(line.Almacen_Destino, 'INTERNAL')
                 
                 move = StockMove(
