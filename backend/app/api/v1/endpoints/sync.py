@@ -58,15 +58,44 @@ def sync_transactions(
         # En producción esto debe logear si el SKU no existe
         def get_variant_id(sku):
             var = db.query(ProductVariant).filter(ProductVariant.sku == sku).first()
-            return var.id if var else 1
+            if var: return var.id
+            
+            # Auto-crear producto si no existe (Auto-Discovery)
+            from app.models.inventory import Category, Product
+            cat = db.query(Category).filter(Category.name == 'SYNC').first()
+            if not cat:
+                cat = Category(name='SYNC', is_active=True)
+                db.add(cat)
+                db.flush()
+                
+            prod = db.query(Product).filter(Product.name == 'SYNC_PROD').first()
+            if not prod:
+                prod = Product(name='SYNC_PROD', category_id=cat.id, product_type='STOCKED', uom_base='PZA')
+                db.add(prod)
+                db.flush()
+                
+            new_var = ProductVariant(product_id=prod.id, sku=sku, is_active=True)
+            db.add(new_var)
+            db.flush()
+            return new_var.id
             
         def get_loc_id(code, default_usage='INTERNAL'):
             if not code:
-                # Buscar ubicación virtual genérica
-                loc = db.query(Location).filter(Location.usage == default_usage).first()
-                return loc.id if loc else 1
+                code = default_usage
             loc = db.query(Location).filter(Location.code == code).first()
-            return loc.id if loc else 1
+            if loc: return loc.id
+            
+            from app.models.inventory import Warehouse
+            wh = db.query(Warehouse).filter(Warehouse.code == 'SYNC').first()
+            if not wh:
+                wh = Warehouse(name='SYNC', code='SYNC', facility_id=1)
+                db.add(wh)
+                db.flush()
+                
+            new_loc = Location(code=code, name=code, warehouse_id=wh.id, usage=default_usage)
+            db.add(new_loc)
+            db.flush()
+            return new_loc.id
 
         if op_type in ['VTA', 'FAC', 'VEN']:
             doc = db.query(Document).filter(Document.document_number == ref).first()
