@@ -99,6 +99,17 @@ def sync_transactions(
             db.flush()
             return new_loc.id
 
+        def get_customer_id(rif):
+            rif_str = str(rif) if rif else "J-GENERIC"
+            from app.models.sales import Customer
+            cust = db.query(Customer).filter(Customer.rif == rif_str).first()
+            if cust: return cust.id
+            
+            new_cust = Customer(rif=rif_str, name=rif_str)
+            db.add(new_cust)
+            db.flush()
+            return new_cust.id
+
         if op_type in ['VTA', 'FAC', 'VEN']:
             doc = db.query(Document).filter(Document.document_number == ref).first()
             if not doc:
@@ -110,7 +121,7 @@ def sync_transactions(
                     fiscal_serial=head.Serial_Fiscal,
                     customer_name_snap=head.Cliente_Proveedor_RIF,
                     customer_tax_snap=head.Cliente_Proveedor_RIF,
-                    customer_id=1, facility_id=1, currency_id=1,
+                    customer_id=get_customer_id(head.Cliente_Proveedor_RIF), facility_id=1, currency_id=1,
                     subtotal=sum((l.Cantidad or 0) * (l.Precio_Unitario or 0) for l in lines),
                     tax_amount=sum((l.Impuesto_Monto or 0) for l in lines),
                     total_amount=sum((l.Cantidad or 0) * (l.Precio_Unitario or 0) + (l.Impuesto_Monto or 0) for l in lines)
@@ -177,7 +188,7 @@ def sync_transactions(
                     document_number=ref, type=DocumentType.CREDIT_NOTE, state=DocumentState.CONFIRMED,
                     fiscal_number=head.Nro_Fiscal, fiscal_serial=head.Serial_Fiscal,
                     customer_name_snap=head.Cliente_Proveedor_RIF, customer_tax_snap=head.Cliente_Proveedor_RIF,
-                    customer_id=1, facility_id=1, currency_id=1,
+                    customer_id=get_customer_id(head.Cliente_Proveedor_RIF), facility_id=1, currency_id=1,
                     subtotal=sum((l.Cantidad or 0) * (l.Precio_Unitario or 0) for l in lines),
                     tax_amount=sum((l.Impuesto_Monto or 0) for l in lines),
                     total_amount=sum((l.Cantidad or 0) * (l.Precio_Unitario or 0) + (l.Impuesto_Monto or 0) for l in lines)
