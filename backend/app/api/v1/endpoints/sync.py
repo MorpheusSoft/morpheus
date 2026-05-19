@@ -69,35 +69,39 @@ def sync_transactions(
             return loc.id if loc else 1
 
         if op_type in ['VTA', 'FAC', 'VEN']:
-            doc = Document(
-                document_number=ref,
-                type=DocumentType.INVOICE,
-                state=DocumentState.CONFIRMED,
-                fiscal_number=head.Nro_Fiscal,
-                fiscal_serial=head.Serial_Fiscal,
-                customer_name_snap=head.Cliente_Proveedor_RIF,
-                customer_tax_snap=head.Cliente_Proveedor_RIF,
-                customer_id=1, facility_id=1, currency_id=1,
-                subtotal=sum(l.Cantidad * l.Precio_Unitario for l in lines),
-                tax_amount=sum(l.Impuesto_Monto for l in lines),
-                total_amount=sum(l.Cantidad * l.Precio_Unitario + l.Impuesto_Monto for l in lines)
-            )
-            db.add(doc)
-            db.flush()
+            doc = db.query(Document).filter(Document.document_number == ref).first()
+            if not doc:
+                doc = Document(
+                    document_number=ref,
+                    type=DocumentType.INVOICE,
+                    state=DocumentState.CONFIRMED,
+                    fiscal_number=head.Nro_Fiscal,
+                    fiscal_serial=head.Serial_Fiscal,
+                    customer_name_snap=head.Cliente_Proveedor_RIF,
+                    customer_tax_snap=head.Cliente_Proveedor_RIF,
+                    customer_id=1, facility_id=1, currency_id=1,
+                    subtotal=sum((l.Cantidad or 0) * (l.Precio_Unitario or 0) for l in lines),
+                    tax_amount=sum((l.Impuesto_Monto or 0) for l in lines),
+                    total_amount=sum((l.Cantidad or 0) * (l.Precio_Unitario or 0) + (l.Impuesto_Monto or 0) for l in lines)
+                )
+                db.add(doc)
+                db.flush()
             
             # Movimiento de inventario para ventas (Salida a Cliente)
-            picking = StockPicking(
-                name=f"OUT-{ref}", origin_document=ref, facility_id=1, status='DONE', picking_type_id=1
-            )
-            db.add(picking)
-            db.flush()
+            picking = db.query(StockPicking).filter(StockPicking.name == f"OUT-{ref}").first()
+            if not picking:
+                picking = StockPicking(
+                    name=f"OUT-{ref}", origin_document=ref, facility_id=1, status='DONE', picking_type_id=1
+                )
+                db.add(picking)
+                db.flush()
             
             for line in lines:
                 vid = get_variant_id(line.SKU)
                 # Comercial
                 doc_line = DocumentLine(
-                    document_id=doc.id, variant_id=vid, quantity=line.Cantidad,
-                    unit_price=line.Precio_Unitario, tax_pct=0.0, line_total=(line.Cantidad * line.Precio_Unitario)
+                    document_id=doc.id, variant_id=vid, quantity=(line.Cantidad or 0),
+                    unit_price=(line.Precio_Unitario or 0), tax_pct=0.0, line_total=((line.Cantidad or 0) * (line.Precio_Unitario or 0))
                 )
                 db.add(doc_line)
                 
@@ -106,17 +110,19 @@ def sync_transactions(
                     picking_id=picking.id, product_id=vid,
                     location_src_id=get_loc_id(line.Almacen_Origen, 'INTERNAL'),
                     location_dest_id=get_loc_id(None, 'CUSTOMER'), # Virtual Cliente
-                    quantity_demand=line.Cantidad, quantity_done=line.Cantidad,
-                    unit_cost=line.Costo_Unitario, state='DONE', reference=ref
+                    quantity_demand=(line.Cantidad or 0), quantity_done=(line.Cantidad or 0),
+                    unit_cost=(line.Costo_Unitario or 0), state='DONE', reference=ref
                 )
                 db.add(move)
                 
         elif op_type in ['REC', 'AJU', 'INV', 'TRA', 'TRS']:
-            picking = StockPicking(
-                name=f"{op_type}-{ref}", origin_document=ref, facility_id=1, status='DONE', picking_type_id=1
-            )
-            db.add(picking)
-            db.flush()
+            picking = db.query(StockPicking).filter(StockPicking.name == f"{op_type}-{ref}").first()
+            if not picking:
+                picking = StockPicking(
+                    name=f"{op_type}-{ref}", origin_document=ref, facility_id=1, status='DONE', picking_type_id=1
+                )
+                db.add(picking)
+                db.flush()
             
             for line in lines:
                 vid = get_variant_id(line.SKU)
@@ -128,35 +134,39 @@ def sync_transactions(
                 move = StockMove(
                     picking_id=picking.id, product_id=vid,
                     location_src_id=loc_src, location_dest_id=loc_dest,
-                    quantity_demand=line.Cantidad, quantity_done=line.Cantidad,
-                    unit_cost=line.Costo_Unitario, state='DONE', reference=ref
+                    quantity_demand=(line.Cantidad or 0), quantity_done=(line.Cantidad or 0),
+                    unit_cost=(line.Costo_Unitario or 0), state='DONE', reference=ref
                 )
                 db.add(move)
             
         elif op_type in ['DEV']:
-            doc = Document(
-                document_number=ref, type=DocumentType.CREDIT_NOTE, state=DocumentState.CONFIRMED,
-                fiscal_number=head.Nro_Fiscal, fiscal_serial=head.Serial_Fiscal,
-                customer_name_snap=head.Cliente_Proveedor_RIF, customer_tax_snap=head.Cliente_Proveedor_RIF,
-                customer_id=1, facility_id=1, currency_id=1,
-                subtotal=sum(l.Cantidad * l.Precio_Unitario for l in lines),
-                tax_amount=sum(l.Impuesto_Monto for l in lines),
-                total_amount=sum(l.Cantidad * l.Precio_Unitario + l.Impuesto_Monto for l in lines)
-            )
-            db.add(doc)
-            db.flush()
+            doc = db.query(Document).filter(Document.document_number == ref).first()
+            if not doc:
+                doc = Document(
+                    document_number=ref, type=DocumentType.CREDIT_NOTE, state=DocumentState.CONFIRMED,
+                    fiscal_number=head.Nro_Fiscal, fiscal_serial=head.Serial_Fiscal,
+                    customer_name_snap=head.Cliente_Proveedor_RIF, customer_tax_snap=head.Cliente_Proveedor_RIF,
+                    customer_id=1, facility_id=1, currency_id=1,
+                    subtotal=sum((l.Cantidad or 0) * (l.Precio_Unitario or 0) for l in lines),
+                    tax_amount=sum((l.Impuesto_Monto or 0) for l in lines),
+                    total_amount=sum((l.Cantidad or 0) * (l.Precio_Unitario or 0) + (l.Impuesto_Monto or 0) for l in lines)
+                )
+                db.add(doc)
+                db.flush()
             
-            picking = StockPicking(
-                name=f"RET-{ref}", origin_document=ref, facility_id=1, status='DONE', picking_type_id=1
-            )
-            db.add(picking)
-            db.flush()
+            picking = db.query(StockPicking).filter(StockPicking.name == f"RET-{ref}").first()
+            if not picking:
+                picking = StockPicking(
+                    name=f"RET-{ref}", origin_document=ref, facility_id=1, status='DONE', picking_type_id=1
+                )
+                db.add(picking)
+                db.flush()
             
             for line in lines:
                 vid = get_variant_id(line.SKU)
                 doc_line = DocumentLine(
-                    document_id=doc.id, variant_id=vid, quantity=line.Cantidad,
-                    unit_price=line.Precio_Unitario, tax_pct=0.0, line_total=(line.Cantidad * line.Precio_Unitario)
+                    document_id=doc.id, variant_id=vid, quantity=(line.Cantidad or 0),
+                    unit_price=(line.Precio_Unitario or 0), tax_pct=0.0, line_total=((line.Cantidad or 0) * (line.Precio_Unitario or 0))
                 )
                 db.add(doc_line)
                 
@@ -165,8 +175,8 @@ def sync_transactions(
                     picking_id=picking.id, product_id=vid,
                     location_src_id=get_loc_id(None, 'CUSTOMER'),
                     location_dest_id=get_loc_id(line.Almacen_Origen, 'INTERNAL'), 
-                    quantity_demand=line.Cantidad, quantity_done=line.Cantidad,
-                    unit_cost=line.Costo_Unitario, state='DONE', reference=ref
+                    quantity_demand=(line.Cantidad or 0), quantity_done=(line.Cantidad or 0),
+                    unit_cost=(line.Costo_Unitario or 0), state='DONE', reference=ref
                 )
                 db.add(move)
 
