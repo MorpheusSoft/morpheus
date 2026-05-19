@@ -92,8 +92,8 @@ def sync_transactions(
                 db.add(wh)
                 db.flush()
                 
-            # Si estamos creando la ubicación, forzamos INTERNAL para no chocar con constraints
-            safe_usage = 'INTERNAL' if default_usage not in ['CUSTOMER', 'VENDOR', 'INTERNAL'] else default_usage
+            # Si estamos creando la ubicación, forzamos INTERNAL 100% estricto para evadir check constraints
+            safe_usage = 'INTERNAL'
             new_loc = Location(code=code, name=code, warehouse_id=wh.id, usage=safe_usage)
             db.add(new_loc)
             db.flush()
