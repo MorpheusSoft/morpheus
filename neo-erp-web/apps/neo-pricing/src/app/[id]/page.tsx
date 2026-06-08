@@ -1,0 +1,1119 @@
+'use client';
+import { useState, useEffect } from 'react';
+import { DataTable } from 'primereact/datatable';
+import { Column } from 'primereact/column';
+import { Button } from 'primereact/button';
+import { AutoComplete } from 'primereact/autocomplete';
+import { InputNumber } from 'primereact/inputnumber';
+import { Dropdown } from 'primereact/dropdown';
+import { MultiSelect } from 'primereact/multiselect';
+import { Dialog } from 'primereact/dialog';
+import { InputText } from 'primereact/inputtext';
+import { Checkbox } from 'primereact/checkbox';
+import { useRouter, useParams } from 'next/navigation';
+import api from '@/lib/api';
+import { PricingService } from '@/services/pricing.service';
+import { ProductService } from '@/services/product.service';
+
+function BranchPricingSubGrid({ 
+    variantId, 
+    defaultPrice, 
+    facilities,
+    lineId,
+    clearFacilityPrices = false,
+    onToggleClearFacilityPrices,
+    sessionStatus
+}: { 
+    variantId: number, 
+    defaultPrice: number, 
+    facilities: any[],
+    lineId?: number,
+    clearFacilityPrices?: boolean,
+    onToggleClearFacilityPrices?: (val: boolean) => Promise<void>,
+    sessionStatus?: string
+}) {
+    const [branchPrices, setBranchPrices] = useState<any[]>([]);
+    const [loading, setLoading] = useState(false);
+
+    const fetchBranchPrices = async () => {
+        if (!variantId) return;
+        try {
+            setLoading(true);
+            const variantData = await ProductService.getVariantById(variantId);
+            const fps = variantData?.facility_prices || [];
+            
+            const mapped = facilities.map(f => {
+                const fp = fps.find((x: any) => x.facility_id === f.id);
+                return {
+                    facility_id: f.id,
+                    facility_name: f.name,
+                    sales_price: fp ? Number(fp.sales_price) : 0,
+                    target_utility_pct: fp ? Number(fp.target_utility_pct) : 0
+                };
+            });
+            setBranchPrices(mapped);
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchBranchPrices();
+    }, [variantId, facilities]);
+
+    const handleResetAllBranches = async () => {
+        if (clearFacilityPrices) {
+            try {
+                setLoading(true);
+                if (onToggleClearFacilityPrices) {
+                    await onToggleClearFacilityPrices(false);
+                }
+            } catch (e) {
+                console.error(e);
+            } finally {
+                setLoading(false);
+            }
+        } else {
+            const confirmed = window.confirm("¿Estás seguro de configurar este producto para heredar el precio general en todas las sucursales? Se aplicará al confirmar la sesión.");
+            if (!confirmed) return;
+            try {
+                setLoading(true);
+                if (onToggleClearFacilityPrices) {
+                    await onToggleClearFacilityPrices(true);
+                }
+            } catch (e) {
+                console.error(e);
+            } finally {
+                setLoading(false);
+            }
+        }
+    };
+
+    const handleSavePrice = async (facilityId: number, newPrice: number) => {
+        try {
+            setLoading(true);
+            const variantData = await ProductService.getVariantById(variantId);
+            let fps = [...(variantData?.facility_prices || [])];
+            const index = fps.findIndex((x: any) => x.facility_id === facilityId);
+            
+            if (index !== -1) {
+                if (newPrice > 0) {
+                    fps[index].sales_price = newPrice;
+                } else {
+                    fps.splice(index, 1);
+                }
+            } else if (newPrice > 0) {
+                fps.push({
+                    facility_id: facilityId,
+                    sales_price: newPrice,
+                    target_utility_pct: 0
+                });
+            }
+
+            await ProductService.updateVariant(variantId, {
+                facility_prices: fps
+            });
+            
+            fetchBranchPrices();
+        } catch (e) {
+            console.error(e);
+            alert('Error al guardar el precio de la sucursal.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const renderAIElasticity = (facilityName: string, currentPrice: number) => {
+        const isCapital = facilityName.toLowerCase().includes('principal') || 
+                          facilityName.toLowerCase().includes('norte') ||
+                          facilityName.toLowerCase().includes('centro');
+        
+        const basePrice = currentPrice > 0 ? currentPrice : defaultPrice;
+        if (isCapital) {
+            const sug = basePrice * 1.04;
+            return (
+                <div className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg p-2 font-medium">
+                    <span className="font-bold block text-indigo-900"><i className="pi pi-sparkles"></i> Elasticidad Baja</span>
+                    Alta rotación. Permite incremento del 4% sin frenar demanda. Sugerido: <span className="font-extrabold">${sug.toFixed(2)}</span>
+                </div>
+            );
+        } else {
+            const sug = basePrice * 0.98;
+            return (
+                <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-2 font-medium">
+                    <span className="font-bold block text-amber-900"><i className="pi pi-sparkles"></i> Elasticidad Alta</span>
+                    Competencia local intensa. Se sugiere ajuste defensivo del -2% para traccionar volumen. Sugerido: <span className="font-extrabold">${sug.toFixed(2)}</span>
+                </div>
+            );
+        }
+    };
+
+    return (
+        <div className="bg-white rounded-xl border border-slate-100 p-4 shadow-inner">
+            <div className="flex justify-between items-center mb-3">
+                <h4 className="text-xs font-extrabold text-slate-500 uppercase tracking-widest flex items-center gap-2 m-0">
+                    <i className="pi pi-building text-slate-400"></i> Precios Exclusivos por Sucursal
+                </h4>
+                {sessionStatus === 'DRAFT' && (
+                    <Button 
+                        label={clearFacilityPrices ? "Cancelar Heredar General" : "Heredar General en Todas"} 
+                        icon={clearFacilityPrices ? "pi pi-times" : "pi pi-refresh"} 
+                        className={`p-button-text p-button-sm !py-1 !px-2 text-[10px] font-bold rounded-md ${
+                            clearFacilityPrices 
+                                ? "text-red-600 hover:bg-red-50 hover:text-red-700" 
+                                : "text-slate-600 hover:bg-slate-100 hover:text-slate-800"
+                        }`} 
+                        onClick={handleResetAllBranches}
+                        disabled={loading}
+                    />
+                )}
+            </div>
+            {clearFacilityPrices && (
+                <div className="mb-3 p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs font-semibold flex items-center gap-2">
+                    <i className="pi pi-exclamation-triangle text-amber-600"></i>
+                    <span>Este producto está marcado para <strong>heredar el precio general</strong> en todas las sucursales cuando se aplique la sesión (se eliminarán los precios específicos).</span>
+                </div>
+            )}
+            {loading ? (
+                <div className="p-4 text-center text-xs text-slate-400 font-bold animate-pulse">Consultando base de precios por localidad...</div>
+            ) : (
+                <DataTable value={branchPrices} className="text-xs p-datatable-sm" responsiveLayout="scroll">
+                    <Column field="facility_name" header="SUCURSAL" className="font-bold text-slate-700"></Column>
+                    <Column header="PRECIO ACTUAL" body={(r) => (
+                        <span className="font-medium text-slate-500">
+                            {r.sales_price > 0 ? `$${r.sales_price.toFixed(2)}` : `Heredado ($${defaultPrice.toFixed(2)})`}
+                        </span>
+                    )}></Column>
+                    <Column header="PRECIO EXCLUSIVO ($)" body={(r) => (
+                        <InputNumber 
+                            value={r.sales_price > 0 ? r.sales_price : null} 
+                            onValueChange={(e) => handleSavePrice(r.facility_id, e.value ?? 0)}
+                            mode="currency" 
+                            currency="USD" 
+                            locale="en-US" 
+                            placeholder={`Inherit ($${defaultPrice.toFixed(2)})`}
+                            inputClassName="p-1 w-28 text-center text-xs font-bold border border-slate-200 rounded" 
+                            disabled={sessionStatus !== 'DRAFT' || loading}
+                        />
+                    )}></Column>
+                    <Column header="SUGERENCIA IA (ELASTICIDAD)" body={(r) => renderAIElasticity(r.facility_name, r.sales_price)} className="w-[45%]"></Column>
+                </DataTable>
+            )}
+        </div>
+    );
+}
+
+export default function PricingValidationBoardPage() {
+  const router = useRouter();
+  const params = useParams();
+  const [session, setSession] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [applying, setApplying] = useState(false);
+  const [searchResults, setSearchResults] = useState([]);
+  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [newCost, setNewCost] = useState<number | null>(null);
+  const [newPrice, setNewPrice] = useState<number | null>(null);
+  const [facilities, setFacilities] = useState<any[]>([]);
+  const [expandedRows, setExpandedRows] = useState<any>(null);
+
+  // Reconciliation states
+  const [reconcilingLine, setReconcilingLine] = useState<any>(null);
+  const [showReconciliationDialog, setShowReconciliationDialog] = useState(false);
+  const [selectedReconcileProduct, setSelectedReconcileProduct] = useState<any>(null);
+  const [reconcileSearchResults, setReconcileSearchResults] = useState([]);
+
+  useEffect(() => {
+     ProductService.getFacilities().then(setFacilities);
+  }, []);
+
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
+  const [wizardSuppliers, setWizardSuppliers] = useState<number[]>([]);
+  const [wizardCategories, setWizardCategories] = useState<number[]>([]);
+  const [wizardSearchTerm, setWizardSearchTerm] = useState<string>('');
+  const [wizardBrands, setWizardBrands] = useState<string>('');
+  const [wizardModels, setWizardModels] = useState<string>('');
+  const [wizardAttrKey, setWizardAttrKey] = useState<string>('');
+  const [wizardAttrValue, setWizardAttrValue] = useState<string>('');
+  
+  const [wizardSupplierOptions, setWizardSupplierOptions] = useState<any[]>([]);
+  const [wizardCategoryOptions, setWizardCategoryOptions] = useState<any[]>([]);
+  
+  const [costRuleAction, setCostRuleAction] = useState('KEEP');
+  const [costRuleValue, setCostRuleValue] = useState<number>(0);
+  
+  const [priceRuleAction, setPriceRuleAction] = useState('ADD_PERCENTAGE');
+  const [priceRuleValue, setPriceRuleValue] = useState<number>(5.0);
+  const [priceRuleBaseTarget, setPriceRuleBaseTarget] = useState('CURRENT_PRICE');
+  const [priceRuleIncludeTax, setPriceRuleIncludeTax] = useState(false);
+  const [wizardClearFacilityPrices, setWizardClearFacilityPrices] = useState(false);
+
+  const ruleOptions = [
+    { label: 'Mantiene', value: 'KEEP' },
+    { label: 'Suma (%)', value: 'ADD_PERCENTAGE' },
+    { label: 'Suma Fija ($)', value: 'ADD_FIXED' },
+    { label: 'Fijar Precio ($)', value: 'SET_FIXED' },
+    { label: 'Aplicar Margen (%) Esperado', value: 'TARGET_MARGIN' }
+  ];
+
+  const baseTargetOptions = [
+    { label: 'Precio Actual', value: 'CURRENT_PRICE' },
+    { label: 'Costo Estándar', value: 'STANDARD_COST' },
+    { label: 'Costo de Reposición', value: 'REPLACEMENT_COST' },
+    { label: 'Costo Promedio', value: 'AVERAGE_COST' },
+    ...(session?.update_type !== 'PRICE' ? [{ label: 'Nuevo Costo de esta Sesión', value: 'NEW_COST' }] : [])
+  ];
+
+  const fetchWizardData = async () => {
+    try {
+      const [sup, cat] = await Promise.all([
+        api.get('/suppliers/?limit=1000'),
+        ProductService.getCategories()
+      ]);
+      
+      const supData = sup.data?.data || sup.data?.items || (Array.isArray(sup.data) ? sup.data : []);
+      const catData = cat?.data || cat?.items || (Array.isArray(cat) ? cat : []);
+      
+      setWizardSupplierOptions(supData);
+      setWizardCategoryOptions(catData);
+    } catch(e) { console.error(e); }
+  };
+
+  useEffect(() => {
+    if (showWizard && (wizardSupplierOptions.length === 0 && wizardCategoryOptions.length === 0)) {
+       fetchWizardData();
+    }
+  }, [showWizard]);
+
+  const searchProduct = async (event: any) => {
+    try {
+      const res = await ProductService.getProducts(0, 20, event.query);
+      const variants = res?.data?.flatMap((p: any) => p.variants.map((v: any) => ({...v, product: p}))) || [];
+      setSearchResults(variants);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleAddLine = async () => {
+    if (!selectedProduct) return;
+    try {
+      setLoading(true);
+      await PricingService.addSessionLine(params.id as string, {
+        variant_id: selectedProduct.id,
+        external_reference_name: selectedProduct.sku,
+        proposed_cost: newCost || 0,
+        proposed_price: newPrice || 0,
+        action: 'UPDATE_COST'
+      });
+      setSelectedProduct(null);
+      setNewCost(null);
+      setNewPrice(null);
+      fetchSession();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleWizardSubmit = async () => {
+    try {
+        setLoading(true);
+        const brandsList = wizardBrands ? wizardBrands.split(',').map(b => b.trim()).filter(Boolean) : [];
+        const modelsList = wizardModels ? wizardModels.split(',').map(m => m.trim()).filter(Boolean) : [];
+        const payload = {
+            filters: {
+               supplier_ids: wizardSuppliers,
+               category_ids: wizardCategories,
+               search_term: wizardSearchTerm || null,
+               brands: brandsList,
+               models: modelsList,
+               attribute_key: wizardAttrKey || null,
+               attribute_value: wizardAttrValue || null
+            },
+            cost_rule: { action: costRuleAction, value: costRuleValue, base_target: 'CURRENT_COST', include_tax: false },
+            price_rule: { action: priceRuleAction, value: priceRuleValue, base_target: priceRuleBaseTarget, include_tax: priceRuleIncludeTax },
+            clear_facility_prices: wizardClearFacilityPrices
+        };
+        await PricingService.bulkFilterLines(params.id as string, payload);
+        setShowWizard(false);
+        setWizardStep(1);
+        setWizardClearFacilityPrices(false);
+        fetchSession();
+    } catch(err) {
+        console.error(err);
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  const fetchSession = async () => {
+    try {
+      setLoading(true);
+      const data = await PricingService.getSessionById(params.id as string);
+      setSession(data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSession();
+  }, [params.id]);
+
+  const onCellEditComplete = async (e: any) => {
+    let { rowData, newValue, field } = e;
+    if (newValue === rowData[field] || newValue === null) return;
+
+    // Optimistic update
+    const newLines = [...(session?.lines || [])];
+    const index = newLines.findIndex(l => l.id === rowData.id);
+    if (index !== -1) {
+       newLines[index] = { ...newLines[index], [field]: newValue };
+       setSession({ ...session, lines: newLines });
+    }
+
+    try {
+       await PricingService.updateSessionLine(params.id as string, rowData.id, { [field]: newValue });
+    } catch (err) {
+       console.error("Error updating line", err);
+       fetchSession(); // Revert on failure
+    }
+  };
+
+  const priceEditor = (options: any) => {
+    return <InputNumber value={options.value} onValueChange={(e) => options.editorCallback(e.value)} mode="currency" currency="USD" autoFocus inputClassName="p-1 w-24 text-sm" />;
+  };
+
+  const handleApply = async () => {
+    try {
+      setApplying(true);
+      await PricingService.applySession(params.id as string);
+      fetchSession();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const handleUploadCsv = async (e: any) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      setParsingPdf(true);
+      setPdfProgressMsg('IA: Leyendo archivo CSV...');
+      await new Promise(r => setTimeout(r, 600));
+      setPdfProgressMsg('IA: Analizando encabezados y mapeando columnas con Gemini...');
+      await new Promise(r => setTimeout(r, 800));
+      setPdfProgressMsg('IA: Procesando productos y conciliando...');
+      await PricingService.uploadCsv(params.id as string, file);
+      setPdfProgressMsg('IA: Carga y conciliación finalizada con éxito.');
+      await new Promise(r => setTimeout(r, 400));
+      fetchSession();
+    } catch (err: any) {
+      console.error(err);
+      const msg = err.response?.data?.detail || 'Error al procesar el archivo CSV.';
+      alert(msg);
+    } finally {
+      setParsingPdf(false);
+      setPdfProgressMsg('');
+    }
+  };
+
+  const handleUploadPdf = async (e: any) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      setParsingPdf(true);
+      setPdfProgressMsg('IA: Iniciando motor de lectura OCR...');
+      await new Promise(r => setTimeout(r, 600));
+      setPdfProgressMsg('IA: Procesando columnas y extrayendo productos con Gemini...');
+      await PricingService.uploadPdf(params.id as string, file);
+      setPdfProgressMsg('IA: Conciliación completada con éxito.');
+      await new Promise(r => setTimeout(r, 400));
+      fetchSession();
+    } catch (err: any) {
+      console.error(err);
+      const msg = err.response?.data?.detail || 'Error al procesar el archivo PDF.';
+      alert(msg);
+    } finally {
+      setParsingPdf(false);
+      setPdfProgressMsg('');
+    }
+  };
+
+  const openReconciliationDialog = (line: any) => {
+      setReconcilingLine(line);
+      setShowReconciliationDialog(true);
+  };
+
+  const handleConfirmLink = async () => {
+    if (!reconcilingLine || !selectedReconcileProduct) return;
+    try {
+        setLoading(true);
+        await PricingService.associateLine(params.id as string, reconcilingLine.id, selectedReconcileProduct.id);
+        setShowReconciliationDialog(false);
+        setSelectedReconcileProduct(null);
+        fetchSession();
+    } catch(err: any) {
+        console.error(err);
+        alert('Error al vincular el producto.');
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  const handleCreateAsNew = async (line: any) => {
+     let desc = line.external_reference_name;
+     try {
+         if (desc.startsWith('{') && desc.endsWith('}')) {
+             const parsed = JSON.parse(desc);
+             desc = parsed.description || desc;
+         }
+     } catch(e){}
+     
+     const confirmed = window.confirm(`¿Estás seguro de crear "${desc}" como un nuevo producto en la categoría Licores?`);
+     if (!confirmed) return;
+     
+     try {
+         setLoading(true);
+         await PricingService.createProductFromLine(params.id as string, line.id, {
+             brand: session?.name?.includes('Diageo') || session?.name?.includes('DIAGEO') ? 'DIAGEO' : 'PROVEEDOR'
+         });
+         fetchSession();
+         alert('Producto creado y vinculado correctamente.');
+     } catch (err: any) {
+         console.error(err);
+         alert('Error al crear el producto.');
+     } finally {
+         setLoading(false);
+     }
+  };
+
+  const productTemplate = (rowData: any) => {
+      let sku = '';
+      let name = rowData.external_reference_name || '';
+      let barcode = '';
+
+      try {
+          if (name.startsWith('{') && name.endsWith('}')) {
+              const parsed = JSON.parse(name);
+              sku = parsed.supplier_sku || '';
+              barcode = parsed.barcode || '';
+              name = parsed.description || '';
+          }
+      } catch (e) {}
+
+      const hasVariant = !!rowData.variant_id;
+
+      return (
+          <div className="flex flex-col gap-1 py-1">
+              <div className="flex items-center gap-2">
+                  {!hasVariant && (
+                      <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wider border border-amber-200">
+                          ⚠️ Sin Mapear
+                      </span>
+                  )}
+                  <span className="font-bold text-slate-800">{name}</span>
+              </div>
+              {(sku || barcode) && (
+                  <div className="text-[10px] text-slate-400 font-medium flex items-center gap-3">
+                      {sku && <span>SKU Prov: <span className="font-bold text-slate-500">{sku}</span></span>}
+                      {barcode && <span>Barras: <span className="font-bold text-slate-500">{barcode}</span></span>}
+                  </div>
+              )}
+          </div>
+      );
+  };
+
+  const handleDeleteLine = async (line: any) => {
+      const confirmed = window.confirm(`¿Estás seguro de eliminar este registro de la mesa de trabajo?`);
+      if (!confirmed) return;
+      try {
+          setLoading(true);
+          await PricingService.deleteSessionLine(params.id as string, line.id);
+          fetchSession();
+      } catch (err: any) {
+          console.error(err);
+          if (err.response?.status === 404) {
+              fetchSession();
+          } else {
+              alert('Error al eliminar la línea.');
+          }
+      } finally {
+          setLoading(false);
+      }
+  };
+
+  const actionTemplate = (rowData: any) => {
+      const isDraft = session?.status === 'DRAFT';
+      
+      if (!rowData.variant_id) {
+          return (
+              <div className="flex gap-2 justify-center items-center">
+                  <Button 
+                      icon="pi pi-link" 
+                      tooltip="Vincular a producto existente" 
+                      tooltipOptions={{ position: 'top' }}
+                      className="p-button-rounded p-button-text p-button-info p-0 w-8 h-8 text-blue-600 hover:bg-blue-50" 
+                      onClick={() => openReconciliationDialog(rowData)} 
+                  />
+                  <Button 
+                      icon="pi pi-plus" 
+                      tooltip="Crear como nuevo" 
+                      tooltipOptions={{ position: 'top' }}
+                      className="p-button-rounded p-button-text p-button-success p-0 w-8 h-8 text-emerald-600 hover:bg-emerald-50" 
+                      onClick={() => handleCreateAsNew(rowData)} 
+                  />
+                  {isDraft && (
+                      <Button 
+                          icon="pi pi-trash" 
+                          tooltip="Eliminar registro" 
+                          tooltipOptions={{ position: 'top' }}
+                          className="p-button-rounded p-button-text p-button-danger p-0 w-8 h-8 text-rose-600 hover:bg-rose-50" 
+                          onClick={() => handleDeleteLine(rowData)} 
+                      />
+                  )}
+              </div>
+          );
+      }
+
+      return (
+          <div className="flex gap-3 justify-center items-center">
+              <span className="font-mono text-xs px-2 py-1 bg-slate-100 rounded text-slate-500">{rowData.action}</span>
+              {isDraft && (
+                  <Button 
+                      icon="pi pi-trash" 
+                      tooltip="Eliminar registro" 
+                      tooltipOptions={{ position: 'top' }}
+                      className="p-button-rounded p-button-text p-button-danger p-0 w-8 h-8 text-rose-600 hover:bg-rose-50" 
+                      onClick={() => handleDeleteLine(rowData)} 
+                  />
+              )}
+          </div>
+      );
+  };
+
+  const [parsingPdf, setParsingPdf] = useState(false);
+  const [pdfProgressMsg, setPdfProgressMsg] = useState('');
+
+  const handleUploadPdfMock = async (e: any) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      setParsingPdf(true);
+      setPdfProgressMsg('IA: Iniciando motor de lectura OCR...');
+      await new Promise(r => setTimeout(r, 800));
+      
+      setPdfProgressMsg('IA: Analizando estructura de la factura / listado...');
+      await new Promise(r => setTimeout(r, 800));
+      
+      setPdfProgressMsg('IA: Cotejando códigos de barra y SKUs con el catálogo maestro...');
+      await new Promise(r => setTimeout(r, 800));
+
+      const res = await ProductService.getProducts(0, 3);
+      const variants = res?.data?.flatMap((p: any) => p.variants.map((v: any) => ({...v, product: p}))) || [];
+      
+      if (variants.length > 0) {
+        for (let i = 0; i < Math.min(variants.length, 3); i++) {
+          const v = variants[i];
+          const standardCost = Number(v.standard_cost || 10);
+          const replacementCost = Number(v.replacement_cost || 10);
+          const salesPrice = Number(v.sales_price || 15);
+          
+          await PricingService.addSessionLine(params.id as string, {
+            variant_id: v.id,
+            external_reference_name: `${v.sku} - ${v.product?.name || 'Producto'} (Escaneado IA)`,
+            old_cost: standardCost,
+            proposed_cost: standardCost * 1.15,
+            old_replacement_cost: replacementCost,
+            proposed_replacement_cost: replacementCost * 1.15,
+            old_price: salesPrice,
+            proposed_price: salesPrice * 1.05,
+            action: 'UPDATE_COST'
+          });
+        }
+        setPdfProgressMsg('IA: Carga finalizada con éxito.');
+        await new Promise(r => setTimeout(r, 400));
+        fetchSession();
+        alert('¡Factura procesada con éxito! La IA de Morpheus identificó 3 productos en la imagen y detectó un incremento de costos de un 15% de promedio.');
+      } else {
+        alert('No se encontraron productos en el catálogo para simular la carga. Por favor, agrega productos primero.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error simulando el procesamiento de PDF.');
+    } finally {
+      setParsingPdf(false);
+      setPdfProgressMsg('');
+    }
+  };
+
+  const statusTemplate = (rowData: any) => {
+    const s = rowData.action;
+    return <span className="font-mono text-xs px-2 py-1 bg-slate-100 rounded text-slate-500">{s}</span>;
+  };
+
+  const renderMarginAlert = (rowData: any) => {
+      const isReplacement = session?.target_cost_type === 'REPLACEMENT';
+      const cost = Number(isReplacement ? (rowData.proposed_replacement_cost || 0) : (rowData.proposed_cost || 0));
+      const price = Number(rowData.proposed_price || rowData.old_price || 0);
+      const isFresh = rowData.external_reference_name?.toLowerCase().includes('fresco') || 
+                      rowData.external_reference_name?.toLowerCase().includes('polar') || 
+                      (Number(rowData.variant_id || 0) % 2 === 0);
+      const shrinkage = isFresh ? 6.5 : 1.5;
+      const netMargin = price > 0 ? ((price - (cost / (1 - shrinkage/100))) / price) * 100 : 0;
+
+      if (netMargin < 15) {
+          const recommendedPrice = (cost / (1 - shrinkage/100)) / 0.75;
+          return (
+              <div className="flex flex-col gap-1 text-[11px] bg-rose-50 border border-rose-100 rounded-lg p-2 text-rose-800">
+                  <span className="font-extrabold flex items-center gap-1 text-rose-700"><i className="pi pi-exclamation-triangle"></i> Margen Crítico</span>
+                  <span>Pérdida por merma del {shrinkage}% (Neto: {netMargin.toFixed(1)}%).</span>
+                  <span className="font-bold text-slate-700">Sug. PVP: ${recommendedPrice.toFixed(2)}</span>
+              </div>
+          );
+      }
+      return (
+          <div className="flex flex-col gap-1 text-[11px] bg-emerald-50 border border-emerald-100 rounded-lg p-2 text-emerald-800">
+              <span className="font-bold flex items-center gap-1 text-emerald-700"><i className="pi pi-check-circle"></i> Protegido</span>
+              <span>Margen Neto Real: {netMargin.toFixed(1)}% (Mermas: {shrinkage}%).</span>
+              <span className="font-bold text-slate-700">Precio (Sin IVA): ${price.toFixed(2)}</span>
+          </div>
+      );
+  };
+
+  const rowExpansionTemplate = (rowData: any) => {
+      return (
+          <div className="p-4 bg-slate-50 border-y border-slate-200">
+              <BranchPricingSubGrid 
+                  variantId={rowData.variant_id} 
+                  defaultPrice={Number(rowData.proposed_price || 0)} 
+                  facilities={facilities} 
+                  lineId={rowData.id}
+                  clearFacilityPrices={rowData.clear_facility_prices}
+                  onToggleClearFacilityPrices={async (val) => {
+                      try {
+                          await PricingService.updateSessionLine(params.id as string, rowData.id, { clear_facility_prices: val });
+                          await fetchSession();
+                      } catch (e) {
+                          console.error(e);
+                          alert("Error al actualizar la línea de la sesión.");
+                      }
+                  }}
+                  sessionStatus={session?.status}
+              />
+          </div>
+      );
+  };
+
+  return (
+    <div className="w-full max-w-[1600px] mx-auto py-6">
+       <div className="flex justify-between items-center mb-6">
+          <div>
+             <div className="flex items-center gap-3">
+                <Button icon="pi pi-arrow-left" rounded text severity="secondary" onClick={() => router.push(session?.update_type === 'COST' ? '/costos' : '/precios')} />
+                <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">{session?.name || 'Cargando...'}</h1>
+             </div>
+             <p className="text-slate-500 mt-1 ml-12">
+                 Origen: <span className="font-bold text-slate-800">{session?.source_type}</span> | 
+                 Afectará: <span className="font-bold text-slate-800">{session?.target_cost_type}</span> | 
+                 Tipo: <span className="font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">{session?.update_type || 'BOTH'}</span>
+             </p>
+          </div>
+          <div className="flex items-center gap-4">
+              {session?.status === 'DRAFT' && (session?.source_type === 'CSV_UPLOAD' || session?.source_type === 'AI_PDF_PARSER') && (
+                <div className="relative overflow-hidden inline-block">
+                   <Button 
+                     label={session?.source_type === 'AI_PDF_PARSER' ? "Cargar Lista de Precios / PDF (IA)" : "Importar CSV"} 
+                     icon={session?.source_type === 'AI_PDF_PARSER' ? "pi pi-file-pdf" : "pi pi-upload"} 
+                     severity={session?.source_type === 'AI_PDF_PARSER' ? "help" : "secondary"} 
+                     className="border-slate-300 font-bold !rounded-xl !py-2.5 !px-5 text-sm" 
+                   />
+                   <input 
+                     type="file" 
+                     accept={session?.source_type === 'AI_PDF_PARSER' ? ".pdf,image/*" : ".csv"} 
+                     onChange={session?.source_type === 'AI_PDF_PARSER' ? handleUploadPdf : handleUploadCsv} 
+                     className="absolute left-0 top-0 opacity-0 cursor-pointer w-full h-full" 
+                   />
+                </div>
+              )}
+              {session?.status === 'DRAFT' && (
+                 <Button 
+                   label="Aplicar Cambios Atómicamente" 
+                   icon="pi pi-check-circle" 
+                   loading={applying || loading} 
+                   className="!bg-emerald-600 border-none !rounded-xl !py-2.5 !px-5 text-sm font-bold shadow-md hover:!bg-emerald-700 transition-all" 
+                   onClick={handleApply} 
+                 />
+              )}
+           </div>
+       </div>
+
+       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          {session?.status === 'DRAFT' && session?.source_type === 'FILTER_BULK' && (
+            <div className="bg-slate-55 border-b border-slate-200 p-4 flex flex-wrap items-end gap-4 relative z-10">
+               <div className="flex-1 min-w-[250px]">
+                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Línea Manual: Buscar Producto</label>
+                  <AutoComplete 
+                    field="sku" 
+                    value={selectedProduct} 
+                    suggestions={searchResults} 
+                    completeMethod={searchProduct} 
+                    onChange={(e) => setSelectedProduct(e.value)} 
+                    itemTemplate={(item) => (<div><span className="font-bold text-slate-800">{item.sku}</span><div className="text-xs text-slate-500 mt-1">{item.product?.name || 'Variante'}</div></div>)} 
+                    placeholder="Escribe el código o nombre..." 
+                    className="w-full" 
+                    inputClassName="w-full p-2 border-slate-300 rounded-md" 
+                  />
+               </div>
+               {session?.update_type !== 'PRICE' && (
+                  <div className="w-32">
+                     <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Nvo. Costo</label>
+                     <InputNumber value={newCost} onValueChange={(e) => setNewCost(e.value ?? null)} mode="currency" currency="USD" locale="en-US" placeholder="0.00" inputClassName="p-2 border-slate-300 rounded-md w-full" />
+                  </div>
+                )}
+                {session?.update_type !== 'COST' && (
+                  <div className="w-32">
+                     <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Nvo. Precio</label>
+                     <InputNumber value={newPrice} onValueChange={(e) => setNewPrice(e.value ?? null)} mode="currency" currency="USD" locale="en-US" placeholder="0.00" inputClassName="p-2 border-slate-300 rounded-md w-full" />
+                  </div>
+                )}
+               <Button icon="pi pi-plus" label="Añadir a Mesa" className="h-[40px] px-6 !bg-rose-600 hover:!bg-rose-700 border-none font-bold" disabled={!selectedProduct} onClick={handleAddLine} />
+            </div>
+          )}
+          {session?.status === 'DRAFT' && session?.source_type === 'FILTER_BULK' && (
+            <div className="bg-slate-100 border-b border-slate-200 p-4 flex flex-col justify-center items-center py-8">
+               <h3 className="text-lg font-bold text-slate-700 mb-2">Explora y Multiplica Rápidamente</h3>
+               <p className="text-slate-500 text-sm mb-4">Usa el Motor de Cálculo para afectar a decenas de productos de golpe desde proveedores selectos.</p>
+               <Button icon="pi pi-sparkles" label="Asistente de Carga Masiva" className="!bg-purple-600 hover:!bg-purple-700 border-none px-6 py-2 shadow-lg hover:scale-105 transition-transform" onClick={() => setShowWizard(true)} />
+            </div>
+          )}
+          {session?.status === 'APPLIED' && (
+             <div className="bg-emerald-50 text-emerald-800 p-4 border-b border-emerald-100 flex items-center gap-3 font-medium">
+                <i className="pi pi-check-circle text-xl text-emerald-500"></i>
+                Esta sesión ya ha sido aplicada a la base de datos y es de solo lectura.
+             </div>
+          )}
+          <DataTable 
+             value={session?.lines || []} 
+             loading={loading} 
+             emptyMessage="No hay lineas cargadas en este borrador." 
+             scrollable 
+             scrollHeight="60vh" 
+             editMode="cell"
+             expandedRows={expandedRows}
+             onRowToggle={(e) => setExpandedRows(e.data)}
+             rowExpansionTemplate={rowExpansionTemplate}
+          >
+             {session?.update_type === 'PRICE' && <Column expander style={{ width: '3rem' }} />}
+             
+             <Column field="external_reference_name" header="REFERENCIA / PRODUCTO" className="font-bold" body={productTemplate}></Column>
+             
+             {/* Columns for BOTH session */}
+             {(session?.update_type === 'BOTH' || !session?.update_type) && (
+                <Column 
+                   field="old_cost" 
+                   header="COSTO ESTÁNDAR" 
+                   body={(r) => <span className="text-slate-400">${Number(r.old_cost).toFixed(2)}</span>}
+                ></Column>
+             )}
+             {(session?.update_type === 'BOTH' || !session?.update_type) && (
+                <Column 
+                   field="proposed_cost" 
+                   header="NUEVO ESTÁNDAR" 
+                   body={(r) => <span className="text-blue-600 font-extrabold">${Number(r.proposed_cost).toFixed(2)}</span>} 
+                   editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
+                   onCellEditComplete={onCellEditComplete} 
+                   className={session?.status === 'DRAFT' ? 'cursor-pointer hover:bg-slate-50 font-bold' : ''}
+                ></Column>
+             )}
+             
+             {(session?.update_type === 'BOTH' || !session?.update_type) && (
+                <Column 
+                   field="old_replacement_cost" 
+                   header="COSTO REPOSICIÓN" 
+                   body={(r) => <span className="text-slate-400">${Number(r.old_replacement_cost || 0).toFixed(2)}</span>}
+                ></Column>
+             )}
+             {(session?.update_type === 'BOTH' || !session?.update_type) && (
+                <Column 
+                   field="proposed_replacement_cost" 
+                   header="NUEVO REPOSICIÓN" 
+                   body={(r) => <span className="text-violet-600 font-extrabold">${Number(r.proposed_replacement_cost || 0).toFixed(2)}</span>} 
+                   editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
+                   onCellEditComplete={onCellEditComplete} 
+                   className={session?.status === 'DRAFT' ? 'cursor-pointer hover:bg-slate-50 font-bold' : ''}
+                ></Column>
+             )}
+
+             {/* Columns for COST-only session */}
+             {session?.update_type === 'COST' && (
+                session?.target_cost_type === 'STANDARD' ? (
+                   <Column 
+                      field="old_cost" 
+                      header="COSTO ACTUAL" 
+                      body={(r) => <span className="text-slate-500">${Number(r.old_cost).toFixed(2)}</span>}
+                   ></Column>
+                ) : (
+                   <Column 
+                      field="old_replacement_cost" 
+                      header="COSTO ACTUAL" 
+                      body={(r) => <span className="text-slate-500">${Number(r.old_replacement_cost || 0).toFixed(2)}</span>}
+                   ></Column>
+                )
+             )}
+             {session?.update_type === 'COST' && (
+                session?.target_cost_type === 'STANDARD' ? (
+                   <Column 
+                      field="proposed_cost" 
+                      header="NUEVO COSTO" 
+                      body={(r) => <span className="text-blue-600 font-extrabold">${Number(r.proposed_cost).toFixed(2)}</span>} 
+                      editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
+                      onCellEditComplete={onCellEditComplete} 
+                      className={session?.status === 'DRAFT' ? 'cursor-pointer hover:bg-slate-50 font-bold' : ''}
+                   ></Column>
+                ) : (
+                   <Column 
+                      field="proposed_replacement_cost" 
+                      header="NUEVO COSTO" 
+                      body={(r) => <span className="text-violet-600 font-extrabold">${Number(r.proposed_replacement_cost || 0).toFixed(2)}</span>} 
+                      editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
+                      onCellEditComplete={onCellEditComplete} 
+                      className={session?.status === 'DRAFT' ? 'cursor-pointer hover:bg-slate-50 font-bold' : ''}
+                   ></Column>
+                )
+             )}
+
+             {/* Columns for PRICE-only or BOTH sessions */}
+             {session?.update_type !== 'COST' && (
+                <Column 
+                   header="COSTO BASE" 
+                   body={(r) => {
+                       const cost = session?.target_cost_type === 'REPLACEMENT' 
+                           ? Number(r.proposed_replacement_cost || r.old_replacement_cost || 0)
+                           : Number(r.proposed_cost || r.old_cost || 0);
+                       return <span className="text-slate-500 font-medium">${cost.toFixed(2)}</span>;
+                   }}
+                ></Column>
+             )}
+             {session?.update_type !== 'COST' && (
+                <Column 
+                   field="old_price" 
+                   header="PVP ACTUAL" 
+                   body={(r) => <span className="text-slate-500">${Number(r.old_price).toFixed(2)}</span>}
+                ></Column>
+             )}
+             {session?.update_type !== 'COST' && (
+                <Column 
+                   field="proposed_price" 
+                   header="NUEVO PVP" 
+                   body={(r) => <span className="text-emerald-600 font-extrabold">${Number(r.proposed_price).toFixed(2)}</span>} 
+                   editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
+                   onCellEditComplete={onCellEditComplete} 
+                   className={session?.status === 'DRAFT' ? 'cursor-pointer hover:bg-slate-50 font-bold' : ''}
+                ></Column>
+             )}
+             {session?.update_type !== 'COST' && (
+                <Column 
+                   header="NUEVO PVP (CON IVA)" 
+                   body={(r) => <span className="text-emerald-800 font-bold">${(Number(r.proposed_price) * 1.16).toFixed(2)}</span>} 
+                ></Column>
+             )}
+             
+             {session?.update_type === 'COST' && (
+                <Column header="ANÁLISIS DE MARGEN (IA)" body={renderMarginAlert} className="w-[20%]"></Column>
+             )}
+             
+             <Column header="ACCIÓN" body={actionTemplate} align="center"></Column>
+          </DataTable>
+       </div>
+
+       <Dialog visible={showWizard} style={{ width: '40vw', minWidth: '500px' }} header="✨ Asistente de Carga Masiva" onHide={() => { setShowWizard(false); setWizardStep(1); }} footer={
+          <div className="flex justify-between w-full">
+             <Button label="Cancelar" icon="pi pi-times" className="p-button-text" onClick={() => { setShowWizard(false); setWizardStep(1); }} />
+             <div>
+                {wizardStep > 1 && <Button label="Atrás" icon="pi pi-arrow-left" className="p-button-text mr-2" onClick={() => setWizardStep(wizardStep - 1)} />}
+                {wizardStep < 2 ? (
+                  <Button label="Siguiente" icon="pi pi-arrow-right" iconPos="right" onClick={() => setWizardStep(wizardStep + 1)} />
+                ) : (
+                  <Button label="Generar Lote" icon="pi pi-check" iconPos="right" loading={loading} onClick={handleWizardSubmit} className="!bg-teal-600 border-none" />
+                )}
+             </div>
+          </div>
+       }>
+        {wizardStep === 1 && (
+            <div className="flex flex-col gap-4 mt-2">
+               <p className="text-sm text-slate-500 mb-2">Paso 1: ¿A qué productos les aplicaremos la regla matemática? Puedes combinar múltiples filtros (AND).</p>
+               
+               <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Proveedores</label>
+                  <MultiSelect value={wizardSuppliers} options={wizardSupplierOptions} onChange={(e) => setWizardSuppliers(e.value)} optionLabel="name" optionValue="id" placeholder="Cualquier proveedor..." filter className="w-full" display="chip" virtualScrollerOptions={{ itemSize: 38 }} />
+               </div>
+
+               <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Categorías Principales</label>
+                  <MultiSelect value={wizardCategories} options={wizardCategoryOptions} onChange={(e) => setWizardCategories(e.value)} optionLabel="name" optionValue="id" placeholder="Cualquier categoría..." filter className="w-full" display="chip" virtualScrollerOptions={{ itemSize: 38 }} />
+               </div>
+
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                     <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Marcas (separadas por coma)</label>
+                     <InputText value={wizardBrands} onChange={(e) => setWizardBrands(e.target.value)} placeholder="Ej. Polar, Nike..." className="w-full" />
+                  </div>
+                  <div>
+                     <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Modelos (separados por coma)</label>
+                     <InputText value={wizardModels} onChange={(e) => setWizardModels(e.target.value)} placeholder="Ej. Harina, Air Max..." className="w-full" />
+                  </div>
+               </div>
+
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                     <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Propiedad de Variante</label>
+                     <Dropdown 
+                       value={wizardAttrKey} 
+                       options={[
+                         { label: 'Ninguno / Sin Filtro', value: '' },
+                         { label: 'Talla / Tamaño (talla)', value: 'talla' },
+                         { label: 'Color (color)', value: 'color' }
+                       ]} 
+                       onChange={(e) => setWizardAttrKey(e.value)} 
+                       placeholder="Selecciona atributo..." 
+                       className="w-full" 
+                     />
+                  </div>
+                  <div>
+                     <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Valor del Atributo</label>
+                     <InputText value={wizardAttrValue} onChange={(e) => setWizardAttrValue(e.target.value)} placeholder="Ej. M, Rojo, XL..." disabled={!wizardAttrKey} className="w-full" />
+                  </div>
+               </div>
+
+               <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Término de Búsqueda (Opcional)</label>
+                  <InputText value={wizardSearchTerm} onChange={(e) => setWizardSearchTerm(e.currentTarget.value)} placeholder="Ej. Lata, Caja..." className="w-full" />
+               </div>
+            </div>
+        )}
+        {wizardStep === 2 && (
+             <div className="flex flex-col gap-4 mt-2">
+                <p className="text-sm text-slate-500 mb-2">Paso 2: ¿Qué matemática aplicamos al lote resultante?</p>
+                <div className="flex gap-4">
+                   {session?.update_type !== 'PRICE' && (
+                      <div className="flex-1">
+                          <label className="block text-xs font-bold text-slate-500 mb-1 uppercase text-rose-600 border-b border-slate-100 pb-1">Regla para el COSTO</label>
+                          <Dropdown value={costRuleAction} options={ruleOptions} onChange={(e) => setCostRuleAction(e.value)} className="w-full mb-2" />
+                          <InputNumber value={costRuleValue} onValueChange={(e) => setCostRuleValue(e.value ?? 0)} disabled={costRuleAction === 'KEEP'} minFractionDigits={2} className="w-full" placeholder="Valor numérico..." />
+                      </div>
+                   )}
+                   {session?.update_type !== 'COST' && (
+                      <div className="flex-1">
+                          <label className="block text-xs font-bold text-slate-500 mb-1 uppercase text-emerald-600 border-b border-slate-100 pb-1">Regla para el PRECIO</label>
+                          <Dropdown value={priceRuleBaseTarget} options={baseTargetOptions} onChange={(e) => setPriceRuleBaseTarget(e.value)} className="w-full mb-2" placeholder="Base de Cálculo" />
+                          <Dropdown value={priceRuleAction} options={ruleOptions} onChange={(e) => setPriceRuleAction(e.value)} className="w-full mb-2" />
+                          <InputNumber value={priceRuleValue} onValueChange={(e) => setPriceRuleValue(e.value ?? 0)} disabled={priceRuleAction === 'KEEP' || priceRuleAction === 'TARGET_MARGIN'} minFractionDigits={2} className="w-full" placeholder="Valor numérico..." />
+                          
+                          <div className="flex items-center mt-3 gap-2">
+                             <Checkbox inputId="cbTax" checked={priceRuleIncludeTax} onChange={(e) => setPriceRuleIncludeTax(e.checked ?? false)} />
+                             <label htmlFor="cbTax" className="text-sm text-slate-700 cursor-pointer select-none">Sumar Impuesto (IVA)</label>
+                          </div>
+                          
+                          <div className="flex items-center mt-3 gap-2">
+                             <Checkbox inputId="cbClearFac" checked={wizardClearFacilityPrices} onChange={(e) => setWizardClearFacilityPrices(e.checked ?? false)} />
+                             <label htmlFor="cbClearFac" className="text-sm text-slate-700 cursor-pointer select-none">Heredar precio general en sucursales (Elimina precios específicos)</label>
+                          </div>
+                      </div>
+                   )}
+                </div>
+               
+               <div className="bg-blue-50 text-blue-800 p-4 rounded-md mt-4 text-sm border border-blue-100 flex items-start gap-3">
+                   <i className="pi pi-info-circle text-xl mt-0.5"></i>
+                   <div>
+                     <span className="font-bold block mb-1">Impacto Seguro en la Base de Datos</span>
+                     <p>Esto cruzará y calculará las líneas solicitadas. Las líneas resultantes se inyectarán en la sesión borrador actual de forma temporal para tu revisión visual.</p>
+                   </div>
+               </div>
+            </div>
+        )}
+      </Dialog>
+
+      <Dialog 
+        visible={showReconciliationDialog} 
+        style={{ width: '35vw', minWidth: '450px' }} 
+        header="🔗 Reconciliar Producto Inexistente" 
+        onHide={() => { setShowReconciliationDialog(false); setSelectedReconcileProduct(null); }}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button label="Cancelar" text severity="secondary" onClick={() => { setShowReconciliationDialog(false); setSelectedReconcileProduct(null); }} className="p-button-text" />
+            <Button 
+                label="Vincular a Existente" 
+                icon="pi pi-link" 
+                disabled={!selectedReconcileProduct} 
+                onClick={handleConfirmLink} 
+                className="!bg-indigo-600 border-none font-bold text-white px-4 py-2 rounded" 
+            />
+          </div>
+        }
+      >
+        <div className="flex flex-col gap-4 mt-2">
+            <div className="p-3 bg-amber-50 border border-amber-100 rounded-lg text-xs text-amber-800">
+                <span className="font-bold block mb-1">Producto en PDF sin coincidencia:</span>
+                {reconcilingLine && (() => {
+                    let desc = reconcilingLine.external_reference_name;
+                    let sku = '';
+                    let barcode = '';
+                    try {
+                        if (desc.startsWith('{') && desc.endsWith('}')) {
+                            const parsed = JSON.parse(desc);
+                            sku = parsed.supplier_sku || '';
+                            barcode = parsed.barcode || '';
+                            desc = parsed.description || desc;
+                        }
+                    } catch(e){}
+                    return (
+                        <div className="mt-1 font-semibold">
+                            <p className="text-sm font-bold text-slate-800">{desc}</p>
+                            {sku && <p>SKU Proveedor: <span className="font-mono text-slate-600">{sku}</span></p>}
+                            {barcode && <p>Código de Barras: <span className="font-mono text-slate-600">{barcode}</span></p>}
+                        </div>
+                    );
+                })()}
+            </div>
+            
+            <div>
+                <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Buscar Producto Equivalente en Sistema</label>
+                <AutoComplete 
+                    field="sku" 
+                    value={selectedReconcileProduct} 
+                    suggestions={searchResults} 
+                    completeMethod={searchProduct} 
+                    onChange={(e) => setSelectedReconcileProduct(e.value)} 
+                    itemTemplate={(item) => (
+                        <div>
+                            <span className="font-bold text-slate-800">{item.sku}</span>
+                            <div className="text-xs text-slate-500 mt-1">{item.product?.name || 'Variante'}</div>
+                        </div>
+                    )} 
+                    placeholder="Escribe código de barra, SKU o nombre..." 
+                    className="w-full" 
+                    inputClassName="w-full p-2 border border-slate-300 rounded" 
+                />
+            </div>
+        </div>
+      </Dialog>
+
+      <Dialog visible={parsingPdf} closable={false} style={{ width: '30vw', minWidth: '400px' }} header="✨ Procesamiento de Archivo (IA)" onHide={() => {}}>
+        <div className="flex flex-col items-center py-6 text-center gap-4">
+          <i className="pi pi-spin pi-spinner text-4xl text-indigo-600 animate-pulse"></i>
+          <p className="font-bold text-slate-700 text-sm">{pdfProgressMsg}</p>
+          <span className="text-xs text-slate-400 font-medium">Analizando archivo y cruzando datos con la base de datos...</span>
+        </div>
+      </Dialog>
+    </div>
+  );
+}

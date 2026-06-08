@@ -97,6 +97,7 @@ class RoleCreate(RoleBase):
 class RoleUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    permissions: Optional[dict] = None
     can_use_oracle: Optional[bool] = None
     is_active: Optional[bool] = None
 

@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Any
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from app.api import deps
@@ -42,3 +42,13 @@ def generate_orders_endpoint(
     lines_data = [line.model_dump() for line in payload.lines]
     created = MRPService.generate_orders(db, lines_data, payload.facility_id, payload.buyer_id)
     return {"status": "success", "orders_created": len(created), "data": created}
+
+@router.get("/ai-recommendations", response_model=List[Any])
+def read_ai_recommendations(
+    db: Session = Depends(deps.get_db),
+    facility_id: int = Query(1, description="Locación para medir el inventario")
+):
+    """
+    Obtener alertas proactivas e inteligentes de compra basadas en demanda predictiva y efectividad de entrega.
+    """
+    return MRPService.get_ai_recommendations(db, facility_id=facility_id)

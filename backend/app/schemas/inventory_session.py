@@ -33,8 +33,10 @@ class InventoryLineBulkUpload(BaseModel):
 class InventoryLine(InventoryLineBase):
     id: int
     session_id: int
-    theoretical_qty: float
-    difference_qty: Optional[float]
+    theoretical_qty: Optional[float] = None
+    difference_qty: Optional[float] = None
+    is_anomaly: Optional[bool] = False
+    anomaly_reason: Optional[str] = None
     updated_at: datetime
     
     class Config:
@@ -45,6 +47,8 @@ class InventorySessionBase(BaseModel):
     name: str # e.g. "Annual Count 2026"
     facility_id: Optional[int] = None
     warehouse_id: Optional[int] = None
+    scope_type: Optional[str] = "GENERAL"
+    scope_value: Optional[str] = None
 
 class InventorySessionCreate(InventorySessionBase):
     pass

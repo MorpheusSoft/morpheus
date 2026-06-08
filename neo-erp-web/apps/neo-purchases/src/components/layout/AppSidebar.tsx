@@ -36,13 +36,11 @@ export function AppSidebar() {
     { label: 'Dashboard', icon: 'pi pi-home', href: '/' },
     { label: 'Proveedores', icon: 'pi pi-users', href: '/suppliers' },
     { label: 'Órdenes de Compra', icon: 'pi pi-file', href: '/orders' },
-    { label: 'Recepción (WMS)', icon: 'pi pi-check-square', href: '/receipts' },
-    { label: 'Facturas', icon: 'pi pi-wallet', href: '/invoices' },
+    { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
   ];
 
   const coreItems = [
     { label: 'Productos', icon: 'pi pi-box', href: '/products' },
-    { label: 'Auditoría de Precios', icon: 'pi pi-bolt', href: '/pricing' },
     { label: 'Categorías', icon: 'pi pi-tags', href: '/categories' },
     { label: 'Perfiles de Compradores', icon: 'pi pi-id-card', href: '/buyers' },
     { label: 'Reglas Logísticas', icon: 'pi pi-cog', href: '#rules' },

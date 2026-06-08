@@ -36,6 +36,7 @@ export function AppSidebar() {
     { label: 'Dashboard Muelle', icon: 'pi pi-home', href: '/' },
     { label: 'Recepción (Inbound)', icon: 'pi pi-truck', href: '/receipts' },
     { label: 'Mapa WMS', icon: 'pi pi-sitemap', href: '#map' },
+    { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
   ];
 
   const coreItems = [

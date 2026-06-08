@@ -8,6 +8,7 @@ import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
+import { ProductService } from '@/services/product.service';
 
 export default function MRPDashboard() {
   const router = useRouter();
@@ -15,11 +16,26 @@ export default function MRPDashboard() {
   const [selectedProducts, setSelectedProducts] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState<number | null>(null);
+  const [facilities, setFacilities] = useState<any[]>([]);
+  const [selectedFacility, setSelectedFacility] = useState<number>(1);
+  const [aiAlerts, setAiAlerts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const toast = useRef<Toast>(null);
 
   const [ordersSummary, setOrdersSummary] = useState({ pendingApproval: 0, pendingSend: 0, pendingRead: 0, pendingReceipt: 0 });
   const [ceoMetrics, setCeoMetrics] = useState({ pending_approval_usd: 0, pending_float_usd: 0 });
+
+  const fetchFacilities = async () => {
+    try {
+      const res = await ProductService.getFacilities();
+      setFacilities(res || []);
+      if (res && res.length > 0) {
+        setSelectedFacility(res[0].id);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const fetchSuppliers = async () => {
     try {
@@ -47,11 +63,12 @@ export default function MRPDashboard() {
   };
 
   const fetchMRP = async () => {
+    if (!selectedFacility) return;
     setLoading(true);
     try {
       const url = selectedSupplier 
-        ? `/mrp/simulator?supplier_id=${selectedSupplier}&facility_id=1`
-        : `/mrp/simulator?facility_id=1`;
+        ? `/mrp/simulator?supplier_id=${selectedSupplier}&facility_id=${selectedFacility}`
+        : `/mrp/simulator?facility_id=${selectedFacility}`;
       const res = await api.get(url);
       setData(res.data);
     } catch (e) {
@@ -60,17 +77,34 @@ export default function MRPDashboard() {
     setLoading(false);
   };
 
+  const fetchAIAlerts = async () => {
+    if (!selectedFacility) return;
+    try {
+      const res = await api.get(`/mrp/ai-recommendations?facility_id=${selectedFacility}`);
+      setAiAlerts(res.data || []);
+    } catch (e) {
+      console.error("Error fetching AI alerts", e);
+    }
+  };
+
   useEffect(() => {
+    fetchFacilities();
     fetchSuppliers();
     fetchOrdersSummary();
-    fetchMRP();
-  }, [selectedSupplier]);
+  }, []);
+
+  useEffect(() => {
+    if (selectedFacility) {
+      fetchMRP();
+      fetchAIAlerts();
+    }
+  }, [selectedSupplier, selectedFacility]);
 
   const updateMetric = async (rowData: any, field: string, value: number) => {
     toast.current?.show({ severity: 'info', summary: 'Guardando', detail: 'Calculando nueva proyección...', life: 1500 });
     const payload = {
         variant_id: rowData.variant_id,
-        facility_id: 1, // MVP
+        facility_id: selectedFacility,
         run_rate: field === 'run_rate' ? value : rowData.run_rate,
         safety_stock: field === 'safety_stock' ? value : rowData.safety_stock
     };
@@ -78,6 +112,7 @@ export default function MRPDashboard() {
        await api.put('/mrp/sync-metrics', payload);
        toast.current?.show({ severity: 'success', summary: 'Guardado', detail: 'Métricas recalibradas exitosamente', life: 2000 });
        fetchMRP(); // Refresh full MRP simulation
+       fetchAIAlerts();
     } catch (e) {
        toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo actualizar métrica' });
     }
@@ -96,12 +131,13 @@ export default function MRPDashboard() {
         toast.current?.show({ severity: 'info', summary: 'Procesando', detail: 'Consolidando órdenes y enrutando...', life: 2000 });
         const payload = {
             lines: toOrder,
-            facility_id: 1, // MVP
+            facility_id: selectedFacility,
             buyer_id: 2 // MVP (Admin/Compras)
         };
         const res = await api.post('/mrp/generate-orders', payload);
         toast.current?.show({ severity: 'success', summary: '¡Éxito Fricción-Cero!', detail: `Se fabricaron ${res.data.orders_created} Órdenes de Compra (Borrador)`, life: 5000 });
         fetchMRP();
+        fetchAIAlerts();
     } catch(e) {
         toast.current?.show({ severity: 'error', summary: 'Error Fatal', detail: 'Fallo al inyectar las órdenes transaccionales' });
     }
@@ -169,7 +205,7 @@ export default function MRPDashboard() {
           </div>
       </div>
 
-      <div className="flex justify-between items-center mb-6 mt-4">
+      <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center mb-6 mt-4 gap-4">
          <div>
             <h1 className="text-3xl font-black text-slate-800 flex items-center gap-3 tracking-tight">
                <i className="pi pi-bolt text-yellow-500 text-3xl filter drop-shadow-md"></i> 
@@ -177,7 +213,16 @@ export default function MRPDashboard() {
             </h1>
             <p className="text-slate-500 text-sm mt-2 max-w-2xl font-medium">Asistente automatizado de necesidades. El sistema calcula Matemáticamente tus sugeridos cruzando Consumos, Empaques Logísticos de venta y Tiempos de Entrega históricos.</p>
          </div>
-         <div className="flex gap-3">
+         <div className="flex flex-wrap gap-3">
+             <Dropdown 
+               value={selectedFacility} 
+               onChange={(e) => setSelectedFacility(e.value)} 
+               options={facilities} 
+               optionLabel="name" 
+               optionValue="id" 
+               placeholder="Seleccionar Sucursal" 
+               className="w-56 font-semibold shadow-sm border-slate-200"
+             />
              <Dropdown 
                value={selectedSupplier} 
                onChange={(e) => setSelectedSupplier(e.value)} 
@@ -193,6 +238,59 @@ export default function MRPDashboard() {
              <Button onClick={generateOrders} label="Generar ODCs [Borradores]" icon="pi pi-send" severity="success" disabled={data.length === 0 || loading} className="font-bold shadow-md hover:shadow-lg transition-all" />
          </div>
       </div>
+
+      {/* ALERTA PREVENTIVA DE IA */}
+      {aiAlerts && aiAlerts.length > 0 && (
+         <div className="mb-6 bg-gradient-to-r from-violet-50 via-indigo-50/30 to-violet-50 border border-violet-200/60 p-5 rounded-2xl shadow-sm relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-violet-200 rounded-full opacity-10 filter blur-xl"></div>
+            <h3 className="text-sm font-bold text-violet-800 uppercase tracking-widest mb-3 flex items-center gap-2">
+               <i className="pi pi-sparkles text-violet-600"></i>
+               Alertas de Compra Proactiva por IA (Evitar Quiebres)
+            </h3>
+            <div className="flex flex-col gap-3">
+               {aiAlerts.map((alert: any, index: number) => (
+                  <div key={index} className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-white/75 backdrop-blur-sm p-4 rounded-xl border border-violet-100/80 hover:shadow-sm transition-all">
+                     <div>
+                        <div className="flex items-center gap-2 mb-1">
+                           <span className="px-2 py-0.5 bg-violet-100 text-violet-700 font-mono text-[10px] font-bold rounded">{alert.sku}</span>
+                           <span className="font-bold text-slate-800 text-sm">{alert.product_name}</span>
+                           <span className="text-xs text-rose-500 font-bold bg-rose-50 px-2 py-0.5 rounded-full">Se agota en {alert.days_left} días</span>
+                        </div>
+                        <p className="text-xs text-slate-600 font-medium">{alert.reason}</p>
+                     </div>
+                     <Button 
+                        icon="pi pi-plus" 
+                        label={`Pedir ${alert.suggested_qty} U.`} 
+                        className="p-button-sm !bg-violet-600 hover:!bg-violet-700 !border-none text-white rounded-lg text-xs font-bold shrink-0 shadow-sm"
+                        onClick={async () => {
+                           toast.current?.show({ severity: 'info', summary: 'Procesando', detail: 'Inyectando orden de compra borrador...', life: 2000 });
+                           try {
+                              const payload = {
+                                 lines: [{
+                                    variant_id: alert.variant_id,
+                                    supplier_id: alert.chosen_supplier_id,
+                                    supplier_default_facility_id: selectedFacility,
+                                    suggested_qty: alert.suggested_qty,
+                                    suggested_base_qty: alert.suggested_qty,
+                                    replacement_cost: alert.proposed_cost
+                                 }],
+                                 facility_id: selectedFacility,
+                                 buyer_id: 2
+                              };
+                              await api.post('/mrp/generate-orders', payload);
+                              toast.current?.show({ severity: 'success', summary: '¡ODC Creada!', detail: `Se generó borrador para ${alert.chosen_supplier_name}`, life: 4000 });
+                              fetchMRP();
+                              fetchAIAlerts();
+                           } catch (e) {
+                              toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo crear la ODC' });
+                           }
+                        }}
+                     />
+                  </div>
+               ))}
+            </div>
+         </div>
+      )}
       
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
         <DataTable 

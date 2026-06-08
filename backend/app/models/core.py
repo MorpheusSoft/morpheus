@@ -97,6 +97,20 @@ class SystemSettings(Base):
     country_currency_id = Column(Integer, ForeignKey("core.currencies.id"))
     default_valuation_method = Column(String, nullable=False, default='AVERAGE')
     utility_calc_method = Column(String, nullable=False, default='MARGIN_ON_SALES')
+    b2b_web_stock_percent = Column(Numeric(5, 2), default=30.0)
+    b2b_safety_stock = Column(Numeric(19, 4), default=0.0)
+
+class ExchangeRateAuditLog(Base):
+    __tablename__ = "exchange_rate_audit_logs"
+    __table_args__ = {"schema": "core"}
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("core.users.id"))
+    old_rate = Column(Numeric(18, 6))
+    new_rate = Column(Numeric(18, 6))
+    reason = Column(String)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 
 from sqlalchemy.dialects.postgresql import JSONB
 

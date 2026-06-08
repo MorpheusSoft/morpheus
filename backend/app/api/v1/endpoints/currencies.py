@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Any, List
 from app.api import deps
-from app.models.core import Currency, ExchangeRate
+from app.models.core import Currency, ExchangeRate, User
 from app.schemas.core import Currency as CurrencySchema, CurrencyCreate, CurrencyUpdate
 from decimal import Decimal
 from datetime import datetime
@@ -117,4 +117,40 @@ def delete_currency(
         )
         
     return {"message": "Currency deleted successfully"}
+
+from pydantic import BaseModel
+class ExchangeRateOverride(BaseModel):
+    new_rate: float
+    reason: str
+
+@router.post("/sync-bcv", response_model=CurrencySchema)
+def sync_bcv(db: Session = Depends(deps.get_db)) -> Any:
+    try:
+        from app.services.currency_service import CurrencyService
+        return CurrencyService.sync_daily_bcv_rate(db)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{currency_id}/override", response_model=CurrencySchema)
+def override_rate(
+    *,
+    db: Session = Depends(deps.get_db),
+    currency_id: int,
+    override_in: ExchangeRateOverride,
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    try:
+        from app.services.currency_service import CurrencyService
+        return CurrencyService.update_rate_manual(
+            db=db,
+            currency_id=currency_id,
+            new_rate=Decimal(str(override_in.new_rate)),
+            reason=override_in.reason,
+            user_id=current_user.id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 

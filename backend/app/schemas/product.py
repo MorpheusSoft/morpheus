@@ -73,6 +73,7 @@ class ProductVariantBase(BaseModel):
     replacement_cost: Decimal = 0
     sales_price: Decimal = 0
     is_published: bool = False
+    price_base_cost: str = "STANDARD"
     
     weight: Optional[Decimal] = None
     currency_id: Optional[int] = None
@@ -95,6 +96,7 @@ class ProductVariantUpdate(BaseModel):
     currency_id: Optional[int] = None
     attributes: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
+    price_base_cost: Optional[str] = None
 
 class ProductVariant(ProductVariantBase):
     id: int
@@ -128,6 +130,8 @@ class ProductBase(BaseModel):
     image_main: Optional[str] = None
     datasheet: Optional[str] = None
     origin: Optional[str] = "NACIONAL"
+    sell_on_web: Optional[bool] = False
+    images: Optional[List[str]] = []
 
 class ProductCreate(ProductBase):
     category_id: int
@@ -141,6 +145,7 @@ class ProductCreate(ProductBase):
     replacement_cost: Optional[Decimal] = 0
     has_variants: Optional[bool] = False
     is_active: Optional[bool] = True
+    price_base_cost: Optional[str] = 'STANDARD'
     
     # Anidando la metadata multidimensional prometida
     packagings: Optional[List[ProductPackagingCreate]] = []
@@ -159,6 +164,7 @@ class ProductUpdate(ProductBase):
     standard_cost: Optional[Decimal] = None
     price: Optional[Decimal] = None
     replacement_cost: Optional[Decimal] = None
+    price_base_cost: Optional[str] = None
     
     # Arreglos relacionales
     packagings: Optional[List[ProductPackagingCreate]] = None

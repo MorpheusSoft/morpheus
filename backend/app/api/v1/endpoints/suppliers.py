@@ -57,7 +57,8 @@ def install_cost_trigger(db: Session = Depends(get_db)):
 @router.get("/", response_model=SupplierPaginated)
 def get_suppliers(db: Session = Depends(get_db), skip: int = 0, limit: int = 100, q: str = None) -> Any:
     from sqlalchemy import or_
-    query = db.query(Supplier)
+    from sqlalchemy.orm import joinedload
+    query = db.query(Supplier).options(joinedload(Supplier.banks))
     
     if q:
         query = query.filter(

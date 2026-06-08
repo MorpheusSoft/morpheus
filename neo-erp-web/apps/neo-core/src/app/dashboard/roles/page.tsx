@@ -22,6 +22,12 @@ const initialPermissions: any = {
       orders: { read: false, write: false, delete: false, approve: false },
       prices: { read: false, write: false, delete: false, approve: false },
   },
+  neo_pricing: {
+      pricing_metrics: { read: false, write: false, delete: false, approve: false },
+      pricing_costs: { read: false, write: false, delete: false, approve: false },
+      pricing_prices: { read: false, write: false, delete: false, approve: false },
+      pricing_reports: { read: false, write: false, delete: false, approve: false },
+  },
   neo_logistics: {
       routes: { read: false, write: false, delete: false, approve: false },
       vehicles: { read: false, write: false, delete: false, approve: false },
@@ -32,6 +38,7 @@ const moduleNames: any = {
   neo_core: "Control Maestro (Neo Core)",
   neo_inventory: "Bodegas e Inventario",
   neo_purchases: "Compras y Adquisiciones",
+  neo_pricing: "Costos y Precios (Neo Pricing)",
   neo_logistics: "CENDI y Logística",
 };
 
@@ -39,6 +46,7 @@ const featureNames: any = {
   companies: "Holding y Empresas", users: "Usuarios", roles: "Roles y Seguridad", facilities: "Sucursales", currencies: "Mercado de Divisas", jobs: "Tareas en Segundo Plano (Jobs)",
   products: "Maestro de Productos", categories: "Categorías", warehouses: "Almacenes",
   suppliers: "Directorio de Proveedores", orders: "Gestor de Órdenes", prices: "Tarifas de Compra",
+  pricing_metrics: "Métricas y Desviaciones", pricing_costs: "Auditoría de Costos", pricing_prices: "Mesa de Trabajo de Precios", pricing_reports: "Reportes de Precios y Márgenes",
   routes: "Rutas", vehicles: "Flota de Vehículos"
 };
 

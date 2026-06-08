@@ -36,7 +36,12 @@ export function AppSidebar() {
     { label: 'Dashboard', icon: 'pi pi-home', href: '/' },
     { label: 'Productos', icon: 'pi pi-box', href: '/products' },
     { label: 'Categorías de Productos', icon: 'pi pi-tags', href: '/categories' },
+    { label: 'Valoración de Inventario', icon: 'pi pi-chart-bar', href: '/valuation' },
+    { label: 'Libro de Inventario', icon: 'pi pi-book', href: '/book' },
+    { label: 'Toma de Inventario', icon: 'pi pi-check-square', href: '/physical-counts' },
+    { label: 'Etiquetas', icon: 'pi pi-print', href: '/labels' },
     { label: 'Tipos de Costo', icon: 'pi pi-dollar', href: '/costs' },
+    { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
     { label: 'Configuración', icon: 'pi pi-cog', href: '/settings' },
   ];
 

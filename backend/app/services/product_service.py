@@ -73,7 +73,9 @@ class ProductService:
             image_main=product_in.image_main,
             datasheet=product_in.datasheet,
             has_variants=product_in.has_variants,
-            is_active=product_in.is_active
+            is_active=product_in.is_active,
+            sell_on_web=product_in.sell_on_web,
+            images=product_in.images
         )
         db.add(db_product)
         db.flush() # Flush to get the ID
@@ -99,6 +101,7 @@ class ProductService:
                 sales_price=product_in.price if product_in.price else 0,
                 replacement_cost=product_in.replacement_cost if product_in.replacement_cost else 0,
                 currency_id=product_in.currency_id,
+                price_base_cost=product_in.price_base_cost if product_in.price_base_cost else 'STANDARD',
                 attributes=None 
             )
             db.add(db_variant)
@@ -138,7 +141,7 @@ class ProductService:
         update_data = product_in.dict(exclude_unset=True)
         
         # Filtrar campos que no pertenecen a Product directamente
-        variant_fields = ['standard_cost', 'price', 'replacement_cost']
+        variant_fields = ['standard_cost', 'price', 'replacement_cost', 'price_base_cost']
         relation_fields = ['packagings', 'facility_prices']
         
         product_update_data = {k: v for k, v in update_data.items() if k not in variant_fields and k not in relation_fields}
@@ -164,6 +167,8 @@ class ProductService:
                     variant.replacement_cost = update_data['replacement_cost']
                 if 'currency_id' in update_data and update_data['currency_id'] is not None:
                     variant.currency_id = update_data['currency_id']
+                if 'price_base_cost' in update_data and update_data['price_base_cost'] is not None:
+                    variant.price_base_cost = update_data['price_base_cost']
                     
             # Update Facility Prices
             if 'facility_prices' in update_data and update_data['facility_prices'] is not None and variant:

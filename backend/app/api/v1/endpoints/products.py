@@ -1,8 +1,9 @@
-from typing import Any, List
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Any, List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.api import deps
-from app.models.inventory import Product, ProductVariant
+from app.models.inventory import Product, ProductVariant, Category
+from app.models.purchasing import SupplierProduct
 from app.schemas import product as schemas
 from app.schemas.supplier import SupplierProductResponse, SupplierProductCreate
 from app.services.product_service import ProductService
@@ -59,6 +60,20 @@ def read_variants(
     """
     return ProductService.get_variants_by_product(db, id)
 
+@router.get("/variants/{variant_id}", response_model=schemas.ProductVariant)
+def read_variant(
+    *,
+    db: Session = Depends(deps.get_db),
+    variant_id: int,
+) -> Any:
+    """
+    Get a single product variant by ID.
+    """
+    db_variant = db.query(ProductVariant).get(variant_id)
+    if not db_variant:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    return db_variant
+
 @router.put("/variants/{variant_id}", response_model=schemas.ProductVariant)
 def update_variant(
     *,
@@ -87,7 +102,9 @@ def read_products(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
     limit: int = 100,
-    q: str = None
+    q: str = None,
+    category_ids: Optional[List[int]] = Query(None),
+    supplier_ids: Optional[List[int]] = Query(None)
 ) -> Any:
     """
     Retrieve products.
@@ -97,13 +114,37 @@ def read_products(
         from sqlalchemy import or_
         
         query = db.query(Product)
+        
+        # Supplier filtering
+        if supplier_ids:
+            query = query.join(ProductVariant, ProductVariant.product_id == Product.id) \
+                         .join(SupplierProduct, SupplierProduct.variant_id == ProductVariant.id) \
+                         .filter(SupplierProduct.supplier_id.in_(supplier_ids))
+            
+        # Category filtering
+        if category_ids:
+            query = query.join(Category, Category.id == Product.category_id)
+            cats = db.query(Category).filter(Category.id.in_(category_ids)).all()
+            cat_conditions = []
+            for c in cats:
+                cat_conditions.append(Category.id == c.id)
+                if c.path:
+                    cat_conditions.append(Category.path.like(f"{c.path}/%"))
+            if cat_conditions:
+                query = query.filter(or_(*cat_conditions))
+
         if q:
-            query = query.outerjoin(ProductVariant).filter(
+            if not supplier_ids:
+                query = query.outerjoin(ProductVariant)
+            query = query.filter(
                 or_(
                     Product.name.ilike(f"%{q}%"),
                     ProductVariant.sku.ilike(f"%{q}%")
                 )
             )
+
+        if supplier_ids or q:
+            query = query.distinct()
             
         total = query.count()
         

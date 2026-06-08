@@ -30,6 +30,8 @@ class Customer(Base):
     phone = Column(String)
     email = Column(String, index=True)
     is_active = Column(Boolean, default=True)
+    approval_status = Column(String, default='PENDING_APPROVAL') # PENDING_APPROVAL, APPROVED, REJECTED
+    wholesaler_tier_id = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relaciones
@@ -69,6 +71,7 @@ class Document(Base):
     subtotal = Column(Numeric(14, 4), nullable=False, default=0.0)
     tax_amount = Column(Numeric(14, 4), nullable=False, default=0.0)
     total_amount = Column(Numeric(14, 4), nullable=False, default=0.0)
+    is_web_order = Column(Boolean, default=False)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     

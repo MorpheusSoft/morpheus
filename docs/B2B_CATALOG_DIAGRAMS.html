@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagramas de Arquitectura B2B</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+            color: #333;
+            margin: 0;
+            padding: 40px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 40px;
+        }
+        h2 {
+            color: #2c3e50;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+    </style>
+    <!-- Importar Mermaid.js -->
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ startOnLoad: true, theme: 'default' });
+    </script>
+</head>
+<body>
+
+    <div class="container">
+        <h2>1. Modelado de Datos (Base de Datos)</h2>
+        <p>Relación entre el inventario existente y el nuevo módulo de ventas.</p>
+        <div class="mermaid">
+erDiagram
+    %% Inventario Existente
+    inv_products ||--o{ inv_product_variants : "tiene"
+    inv_categories ||--o{ inv_products : "agrupa"
+    
+    %% Nuevo Módulo de Ventas (sales)
+    sales_customers ||--o{ sales_orders : "realiza"
+    sales_orders ||--o{ sales_order_lines : "contiene"
+    sales_order_lines }o--|| inv_product_variants : "referencia a SKU"
+
+    sales_orders {
+        int id PK
+        int customer_id FK "Opcional si es usuario invitado"
+        string status "DRAFT | CONFIRMED | INVOICED | CANCELLED"
+        decimal total_amount "Referencial"
+        string notes "Comentarios del cliente"
+        datetime created_at
+    }
+    
+    sales_order_lines {
+        int id PK
+        int order_id FK
+        int product_variant_id FK
+        decimal quantity
+        decimal unit_price "Precio de venta al momento de pedir"
+    }
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>2. Flujo de Trabajo (Web a ERP)</h2>
+        <p>Ciclo de vida del pedido desde que el cliente lo genera hasta que se factura en el ERP.</p>
+        <div class="mermaid">
+sequenceDiagram
+    participant User as Cliente B2B
+    participant Web as Catálogo Web
+    participant API as Morpheus Backend
+    participant ERP as Morpheus ERP (Oficina)
+    
+    User->>Web: Agrega productos al Carrito
+    User->>Web: Envía el Pedido (Checkout)
+    Web->>API: POST /api/orders
+    API->>API: Crea sales.orders (Estado: DRAFT)
+    API-->>Web: Orden #1042 exitosa
+    Web-->>User: Pantalla de Confirmación
+    Note over API,ERP: El proceso web termina aquí.
+    ERP->>API: Oficina abre "Pedidos Web"
+    API-->>ERP: Muestra la Orden #1042
+    ERP->>ERP: Oficina revisa, factura y procesa pago
+    ERP->>API: Genera Picking de Almacén (inv.stock_pickings)
+        </div>
+    </div>
+
+</body>
+</html>

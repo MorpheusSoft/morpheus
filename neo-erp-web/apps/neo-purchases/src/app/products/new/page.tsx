@@ -27,12 +27,14 @@ const schema = yup.object().shape({
   is_active: yup.boolean().default(true),
   track_batches: yup.boolean().default(false),
   has_variants: yup.boolean().default(false),
+  sell_on_web: yup.boolean().default(false),
   shrinkage_percent: yup.number().default(0),
   description: yup.string().nullable(),
   uom_base: yup.string().default('PZA'),
   tax_id: yup.number().nullable(),
   origin: yup.string().default('NACIONAL'),
   image_main: yup.string().nullable(),
+  images: yup.array().of(yup.string()).default([]),
   datasheet: yup.string().nullable(),
   packagings: yup.array().of(
     yup.object().shape({
@@ -53,6 +55,7 @@ const schema = yup.object().shape({
   
   standard_cost: yup.number().default(0),
   replacement_cost: yup.number().default(0),
+  price_base_cost: yup.string().default('STANDARD'),
   target_utility_pct: yup.number().default(30),
   price: yup.number().default(0),
   price_with_tax: yup.number().default(0),
@@ -66,16 +69,14 @@ const schema = yup.object().shape({
   ).default([])
 }).required();
 
-const FacilityMarginCell = ({ index, control, cost }: { index: number, control: any, cost: number }) => {
-    const rowPrice = useWatch({ control, name: `facility_prices.${index}.sales_price` }) || 0;
-    const margin = (rowPrice > 0) ? ((rowPrice - cost) / rowPrice) * 100 : 0;
+const FacilityMarginCell = ({ price, cost }: { price: number, cost: number }) => {
+    const margin = (price > 0) ? ((price - cost) / price) * 100 : 0;
     return <span className="font-bold text-slate-500">{margin.toFixed(2)}%</span>;
 };
 
-const FacilityPVPCell = ({ index, control, tributes, taxId }: { index: number, control: any, tributes: any[], taxId: number }) => {
-    const rowPrice = useWatch({ control, name: `facility_prices.${index}.sales_price` }) || 0;
+const FacilityPVPCell = ({ price, tributes, taxId }: { price: number, tributes: any[], taxId: number }) => {
     const taxRate = tributes.find(t => t.id === taxId)?.rate || 0;
-    const withTax = rowPrice * (1 + (taxRate / 100));
+    const withTax = price * (1 + (taxRate / 100));
     return <span className="font-extrabold text-emerald-700">${withTax.toFixed(2)}</span>;
 };
 
@@ -140,13 +141,16 @@ function ProductFormContent() {
       is_liquor: false,
       track_batches: false,
       has_variants: false,
+      sell_on_web: false,
       shrinkage_percent: 0,
       uom_base: 'PZA',
       origin: 'NACIONAL',
       image_main: '',
+      images: [],
       datasheet: '',
       standard_cost: 0,
       replacement_cost: 0,
+      price_base_cost: 'STANDARD',
       target_utility_pct: 30,
       price: 0,
       price_with_tax: 0,
@@ -162,7 +166,9 @@ function ProductFormContent() {
 
   // Watches
   const shrink = watch('shrinkage_percent') || 0;
-  const cost = watch('standard_cost') || 0;
+  const standardCost = watch('standard_cost') || 0;
+  const replacementCost = watch('replacement_cost') || 0;
+  const priceBaseCost = watch('price_base_cost') || 'STANDARD';
   const targetUtility = watch('target_utility_pct') || 0;
   const price = watch('price') || 0;
   const taxId = watch('tax_id');
@@ -171,15 +177,21 @@ function ProductFormContent() {
   const formValues = watch();
   const facilityPrices = formValues.facility_prices || fields;
 
+  // Real DB Costs (Locked array/display info)
+  const [historicCosts, setHistoricCosts] = useState({ avg: 0, prev: 0, rep: 0 });
+
+  // Resolve activeCost dynamically based on selected price base cost
+  let activeCost = standardCost;
+  if (priceBaseCost === 'REPLACEMENT') activeCost = replacementCost;
+  else if (priceBaseCost === 'LAST_COST') activeCost = historicCosts.prev || 0;
+  else if (priceBaseCost === 'AVERAGE') activeCost = historicCosts.avg || 0;
+
   // Computed Main PVP
   const activeTaxRate = tributes.find(t => t.id === taxId)?.rate || 0;
   const computedPvp = price * (1 + (activeTaxRate / 100));
 
   const [grossUtility, setGrossUtility] = useState(0);
   const [netUtility, setNetUtility] = useState(0);
-  
-  // Real DB Costs (Locked array/display info)
-  const [historicCosts, setHistoricCosts] = useState({ avg: 0, prev: 0, rep: 0 });
 
   // Tab 5: Cartesian Engine State
   const [dimensions, setDimensions] = useState<{name: string, values: string[]}[]>([
@@ -199,13 +211,48 @@ function ProductFormContent() {
       try {
           const apiModule = await import('@/lib/api');
           const api = apiModule.default;
-          const response = await api.post('/utils/upload/', formData, {
+          let skuParam = '';
+          if (editId) {
+              const prdCode = `PRD-${editId.padStart(4, '0')}`;
+              skuParam = fieldName === 'image_main' ? prdCode : `${prdCode}_gallery`;
+          }
+          const response = await api.post(`/utils/upload/${skuParam ? `?sku=${skuParam}` : ''}`, formData, {
               headers: { 'Content-Type': 'multipart/form-data' }
           });
           setValue(fieldName as any, response.data.url);
       } catch(err) {
           alert('Error uploading file');
       }
+  };
+
+  const handleUploadSecondary = async (e: any) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      try {
+          const apiModule = await import('@/lib/api');
+          const api = apiModule.default;
+          let skuParam = '';
+          const secondaryImages = watch('images') || [];
+          if (editId) {
+              const prdCode = `PRD-${editId.padStart(4, '0')}`;
+              const nextIndex = secondaryImages.length + 1;
+              skuParam = `${prdCode}_gallery_${nextIndex}`;
+          }
+          const response = await api.post(`/utils/upload/${skuParam ? `?sku=${skuParam}` : ''}`, formData, {
+              headers: { 'Content-Type': 'multipart/form-data' }
+          });
+          setValue('images', [...secondaryImages, response.data.url]);
+      } catch(err) {
+          alert('Error uploading secondary image');
+      }
+  };
+
+  const deleteSecondaryImage = (idxToRemove: number) => {
+      const secondaryImages = watch('images') || [];
+      setValue('images', secondaryImages.filter((_, idx) => idx !== idxToRemove));
   };
 
   const generateCartesian = () => {
@@ -291,11 +338,14 @@ function ProductFormContent() {
           setValue('uom_base', p.uom_base || 'PZA');
           setValue('origin', p.origin || 'NACIONAL');
           setValue('image_main', p.image_main || '');
+          setValue('images', p.images || []);
+          setValue('sell_on_web', p.sell_on_web || false);
           setValue('datasheet', p.datasheet || '');
           
           if (p.variants && p.variants.length > 0) {
             setValue('standard_cost', Number(p.variants[0].standard_cost) || 0);
             setValue('replacement_cost', Number(p.variants[0].replacement_cost) || 0);
+            setValue('price_base_cost', p.variants[0].price_base_cost || 'STANDARD');
             setValue('price', Number(p.variants[0].sales_price) || 0);
             setValue('currency_id', p.variants[0].currency_id || 1);
             setHistoricCosts({ 
@@ -331,42 +381,36 @@ function ProductFormContent() {
     const taxRate = tributes.find(t => t.id === taxId)?.rate || 0;
     
     // Reverse calculation (Base Utility targets)
-    if (cost > 0) {
+    if (activeCost > 0) {
        // Calculation
        const s = shrink / 100;
-       const protectedCost = s < 1 ? cost / (1 - s) : cost;
+       const protectedCost = s < 1 ? activeCost / (1 - s) : activeCost;
        
        const currentPrc = price;
        if (currentPrc > 0) {
            // Mark-up over Sales Formula: (Price - Cost) / Price
-           const gU = ((currentPrc - cost) / currentPrc) * 100;
+           const gU = ((currentPrc - activeCost) / currentPrc) * 100;
            setGrossUtility(gU);
            const nU = ((currentPrc - protectedCost) / currentPrc) * 100;
            setNetUtility(nU);
-           
-           // Cascade tax
-           const finalP = currentPrc * (1 + (taxRate/100));
-           // Prevent infinite loop by not calling setValue blindly if it matches
-           // Actually we need an onChange handler strategy to prevent loops.
-           // For now, let's just display it securely.
        } else {
            setGrossUtility(0);
            setNetUtility(0);
        }
     }
-  }, [cost, price, shrink, taxId, tributes]);
+  }, [activeCost, price, shrink, taxId, tributes]);
 
   const handlePriceSansTaxChange = (newBasePrice: number) => {
       setValue('price', newBasePrice);
       if (newBasePrice > 0) {
-          const m = ((newBasePrice - cost) / newBasePrice) * 100;
+          const m = ((newBasePrice - activeCost) / newBasePrice) * 100;
           setValue('target_utility_pct', Number(m.toFixed(2)));
       }
   };
 
   const applyTargetUtility = () => {
       const s = shrink / 100;
-      const protectedCost = s < 1 ? cost / (1 - s) : cost;
+      const protectedCost = s < 1 ? activeCost / (1 - s) : activeCost;
       const u = targetUtility / 100;
       // Mark-up over Sales Reverse Formula: Cost / (1 - Margin)
       const newPrice = u < 1 ? protectedCost / (1 - u) : protectedCost;
@@ -574,17 +618,26 @@ function ProductFormContent() {
                     </div>
                   </div>
                 )} />
+                    <Controller name="is_active" control={control} render={({ field }) => (
+                   <div className={`flex-1 rounded-xl p-4 border transition-all cursor-pointer flex gap-3 items-center select-none w-full shadow-sm hover:shadow-md ${field.value ? 'bg-emerald-50/50 border-emerald-400' : 'bg-slate-50 border-slate-200 hover:border-slate-300'}`} onClick={() => field.onChange(!field.value)}>
+                     <InputSwitch inputId="is_active" checked={field.value} className={field.value ? '[&_.p-inputswitch-slider]:!bg-emerald-500' : ''} />
+                     <div className="flex-1 mt-1">
+                       <label className={`font-bold text-sm leading-tight cursor-pointer ${field.value ? 'text-emerald-800' : 'text-slate-700'}`}>Producto Activo</label>
+                       <p className="text-[10px] text-slate-500 mt-1 font-medium leading-relaxed">Visible en ventas y catálogos.</p>
+                     </div>
+                   </div>
+                 )} />
 
-                <Controller name="is_active" control={control} render={({ field }) => (
-                  <div className={`flex-1 rounded-xl p-4 border transition-all cursor-pointer flex gap-3 items-center select-none w-full shadow-sm hover:shadow-md ${field.value ? 'bg-emerald-50/50 border-emerald-400' : 'bg-slate-50 border-slate-200 hover:border-slate-300'}`} onClick={() => field.onChange(!field.value)}>
-                    <InputSwitch inputId="is_active" checked={field.value} className={field.value ? '[&_.p-inputswitch-slider]:!bg-emerald-500' : ''} />
-                    <div className="flex-1 mt-1">
-                      <label className={`font-bold text-sm leading-tight cursor-pointer ${field.value ? 'text-emerald-800' : 'text-slate-700'}`}>Producto Activo</label>
-                      <p className="text-[10px] text-slate-500 mt-1 font-medium leading-relaxed">Visible en ventas y catálogos.</p>
-                    </div>
-                  </div>
-                )} />
-              </div>
+                 <Controller name="sell_on_web" control={control} render={({ field }) => (
+                   <div className={`flex-1 rounded-xl p-4 border transition-all cursor-pointer flex gap-3 items-center select-none w-full shadow-sm hover:shadow-md ${field.value ? 'bg-blue-50/50 border-blue-400' : 'bg-slate-50 border-slate-200 hover:border-slate-300'}`} onClick={() => field.onChange(!field.value)}>
+                     <InputSwitch inputId="sell_on_web" checked={field.value || false} className={field.value ? '[&_.p-inputswitch-slider]:!bg-blue-500' : ''} />
+                     <div className="flex-1 mt-1">
+                       <label className={`font-bold text-sm leading-tight cursor-pointer ${field.value ? 'text-blue-800' : 'text-slate-700'}`}>Vender en la Web</label>
+                       <p className="text-[10px] text-slate-500 mt-1 font-medium leading-relaxed">Visible en la tienda e-commerce.</p>
+                     </div>
+                   </div>
+                 )} />
+               </div>
             </div>
 
             {/* TAB 2: COSTOS Y RENTABILIDAD */}
@@ -651,6 +704,25 @@ function ProductFormContent() {
                     />
                   )} />
                 </div>
+                <div className="flex flex-col flex-shrink-0" style={{ width: '220px' }}>
+                  <label className={labelClass}>Calcular Precio Sobre</label>
+                  <Controller name="price_base_cost" control={control} render={({ field }) => (
+                    <Dropdown 
+                      value={field.value || 'STANDARD'} 
+                      onChange={e => field.onChange(e.value)} 
+                      options={[
+                        {label: 'Costo Estándar', value: 'STANDARD'},
+                        {label: 'Costo de Reposición', value: 'REPLACEMENT'},
+                        {label: 'Último Costo', value: 'LAST_COST'},
+                        {label: 'Costo Promedio', value: 'AVERAGE'}
+                      ]}
+                      optionLabel="label" 
+                      optionValue="value" 
+                      className="w-full !rounded-xl !border-slate-200 !bg-white transition-all shadow-sm"
+                      pt={{ input: { className: '!py-3 !px-4 text-slate-800 font-medium' }, trigger: { className: 'text-slate-400' } }}
+                    />
+                  )} />
+                </div>
                 <div className="flex flex-col relative flex-shrink-0" style={{ width: '160px' }}>
                   <label className={labelClass}>Deseo ganar (%)</label>
                   <div className="flex w-full">
@@ -712,14 +784,14 @@ function ProductFormContent() {
                     <Button type="button" label="Añadir Localidad" icon="pi pi-plus" onClick={() => append({ facility_id: undefined as any, sales_price: 0, target_utility_pct: 0 })} className="!bg-indigo-50 !text-indigo-700 hover:!bg-indigo-100 !border-indigo-200 !rounded-xl !px-4 !py-2 !shadow-none font-bold text-xs shrink-0" />
                  </div>
                  
-                 {fields.length === 0 ? (
+                 {facilityPrices.length === 0 ? (
                    <div className="text-center p-8 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
                      <i className="pi pi-building text-3xl mb-3 text-slate-300"></i>
                      <p className="text-slate-500 text-sm font-medium">Este producto usará el Precio Base global para todas las localidades. <br/>Añade una sucursal si deseas fijar una tarifa exclusiva.</p>
                    </div>
                  ) : (
                    <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden mt-4 shadow-sm">
-                     <DataTable value={fields} responsiveLayout="scroll">
+                     <DataTable value={facilityPrices} responsiveLayout="scroll">
                        <Column header="SUCURSAL / LOCALIDAD" body={(rowData, options) => (
                          <Controller name={`facility_prices.${options.rowIndex}.facility_id`} control={control} render={({ field }) => (
                            <Dropdown value={field.value} onChange={e => field.onChange(e.value)} options={facilities} optionLabel="name" optionValue="id" placeholder="Seleccionar Sucursal..." className="w-full !rounded-lg border-slate-200 shadow-sm p-inputtext-sm" />
@@ -737,11 +809,11 @@ function ProductFormContent() {
                            </div>
                          )} />
                        )} className="w-[30%]" />
-                       <Column header="MARGEN (%)" body={(rowData, options) => (
-                          <FacilityMarginCell index={options.rowIndex} control={control} cost={cost} />
+                       <Column header="MARGEN (%)" body={(rowData) => (
+                          <FacilityMarginCell price={rowData.sales_price || 0} cost={activeCost} />
                        )} className="w-[10%]" />
-                       <Column header="P.V.P (Con IVA)" body={(rowData, options) => (
-                          <FacilityPVPCell index={options.rowIndex} control={control} tributes={tributes} taxId={taxId || 0} />
+                       <Column header="P.V.P (Con IVA)" body={(rowData) => (
+                          <FacilityPVPCell price={rowData.sales_price || 0} tributes={tributes} taxId={taxId || 0} />
                        )} className="w-[10%]" />
                        <Column body={(rowData, options) => (
                          <Button type="button" icon="pi pi-trash" onClick={() => remove(options.rowIndex)} className="p-button-rounded p-button-danger p-button-text hover:bg-rose-100 w-10 h-10 transition-colors" title="Eliminar Excepción" />
@@ -813,6 +885,29 @@ function ProductFormContent() {
                          <p className="text-[10px] text-slate-400 mt-4 leading-relaxed mt-auto">Recomendado PDF. Peso máximo 5MB. Este archivo será vital para los procesos de compras y MRP.</p>
                       </div>
                   )} />
+               </div>
+
+               {/* Galería de Imágenes Secundarias */}
+               <div className="bg-slate-50 border border-slate-200 p-8 rounded-3xl mt-6 animate-fade-in">
+                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-4 flex items-center gap-2">
+                      <i className="pi pi-images text-indigo-500"></i> Galería de Imágenes Secundarias
+                  </h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
+                     {((watch('images') || []) as string[]).map((imgUrl: string, idx: number) => (
+                        <div key={idx} className="relative group rounded-xl overflow-hidden shadow-md bg-white border border-slate-100 aspect-square flex items-center justify-center">
+                            <img src={`http://localhost:8000${imgUrl}`} alt={`Gallery ${idx + 1}`} className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all gap-2">
+                                <Button type="button" icon="pi pi-trash" onClick={() => deleteSecondaryImage(idx)} className="p-button-rounded p-button-danger p-button-sm !w-8 !h-8" title="Eliminar Imagen" />
+                            </div>
+                        </div>
+                     ))}
+                     
+                     <label className="cursor-pointer flex flex-col items-center justify-center aspect-square bg-white border border-dashed border-slate-300 rounded-xl hover:bg-indigo-50 hover:border-indigo-200 transition-all">
+                         <i className="pi pi-plus text-2xl text-slate-400 mb-1"></i>
+                         <span className="text-slate-500 font-medium text-[10px] text-center px-1">Añadir Imagen</span>
+                         <input type="file" className="hidden" accept="image/*" onChange={handleUploadSecondary} />
+                     </label>
+                  </div>
                </div>
             </div>
 

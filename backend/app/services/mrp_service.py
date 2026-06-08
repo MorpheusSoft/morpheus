@@ -172,3 +172,122 @@ class MRPService:
         db.commit()
         return created_orders
 
+    @staticmethod
+    def get_ai_recommendations(db: Session, facility_id: int):
+        snapshots = db.query(InventorySnapshot).filter(
+            InventorySnapshot.facility_id == facility_id
+        ).all()
+        
+        recommendations = []
+        for snap in snapshots:
+            run_rate = float(snap.run_rate or 0)
+            safety_stock = float(snap.safety_stock or 0)
+            current_stock = float(snap.stock_qty or 0)
+            
+            if run_rate <= 0:
+                continue
+                
+            days_left = current_stock / run_rate
+            
+            # Fetch variant and suppliers
+            suppliers = db.query(
+                SupplierProduct, Supplier
+            ).join(
+                Supplier, SupplierProduct.supplier_id == Supplier.id
+            ).filter(
+                SupplierProduct.variant_id == snap.variant_id,
+                SupplierProduct.is_active == True
+            ).all()
+            
+            if not suppliers:
+                continue
+                
+            supplier_options = []
+            for sp, sup in suppliers:
+                cost = float(sp.replacement_cost or 0)
+                lead_time = int(sup.lead_time_days or 0)
+                
+                # past delivery performance
+                past_lines = db.query(PurchaseOrderLine).join(
+                    PurchaseOrder, PurchaseOrderLine.order_id == PurchaseOrder.id
+                ).filter(
+                    PurchaseOrder.supplier_id == sup.id,
+                    PurchaseOrderLine.variant_id == snap.variant_id,
+                    PurchaseOrder.status == 'received'
+                ).all()
+                
+                if past_lines:
+                    total_ordered = sum(float(l.expected_base_qty) for l in past_lines)
+                    total_received = sum(float(l.received_base_qty) for l in past_lines)
+                    effectiveness = (total_received / total_ordered) * 100.0 if total_ordered > 0 else 100.0
+                else:
+                    effectiveness = 95.0 # default fallback
+                    
+                cost_score = -cost
+                lead_time_score = -lead_time
+                eff_score = effectiveness
+                
+                # normalized scoring
+                score = cost_score * 100 + lead_time_score * 50 + eff_score * 2
+                
+                supplier_options.append({
+                    "supplier": sup,
+                    "cost": cost,
+                    "lead_time": lead_time,
+                    "effectiveness": effectiveness,
+                    "score": score,
+                    "sp": sp
+                })
+                
+            if not supplier_options:
+                continue
+                
+            supplier_options.sort(key=lambda x: x["score"], reverse=True)
+            chosen = supplier_options[0]
+            
+            trigger_days = chosen["lead_time"] + (safety_stock / run_rate if safety_stock > 0 else 5)
+            if days_left <= trigger_days:
+                v = db.query(ProductVariant).filter(ProductVariant.id == snap.variant_id).first()
+                p_name = v.product.name if v and v.product else "Producto"
+                sku = v.sku if v else ""
+                
+                alt_reasons = []
+                if len(supplier_options) > 1:
+                    other = supplier_options[1]
+                    diff_pct = ((other["cost"] - chosen["cost"]) / chosen["cost"]) * 100.0 if chosen["cost"] > 0 else 0
+                    if chosen["lead_time"] < other["lead_time"]:
+                        alt_reasons.append(f"entrega {other['lead_time'] - chosen['lead_time']} días más rápido")
+                    if chosen["effectiveness"] > other["effectiveness"]:
+                        alt_reasons.append(f"tiene mejor cumplimiento de entrega ({chosen['effectiveness']:.0f}% vs {other['effectiveness']:.0f}%)")
+                    if chosen["cost"] < other["cost"]:
+                        alt_reasons.append(f"es {abs(diff_pct):.1f}% más económico")
+                
+                if not alt_reasons:
+                    alt_reasons.append(f"tiene efectividad de entrega de {chosen['effectiveness']:.0f}% y tiempo de entrega de {chosen['lead_time']} días")
+                    
+                reason = f"Recomendación: Comprar a {chosen['supplier'].name} porque " + " y ".join(alt_reasons) + "."
+                
+                suggested_buy = math.ceil((safety_stock + (run_rate * 15)) - current_stock)
+                if suggested_buy <= 0:
+                    suggested_buy = int(chosen["supplier"].lead_time_days or 1) * run_rate
+                
+                moq = float(chosen["sp"].min_order_qty or 1)
+                if suggested_buy < moq:
+                    suggested_buy = moq
+                    
+                recommendations.append({
+                    "variant_id": snap.variant_id,
+                    "sku": sku,
+                    "product_name": p_name,
+                    "days_left": math.ceil(days_left),
+                    "current_stock": current_stock,
+                    "run_rate": run_rate,
+                    "chosen_supplier_id": chosen["supplier"].id,
+                    "chosen_supplier_name": chosen["supplier"].name,
+                    "proposed_cost": chosen["cost"],
+                    "suggested_qty": suggested_buy,
+                    "reason": reason
+                })
+                
+        return recommendations
+

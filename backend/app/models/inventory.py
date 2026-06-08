@@ -65,7 +65,9 @@ class Product(Base):
     
     # Multimedia / Technical
     image_main = Column(String)
+    images = Column(JSONB, server_default='[]')
     datasheet = Column(String)
+    sell_on_web = Column(Boolean, default=False)
     
     product_type = Column(String, default='STOCKED', nullable=False)
     uom_base = Column(String, default='PZA', nullable=False)
@@ -77,9 +79,9 @@ class Product(Base):
     origin = Column(String, default='NACIONAL')
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    # Relationships
     variants = relationship("ProductVariant", back_populates="product")
     packagings = relationship("ProductPackaging", backref="product", cascade="all, delete-orphan")
+    category = relationship("Category")
 
 class ProductVariant(Base):
     __tablename__ = "product_variants"
@@ -112,6 +114,7 @@ class ProductVariant(Base):
     
     weight = Column(Numeric(12, 4), default=0)
     is_active = Column(Boolean, default=True)
+    price_base_cost = Column(String, default='STANDARD', nullable=False)
     
     product = relationship("Product", back_populates="variants")
     barcodes = relationship("ProductBarcode", backref="variant")
@@ -198,6 +201,7 @@ class StockPicking(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     moves = relationship("StockMove", back_populates="picking")
+    picking_type = relationship("StockPickingType")
 
 class StockMove(Base):
     __tablename__ = "stock_moves"
@@ -250,6 +254,9 @@ class InventorySession(Base):
     date_start = Column(DateTime(timezone=True), server_default=func.now())
     date_end = Column(DateTime)
     
+    scope_type = Column(String, default='GENERAL') # GENERAL, WAREHOUSE, LOCATION, CATEGORY
+    scope_value = Column(String, nullable=True) # ID or Code of filter value
+    
     created_by = Column(Integer, ForeignKey("core.users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
@@ -288,12 +295,15 @@ class PricingSession(Base):
     target_cost_type = Column(String, default='REPLACEMENT') # STANDARD, REPLACEMENT
     source_type = Column(String, default='CSV_UPLOAD') # FILTER_BULK, CSV_UPLOAD, AI_PDF_PARSER
     status = Column(String, default='DRAFT') # DRAFT, APPLIED, CANCELLED
+    update_type = Column(String, default='BOTH') # COST, PRICE, BOTH
     
     created_by = Column(Integer, ForeignKey("core.users.id"))
+    supplier_id = Column(Integer, ForeignKey("core.suppliers.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     applied_at = Column(DateTime(timezone=True))
     
     lines = relationship("PricingSessionLine", back_populates="session", cascade="all, delete-orphan")
+    supplier = relationship("Supplier")
 
 class PricingSessionLine(Base):
     __tablename__ = "pricing_session_lines"
@@ -308,10 +318,13 @@ class PricingSessionLine(Base):
     
     old_cost = Column(Numeric(19, 4), default=0)
     proposed_cost = Column(Numeric(19, 4), default=0)
+    old_replacement_cost = Column(Numeric(19, 4), default=0)
+    proposed_replacement_cost = Column(Numeric(19, 4), default=0)
     
     old_price = Column(Numeric(19, 4), default=0)
     proposed_price = Column(Numeric(19, 4), default=0)
     
     action = Column(String, default='IGNORE') # IGNORE, UPDATE_COST, CREATE_NEW
+    clear_facility_prices = Column(Boolean, default=False)
     
     session = relationship("PricingSession", back_populates="lines")

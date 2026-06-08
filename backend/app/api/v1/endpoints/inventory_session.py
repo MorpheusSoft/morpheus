@@ -3,18 +3,81 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.api import deps
 from app.schemas import inventory_session as schemas
-from app.models.inventory import InventorySession, InventoryLine, ProductVariant, Location, StockMove, InventorySnapshot, ProductBarcode
+from app.models.inventory import InventorySession, InventoryLine, ProductVariant, Location, StockMove, InventorySnapshot, ProductBarcode, Category
 from datetime import datetime
 
 router = APIRouter()
+
+def attach_anomaly_fields(session: InventorySession, db: Session):
+    for line in session.lines:
+        line.is_anomaly = False
+        line.anomaly_reason = None
+        
+        diff = float(line.counted_qty or 0) - float(line.theoretical_qty or 0)
+        abs_diff = abs(diff)
+        
+        if abs_diff > 0:
+            variant = db.query(ProductVariant).filter(ProductVariant.id == line.product_variant_id).first()
+            if variant:
+                cost = float(variant.standard_cost or variant.replacement_cost or 0)
+                if cost > 50.0:
+                    line.is_anomaly = True
+                    line.anomaly_reason = f"Diferencia en artículo de alto valor ({cost} USD). Delta: {diff} unidades."
+                elif line.theoretical_qty and (abs_diff / float(line.theoretical_qty)) > 0.5 and abs_diff > 5:
+                    line.is_anomaly = True
+                    line.anomaly_reason = f"Desviación significativa (>50%). Teórico: {line.theoretical_qty}, Contado: {line.counted_qty}."
+                elif not line.theoretical_qty and abs_diff > 20:
+                    line.is_anomaly = True
+                    line.anomaly_reason = f"Cantidad contada inesperada sin stock teórico previo ({line.counted_qty} unidades)."
 
 @router.get("/", response_model=List[schemas.InventorySession])
 def read_inventory_sessions(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
     limit: int = 100,
+    current_user: Any = Depends(deps.get_current_active_user)
 ) -> Any:
-    return db.query(InventorySession).offset(skip).limit(limit).all()
+    sessions = db.query(InventorySession).offset(skip).limit(limit).all()
+    is_supervisor = False
+    if hasattr(current_user, 'roles'):
+        is_supervisor = any(r.name.upper() in ('SUPERVISOR', 'ADMIN', 'GERENTE') for r in current_user.roles)
+        
+    for s in sessions:
+        if is_supervisor:
+            attach_anomaly_fields(s, db)
+        else:
+            for line in s.lines:
+                line.theoretical_qty = None
+                line.difference_qty = None
+                line.is_anomaly = False
+                line.anomaly_reason = None
+    return sessions
+
+@router.get("/{id}", response_model=schemas.InventorySession)
+def get_inventory_session(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    current_user: Any = Depends(deps.get_current_active_user)
+) -> Any:
+    session = db.query(InventorySession).filter(InventorySession.id == id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    is_supervisor = False
+    if hasattr(current_user, 'roles'):
+        is_supervisor = any(r.name.upper() in ('SUPERVISOR', 'ADMIN', 'GERENTE') for r in current_user.roles)
+        
+    if is_supervisor:
+        attach_anomaly_fields(session, db)
+    else:
+        for line in session.lines:
+            line.theoretical_qty = None
+            line.difference_qty = None
+            line.is_anomaly = False
+            line.anomaly_reason = None
+            
+    return session
 
 @router.post("/", response_model=schemas.InventorySession)
 def create_inventory_session(
@@ -26,6 +89,8 @@ def create_inventory_session(
         name=session_in.name,
         facility_id=session_in.facility_id,
         warehouse_id=session_in.warehouse_id,
+        scope_type=session_in.scope_type,
+        scope_value=session_in.scope_value,
         state="DRAFT"
     )
     db.add(db_obj)
@@ -57,6 +122,33 @@ def bulk_upload_lines(
         if not variant or not location:
             # Saltamos silenciosamente los SKUs o Ubicaciones no encontrados
             continue
+            
+        # Validar Filtros de Alcance (Scope Filters)
+        if session.scope_type == 'WAREHOUSE' and session.scope_value:
+            try:
+                scope_wh_id = int(session.scope_value)
+                if location.warehouse_id != scope_wh_id:
+                    continue
+            except ValueError:
+                pass
+        elif session.scope_type == 'LOCATION' and session.scope_value:
+            try:
+                scope_loc_id = int(session.scope_value)
+                if location.id != scope_loc_id:
+                    continue
+            except ValueError:
+                if location.code != session.scope_value:
+                    continue
+        elif session.scope_type == 'CATEGORY' and session.scope_value and variant.product:
+            try:
+                scope_cat_id = int(session.scope_value)
+                if variant.product.category_id != scope_cat_id:
+                    cat = db.query(Category).filter(Category.id == variant.product.category_id).first()
+                    parent_cat = db.query(Category).filter(Category.id == scope_cat_id).first()
+                    if not (cat and parent_cat and cat.path and parent_cat.path and cat.path.startswith(parent_cat.path)):
+                        continue
+            except ValueError:
+                pass
             
         # Calcular Stock Teórico dinámico desde InventorySnapshot
         snapshot = db.query(InventorySnapshot).filter_by(

@@ -8,7 +8,7 @@ import argparse
 # ==========================================
 # CONFIGURACIÓN
 # ==========================================
-MORPHEUS_API_URL = "http://localhost:8000/api/v1/sync/transactions"
+MORPHEUS_API_URL = "https://api.qa.morpheussoft.net/api/v1/sync/transactions"
 MORPHEUS_API_TOKEN = "AQUI_TU_BEARER_TOKEN"
 
 DB_VAD10_DSN = "DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=VAD10;UID=sa;PWD=tu_password"
@@ -23,7 +23,7 @@ def get_last_sync_date():
             
     # Si no existe archivo, asume por defecto "Hoy a la medianoche"
     today_midnight = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    return today_midnight.strftime("%Y-%m-%d %H:%M:%S")
+    return today_midnight.strftime("%Y%m%d %H:%M:%S")
 
 def update_last_sync_date(new_date):
     with open(WATERMARK_FILE, 'w') as f:
@@ -65,8 +65,7 @@ def is_morpheus_reachable():
 def send_to_morpheus(payload):
     if not payload:
         return True
-        
-    print(f"[*] Enviando {len(payload)} registros a Morpheus...")
+    
     headers = {
         "Authorization": f"Bearer {MORPHEUS_API_TOKEN}",
         "Content-Type": "application/json"
@@ -74,14 +73,54 @@ def send_to_morpheus(payload):
     try:
         response = requests.post(MORPHEUS_API_URL, json=payload, headers=headers)
         if response.status_code in [200, 201]:
-            print("[+] Sincronización exitosa.")
             return True
         else:
             print(f"[!] Error de API: {response.status_code} - {response.text}")
             return False
     except Exception as e:
-        print(f"[!] Error de conexión con Morpheus: {e}")
+        print(f"[!] Error de conexión: {e}")
         return False
+
+import glob
+import uuid
+
+def queue_and_send(payload, is_historical):
+    """Implementa el verdadero Store-and-Forward con tolerancia a fallos."""
+    QUEUE_DIR = "pending_sync"
+    os.makedirs(QUEUE_DIR, exist_ok=True)
+    
+    # 1. Empaquetar en archivos JSON de 1000 registros para no chocar con el límite de 1MB de Nginx
+    if payload:
+        chunk_size = 1000
+        print(f"[*] Guardando {len(payload)} registros en disco local (Lotes de {chunk_size})...")
+        for i in range(0, len(payload), chunk_size):
+            chunk = payload[i:i + chunk_size]
+            filename = f"{QUEUE_DIR}/sync_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{str(uuid.uuid4())[:6]}.json"
+            with open(filename, 'w') as f:
+                json.dump(chunk, f)
+                
+    # 2. Leer la cola y enviar uno por uno
+    pending_files = sorted(glob.glob(f"{QUEUE_DIR}/*.json"))
+    if not pending_files:
+        print("[*] No hay datos pendientes en cola.")
+        return True
+        
+    print(f"[*] Procesando {len(pending_files)} archivos en cola...")
+    for file in pending_files:
+        with open(file, 'r') as f:
+            chunk_data = json.load(f)
+            
+        print(f"    -> Enviando {file} ({len(chunk_data)} registros)...")
+        success = send_to_morpheus(chunk_data)
+        
+        if success:
+            os.remove(file) # Se borra solo si Morpheus confirma recepción
+            print(f"       [+] Éxito. Archivo borrado.")
+        else:
+            print(f"       [!] Falló el envío. Se detiene el proceso y se reintentará luego.")
+            return False # Rompe el ciclo, dejando los archivos restantes seguros en disco
+            
+    return True
 
 def main():
     # ---------------------------------------------------------
@@ -105,14 +144,15 @@ def main():
     
     if is_historical:
         print(f"[!] MODO HISTÓRICO: {args.start} hasta {args.end}")
-        where_inv = "d_FECHA BETWEEN ? AND ?"
-        where_vta = "(f.f_Fecha + convert(time,f.f_Hora)) BETWEEN ? AND ?"
+        # Optimizamos para no usar CONVERT sobre la columna, lo que rompe los índices
+        where_inv = "d_FECHA >= ? AND d_FECHA <= ?"
+        where_vta = "f.f_Fecha >= ? AND f.f_Fecha <= ?"
         params = (args.start, args.end)
     else:
         last_sync = get_last_sync_date()
         print(f"[*] MODO INCREMENTAL: Extrayendo registros posteriores a {last_sync}")
         where_inv = "d_FECHA > ?"
-        where_vta = "(f.f_Fecha + convert(time,f.f_Hora)) > ?"
+        where_vta = "f.f_Fecha > ?"
         params = (last_sync,)
     
     # ---------------------------------------------------------
@@ -156,14 +196,15 @@ def main():
     
     payload_total = datos_inv + datos_ventas
     
-    if payload_total:
-        exito = send_to_morpheus(payload_total)
-        # Solo actualizamos la marca de agua si es modo incremental y todo fue un éxito
-        if exito and not is_historical:
-            current_sync_run = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if payload_total or os.path.exists("pending_sync"):
+        exito = queue_and_send(payload_total, is_historical)
+        
+        # Solo actualizamos la marca de agua si guardamos los datos nuevos en disco y la cola fluyó
+        if not is_historical and payload_total:
+            current_sync_run = datetime.datetime.now().strftime("%Y%m%d %H:%M:%S")
             update_last_sync_date(current_sync_run)
     else:
-        print("[*] No hay datos nuevos para sincronizar.")
+        print("[*] No hay datos nuevos ni pendientes para sincronizar.")
 
 if __name__ == "__main__":
     main()

@@ -16,7 +16,8 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @router.post("/upload/", response_model=dict)
 async def upload_file(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    sku: str = None
 ) -> Any:
     """
     Upload a file (Image or PDF).
@@ -28,7 +29,12 @@ async def upload_file(
 
     # Generate unique filename
     ext = os.path.splitext(file.filename)[1].lower()
-    filename = f"{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}{ext}"
+    if sku:
+        # Sanitize SKU to be filesystem safe
+        safe_sku = "".join([c for c in sku if c.isalnum() or c in ('-', '_')]).strip()
+        filename = f"{safe_sku}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}{ext}"
+    else:
+        filename = f"{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}{ext}"
     file_path = os.path.join(UPLOAD_DIR, filename)
     
     # 1. Handle Images (Resize & Optimize)
