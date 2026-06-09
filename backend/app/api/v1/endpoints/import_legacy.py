@@ -311,6 +311,7 @@ def import_inventory_movements(
             grouped_moves[key] = []
         grouped_moves[key].append(m)
         
+    for (doc, concepto, tipo_mov, fecha), lines in grouped_moves.items():
         # Deduplication check
         existing = session.query(StockPicking).filter(StockPicking.origin_document==doc).first()
         if existing:
@@ -376,7 +377,7 @@ def import_sales_legacy(
     sales_in: List[LegacySalesDocument],
     session: Session = Depends(deps.get_db)
 ):
-    from app.models.sales import Document, DocumentLine
+    from app.models.sales import Document, DocumentLine, Customer
     from app.models.inventory import StockPicking, StockMove
     from datetime import datetime
     
