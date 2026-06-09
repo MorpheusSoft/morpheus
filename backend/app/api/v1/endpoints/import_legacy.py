@@ -196,3 +196,229 @@ def import_barcodes_legacy(
     session.commit()
     print(f"✅ ¡Carga de Códigos terminada! Insertados: {count}, No encontrados: {not_found}")
     return {"message": "Success", "imported": count, "not_found": not_found}
+
+class LegacyInventoryBaseline(BaseModel):
+    c_deposito: str
+    c_codArticulo: str
+    Cantidad: float
+
+@router.post("/inventory-baseline-legacy")
+def import_inventory_baseline(
+    baseline_in: List[LegacyInventoryBaseline],
+    session: Session = Depends(deps.get_db)
+):
+    print("Iniciando carga de foto inicial de Inventario...")
+    from app.models.inventory import InventorySession, InventoryLine
+    from datetime import datetime
+    
+    # Pre-cache variants based on STELLAR_CODE
+    stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
+    variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
+    
+    inv_session = InventorySession(
+        name=f"Baseline Legacy {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        facility_id=1,
+        state='IN_PROGRESS',
+        type='FULL'
+    )
+    session.add(inv_session)
+    session.flush()
+    
+    count = 0
+    not_found = 0
+    for b in baseline_in:
+        stellar_code = b.c_codArticulo.strip()
+        variant_id = variant_map.get(stellar_code)
+        
+        if not variant_id:
+            not_found += 1
+            continue
+            
+        line = InventoryLine(
+            session_id=inv_session.id,
+            variant_id=variant_id,
+            counted_quantity=b.Cantidad
+        )
+        session.add(line)
+        count += 1
+        if count % 1000 == 0:
+            session.flush()
+            
+    # Validate the session immediately to apply stock
+    inv_session.state = 'VALIDATED'
+    inv_session.validated_at = datetime.now()
+    session.commit()
+    
+    print(f"✅ ¡Carga de Inventario Baseline terminada! Insertados: {count}, No encontrados: {not_found}")
+    return {"message": "Success", "imported": count, "not_found": not_found}
+
+class LegacyInventoryMovement(BaseModel):
+    c_documento: str
+    c_concepto: str
+    c_tipoMov: str
+    f_fecha: str
+    c_deposito: str
+    c_codArticulo: str
+    n_cantidad: float
+    n_costo: float
+    n_subtotal: float
+
+@router.post("/inventory-movements-legacy")
+def import_inventory_movements(
+    movements_in: List[LegacyInventoryMovement],
+    session: Session = Depends(deps.get_db)
+):
+    from app.models.inventory import StockPicking, StockMove
+    from datetime import datetime
+    
+    # Pre-cache variants based on STELLAR_CODE
+    stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
+    variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
+    
+    count = 0
+    not_found = 0
+    
+    # Group by document
+    grouped_moves = {}
+    for m in movements_in:
+        key = (m.c_documento, m.c_concepto, m.c_tipoMov, m.f_fecha)
+        if key not in grouped_moves:
+            grouped_moves[key] = []
+        grouped_moves[key].append(m)
+        
+    for (doc, concepto, tipo_mov, fecha), lines in grouped_moves.items():
+        # Deduplication check
+        existing = session.query(StockPicking).filter_by(origin=doc, reference=concepto).first()
+        if existing:
+            continue
+            
+        is_in = tipo_mov.strip().lower() == 'cargo'
+        
+        picking = StockPicking(
+            facility_id=1,
+            type_id=1 if is_in else 2, 
+            origin=doc,
+            reference=concepto,
+            state='DONE',
+            scheduled_date=datetime.fromisoformat(fecha) if 'T' in fecha else datetime.strptime(fecha, '%Y-%m-%d %H:%M:%S')
+        )
+        session.add(picking)
+        session.flush()
+        
+        for m in lines:
+            stellar_code = m.c_codArticulo.strip()
+            variant_id = variant_map.get(stellar_code)
+            if not variant_id:
+                not_found += 1
+                continue
+                
+            qty = abs(m.n_cantidad)
+            
+            move = StockMove(
+                picking_id=picking.id,
+                variant_id=variant_id,
+                quantity_done=qty,
+                quantity=qty,
+                source_location_id=1,
+                dest_location_id=1,
+                state='DONE'
+            )
+            session.add(move)
+            count += 1
+            
+        if count % 500 == 0:
+            session.commit()
+            
+    session.commit()
+    print(f"✅ ¡Kardex procesado! Movimientos: {count}, No encontrados: {not_found}")
+    return {"message": "Success", "imported": count, "not_found": not_found}
+
+class LegacySalesDocument(BaseModel):
+    facility_id: int
+    c_Numero: str
+    f_Fecha: str
+    Cod_Principal: str
+    Cantidad: float
+    Precio: float
+    Subtotal: float
+    Impuesto: float
+    Total: float
+
+@router.post("/sales-legacy")
+def import_sales_legacy(
+    sales_in: List[LegacySalesDocument],
+    session: Session = Depends(deps.get_db)
+):
+    from app.models.sales import Document, DocumentLine
+    from app.models.inventory import StockPicking, StockMove
+    from datetime import datetime
+    
+    # Pre-cache variants based on STELLAR_CODE
+    stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
+    variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
+    
+    count = 0
+    not_found = 0
+    for s in sales_in:
+        stellar_code = s.Cod_Principal.strip()
+        variant_id = variant_map.get(stellar_code)
+        if not variant_id:
+            not_found += 1
+            continue
+            
+        doc_date = datetime.fromisoformat(s.f_Fecha) if 'T' in s.f_Fecha else datetime.strptime(s.f_Fecha, '%Y-%m-%d %H:%M:%S')
+        
+        doc = Document(
+            facility_id=s.facility_id,
+            type='INVOICE',
+            state='POSTED',
+            number=s.c_Numero,
+            date=doc_date,
+            subtotal=Decimal(str(s.Subtotal)),
+            tax_total=Decimal(str(s.Impuesto)),
+            total=Decimal(str(s.Total))
+        )
+        session.add(doc)
+        session.flush()
+        
+        line = DocumentLine(
+            document_id=doc.id,
+            product_variant_id=variant_id,
+            quantity=Decimal(str(s.Cantidad)),
+            unit_price=Decimal(str(s.Precio)),
+            subtotal=Decimal(str(s.Subtotal)),
+            tax_amount=Decimal(str(s.Impuesto)),
+            total=Decimal(str(s.Total))
+        )
+        session.add(line)
+        
+        # Deduct inventory (Double deduction is avoided because VEN is excluded from Kardex)
+        picking = StockPicking(
+            facility_id=s.facility_id,
+            type_id=2, # Delivery
+            origin=s.c_Numero,
+            reference="Sale/Venta",
+            state='DONE',
+            scheduled_date=doc_date
+        )
+        session.add(picking)
+        session.flush()
+        
+        move = StockMove(
+            picking_id=picking.id,
+            variant_id=variant_id,
+            quantity_done=abs(s.Cantidad),
+            quantity=abs(s.Cantidad),
+            source_location_id=1,
+            dest_location_id=1,
+            state='DONE'
+        )
+        session.add(move)
+        count += 1
+        
+        if count % 500 == 0:
+            session.commit()
+            
+    session.commit()
+    print(f"✅ ¡Ventas procesadas! Registros: {count}, No encontrados: {not_found}")
+    return {"message": "Success", "imported": count, "not_found": not_found}
