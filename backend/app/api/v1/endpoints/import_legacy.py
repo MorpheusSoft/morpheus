@@ -311,21 +311,22 @@ def import_inventory_movements(
             grouped_moves[key] = []
         grouped_moves[key].append(m)
         
-    for (doc, concepto, tipo_mov, fecha), lines in grouped_moves.items():
         # Deduplication check
-        existing = session.query(StockPicking).filter_by(origin=doc, reference=concepto).first()
+        existing = session.query(StockPicking).filter(StockPicking.origin_document==doc).first()
         if existing:
             continue
             
         is_in = tipo_mov.strip().lower() == 'cargo'
+        doc_date = datetime.fromisoformat(fecha) if 'T' in fecha else datetime.strptime(fecha, '%Y-%m-%d %H:%M:%S')
         
         picking = StockPicking(
             facility_id=1,
-            type_id=1 if is_in else 2, 
-            origin=doc,
-            reference=concepto,
-            state='DONE',
-            scheduled_date=datetime.fromisoformat(fecha) if 'T' in fecha else datetime.strptime(fecha, '%Y-%m-%d %H:%M:%S')
+            name=f"LEG-{doc}-{concepto}"[:45],
+            picking_type_id=1 if is_in else 2, 
+            origin_document=doc,
+            status='DONE',
+            scheduled_date=doc_date,
+            date_done=doc_date
         )
         session.add(picking)
         session.flush()
@@ -341,18 +342,19 @@ def import_inventory_movements(
             
             move = StockMove(
                 picking_id=picking.id,
-                variant_id=variant_id,
+                product_id=variant_id,
+                quantity_demand=qty,
                 quantity_done=qty,
-                quantity=qty,
-                source_location_id=1,
-                dest_location_id=1,
-                state='DONE'
+                location_src_id=1,
+                location_dest_id=1,
+                state='DONE',
+                reference=concepto
             )
             session.add(move)
             count += 1
             
         if count % 500 == 0:
-            session.commit()
+            session.flush()
             
     session.commit()
     print(f"✅ ¡Kardex procesado! Movimientos: {count}, No encontrados: {not_found}")
@@ -382,6 +384,13 @@ def import_sales_legacy(
     stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
     variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
     
+    # Ensure generic customer exists
+    generic_customer = session.query(Customer).filter_by(id=1).first()
+    if not generic_customer:
+        generic_customer = Customer(id=1, rif="J-000000000", name="Cliente Generico Venta Legacy")
+        session.add(generic_customer)
+        session.flush()
+        
     count = 0
     not_found = 0
     for s in sales_in:
@@ -393,56 +402,67 @@ def import_sales_legacy(
             
         doc_date = datetime.fromisoformat(s.f_Fecha) if 'T' in s.f_Fecha else datetime.strptime(s.f_Fecha, '%Y-%m-%d %H:%M:%S')
         
+        # Deduplication check
+        existing = session.query(Document).filter(
+            Document.facility_id == s.facility_id,
+            Document.document_number == s.c_Numero
+        ).first()
+        if existing:
+            continue
+            
         doc = Document(
             facility_id=s.facility_id,
+            customer_id=1,
+            currency_id=1,
             type='INVOICE',
-            state='POSTED',
-            number=s.c_Numero,
-            date=doc_date,
+            state='CONFIRMED',
+            document_number=s.c_Numero,
+            created_at=doc_date,
             subtotal=Decimal(str(s.Subtotal)),
-            tax_total=Decimal(str(s.Impuesto)),
-            total=Decimal(str(s.Total))
+            tax_amount=Decimal(str(s.Impuesto)),
+            total_amount=Decimal(str(s.Total))
         )
         session.add(doc)
         session.flush()
         
         line = DocumentLine(
             document_id=doc.id,
-            product_variant_id=variant_id,
+            variant_id=variant_id,
             quantity=Decimal(str(s.Cantidad)),
             unit_price=Decimal(str(s.Precio)),
-            subtotal=Decimal(str(s.Subtotal)),
-            tax_amount=Decimal(str(s.Impuesto)),
-            total=Decimal(str(s.Total))
+            tax_pct=Decimal('0.0'),
+            line_total=Decimal(str(s.Total))
         )
         session.add(line)
         
         # Deduct inventory (Double deduction is avoided because VEN is excluded from Kardex)
         picking = StockPicking(
             facility_id=s.facility_id,
-            type_id=2, # Delivery
-            origin=s.c_Numero,
-            reference="Sale/Venta",
-            state='DONE',
-            scheduled_date=doc_date
+            name=f"SALE-{s.c_Numero}-{s.Cod_Principal}"[:45],
+            picking_type_id=2, # Delivery
+            origin_document=s.c_Numero,
+            status='DONE',
+            scheduled_date=doc_date,
+            date_done=doc_date
         )
         session.add(picking)
         session.flush()
         
         move = StockMove(
             picking_id=picking.id,
-            variant_id=variant_id,
+            product_id=variant_id,
+            quantity_demand=abs(s.Cantidad),
             quantity_done=abs(s.Cantidad),
-            quantity=abs(s.Cantidad),
-            source_location_id=1,
-            dest_location_id=1,
-            state='DONE'
+            location_src_id=1,
+            location_dest_id=1,
+            state='DONE',
+            reference="Sale/Venta"
         )
         session.add(move)
         count += 1
         
         if count % 500 == 0:
-            session.commit()
+            session.flush()
             
     session.commit()
     print(f"✅ ¡Ventas procesadas! Registros: {count}, No encontrados: {not_found}")
