@@ -26,11 +26,7 @@ def import_products_legacy(
     products_in: List[LegacyProduct],
     session: Session = Depends(deps.get_db)
 ):
-    print("Iniciando limpieza de tablas de productos...")
-    session.execute(text("TRUNCATE TABLE inv.products, inv.product_variants, inv.product_facility_prices CASCADE;"))
-    session.commit()
-    
-    print("Iniciando carga Maestro de Productos con nueva estructura...")
+    print("Iniciando carga Maestro de Productos con UPSERT (Sin truncar tablas)...")
     
     # 1. Obtener monedas
     currencies = {c.code.upper(): c.id for c in session.query(Currency).all()}
@@ -52,6 +48,10 @@ def import_products_legacy(
             part = cat.slug.split('-')[-1]
             cat_cache[part] = cat.id
             
+    # Cache existing variants based on STELLAR_CODE to speed up lookups
+    stellar_barcodes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
+    variant_map = {bc.barcode: bc.variant for bc in stellar_barcodes_db}
+    
     count = 0
     for p in products_in:
         legacy_stellar_code = p.c_Codigo.strip()
@@ -84,56 +84,82 @@ def import_products_legacy(
         # Evitar desbordamiento en Numeric(5,2) (Max 999.99)
         margin_pct = min(round(margin_pct, 2), Decimal('999.99'))
             
-        parent_product = Product(
-            name=name,
-            category_id=cat_id,
-            currency_id=curr_id,
-            tax_id=tax_id,
-            brand=brand,
-            product_type='STOCKED',
-            uom_base='PZA',
-            origin='NACIONAL',
-            is_active=True,
-            has_variants=False,
-            image_main=img
-        )
-        session.add(parent_product)
-        session.flush() 
+        existing_variant = variant_map.get(legacy_stellar_code)
         
-        new_variant = ProductVariant(
-            product_id=parent_product.id,
-            sku=f"PRD-{parent_product.id}",
-            currency_id=curr_id,
-            standard_cost=cost,
-            last_cost=cost,
-            average_cost=cost,
-            sales_price=price,
-            is_active=True
-        )
-        session.add(new_variant)
-        session.flush()
-        
-        stellar_barcode = ProductBarcode(
-            product_variant_id=new_variant.id,
-            barcode=legacy_stellar_code,
-            code_type='STELLAR_CODE',
-            uom="UND",
-            conversion_factor=1.0
-        )
-        session.add(stellar_barcode)
-        
-        facility_price = ProductFacilityPrice(
-            variant_id=new_variant.id,
-            facility_id=1,
-            sales_price=price,
-            target_utility_pct=margin_pct
-        )
-        session.add(facility_price)
-        
+        if existing_variant:
+            # UPSERT: Update existing product and variant
+            existing_product = existing_variant.product
+            existing_product.name = name
+            existing_product.category_id = cat_id
+            existing_product.tax_id = tax_id
+            existing_product.brand = brand
+            existing_product.currency_id = curr_id
+            if img:
+                existing_product.image_main = img
+                
+            existing_variant.average_cost = cost
+            existing_variant.last_cost = cost
+            existing_variant.sales_price = price
+            
+            # Update facility price
+            if existing_variant.facility_prices:
+                fp = existing_variant.facility_prices[0]
+                fp.sales_price = price
+                fp.target_utility_pct = margin_pct
+        else:
+            # CREATE NEW
+            parent_product = Product(
+                name=name,
+                category_id=cat_id,
+                currency_id=curr_id,
+                tax_id=tax_id,
+                brand=brand,
+                product_type='STOCKED',
+                uom_base='PZA',
+                origin='NACIONAL',
+                is_active=True,
+                has_variants=False,
+                image_main=img
+            )
+            session.add(parent_product)
+            session.flush() # To get ID
+            
+            variant = ProductVariant(
+                product_id=parent_product.id,
+                sku=f"PRD-{parent_product.id}",
+                currency_id=curr_id,
+                average_cost=cost,
+                last_cost=cost,
+                sales_price=price,
+                is_active=True
+            )
+            session.add(variant)
+            session.flush()
+            
+            stellar_barcode = ProductBarcode(
+                product_variant_id=variant.id,
+                barcode=legacy_stellar_code,
+                code_type='STELLAR_CODE',
+                uom="UND",
+                conversion_factor=1.0
+            )
+            session.add(stellar_barcode)
+            
+            facility_price = ProductFacilityPrice(
+                variant_id=variant.id,
+                facility_id=1,
+                sales_price=price,
+                target_utility_pct=margin_pct
+            )
+            session.add(facility_price)
+            
+            # Also add to map so subsequent duplicates in the same payload are ignored or updated
+            variant_map[legacy_stellar_code] = variant
+            
         count += 1
         if count % 500 == 0:
-            session.commit()
-            print(f"  ... Insertados {count} productos")
+            session.flush()
+            print(f"  ... Procesados {count} productos")
             
     session.commit()
     print(f"✅ ¡Carga Maestro terminada! Total productos procesados con Costo, Impuesto y Margen Utilidad: {count}")

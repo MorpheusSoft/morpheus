@@ -64,6 +64,7 @@ public class ProductBarcodesExtractorWorker : BackgroundService
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
         var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(15);
         var response = await client.PostAsync(config.TargetApiUrl, content, stoppingToken);
 
         if (response.IsSuccessStatusCode)
