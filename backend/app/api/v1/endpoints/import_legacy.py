@@ -172,9 +172,8 @@ def import_barcodes_legacy(
             not_found += 1
             continue
             
-        # Check if barcode already exists for this variant to avoid duplicates
+        # Check if barcode already exists GLOBALLY to avoid IntegrityError
         existing = session.query(ProductBarcode).filter(
-            ProductBarcode.product_variant_id == variant_id,
             ProductBarcode.barcode == alterno
         ).first()
         
@@ -219,7 +218,7 @@ def import_inventory_baseline(
         name=f"Baseline Legacy {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         facility_id=1,
         state='IN_PROGRESS',
-        type='FULL'
+        scope_type='GENERAL'
     )
     session.add(inv_session)
     session.flush()
@@ -236,8 +235,8 @@ def import_inventory_baseline(
             
         line = InventoryLine(
             session_id=inv_session.id,
-            variant_id=variant_id,
-            counted_quantity=b.Cantidad
+            product_variant_id=variant_id,
+            counted_qty=b.Cantidad
         )
         session.add(line)
         count += 1
@@ -246,7 +245,7 @@ def import_inventory_baseline(
             
     # Validate the session immediately to apply stock
     inv_session.state = 'VALIDATED'
-    inv_session.validated_at = datetime.now()
+    inv_session.date_end = datetime.now()
     session.commit()
     
     print(f"✅ ¡Carga de Inventario Baseline terminada! Insertados: {count}, No encontrados: {not_found}")
