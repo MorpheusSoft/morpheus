@@ -244,7 +244,7 @@ def import_inventory_baseline(
             session.flush()
             
     # Validate the session immediately to apply stock
-    inv_session.state = 'VALIDATED'
+    inv_session.state = 'DONE'
     inv_session.date_end = datetime.now()
     session.commit()
     
