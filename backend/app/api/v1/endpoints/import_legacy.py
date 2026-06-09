@@ -243,7 +243,7 @@ def import_inventory_baseline(
     inv_session = InventorySession(
         name=f"Baseline Legacy {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         facility_id=1,
-        state='IN_PROGRESS',
+        state='DONE',
         scope_type='GENERAL'
     )
     session.add(inv_session)
