@@ -4,11 +4,13 @@ import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 
 export async function loginAction(prevState: any, formData: FormData) {
+  console.log("LOGIN ACTION TRIGGERED WITH:", formData.get("email"))
   const email = formData.get("email") as string
   const password = formData.get("password") as string
   const callbackUrl = formData.get("callbackUrl") as string || "/dashboard"
 
-  const res = await fetch("http://127.0.0.1:8000/api/v1/login/access-token", {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.qa.morpheussoft.net/api/v1"
+  const res = await fetch(`${apiUrl}/login/access-token`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
