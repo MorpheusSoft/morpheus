@@ -54,8 +54,11 @@ app.add_middleware(
         "http://127.0.0.1:4005",
         "https://hub.qa.morpheussoft.net",
         "https://compras.qa.morpheussoft.net",
+        "http://costos.qa.morpheussoft.net",
+        "https://costos.qa.morpheussoft.net",
         "https://inventario.qa.morpheussoft.net",
-        "https://logistica.qa.morpheussoft.net"
+        "https://logistica.qa.morpheussoft.net",
+        "https://costos.qa.morpheussoft.net"
     ],
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?",
     allow_credentials=True,
@@ -82,9 +85,16 @@ from fastapi.responses import JSONResponse
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    safe_errors = []
+    for error in errors:
+        error_copy = dict(error)
+        error_copy.pop('input', None)
+        safe_errors.append(error_copy)
     print(f"OMFG 422 ERROR! Body: {exc.body}")
-    print(f"Details: {exc.errors()}")
-    return JSONResponse(status_code=422, content={"detail": exc.errors(), "body": exc.body})
+    print(f"Details: {safe_errors}")
+    body_str = str(exc.body) if exc.body else None
+    return JSONResponse(status_code=422, content={"detail": safe_errors, "body": body_str})
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
