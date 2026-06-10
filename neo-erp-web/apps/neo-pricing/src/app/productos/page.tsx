@@ -208,15 +208,16 @@ export default function ProductConsultationPage() {
         <div className="lg:col-span-3 bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-6">
           {/* Search Form */}
           <form onSubmit={handleSearch} className="flex gap-2">
-            <div className="relative flex-1">
-              <i className="pi pi-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+            <span className="p-input-icon-left flex-1 w-full relative">
+              <i className="pi pi-search text-slate-400 absolute left-4 top-1/2 -translate-y-1/2 z-10" />
               <InputText
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Buscar por código de barra, SKU o nombre de producto..."
-                className="w-full pl-11 pr-4 py-3 bg-slate-50 border-slate-200 rounded-2xl focus:ring-4 focus:ring-rose-500/10 transition-all text-slate-700"
+                className="w-full pl-12 pr-4 py-3 bg-slate-50 border-slate-200 rounded-2xl focus:ring-4 focus:ring-rose-500/10 transition-all text-slate-700"
+                style={{ paddingLeft: '3rem' }}
               />
-            </div>
+            </span>
             <Button
               type="submit"
               label="Buscar"
