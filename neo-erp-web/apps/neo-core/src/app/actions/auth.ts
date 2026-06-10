@@ -4,11 +4,12 @@ import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 
 export async function loginAction(prevState: any, formData: FormData) {
+  let callbackUrl = "/dashboard"
   try {
     console.log("LOGIN ACTION TRIGGERED WITH:", formData.get("email"))
     const email = (formData.get("email") as string).trim()
     const password = (formData.get("password") as string).trim()
-    const callbackUrl = formData.get("callbackUrl") as string || "/dashboard"
+    callbackUrl = formData.get("callbackUrl") as string || "/dashboard"
 
     let apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.qa.morpheussoft.net/api/v1"
     if (apiUrl.endsWith("/")) apiUrl = apiUrl.slice(0, -1)
@@ -47,11 +48,12 @@ export async function loginAction(prevState: any, formData: FormData) {
       maxAge: 60 * 30, // 30 mins
     })
 
-    redirect(callbackUrl)
   } catch (err: any) {
     console.error("LOGIN ACTION ERROR:", err)
     return { error: `EXCEPTION: ${err.message}` }
   }
+
+  redirect(callbackUrl)
 }
 
 export async function logoutAction() {
