@@ -1,18 +1,22 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-export function proxy(request: NextRequest) {
+export default function proxy(request: NextRequest) {
   const token = request.cookies.get('access_token')?.value
-  const isLoginPage = request.nextUrl.pathname.startsWith('/login')
-
-  // Redirigir al usuario no logueado a la vista de login
-  if (!token && !isLoginPage) {
-    return NextResponse.redirect(new URL('/login', request.url))
-  }
-
-  // Si tiene token y está en el login, redirigir al dashboard (o home)
-  if (token && isLoginPage) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
+  
+  if (!token) {
+    const host = request.headers.get('host') || '';
+    const isProd = host.includes('.morpheussoft.net');
+    
+    // Construir la URL de Login del Hub Central
+    const loginBase = isProd ? 'https://hub.qa.morpheussoft.net/login' : 'http://localhost:4000/login';
+    
+    // Anexar la ruta actual completa como callbackUrl usando el host real
+    const protocol = isProd ? 'https' : request.nextUrl.protocol.replace(':', '');
+    const realUrl = `${protocol}://${host}${request.nextUrl.pathname}${request.nextUrl.search}`;
+    const currentUrl = encodeURIComponent(realUrl);
+    
+    return NextResponse.redirect(`${loginBase}?callbackUrl=${currentUrl}`);
   }
 
   return NextResponse.next()

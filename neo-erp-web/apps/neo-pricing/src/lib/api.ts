@@ -39,7 +39,7 @@ api.interceptors.response.use(
         document.cookie = `access_token=; Max-Age=0; path=/; ${domain}`;
         
         const loginUrl = isProd 
-          ? 'http://hub.qa.morpheussoft.net/login' 
+          ? 'https://hub.qa.morpheussoft.net/login' 
           : 'http://localhost:4000/login';
           
         window.location.href = loginUrl;
