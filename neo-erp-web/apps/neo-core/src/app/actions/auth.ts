@@ -6,8 +6,8 @@ import { redirect } from "next/navigation"
 export async function loginAction(prevState: any, formData: FormData) {
   try {
     console.log("LOGIN ACTION TRIGGERED WITH:", formData.get("email"))
-    const email = formData.get("email") as string
-    const password = formData.get("password") as string
+    const email = (formData.get("email") as string).trim()
+    const password = (formData.get("password") as string).trim()
     const callbackUrl = formData.get("callbackUrl") as string || "/dashboard"
 
     let apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.qa.morpheussoft.net/api/v1"
