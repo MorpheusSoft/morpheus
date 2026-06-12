@@ -9,6 +9,7 @@ public class SyncState
     public bool BaselineInventoryDone { get; set; } = false;
     public DateTime LastMovementSync { get; set; } = new DateTime(2000, 1, 1);
     public DateTime LastSalesSync { get; set; } = new DateTime(2000, 1, 1);
+    public DateTime LastSupplierProductSync { get; set; } = new DateTime(2000, 1, 1);
 }
 
 public static class SyncStateManager

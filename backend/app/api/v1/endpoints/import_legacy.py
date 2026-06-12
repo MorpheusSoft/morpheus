@@ -5,8 +5,9 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.api import deps
-from app.models.inventory import Product, ProductVariant, Category, ProductFacilityPrice, ProductBarcode
-from app.models.core import Currency, Tribute
+from app.models.inventory import Product, ProductVariant, Category, ProductFacilityPrice, ProductBarcode, ProductPackaging
+from app.models.core import Currency, Tribute, Supplier
+from app.models.purchasing import SupplierProduct
 
 router = APIRouter()
 
@@ -467,4 +468,109 @@ def import_sales_legacy(
             
     session.commit()
     print(f"✅ ¡Ventas procesadas! Registros: {count}, No encontrados: {not_found}")
+    return {"message": "Success", "imported": count, "not_found": not_found}
+
+class LegacySupplierProduct(BaseModel):
+    c_Codigo: str
+    c_CodProveedor: str
+    costo: float
+    compMin: float = 1.0
+    empaque: str = 'UND'
+    n_CantiBul: float = 1.0
+
+@router.post("/supplier-products-legacy")
+def import_supplier_products_legacy(
+    supplier_products_in: List[LegacySupplierProduct],
+    session: Session = Depends(deps.get_db)
+):
+    print(f"Iniciando carga de {len(supplier_products_in)} Productos por Proveedor...")
+    
+    count = 0
+    not_found = 0
+    
+    # 1. Pre-cache variants based on STELLAR_CODE
+    stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
+    variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
+    
+    # 2. Pre-cache suppliers by code
+    suppliers_db = session.query(Supplier).all()
+    supplier_map = {s.tax_id: s.id for s in suppliers_db if s.tax_id} # Asumiendo que guardamos el código como tax_id o name
+    
+    # Check if we should match by tax_id or name
+    # We will map by name as well just in case
+    supplier_name_map = {s.name: s.id for s in suppliers_db}
+
+    # 3. Pre-cache packagings
+    pack_map = {p.name.upper(): p.id for p in session.query(ProductPackaging).all()}
+    
+    for sp in supplier_products_in:
+        stellar_code = sp.c_Codigo.strip()
+        sup_code = sp.c_CodProveedor.strip()
+        
+        variant_id = variant_map.get(stellar_code)
+        if not variant_id:
+            not_found += 1
+            print(f"  [WARN] Variante no encontrada para STELLAR_CODE={stellar_code}. Saltando proveedor {sup_code}.")
+            continue
+            
+        # Get or create supplier
+        supplier_id = supplier_map.get(sup_code)
+        if not supplier_id:
+            supplier_id = supplier_name_map.get(sup_code)
+            
+        if not supplier_id:
+            # Create dummy supplier since it doesn't exist
+            new_sup = Supplier(
+                name=sup_code,
+                tax_id=sup_code,
+                lead_time_days=3, # Default
+                is_active=True
+            )
+            session.add(new_sup)
+            session.flush()
+            supplier_id = new_sup.id
+            supplier_map[sup_code] = supplier_id
+            
+        # Get or create pack
+        pack_name = sp.empaque.strip().upper()
+        pack_id = pack_map.get(pack_name)
+        if not pack_id:
+            new_pack = ProductPackaging(
+                name=pack_name,
+                qty_per_unit=Decimal(str(sp.n_CantiBul)),
+                uom='UND'
+            )
+            session.add(new_pack)
+            session.flush()
+            pack_id = new_pack.id
+            pack_map[pack_name] = pack_id
+            
+        # Upsert SupplierProduct
+        existing_sp = session.query(SupplierProduct).filter(
+            SupplierProduct.variant_id == variant_id,
+            SupplierProduct.supplier_id == supplier_id
+        ).first()
+        
+        if existing_sp:
+            existing_sp.replacement_cost = Decimal(str(sp.costo))
+            existing_sp.min_order_qty = Decimal(str(sp.compMin))
+            existing_sp.pack_id = pack_id
+        else:
+            new_sp = SupplierProduct(
+                variant_id=variant_id,
+                supplier_id=supplier_id,
+                replacement_cost=Decimal(str(sp.costo)),
+                min_order_qty=Decimal(str(sp.compMin)),
+                pack_id=pack_id,
+                is_active=True
+            )
+            session.add(new_sp)
+            
+        count += 1
+        if count % 500 == 0:
+            session.flush()
+            print(f"  ... Procesados {count} cruces")
+            
+    session.commit()
+    print(f"✅ ¡Carga de Proveedores terminada! Registros: {count}, No encontrados: {not_found}")
     return {"message": "Success", "imported": count, "not_found": not_found}

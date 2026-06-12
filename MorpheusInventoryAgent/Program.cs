@@ -27,6 +27,7 @@ public class Program
         builder.Services.AddHostedService<InventoryBaselineWorker>();
         builder.Services.AddHostedService<InventoryMovementsWorker>();
         builder.Services.AddHostedService<SalesExtractorWorker>();
+        builder.Services.AddHostedService<SupplierProductsExtractorWorker>();
 
         var host = builder.Build();
         host.Run();

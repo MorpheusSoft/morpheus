@@ -218,6 +218,40 @@ export default function PricingValidationBoardPage() {
   const [facilities, setFacilities] = useState<any[]>([]);
   const [expandedRows, setExpandedRows] = useState<any>(null);
 
+  // Export Wizard states
+  const [showExportWizard, setShowExportWizard] = useState(false);
+  const [exportFields, setExportFields] = useState<string[]>(['sku', 'name', 'proposed_cost', 'proposed_price']);
+  const [exportDelimiter, setExportDelimiter] = useState<string>(',');
+  const [exportIncludeHeaders, setExportIncludeHeaders] = useState<boolean>(true);
+  const [exportCodeType, setExportCodeType] = useState<string>('BARCODE');
+
+  const exportCodeTypeOptions = [
+      { label: 'Cualquiera (El primero disponible)', value: 'ANY' },
+      { label: 'Código de Barras (EAN/UPC)', value: 'BARCODE' },
+      { label: 'Código Principal (STELLAR_CODE)', value: 'STELLAR_CODE' },
+      { label: 'Referencia de Fábrica', value: 'FACTORY_REF' }
+  ];
+
+  const exportFieldOptions = [
+      { label: 'SKU / Código', value: 'sku' },
+      { label: 'Código de Barras', value: 'barcode' },
+      { label: 'Nombre / Descripción', value: 'name' },
+      { label: 'Costo Actual', value: 'old_cost' },
+      { label: 'Nuevo Costo Propuesto', value: 'proposed_cost' },
+      { label: 'Costo Reposición Actual', value: 'old_replacement_cost' },
+      { label: 'Nuevo Costo Reposición', value: 'proposed_replacement_cost' },
+      { label: 'Precio Actual', value: 'old_price' },
+      { label: 'Nuevo Precio Propuesto', value: 'proposed_price' },
+      { label: 'Nuevo Precio (Con IVA)', value: 'proposed_price_iva' }
+  ];
+
+  const delimiterOptions = [
+      { label: 'Coma (,)', value: ',' },
+      { label: 'Punto y Coma (;)', value: ';' },
+      { label: 'Barra Vertical (|)', value: '|' },
+      { label: 'Tabulador (Tab)', value: '\t' }
+  ];
+
   // Reconciliation states
   const [reconcilingLine, setReconcilingLine] = useState<any>(null);
   const [showReconciliationDialog, setShowReconciliationDialog] = useState(false);
@@ -301,9 +335,11 @@ export default function PricingValidationBoardPage() {
     if (!selectedProduct) return;
     try {
       setLoading(true);
+      const nameDesc = selectedProduct.product?.name || 'Variante';
+      const extRefName = `${selectedProduct.sku} - ${nameDesc}`;
       await PricingService.addSessionLine(params.id as string, {
         variant_id: selectedProduct.id,
-        external_reference_name: selectedProduct.sku,
+        external_reference_name: extRefName,
         proposed_cost: newCost || 0,
         proposed_price: newPrice || 0,
         action: 'UPDATE_COST'
@@ -400,6 +436,78 @@ export default function PricingValidationBoardPage() {
     } finally {
       setApplying(false);
     }
+  };
+
+  const handleExportFile = () => {
+      if (!session?.lines || session.lines.length === 0) {
+          alert("No hay líneas para exportar en esta sesión.");
+          return;
+      }
+      let fileContent = "";
+      if (exportIncludeHeaders) {
+          const headers = exportFields.map(f => exportFieldOptions.find(opt => opt.value === f)?.label || f);
+          fileContent += headers.join(exportDelimiter) + "\n";
+      }
+      session.lines.forEach((line: any) => {
+          let sku = line.variant?.sku || line.variant_id?.toString() || '';
+          let name = line.external_reference_name || '';
+          let finalBarcode = '';
+
+          // 1. Intentar extraer del JSON en external_reference si no hay variante (líneas importadas sin emparejar)
+          try {
+              if (name.startsWith('{') && name.endsWith('}')) {
+                  const parsed = JSON.parse(name);
+                  sku = parsed.supplier_sku || sku;
+                  finalBarcode = parsed.barcode || '';
+                  name = parsed.description || '';
+              } else if (name.includes(' - ')) {
+                  const parts = name.split(' - ');
+                  name = parts.slice(1).join(' - ');
+              }
+          } catch (e) {
+              console.error(e);
+          }
+
+          // 2. Extraer el código correcto de los barcodes reales de la base de datos
+          if (line.variant && line.variant.barcodes && line.variant.barcodes.length > 0) {
+              if (exportCodeType === 'ANY') {
+                  finalBarcode = line.variant.barcodes[0].barcode;
+              } else {
+                  const found = line.variant.barcodes.find((b: any) => b.code_type === exportCodeType);
+                  if (found) {
+                      finalBarcode = found.barcode;
+                  } else {
+                      // Fallback si no tiene el específico
+                      finalBarcode = line.variant.barcodes[0].barcode;
+                  }
+              }
+          }
+
+          const rowData: Record<string, string> = {
+              sku: sku,
+              barcode: finalBarcode,
+              name: `"${name.replace(/"/g, '""')}"`,
+              old_cost: Number(line.old_cost || 0).toFixed(2),
+              proposed_cost: Number(line.proposed_cost || 0).toFixed(2),
+              old_replacement_cost: Number(line.old_replacement_cost || 0).toFixed(2),
+              proposed_replacement_cost: Number(line.proposed_replacement_cost || 0).toFixed(2),
+              old_price: Number(line.old_price || 0).toFixed(2),
+              proposed_price: Number(line.proposed_price || 0).toFixed(2),
+              proposed_price_iva: (Number(line.proposed_price || 0) * 1.16).toFixed(2)
+          };
+          const rowValues = exportFields.map(f => rowData[f] || "");
+          fileContent += rowValues.join(exportDelimiter) + "\n";
+      });
+      const blob = new Blob([fileContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      const ext = exportDelimiter === '\t' ? 'txt' : 'csv';
+      link.setAttribute("download", `exportacion_sesion_${params.id || 'morpheus'}.${ext}`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setShowExportWizard(false);
   };
 
   const handleUploadCsv = async (e: any) => {
@@ -728,6 +836,16 @@ export default function PricingValidationBoardPage() {
              </p>
           </div>
           <div className="flex items-center gap-4">
+              {session?.status === 'APPLIED' && (
+                  <Button 
+                      label="Exportar TXT/CSV" 
+                      icon="pi pi-download" 
+                      severity="secondary"
+                      outlined
+                      className="font-bold !rounded-xl !py-2.5 !px-5 text-sm" 
+                      onClick={() => setShowExportWizard(true)} 
+                  />
+              )}
               {session?.status === 'DRAFT' && (session?.source_type === 'CSV_UPLOAD' || session?.source_type === 'AI_PDF_PARSER') && (
                 <div className="relative overflow-hidden inline-block">
                    <Button 
@@ -767,7 +885,7 @@ export default function PricingValidationBoardPage() {
                     suggestions={searchResults} 
                     completeMethod={searchProduct} 
                     onChange={(e) => setSelectedProduct(e.value)} 
-                    itemTemplate={(item) => (<div><span className="font-bold text-slate-800">{item.sku}</span><div className="text-xs text-slate-500 mt-1">{item.product?.name || 'Variante'}</div></div>)} 
+                    itemTemplate={(item) => (<div><span className="font-bold text-slate-800">{item.product?.name || 'Variante'}</span><div className="text-xs text-slate-500 mt-1">{item.sku}</div></div>)} 
                     placeholder="Escribe el código o nombre..." 
                     className="w-full" 
                     inputClassName="w-full p-2 border-slate-300 rounded-md" 
@@ -1040,6 +1158,67 @@ export default function PricingValidationBoardPage() {
                </div>
             </div>
         )}
+      </Dialog>
+
+      <Dialog 
+          visible={showExportWizard} 
+          style={{ width: '30vw', minWidth: '400px' }} 
+          header="📤 Exportar Datos de la Sesión" 
+          onHide={() => setShowExportWizard(false)}
+          footer={
+              <div className="flex justify-end gap-2">
+                  <Button label="Cancelar" icon="pi pi-times" className="p-button-text text-slate-500" onClick={() => setShowExportWizard(false)} />
+                  <Button label="Descargar Archivo" icon="pi pi-download" className="!bg-teal-600 hover:!bg-teal-700 border-none font-bold text-white px-4 py-2" onClick={handleExportFile} />
+              </div>
+          }
+      >
+          <div className="flex flex-col gap-4 mt-2">
+              <p className="text-sm text-slate-500 mb-2">Selecciona las columnas y el delimitador para el archivo exportado.</p>
+              
+              <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Columnas a Exportar</label>
+                  <MultiSelect 
+                      value={exportFields} 
+                      options={exportFieldOptions} 
+                      onChange={(e) => setExportFields(e.value)} 
+                      optionLabel="label" 
+                      placeholder="Selecciona campos..." 
+                      display="chip" 
+                      className="w-full" 
+                  />
+              </div>
+
+              <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase text-indigo-600">Tipo de Código de Barras</label>
+                  <Dropdown 
+                      value={exportCodeType} 
+                      options={exportCodeTypeOptions} 
+                      onChange={(e) => setExportCodeType(e.value)} 
+                      className="w-full border-indigo-200 shadow-sm" 
+                  />
+              </div>
+
+              <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Delimitador (Separador)</label>
+                  <Dropdown 
+                      value={exportDelimiter} 
+                      options={delimiterOptions} 
+                      onChange={(e) => setExportDelimiter(e.value)} 
+                      className="w-full" 
+                  />
+              </div>
+
+              <div className="flex items-center mt-2 gap-2">
+                  <Checkbox 
+                      inputId="cbIncludeHeaders" 
+                      checked={exportIncludeHeaders} 
+                      onChange={(e) => setExportIncludeHeaders(e.checked ?? false)} 
+                  />
+                  <label htmlFor="cbIncludeHeaders" className="text-sm text-slate-700 cursor-pointer select-none">
+                      Incluir fila de encabezados en el archivo
+                  </label>
+              </div>
+          </div>
       </Dialog>
 
       <Dialog 

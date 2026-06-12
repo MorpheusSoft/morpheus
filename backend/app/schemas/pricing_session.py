@@ -28,12 +28,24 @@ class PricingSessionLineUpdate(BaseModel):
     proposed_price: Optional[Decimal] = None
     clear_facility_prices: Optional[bool] = None
 
+class BarcodeOut(BaseModel):
+    barcode: str
+    code_type: str
+    model_config = ConfigDict(from_attributes=True)
+
+class VariantBarcodesOut(BaseModel):
+    id: int
+    sku: str
+    barcodes: List[BarcodeOut] = []
+    model_config = ConfigDict(from_attributes=True)
+
 class PricingSessionLineOut(PricingSessionLineBase):
     id: int
     session_id: int
     suggested_price: Optional[Decimal] = None
     suggested_margin: Optional[Decimal] = None
     current_margin: Optional[Decimal] = None
+    variant: Optional[VariantBarcodesOut] = None
     
     model_config = ConfigDict(from_attributes=True)
 
