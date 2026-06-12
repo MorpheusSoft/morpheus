@@ -111,7 +111,7 @@ def get_advanced_kardex(
     # 1. Resolve locations to track
     target_location_ids = set(filters.location_ids or [])
     if filters.facility_ids:
-        facility_locs = db.query(Location.id).filter(Location.facility_id.in_(filters.facility_ids)).all()
+        facility_locs = db.query(Location.id).join(Warehouse).filter(Warehouse.facility_id.in_(filters.facility_ids)).all()
         target_location_ids.update([loc[0] for loc in facility_locs])
 
     # If no facility or location specified, we track ALL internal locations
