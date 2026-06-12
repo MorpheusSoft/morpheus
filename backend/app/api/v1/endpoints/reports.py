@@ -88,30 +88,169 @@ def get_stock_level(
         
     return data
 
-@router.get("/kardex/{product_id}")
-def get_kardex(
-    product_id: int,
+class KardexFilter(BaseModel):
+    product_ids: List[int]
+    facility_ids: Optional[List[int]] = []
+    location_ids: Optional[List[int]] = []
+    date_from: Optional[datetime] = None
+    date_to: Optional[datetime] = None
+
+@router.post("/kardex")
+def get_advanced_kardex(
+    filters: KardexFilter,
     db: Session = Depends(deps.get_db),
 ):
     """
-    Get detailed history of movements for a product.
+    Get detailed history of movements (Kardex) for up to 10 products.
+    Includes filtering by facilities, locations, and dates.
+    Calculates running balance (saldo).
     """
-    moves = db.query(StockMove).filter(
-        StockMove.product_id == product_id,
-        StockMove.state == 'DONE'
-    ).order_by(StockMove.date.desc()).all()
-    
-    history = []
-    for m in moves:
-        history.append({
-            "date": m.date,
-            "reference": m.reference or f"MOVE-{m.id}",
-            "location_from": m.location_src_id,
-            "location_to": m.location_dest_id,
-            "qty": float(m.quantity_done)
-        })
+    if not filters.product_ids or len(filters.product_ids) > 10:
+        raise HTTPException(status_code=400, detail="Debe seleccionar entre 1 y 10 productos para el Kardex.")
+
+    # 1. Resolve locations to track
+    target_location_ids = set(filters.location_ids or [])
+    if filters.facility_ids:
+        facility_locs = db.query(Location.id).filter(Location.facility_id.in_(filters.facility_ids)).all()
+        target_location_ids.update([loc[0] for loc in facility_locs])
+
+    # If no facility or location specified, we track ALL internal locations
+    if not target_location_ids:
+        all_internal = db.query(Location.id).filter(Location.usage == 'INTERNAL').all()
+        target_location_ids.update([loc[0] for loc in all_internal])
+
+    if not target_location_ids:
+        return []
+
+    # Prepare results per product
+    results = []
+
+    for product_id in filters.product_ids:
+        product_info = db.query(ProductVariant, Product).join(Product).filter(ProductVariant.id == product_id).first()
+        if not product_info:
+            continue
+            
+        variant, product = product_info
+
+        # 2. Calculate initial balance BEFORE date_from
+        initial_balance = 0.0
+        if filters.date_from:
+            # Sum all inputs before date_from
+            inputs_before = db.query(func.sum(StockMove.quantity_done)).filter(
+                StockMove.product_id == product_id,
+                StockMove.state == 'DONE',
+                StockMove.location_dest_id.in_(target_location_ids),
+                StockMove.date < filters.date_from
+            ).scalar() or 0.0
+
+            # Sum all outputs before date_from
+            outputs_before = db.query(func.sum(StockMove.quantity_done)).filter(
+                StockMove.product_id == product_id,
+                StockMove.state == 'DONE',
+                StockMove.location_src_id.in_(target_location_ids),
+                StockMove.date < filters.date_from
+            ).scalar() or 0.0
+
+            initial_balance = float(inputs_before) - float(outputs_before)
+
+        # 3. Query movements within date range
+        moves_query = db.query(StockMove).filter(
+            StockMove.product_id == product_id,
+            StockMove.state == 'DONE',
+            or_(
+                StockMove.location_src_id.in_(target_location_ids),
+                StockMove.location_dest_id.in_(target_location_ids)
+            )
+        )
+
+        if filters.date_from:
+            moves_query = moves_query.filter(StockMove.date >= filters.date_from)
+        if filters.date_to:
+            moves_query = moves_query.filter(StockMove.date <= filters.date_to)
+
+        # Order chronologically to calculate running balance correctly
+        moves = moves_query.order_by(StockMove.date.asc()).all()
+
+        current_balance = initial_balance
         
-    return history
+        # Pre-fetch location names for better response
+        loc_ids_in_moves = set()
+        for m in moves:
+            loc_ids_in_moves.add(m.location_src_id)
+            loc_ids_in_moves.add(m.location_dest_id)
+            
+        loc_names = {l.id: l.name for l in db.query(Location.id, Location.name).filter(Location.id.in_(loc_ids_in_moves)).all()}
+
+        # Always add an INITIAL BALANCE row if there's a date_from filter
+        product_history = []
+        if filters.date_from:
+            product_history.append({
+                "date": filters.date_from,
+                "reference": "SALDO INICIAL",
+                "type": "INITIAL",
+                "location_name": "N/A",
+                "qty_in": 0.0,
+                "qty_out": 0.0,
+                "balance": current_balance,
+                "cost": 0.0
+            })
+
+        for m in moves:
+            is_in = m.location_dest_id in target_location_ids
+            is_out = m.location_src_id in target_location_ids
+
+            qty = float(m.quantity_done)
+            cost = float(m.unit_cost or 0)
+
+            if is_in and is_out:
+                # Internal transfer within the filtered locations
+                # We show it as an output and then an input to balance it, or just a transfer
+                # For Kardex, it's usually better to show both legs or a single transfer line with 0 effect on total balance
+                product_history.append({
+                    "date": m.date,
+                    "reference": m.reference or f"MOVE-{m.id}",
+                    "type": "TRANSFER",
+                    "location_name": f"{loc_names.get(m.location_src_id, 'N/A')} -> {loc_names.get(m.location_dest_id, 'N/A')}",
+                    "qty_in": qty,
+                    "qty_out": qty,
+                    "balance": current_balance,
+                    "cost": cost
+                })
+            elif is_in:
+                current_balance += qty
+                product_history.append({
+                    "date": m.date,
+                    "reference": m.reference or f"MOVE-{m.id}",
+                    "type": "IN",
+                    "location_name": loc_names.get(m.location_dest_id, 'N/A'),
+                    "qty_in": qty,
+                    "qty_out": 0.0,
+                    "balance": current_balance,
+                    "cost": cost
+                })
+            elif is_out:
+                current_balance -= qty
+                product_history.append({
+                    "date": m.date,
+                    "reference": m.reference or f"MOVE-{m.id}",
+                    "type": "OUT",
+                    "location_name": loc_names.get(m.location_src_id, 'N/A'),
+                    "qty_in": 0.0,
+                    "qty_out": qty,
+                    "balance": current_balance,
+                    "cost": cost
+                })
+
+        results.append({
+            "product_id": product_id,
+            "product_name": product.name,
+            "sku": variant.sku,
+            "initial_balance": initial_balance,
+            "final_balance": current_balance,
+            "history": product_history
+        })
+
+    return results
 
 @router.get("/pricing-margin")
 def get_pricing_margin_report(
