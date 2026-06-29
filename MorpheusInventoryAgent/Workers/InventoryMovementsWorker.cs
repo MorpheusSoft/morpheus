@@ -48,7 +48,23 @@ public class InventoryMovementsWorker : BackgroundService
         }
     }
 
-    private async Task ProcessExtractionAsync(DirectExtractorConfig config, SyncState syncState, CancellationToken stoppingToken)
+    public async Task RunOnceAsync(CancellationToken stoppingToken = default)
+    {
+        var config = _configuration.GetSection("DirectExtractors:InventoryMovements").Get<DirectExtractorConfig>();
+        if (config == null)
+        {
+            config = new DirectExtractorConfig
+            {
+                Enabled = true,
+                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "http://localhost/api") + "/import/inventory-movements-legacy"
+            };
+        }
+
+        var syncState = SyncStateManager.LoadState();
+        await ProcessExtractionAsync(config, syncState, stoppingToken);
+    }
+
+    private async Task ProcessExtractionAsync(DirectExtractorConfig config, SyncState syncState, CancellationToken stoppingToken = default)
     {
         string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
         

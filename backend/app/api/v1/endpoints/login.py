@@ -18,6 +18,7 @@ def login_access_token(
     """
     OAuth2 compatible token login, get an access token for future requests
     """
+    print(f"LOGIN ATTEMPT: username='{form_data.username}', password='{form_data.password}'")
     user = db.query(User).filter(User.email == form_data.username).first()
     
     if not user or not security.verify_password(form_data.password, user.hashed_password):

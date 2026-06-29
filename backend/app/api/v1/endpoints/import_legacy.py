@@ -372,6 +372,7 @@ class LegacySalesDocument(BaseModel):
     Subtotal: float
     Impuesto: float
     Total: float
+    deposit_code: str = "01"
 
 @router.post("/sales-legacy")
 def import_sales_legacy(
@@ -379,7 +380,7 @@ def import_sales_legacy(
     session: Session = Depends(deps.get_db)
 ):
     from app.models.sales import Document, DocumentLine, Customer
-    from app.models.inventory import StockPicking, StockMove
+    from app.models.inventory import StockPicking, StockMove, Warehouse, Location
     from datetime import datetime
     
     # Pre-cache variants based on STELLAR_CODE
@@ -392,6 +393,23 @@ def import_sales_legacy(
         generic_customer = Customer(id=1, rif="J-000000000", name="Cliente Generico Venta Legacy")
         session.add(generic_customer)
         session.flush()
+        
+    # Cache locations
+    loc_cache = {}
+    def get_location_id(fac_id, dep_code):
+        key = (fac_id, dep_code)
+        if key in loc_cache:
+            return loc_cache[key]
+        wh = session.query(Warehouse).filter_by(facility_id=fac_id, code=dep_code).first()
+        if wh:
+            loc = session.query(Location).filter_by(warehouse_id=wh.id, usage='INTERNAL').first()
+            if not loc:
+                loc = session.query(Location).filter_by(warehouse_id=wh.id).first()
+            if loc:
+                loc_cache[key] = loc.id
+                return loc.id
+        loc_cache[key] = 1
+        return 1
         
     count = 0
     not_found = 0
@@ -450,12 +468,14 @@ def import_sales_legacy(
         session.add(picking)
         session.flush()
         
+        loc_src_id = get_location_id(s.facility_id, s.deposit_code)
+        
         move = StockMove(
             picking_id=picking.id,
             product_id=variant_id,
             quantity_demand=abs(s.Cantidad),
             quantity_done=abs(s.Cantidad),
-            location_src_id=1,
+            location_src_id=loc_src_id,
             location_dest_id=1,
             state='DONE',
             reference="Sale/Venta"
@@ -574,3 +594,55 @@ def import_supplier_products_legacy(
     session.commit()
     print(f"✅ ¡Carga de Proveedores terminada! Registros: {count}, No encontrados: {not_found}")
     return {"message": "Success", "imported": count, "not_found": not_found}
+
+class LegacySupplier(BaseModel):
+    codigo: str
+    razon_social: str
+    nombre_comercial: Optional[str] = None
+    rif: str
+    direccion: Optional[str] = None
+    telefono: Optional[str] = None
+    email: Optional[str] = None
+    estatus: str
+
+@router.post("/suppliers-legacy")
+def import_suppliers_legacy(
+    suppliers_in: List[LegacySupplier],
+    session: Session = Depends(deps.get_db)
+):
+    print(f"Iniciando carga de {len(suppliers_in)} Proveedores...")
+    from app.models.core import Supplier
+    
+    count = 0
+    
+    for s in suppliers_in:
+        is_active = s.estatus.strip().upper() == 'ACTIVO'
+        existing = session.query(Supplier).filter(Supplier.tax_id == s.rif).first()
+        
+        if existing:
+            existing.name = s.razon_social
+            existing.commercial_name = s.nombre_comercial
+            existing.fiscal_address = s.direccion
+            existing.commercial_contact_phone = s.telefono
+            existing.commercial_email = s.email
+            existing.is_active = is_active
+        else:
+            new_sup = Supplier(
+                tax_id=s.rif,
+                name=s.razon_social,
+                commercial_name=s.nombre_comercial,
+                fiscal_address=s.direccion,
+                commercial_contact_phone=s.telefono,
+                commercial_email=s.email,
+                is_active=is_active
+            )
+            session.add(new_sup)
+            
+        count += 1
+        if count % 500 == 0:
+            session.flush()
+            print(f"  ... Procesados {count} proveedores")
+            
+    session.commit()
+    print(f"✅ ¡Carga de Proveedores terminada! Registros procesados: {count}")
+    return {"message": "Success", "imported": count}

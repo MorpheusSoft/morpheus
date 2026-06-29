@@ -104,25 +104,133 @@ def get_advanced_kardex(
     Get detailed history of movements (Kardex) for up to 10 products.
     Includes filtering by facilities, locations, and dates.
     Calculates running balance (saldo).
+    Unifies StockMoves, Inventory Adjustments, and Sales.
     """
     if not filters.product_ids or len(filters.product_ids) > 10:
         raise HTTPException(status_code=400, detail="Debe seleccionar entre 1 y 10 productos para el Kardex.")
 
-    # 1. Resolve locations to track
-    target_location_ids = set(filters.location_ids or [])
-    if filters.facility_ids:
-        facility_locs = db.query(Location.id).join(Warehouse).filter(Warehouse.facility_id.in_(filters.facility_ids)).all()
-        target_location_ids.update([loc[0] for loc in facility_locs])
+    target_facility_ids = set(filters.facility_ids or [])
+    if filters.location_ids:
+        loc_facs = db.query(Warehouse.facility_id).join(Location).filter(Location.id.in_(filters.location_ids)).all()
+        target_facility_ids.update([f[0] for f in loc_facs if f[0] is not None])
 
-    # If no facility or location specified, we track ALL internal locations
-    if not target_location_ids:
-        all_internal = db.query(Location.id).filter(Location.usage == 'INTERNAL').all()
-        target_location_ids.update([loc[0] for loc in all_internal])
+    if not target_facility_ids:
+        all_facs = db.query(Facility.id).all()
+        target_facility_ids.update([f[0] for f in all_facs if f[0] is not None])
 
-    if not target_location_ids:
+    if not target_facility_ids:
         return []
 
-    # Prepare results per product
+    tf_ids_str = ",".join(map(str, target_facility_ids))
+    p_ids_str = ",".join(map(str, filters.product_ids))
+
+    base_cte = f"""
+        WITH combined_moves AS (
+            SELECT 
+                sm.product_id,
+                sm.date,
+                COALESCE(sm.reference, 'MOVE-' || sm.id) as reference,
+                CASE 
+                    WHEN pt.name IS NOT NULL THEN UPPER(pt.name)
+                    WHEN l_src.usage = 'SUPPLIER' AND l_dest.usage = 'INTERNAL' THEN 'RECEPCIÓN'
+                    ELSE 'TRANSFERENCIA'
+                END as source_type,
+                sm.quantity_done as qty_done,
+                sm.unit_cost as unit_cost,
+                w_src.facility_id as src_facility_id,
+                w_dest.facility_id as dest_facility_id,
+                COALESCE(w_src.name, 'N/A') || ' - ' || COALESCE(l_src.name, 'N/A') as src_name,
+                COALESCE(w_dest.name, 'N/A') || ' - ' || COALESCE(l_dest.name, 'N/A') as dest_name
+            FROM inv.stock_moves sm
+            LEFT JOIN inv.stock_pickings p ON p.id = sm.picking_id
+            LEFT JOIN inv.picking_types pt ON pt.id = p.picking_type_id
+            LEFT JOIN inv.locations l_src ON l_src.id = sm.location_src_id
+            LEFT JOIN inv.warehouses w_src ON w_src.id = l_src.warehouse_id
+            LEFT JOIN inv.locations l_dest ON l_dest.id = sm.location_dest_id
+            LEFT JOIN inv.warehouses w_dest ON w_dest.id = l_dest.warehouse_id
+            WHERE sm.state = 'DONE'
+            
+            UNION ALL
+            
+            SELECT
+                il.product_variant_id as product_id,
+                COALESCE(iss.date_end, iss.date_start) as date,
+                iss.name as reference,
+                'AJUSTE' as source_type,
+                ABS(il.difference_qty) as qty_done,
+                0 as unit_cost, 
+                CASE WHEN il.difference_qty < 0 THEN iss.facility_id ELSE NULL END as src_facility_id,
+                CASE WHEN il.difference_qty > 0 THEN iss.facility_id ELSE NULL END as dest_facility_id,
+                CASE WHEN il.difference_qty < 0 THEN COALESCE(w.name, 'N/A') || ' - ' || COALESCE(l.name, 'N/A') ELSE 'N/A' END as src_name,
+                CASE WHEN il.difference_qty > 0 THEN COALESCE(w.name, 'N/A') || ' - ' || COALESCE(l.name, 'N/A') ELSE 'N/A' END as dest_name
+            FROM inv.inventory_lines il
+            JOIN inv.inventory_sessions iss ON iss.id = il.session_id
+            LEFT JOIN inv.locations l ON l.id = il.location_id
+            LEFT JOIN inv.warehouses w ON w.id = l.warehouse_id
+            WHERE iss.state IN ('APPLIED', 'DONE') AND il.difference_qty != 0
+            
+            UNION ALL
+            
+            SELECT
+                dl.variant_id as product_id,
+                d.created_at as date,
+                d.document_number as reference,
+                'VENTA' as source_type,
+                dl.quantity as qty_done,
+                dl.unit_price as unit_cost,
+                d.facility_id as src_facility_id,
+                NULL as dest_facility_id,
+                'SUCURSAL - VENTAS' as src_name,
+                'CLIENTE - DESTINO' as dest_name
+            FROM sales.document_lines dl
+            JOIN sales.documents d ON d.id = dl.document_id
+            WHERE d.type = 'INVOICE' AND d.state = 'CONFIRMED'
+        )
+    """
+
+    initial_balances = {p_id: 0.0 for p_id in filters.product_ids}
+
+    if filters.date_from:
+        sql_initial = text(base_cte + f"""
+            SELECT 
+                product_id,
+                SUM(CASE WHEN dest_facility_id IN ({tf_ids_str}) AND (src_facility_id IS NULL OR src_facility_id NOT IN ({tf_ids_str})) THEN qty_done ELSE 0 END) as qty_in,
+                SUM(CASE WHEN src_facility_id IN ({tf_ids_str}) AND (dest_facility_id IS NULL OR dest_facility_id NOT IN ({tf_ids_str})) THEN qty_done ELSE 0 END) as qty_out
+            FROM combined_moves
+            WHERE product_id IN ({p_ids_str})
+              AND date < :date_from
+            GROUP BY product_id
+        """)
+        init_res = db.execute(sql_initial, {"date_from": filters.date_from}).fetchall()
+        for row in init_res:
+            qty_in = float(row.qty_in or 0)
+            qty_out = float(row.qty_out or 0)
+            initial_balances[row.product_id] = qty_in - qty_out
+
+    date_filters = ""
+    params = {}
+    if filters.date_from:
+        date_filters += " AND date >= :date_from"
+        params["date_from"] = filters.date_from
+    if filters.date_to:
+        date_filters += " AND date <= :date_to"
+        params["date_to"] = filters.date_to
+
+    sql_moves = text(base_cte + f"""
+        SELECT *
+        FROM combined_moves
+        WHERE product_id IN ({p_ids_str})
+          AND (src_facility_id IN ({tf_ids_str}) OR dest_facility_id IN ({tf_ids_str}))
+          {date_filters}
+        ORDER BY date ASC
+    """)
+    
+    moves_res = db.execute(sql_moves, params).fetchall()
+
+    moves_by_product = {p_id: [] for p_id in filters.product_ids}
+    for m in moves_res:
+        moves_by_product[m.product_id].append(m)
+
     results = []
 
     for product_id in filters.product_ids:
@@ -131,63 +239,16 @@ def get_advanced_kardex(
             continue
             
         variant, product = product_info
-
-        # 2. Calculate initial balance BEFORE date_from
-        initial_balance = 0.0
-        if filters.date_from:
-            # Sum all inputs before date_from
-            inputs_before = db.query(func.sum(StockMove.quantity_done)).filter(
-                StockMove.product_id == product_id,
-                StockMove.state == 'DONE',
-                StockMove.location_dest_id.in_(target_location_ids),
-                StockMove.date < filters.date_from
-            ).scalar() or 0.0
-
-            # Sum all outputs before date_from
-            outputs_before = db.query(func.sum(StockMove.quantity_done)).filter(
-                StockMove.product_id == product_id,
-                StockMove.state == 'DONE',
-                StockMove.location_src_id.in_(target_location_ids),
-                StockMove.date < filters.date_from
-            ).scalar() or 0.0
-
-            initial_balance = float(inputs_before) - float(outputs_before)
-
-        # 3. Query movements within date range
-        moves_query = db.query(StockMove).filter(
-            StockMove.product_id == product_id,
-            StockMove.state == 'DONE',
-            or_(
-                StockMove.location_src_id.in_(target_location_ids),
-                StockMove.location_dest_id.in_(target_location_ids)
-            )
-        )
-
-        if filters.date_from:
-            moves_query = moves_query.filter(StockMove.date >= filters.date_from)
-        if filters.date_to:
-            moves_query = moves_query.filter(StockMove.date <= filters.date_to)
-
-        # Order chronologically to calculate running balance correctly
-        moves = moves_query.order_by(StockMove.date.asc()).all()
-
-        current_balance = initial_balance
         
-        # Pre-fetch location names for better response
-        loc_ids_in_moves = set()
-        for m in moves:
-            loc_ids_in_moves.add(m.location_src_id)
-            loc_ids_in_moves.add(m.location_dest_id)
-            
-        loc_names = {l.id: l.name for l in db.query(Location.id, Location.name).filter(Location.id.in_(loc_ids_in_moves)).all()}
-
-        # Always add an INITIAL BALANCE row if there's a date_from filter
+        current_balance = initial_balances[product_id]
         product_history = []
+
         if filters.date_from:
             product_history.append({
                 "date": filters.date_from,
                 "reference": "SALDO INICIAL",
                 "type": "INITIAL",
+                "source_type": "INITIAL",
                 "location_name": "N/A",
                 "qty_in": 0.0,
                 "qty_out": 0.0,
@@ -195,57 +256,49 @@ def get_advanced_kardex(
                 "cost": 0.0
             })
 
-        for m in moves:
-            is_in = m.location_dest_id in target_location_ids
-            is_out = m.location_src_id in target_location_ids
-
-            qty = float(m.quantity_done)
+        for m in moves_by_product[product_id]:
+            is_in = m.dest_facility_id in target_facility_ids
+            is_out = m.src_facility_id in target_facility_ids
+            qty = float(m.qty_done or 0)
             cost = float(m.unit_cost or 0)
 
             if is_in and is_out:
-                # Internal transfer within the filtered locations
-                # We show it as an output and then an input to balance it, or just a transfer
-                # For Kardex, it's usually better to show both legs or a single transfer line with 0 effect on total balance
-                product_history.append({
-                    "date": m.date,
-                    "reference": m.reference or f"MOVE-{m.id}",
-                    "type": "TRANSFER",
-                    "location_name": f"{loc_names.get(m.location_src_id, 'N/A')} -> {loc_names.get(m.location_dest_id, 'N/A')}",
-                    "qty_in": qty,
-                    "qty_out": qty,
-                    "balance": current_balance,
-                    "cost": cost
-                })
+                location_name = f"{m.src_name or 'N/A'} -> {m.dest_name or 'N/A'}"
+                type_str = m.source_type
+                qty_in = qty
+                qty_out = qty
             elif is_in:
+                location_name = m.dest_name or 'N/A'
+                type_str = m.source_type
                 current_balance += qty
-                product_history.append({
-                    "date": m.date,
-                    "reference": m.reference or f"MOVE-{m.id}",
-                    "type": "IN",
-                    "location_name": loc_names.get(m.location_dest_id, 'N/A'),
-                    "qty_in": qty,
-                    "qty_out": 0.0,
-                    "balance": current_balance,
-                    "cost": cost
-                })
+                qty_in = qty
+                qty_out = 0.0
             elif is_out:
+                location_name = m.src_name or 'N/A'
+                type_str = m.source_type
                 current_balance -= qty
-                product_history.append({
-                    "date": m.date,
-                    "reference": m.reference or f"MOVE-{m.id}",
-                    "type": "OUT",
-                    "location_name": loc_names.get(m.location_src_id, 'N/A'),
-                    "qty_in": 0.0,
-                    "qty_out": qty,
-                    "balance": current_balance,
-                    "cost": cost
-                })
+                qty_in = 0.0
+                qty_out = qty
+            else:
+                continue
+                
+            product_history.append({
+                "date": m.date,
+                "reference": m.reference,
+                "type": type_str,
+                "source_type": m.source_type,
+                "location_name": location_name,
+                "qty_in": qty_in,
+                "qty_out": qty_out,
+                "balance": current_balance,
+                "cost": cost
+            })
 
         results.append({
             "product_id": product_id,
             "product_name": product.name,
             "sku": variant.sku,
-            "initial_balance": initial_balance,
+            "initial_balance": initial_balances[product_id],
             "final_balance": current_balance,
             "history": product_history
         })

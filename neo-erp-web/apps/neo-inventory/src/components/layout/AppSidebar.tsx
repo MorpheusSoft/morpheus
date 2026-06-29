@@ -48,7 +48,8 @@ export function AppSidebar() {
 
   const coreItems = [
     { label: 'Compañías Base', icon: 'pi pi-briefcase', href: '/core/companies' },
-    { label: 'Sucursales / Localidades', icon: 'pi pi-building', href: '/core/facilities' },
+    { label: 'Sucursales', icon: 'pi pi-building', href: '/core/facilities' },
+    { label: 'Depósitos y Ubicaciones', icon: 'pi pi-compass', href: '/core/warehouses' },
     { label: 'Monedas', icon: 'pi pi-money-bill', href: '/core/currencies' },
   ];
 

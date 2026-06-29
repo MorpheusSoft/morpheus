@@ -15,15 +15,25 @@ public class SyncState
 public static class SyncStateManager
 {
     private static readonly string StateFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sync_state.json");
+    private static readonly object _lock = new object();
+
+    private static SyncState LoadStateInternal()
+    {
+        if (File.Exists(StateFilePath))
+        {
+            var json = File.ReadAllText(StateFilePath);
+            return JsonSerializer.Deserialize<SyncState>(json) ?? new SyncState();
+        }
+        return new SyncState();
+    }
 
     public static SyncState LoadState()
     {
         try
         {
-            if (File.Exists(StateFilePath))
+            lock (_lock)
             {
-                var json = File.ReadAllText(StateFilePath);
-                return JsonSerializer.Deserialize<SyncState>(json) ?? new SyncState();
+                return LoadStateInternal();
             }
         }
         catch (Exception ex)
@@ -37,8 +47,23 @@ public static class SyncStateManager
     {
         try
         {
-            var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(StateFilePath, json);
+            lock (_lock)
+            {
+                // Cargar el estado más reciente del disco para no pisar
+                // lo que otro hilo haya guardado mientras este hilo procesaba.
+                var currentState = LoadStateInternal();
+                
+                // Actualizar inteligentemente solo los campos que avanzaron
+                if (state.LastProductSync > currentState.LastProductSync) currentState.LastProductSync = state.LastProductSync;
+                if (state.LastBarcodeSync > currentState.LastBarcodeSync) currentState.LastBarcodeSync = state.LastBarcodeSync;
+                if (state.BaselineInventoryDone) currentState.BaselineInventoryDone = true;
+                if (state.LastMovementSync > currentState.LastMovementSync) currentState.LastMovementSync = state.LastMovementSync;
+                if (state.LastSalesSync > currentState.LastSalesSync) currentState.LastSalesSync = state.LastSalesSync;
+                if (state.LastSupplierProductSync > currentState.LastSupplierProductSync) currentState.LastSupplierProductSync = state.LastSupplierProductSync;
+                
+                var json = JsonSerializer.Serialize(currentState, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(StateFilePath, json);
+            }
         }
         catch (Exception ex)
         {

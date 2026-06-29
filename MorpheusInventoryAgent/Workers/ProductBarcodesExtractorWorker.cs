@@ -45,7 +45,23 @@ public class ProductBarcodesExtractorWorker : BackgroundService
         }
     }
 
-    private async Task ProcessExtractionAsync(DirectExtractorConfig config, CancellationToken stoppingToken)
+    public async Task RunOnceAsync(CancellationToken stoppingToken = default)
+    {
+        var config = _configuration.GetSection("DirectExtractors:ProductBarcodes").Get<DirectExtractorConfig>();
+        if (config == null)
+        {
+            config = new DirectExtractorConfig
+            {
+                Enabled = true,
+                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "http://localhost/api") + "/import/products-barcodes-legacy",
+                ExportMode = ExportMode.OnlyWithStock
+            };
+        }
+
+        await ProcessExtractionAsync(config, stoppingToken);
+    }
+
+    private async Task ProcessExtractionAsync(DirectExtractorConfig config, CancellationToken stoppingToken = default)
     {
         string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
         

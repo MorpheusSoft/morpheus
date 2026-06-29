@@ -27,6 +27,15 @@ Thumbs.db
 # Logs
 *.log
 
-# Cargas masivas grandes (Opcional, pero recomendado no subir CSVs gigantes al repo de código vital)
+# Cargas masivas grandes
 data_import/*.csv
 data_import/*.xlsx
+*.dump
+
+# C# build outputs
+MorpheusInventoryAgent/bin/
+MorpheusInventoryAgent/obj/
+MorpheusInventoryAgent/publish/
+MorpheusInventoryAgent/publish_win64/
+MorpheusInventoryAgent/publish_windows/
+MorpheusInventoryAgent/publish_windows_final/

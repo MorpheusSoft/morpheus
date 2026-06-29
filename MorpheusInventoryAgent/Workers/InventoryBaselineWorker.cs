@@ -32,7 +32,7 @@ public class InventoryBaselineWorker : BackgroundService
                 // Only run once if enabled and not done yet
                 if (config != null && config.Enabled && !syncState.BaselineInventoryDone)
                 {
-                    await ProcessExtractionAsync(config, syncState, stoppingToken);
+                    await ProcessExtractionAsync(config, syncState, null, null, stoppingToken);
                 }
                 
                 await Task.Delay(TimeSpan.FromMinutes(config?.IntervalMinutes ?? 60), stoppingToken);
@@ -45,10 +45,26 @@ public class InventoryBaselineWorker : BackgroundService
         }
     }
 
-    private async Task ProcessExtractionAsync(DirectExtractorConfig config, SyncState syncState, CancellationToken stoppingToken)
+    public async Task RunOnceAsync(string? date = null, string? desc = null, CancellationToken stoppingToken = default)
+    {
+        var syncState = SyncStateManager.LoadState();
+        var config = _configuration.GetSection("DirectExtractors:InventoryBaseline").Get<DirectExtractorConfig>();
+        if (config == null)
+        {
+            config = new DirectExtractorConfig
+            {
+                Enabled = true,
+                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "http://localhost/api") + "/inventory-baseline"
+            };
+        }
+
+        await ProcessExtractionAsync(config, syncState, date, desc, stoppingToken);
+    }
+
+    private async Task ProcessExtractionAsync(DirectExtractorConfig config, SyncState syncState, string? dateOverride = null, string? descOverride = null, CancellationToken stoppingToken = default)
     {
         string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
-        var cutoffStr = _configuration.GetValue<string>("DirectExtractors:InventoryBaseline:BaselineCutoffDate", "2026-06-07");
+        var cutoffStr = dateOverride ?? _configuration.GetValue<string>("DirectExtractors:InventoryBaseline:BaselineCutoffDate", "2026-06-07");
         DateTime cutoffDate = DateTime.Parse(cutoffStr);
         
         string query = @"

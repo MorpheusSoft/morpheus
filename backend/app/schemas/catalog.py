@@ -88,6 +88,16 @@ class WarehouseBase(BaseModel):
     is_scrap: bool = False
     is_transit: bool = False
 
+class WarehouseCreate(WarehouseBase):
+    pass
+
+class WarehouseUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    facility_id: Optional[int] = None
+    is_scrap: Optional[bool] = None
+    is_transit: Optional[bool] = None
+
 class Warehouse(WarehouseBase):
     id: int
     created_at: datetime
@@ -105,6 +115,16 @@ class LocationBase(BaseModel):
     
 class LocationCreate(LocationBase):
     pass
+
+class LocationUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    warehouse_id: Optional[int] = None
+    parent_id: Optional[int] = None
+    location_type: Optional[str] = None
+    usage: Optional[str] = None
+    is_blocked: Optional[bool] = None
+    barcode: Optional[str] = None
 
 class Location(LocationBase):
     id: int

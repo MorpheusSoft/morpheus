@@ -152,7 +152,7 @@ def delete_category(
     return category
 
 # =================
-# LOCATIONS
+# LOCATIONS & WAREHOUSES
 # =================
 @router.get("/warehouses/", response_model=List[schemas.Warehouse])
 def read_warehouses(
@@ -161,6 +161,69 @@ def read_warehouses(
     limit: int = 100,
 ) -> Any:
     return db.query(Warehouse).offset(skip).limit(limit).all()
+
+@router.post("/warehouses/", response_model=schemas.Warehouse)
+def create_warehouse(
+    *,
+    db: Session = Depends(deps.get_db),
+    warehouse_in: schemas.WarehouseCreate,
+) -> Any:
+    existing = db.query(Warehouse).filter(Warehouse.code == warehouse_in.code).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Código de almacén ya existe")
+    db_obj = Warehouse(
+        name=warehouse_in.name,
+        code=warehouse_in.code,
+        facility_id=warehouse_in.facility_id,
+        is_scrap=warehouse_in.is_scrap,
+        is_transit=warehouse_in.is_transit
+    )
+    db.add(db_obj)
+    db.commit()
+    db.refresh(db_obj)
+    return db_obj
+
+@router.put("/warehouses/{warehouse_id}", response_model=schemas.Warehouse)
+def update_warehouse(
+    *,
+    db: Session = Depends(deps.get_db),
+    warehouse_id: int,
+    warehouse_in: schemas.WarehouseUpdate,
+) -> Any:
+    warehouse = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail="Almacén no encontrado")
+    
+    update_data = warehouse_in.model_dump(exclude_unset=True)
+    if "code" in update_data and update_data["code"] != warehouse.code:
+        existing = db.query(Warehouse).filter(Warehouse.code == update_data["code"]).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Código de almacén ya existe")
+            
+    for field, value in update_data.items():
+        setattr(warehouse, field, value)
+        
+    db.commit()
+    db.refresh(warehouse)
+    return warehouse
+
+@router.delete("/warehouses/{warehouse_id}", response_model=schemas.Warehouse)
+def delete_warehouse(
+    *,
+    db: Session = Depends(deps.get_db),
+    warehouse_id: int,
+) -> Any:
+    warehouse = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail="Almacén no encontrado")
+    
+    locations_count = db.query(Location).filter(Location.warehouse_id == warehouse_id).count()
+    if locations_count > 0:
+        raise HTTPException(status_code=400, detail="No se puede eliminar: el almacén tiene ubicaciones asociadas")
+        
+    db.delete(warehouse)
+    db.commit()
+    return warehouse
 
 @router.get("/locations/", response_model=List[schemas.Location])
 def read_locations(
@@ -183,6 +246,76 @@ def read_locations(
         query = query.filter(Location.location_type == type)
         
     return query.offset(skip).limit(limit).all()
+
+@router.post("/locations/", response_model=schemas.Location)
+def create_location(
+    *,
+    db: Session = Depends(deps.get_db),
+    location_in: schemas.LocationCreate,
+) -> Any:
+    if location_in.warehouse_id:
+        wh = db.query(Warehouse).filter(Warehouse.id == location_in.warehouse_id).first()
+        if not wh:
+            raise HTTPException(status_code=404, detail="Almacén no encontrado")
+            
+    db_obj = Location(
+        name=location_in.name,
+        code=location_in.code,
+        warehouse_id=location_in.warehouse_id,
+        parent_id=location_in.parent_id,
+        location_type=location_in.location_type,
+        usage=location_in.usage,
+        is_blocked=False
+    )
+    db.add(db_obj)
+    db.commit()
+    db.refresh(db_obj)
+    return db_obj
+
+@router.put("/locations/{location_id}", response_model=schemas.Location)
+def update_location(
+    *,
+    db: Session = Depends(deps.get_db),
+    location_id: int,
+    location_in: schemas.LocationUpdate,
+) -> Any:
+    location = db.query(Location).filter(Location.id == location_id).first()
+    if not location:
+        raise HTTPException(status_code=404, detail="Ubicación no encontrada")
+        
+    update_data = location_in.model_dump(exclude_unset=True)
+    if "warehouse_id" in update_data and update_data["warehouse_id"]:
+        wh = db.query(Warehouse).filter(Warehouse.id == update_data["warehouse_id"]).first()
+        if not wh:
+            raise HTTPException(status_code=404, detail="Almacén no encontrado")
+            
+    for field, value in update_data.items():
+        setattr(location, field, value)
+        
+    db.commit()
+    db.refresh(location)
+    return location
+
+@router.delete("/locations/{location_id}", response_model=schemas.Location)
+def delete_location(
+    *,
+    db: Session = Depends(deps.get_db),
+    location_id: int,
+) -> Any:
+    location = db.query(Location).filter(Location.id == location_id).first()
+    if not location:
+        raise HTTPException(status_code=404, detail="Ubicación no encontrada")
+        
+    from app.models.inventory import StockMove
+    has_moves = db.query(StockMove).filter(
+        (StockMove.location_src_id == location_id) | (StockMove.location_dest_id == location_id)
+    ).count() > 0
+    if has_moves:
+        raise HTTPException(status_code=400, detail="No se puede eliminar: la ubicación tiene movimientos de inventario asociados")
+        
+    db.delete(location)
+    db.commit()
+    return location
 
 # =================
 # CURRENCIES
