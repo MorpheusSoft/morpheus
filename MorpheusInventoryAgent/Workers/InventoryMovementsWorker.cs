@@ -86,7 +86,7 @@ public class InventoryMovementsWorker : BackgroundService
               and f_fecha >= @LastSyncDate";
 
         using var connection = new SqlConnection(connectionString);
-        var movements = await connection.QueryAsync(query, new { LastSyncDate = lastSync.Date });
+        var movements = await connection.QueryAsync(query, new { LastSyncDate = lastSync.Date }, commandTimeout: 180);
 
         if (!movements.Any()) return;
 

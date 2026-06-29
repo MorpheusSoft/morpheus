@@ -75,7 +75,7 @@ public class InventoryBaselineWorker : BackgroundService
             group by c_deposito, c_codArticulo";
 
         using var connection = new SqlConnection(connectionString);
-        var baseline = await connection.QueryAsync(query, new { Cutoff = cutoffDate.Date });
+        var baseline = await connection.QueryAsync(query, new { Cutoff = cutoffDate.Date }, commandTimeout: 600);
 
         if (!baseline.Any()) return;
 
