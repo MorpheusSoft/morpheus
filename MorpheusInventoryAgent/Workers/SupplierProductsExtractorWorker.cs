@@ -72,7 +72,7 @@ public class SupplierProductsExtractorWorker : BackgroundService
         var lastSync = syncState.LastSupplierProductSync;
         
         string query = @"
-            select x.c_codigo, x.c_codprovee as c_CodProveedor, 
+            select x.c_codigo as c_Codigo, x.c_codprovee as c_CodProveedor, 
                    case when x.n_costo=0 then p.n_CostoAct else x.n_costo end as costo, 
                    1 as compMin, 'EMPAQUE' as empaque, p.n_CantiBul
             from (
