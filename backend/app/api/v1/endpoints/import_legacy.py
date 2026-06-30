@@ -617,7 +617,10 @@ def import_suppliers_legacy(
     
     for s in suppliers_in:
         is_active = s.estatus.strip().upper() == 'ACTIVO'
-        existing = session.query(Supplier).filter(Supplier.tax_id == s.rif).first()
+        # Fallback to GEN-{codigo} if RIF/tax_id is empty or null to avoid UniqueViolation
+        tax_id = s.rif.strip() if s.rif and s.rif.strip() else f"GEN-{s.codigo.strip()}"
+        
+        existing = session.query(Supplier).filter(Supplier.tax_id == tax_id).first()
         
         if existing:
             existing.name = s.razon_social
@@ -628,7 +631,7 @@ def import_suppliers_legacy(
             existing.is_active = is_active
         else:
             new_sup = Supplier(
-                tax_id=s.rif,
+                tax_id=tax_id,
                 name=s.razon_social,
                 commercial_name=s.nombre_comercial,
                 fiscal_address=s.direccion,
