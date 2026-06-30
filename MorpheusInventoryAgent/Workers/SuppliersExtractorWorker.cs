@@ -62,7 +62,7 @@ public class SuppliersExtractorWorker : BackgroundService
     {
         string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
         
-        string query = @"SELECT c_codproveed AS codigo, c_razon AS razon_social, c_descripcio AS nombre_comercial, c_rif AS rif, c_direccion AS direccion, c_telefono AS telefono, c_email AS email, n_activo AS estatus FROM MA_PROVEEDORES WHERE n_activo = 1";
+        string query = @"SELECT c_codproveed AS codigo, c_razon AS razon_social, c_descripcio AS nombre_comercial, c_rif AS rif, c_direccion AS direccion, c_telefono AS telefono, c_email AS email, 'ACTIVO' AS estatus FROM MA_PROVEEDORES WHERE n_activo = 1";
 
         using var connection = new SqlConnection(connectionString);
         var suppliers = await connection.QueryAsync(query);
