@@ -2,6 +2,9 @@
 import { useState, useEffect } from 'react';
 import { Button } from 'primereact/button';
 import { ProgressBar } from 'primereact/progressbar';
+import { Dialog } from 'primereact/dialog';
+import { DataTable } from 'primereact/datatable';
+import { Column } from 'primereact/column';
 import { PricingService } from '@/services/pricing.service';
 import { useRouter } from 'next/navigation';
 
@@ -9,6 +12,7 @@ export default function MetricsDashboardPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState<any>(null);
+  const [showCriticalDialog, setShowCriticalDialog] = useState(false);
 
   const fetchMetrics = async () => {
     try {
@@ -115,7 +119,8 @@ export default function MetricsDashboardPage() {
         {kpiList.map((kpi, idx) => (
           <div 
             key={idx} 
-            className={`bg-white rounded-2xl p-6 border ${kpi.border} shadow-sm hover:shadow-md transition-all duration-300 relative overflow-hidden group`}
+            onClick={() => kpi.isCritical && setShowCriticalDialog(true)}
+            className={`bg-white rounded-2xl p-6 border ${kpi.border} shadow-sm hover:shadow-md transition-all duration-300 relative overflow-hidden group ${kpi.isCritical ? 'cursor-pointer hover:border-red-300 hover:shadow-lg' : ''}`}
           >
             {/* Background Accent Gradient */}
             <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${kpi.color}`}></div>
@@ -125,7 +130,9 @@ export default function MetricsDashboardPage() {
                 <h3 className="text-3xl font-extrabold text-slate-800 mt-2 tracking-tight group-hover:scale-[1.02] transition-transform duration-200">
                   {kpi.value}
                 </h3>
-                <p className="text-slate-400 text-xs mt-1.5 font-medium">{kpi.subtext}</p>
+                <p className="text-slate-400 text-xs mt-1.5 font-medium">
+                  {kpi.subtext} {kpi.isCritical && <span className="text-rose-500 font-bold ml-1 hover:underline">Ver detalle ≫</span>}
+                </p>
               </div>
               <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${kpi.textColor} ${kpi.bgColor} group-hover:scale-110 transition-transform duration-200`}>
                 <i className={`pi ${kpi.icon} text-lg`}></i>
@@ -140,6 +147,68 @@ export default function MetricsDashboardPage() {
           </div>
         ))}
       </div>
+
+      {/* Critical SKUs Dialog */}
+      <Dialog
+        visible={showCriticalDialog}
+        style={{ width: '65vw', minWidth: '700px' }}
+        header={
+          <span className="text-xl font-extrabold text-slate-800 flex items-center gap-2">
+            ⚠️ Detalle de SKUs en Riesgo Crítico (&lt;20% de Margen)
+          </span>
+        }
+        onHide={() => setShowCriticalDialog(false)}
+        footer={
+          <div className="flex justify-end">
+            <Button 
+              label="Cerrar" 
+              icon="pi pi-times" 
+              onClick={() => setShowCriticalDialog(false)} 
+              className="px-5 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 border-none font-bold" 
+            />
+          </div>
+        }
+      >
+        <div className="mt-2">
+          <DataTable
+            value={metrics?.critical_skus_list || []}
+            paginator
+            rows={10}
+            className="p-datatable-sm text-xs custom-table"
+            emptyMessage="No hay productos en riesgo crítico registrados."
+            rowHover
+            responsiveLayout="scroll"
+          >
+            <Column field="sku" header="SKU" className="font-mono font-bold text-slate-700 w-[20%]"></Column>
+            <Column field="name" header="PRODUCTO" className="font-semibold text-slate-800 w-[45%]"></Column>
+            <Column 
+              field="standard_cost" 
+              header="COSTO ESTÁNDAR" 
+              body={(r) => `$${Number(r.standard_cost).toFixed(2)}`}
+              className="w-[12%] text-right font-medium text-slate-600"
+              alignHeader="right"
+            ></Column>
+            <Column 
+              field="sales_price" 
+              header="PVP BASE" 
+              body={(r) => `$${Number(r.sales_price).toFixed(2)}`}
+              className="w-[12%] text-right font-bold text-slate-700"
+              alignHeader="right"
+            ></Column>
+            <Column 
+              field="margin_pct" 
+              header="MARGEN" 
+              body={(r) => (
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-700 border border-rose-100`}>
+                  {r.margin_pct}%
+                </span>
+              )}
+              className="w-[11%] text-center"
+              alignHeader="center"
+            ></Column>
+          </DataTable>
+        </div>
+      </Dialog>
 
       {/* Middle Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
