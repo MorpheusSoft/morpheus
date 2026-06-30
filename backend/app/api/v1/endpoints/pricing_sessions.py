@@ -1188,11 +1188,13 @@ def get_pricing_dashboard_metrics(
     """
     from app.models.inventory import ProductVariant
     from app.models.core import Supplier
+    from sqlalchemy.orm import joinedload
     
-    variants = db.query(ProductVariant).filter(ProductVariant.sales_price > 0).all()
+    variants = db.query(ProductVariant).options(joinedload(ProductVariant.product)).filter(ProductVariant.sales_price > 0).all()
     
     total_margin = 0.0
     critical_skus_count = 0
+    critical_skus_list = []
     
     for v in variants:
         sales_price = float(v.sales_price or 0)
@@ -1202,6 +1204,13 @@ def get_pricing_dashboard_metrics(
             total_margin += margin
             if margin < 20:
                 critical_skus_count += 1
+                critical_skus_list.append({
+                    "sku": v.sku,
+                    "name": v.product.name if v.product else "Producto Desconocido",
+                    "standard_cost": round(standard_cost, 2),
+                    "sales_price": round(sales_price, 2),
+                    "margin_pct": round(margin, 1)
+                })
                 
     avg_gross_margin = total_margin / len(variants) if variants else 28.5
     avg_net_margin = avg_gross_margin - 5.8
@@ -1240,7 +1249,7 @@ def get_pricing_dashboard_metrics(
             {"facility_id": 2, "facility_name": "Sucursal Centro", "avg_margin_pct": 24.8, "active_skus": 95},
             {"facility_id": 3, "facility_name": "Sucursal Express (Sur)", "avg_margin_pct": 29.5, "active_skus": 82}
         ]
-
+ 
     return {
         "kpis": {
             "avg_gross_margin": round(avg_gross_margin, 1),
@@ -1249,6 +1258,7 @@ def get_pricing_dashboard_metrics(
             "critical_skus": critical_skus_count if critical_skus_count > 0 else 14,
             "estimated_loss_usd": 4280.00
         },
+        "critical_skus_list": critical_skus_list,
         "top_suppliers": top_suppliers,
         "branch_dispersion": branch_dispersion
     }
