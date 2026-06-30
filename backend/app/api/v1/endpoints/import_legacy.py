@@ -508,9 +508,12 @@ def import_supplier_products_legacy(
     count = 0
     not_found = 0
     
-    # 1. Pre-cache variants based on STELLAR_CODE
+    # 1. Pre-cache variants based on STELLAR_CODE (c_Codigo) mapping to (variant_id, product_id)
     stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
-    variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
+    variant_map = {}
+    for bc in stellar_codes_db:
+        if bc.variant:
+            variant_map[bc.barcode] = (bc.product_variant_id, bc.variant.product_id)
     
     # 2. Pre-cache suppliers by code
     suppliers_db = session.query(Supplier).all()
@@ -520,18 +523,20 @@ def import_supplier_products_legacy(
     # We will map by name as well just in case
     supplier_name_map = {s.name: s.id for s in suppliers_db}
 
-    # 3. Pre-cache packagings
-    pack_map = {p.name.upper(): p.id for p in session.query(ProductPackaging).all()}
+    # 3. Pre-cache packagings by (product_id, name.upper())
+    pack_map = {(p.product_id, p.name.upper()): p.id for p in session.query(ProductPackaging).all()}
     
     for sp in supplier_products_in:
         stellar_code = sp.c_Codigo.strip()
         sup_code = sp.c_CodProveedor.strip()
         
-        variant_id = variant_map.get(stellar_code)
-        if not variant_id:
+        var_info = variant_map.get(stellar_code)
+        if not var_info:
             not_found += 1
             print(f"  [WARN] Variante no encontrada para STELLAR_CODE={stellar_code}. Saltando proveedor {sup_code}.")
             continue
+            
+        variant_id, product_id = var_info
             
         # Get or create supplier
         supplier_id = supplier_map.get(sup_code)
@@ -553,17 +558,17 @@ def import_supplier_products_legacy(
             
         # Get or create pack
         pack_name = sp.empaque.strip().upper()
-        pack_id = pack_map.get(pack_name)
+        pack_id = pack_map.get((product_id, pack_name))
         if not pack_id:
             new_pack = ProductPackaging(
+                product_id=product_id,
                 name=pack_name,
-                qty_per_unit=Decimal(str(sp.n_CantiBul)),
-                uom='UND'
+                qty_per_unit=Decimal(str(sp.n_CantiBul))
             )
             session.add(new_pack)
             session.flush()
             pack_id = new_pack.id
-            pack_map[pack_name] = pack_id
+            pack_map[(product_id, pack_name)] = pack_id
             
         # Upsert SupplierProduct
         existing_sp = session.query(SupplierProduct).filter(
