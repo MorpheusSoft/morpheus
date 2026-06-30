@@ -218,6 +218,69 @@ export default function PricingValidationBoardPage() {
   const [facilities, setFacilities] = useState<any[]>([]);
   const [expandedRows, setExpandedRows] = useState<any>(null);
 
+  // Product Detail Dialog states
+  const [showProductDetailDialog, setShowProductDetailDialog] = useState(false);
+  const [detailProductInfo, setDetailProductInfo] = useState<any>(null);
+  const [detailVariantPrices, setDetailVariantPrices] = useState<any[]>([]);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  const handleViewProductDetail = async (variantId: number, productName: string) => {
+    try {
+      setLoadingDetail(true);
+      setShowProductDetailDialog(true);
+      
+      const variantData = await ProductService.getVariantById(variantId);
+      
+      let categoryName = 'Sin Categoría';
+      let description = '';
+      
+      if (variantData && variantData.product_id) {
+         try {
+            const productData = await ProductService.getProductById(variantData.product_id);
+            if (productData) {
+               description = productData.description || '';
+               const catData = await ProductService.getCategories();
+               const categoryList = catData?.data || catData || [];
+               const matchedCat = categoryList.find((c: any) => c.id === productData.category_id);
+               if (matchedCat) {
+                  categoryName = matchedCat.name;
+               }
+            }
+         } catch (e) {
+            console.error('Error fetching parent product details:', e);
+         }
+      }
+      
+      setDetailProductInfo({
+        ...variantData,
+        name: productName,
+        categoryName,
+        description
+      });
+
+      const facs = await ProductService.getFacilities();
+      const activeFacilities = facs?.data || facs || [];
+      setFacilities(activeFacilities);
+
+      const fps = variantData?.facility_prices || [];
+      const mapped = activeFacilities.map((f: any) => {
+        const fp = fps.find((x: any) => x.facility_id === f.id);
+        return {
+          facility_id: f.id,
+          facility_name: f.name,
+          sales_price: fp ? Number(fp.sales_price) : null,
+          target_utility_pct: fp ? Number(fp.target_utility_pct) : 0
+        };
+      });
+      setDetailVariantPrices(mapped);
+    } catch (e) {
+      console.error('Error fetching product variant details:', e);
+      setDetailVariantPrices([]);
+    } finally {
+      setLoadingDetail(false);
+    }
+  };
+
   // Export Wizard states
   const [showExportWizard, setShowExportWizard] = useState(false);
   const [exportFields, setExportFields] = useState<string[]>(['sku', 'name', 'proposed_cost', 'proposed_price']);
@@ -628,7 +691,16 @@ export default function PricingValidationBoardPage() {
                           ⚠️ Sin Mapear
                       </span>
                   )}
-                  <span className="font-bold text-slate-800">{name}</span>
+                  {hasVariant ? (
+                      <span 
+                          onClick={() => handleViewProductDetail(rowData.variant_id, name)}
+                          className="font-bold text-indigo-600 cursor-pointer hover:text-indigo-800 hover:underline flex items-center gap-1.5"
+                      >
+                          {name} <i className="pi pi-info-circle text-indigo-400 text-xs hover:text-indigo-600"></i>
+                      </span>
+                  ) : (
+                      <span className="font-bold text-slate-800">{name}</span>
+                  )}
               </div>
               {(sku || barcode) && (
                   <div className="text-[10px] text-slate-400 font-medium flex items-center gap-3">
@@ -1292,6 +1364,173 @@ export default function PricingValidationBoardPage() {
           <p className="font-bold text-slate-700 text-sm">{pdfProgressMsg}</p>
           <span className="text-xs text-slate-400 font-medium">Analizando archivo y cruzando datos con la base de datos...</span>
         </div>
+      </Dialog>
+
+      {/* Product consultation quick-view dialog */}
+      <Dialog
+        visible={showProductDetailDialog}
+        style={{ width: '50vw', minWidth: '600px' }}
+        header={<span className="text-xl font-extrabold text-slate-800">📄 Ficha de Consulta de Producto</span>}
+        onHide={() => setShowProductDetailDialog(false)}
+        footer={
+          <div className="flex justify-end">
+            <Button 
+              label="Cerrar" 
+              icon="pi pi-times" 
+              onClick={() => setShowProductDetailDialog(false)} 
+              className="px-5 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 border-none font-bold" 
+            />
+          </div>
+        }
+      >
+        {detailProductInfo && (
+          <div className="flex flex-col gap-6 mt-2">
+            
+            {/* Header info */}
+            <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+              <h3 className="text-xl font-bold text-slate-800 mb-1">{detailProductInfo.name}</h3>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-400 text-sm font-medium mt-2">
+                <span>SKU: <span className="text-slate-600 font-semibold">{detailProductInfo.sku || 'N/A'}</span></span>
+                <span>•</span>
+                <span>Categoría: <span className="text-slate-600 font-semibold">{detailProductInfo.categoryName || 'Sin Categoría'}</span></span>
+              </div>
+              {detailProductInfo.description && (
+                <p className="text-slate-500 text-xs mt-3 bg-white p-3 rounded-lg border border-slate-100">{detailProductInfo.description}</p>
+              )}
+            </div>
+
+            {loadingDetail ? (
+              <div className="p-8 text-center">
+                 <i className="pi pi-spin pi-spinner text-3xl text-indigo-600"></i>
+                 <p className="text-xs text-slate-400 mt-2 font-medium">Cargando detalles de costos y sucursales...</p>
+              </div>
+            ) : (
+              <>
+                {/* Costs & Prices Section */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Costs Card */}
+                  <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3">
+                    <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider border-b border-slate-50 pb-2">Estructura de Costos</h4>
+                    
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">Costo Estándar (Sin IVA)</span>
+                      <span className="font-semibold text-slate-700">${Number(detailProductInfo.standard_cost || 0).toFixed(2)}</span>
+                    </div>
+                    
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">Costo Estándar (Con IVA)</span>
+                      <span className="font-semibold text-slate-700">${(Number(detailProductInfo.standard_cost || 0) * 1.16).toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-sm border-t border-slate-50 pt-2">
+                      <span className="text-slate-500">Costo Reposición</span>
+                      <span className="font-semibold text-slate-700">${Number(detailProductInfo.replacement_cost || 0).toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">Costo Promedio</span>
+                      <span className="font-semibold text-slate-700">${Number(detailProductInfo.average_cost || 0).toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">Último Costo</span>
+                      <span className="font-semibold text-slate-700">${Number(detailProductInfo.last_cost || 0).toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  {/* Margins & Prices Card */}
+                  <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3">
+                    <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider border-b border-slate-50 pb-2">Precios & Margen General</h4>
+
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">PVP Base General (Sin IVA)</span>
+                      <span className="font-semibold text-slate-700">${Number(detailProductInfo.sales_price || 0).toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">PVP Base General (Con IVA)</span>
+                      <span className="font-extrabold text-emerald-600 text-lg">${(Number(detailProductInfo.sales_price || 0) * 1.16).toFixed(2)}</span>
+                    </div>
+
+                    {(() => {
+                      const cost = Number(detailProductInfo.standard_cost || 0);
+                      const price = Number(detailProductInfo.sales_price || 0);
+                      const margin = price > 0 ? ((price - cost) / price * 100.0) : 0;
+                      return (
+                        <div className="flex justify-between items-center text-sm border-t border-slate-50 pt-2">
+                          <span className="text-slate-500">Margen Bruto General</span>
+                          <span className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold ${margin >= 25 ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'}`}>
+                            {margin.toFixed(2)}%
+                          </span>
+                        </div>
+                      );
+                    })()}
+
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">Stock Consolidado</span>
+                      <span className="font-semibold text-slate-700">{detailProductInfo.total_stock || 0} uds</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Branch Pricing Subgrid */}
+                <div className="flex flex-col gap-3">
+                  <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Detalle por Sucursales</h4>
+                  <div className="border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+                    <DataTable
+                      value={detailVariantPrices}
+                      className="p-datatable-sm text-xs"
+                      emptyMessage="No hay sucursales registradas."
+                    >
+                      <Column field="facility_name" header="SUCURSAL" className="font-semibold text-slate-700"></Column>
+                      <Column
+                        header="ESTADO PRECIO"
+                        body={(r) => (
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${r.sales_price ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>
+                            {r.sales_price ? 'Precio Específico' : 'Hereda General'}
+                          </span>
+                        )}
+                      ></Column>
+                      <Column
+                        header="PVP (SIN IVA)"
+                        body={(r) => {
+                          const val = r.sales_price ?? detailProductInfo.sales_price ?? 0;
+                          return <span className={`font-semibold ${r.sales_price ? 'text-indigo-600' : 'text-slate-500'}`}>${Number(val).toFixed(2)}</span>;
+                        }}
+                      ></Column>
+                      <Column
+                        header="PVP (CON IVA)"
+                        body={(r) => {
+                          const val = r.sales_price ?? detailProductInfo.sales_price ?? 0;
+                          const valWithTax = Number(val) * 1.16;
+                          return <span className={`font-bold ${r.sales_price ? 'text-indigo-700' : 'text-emerald-600'}`}>${valWithTax.toFixed(2)}</span>;
+                        }}
+                      ></Column>
+                      <Column
+                        header="MARGEN/UTILIDAD LOCAL"
+                        body={(r) => {
+                          const val = r.sales_price ?? detailProductInfo.sales_price ?? 0;
+                          const cost = Number(detailProductInfo.standard_cost || 0);
+                          const margin = val > 0 ? ((val - cost) / val * 100.0) : 0;
+                          return (
+                            <div className="flex flex-col">
+                              <span className={`font-bold ${margin >= 25 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                {margin.toFixed(2)}%
+                              </span>
+                              {r.target_utility_pct > 0 && (
+                                <span className="text-[10px] text-slate-400">Objetivo: {r.target_utility_pct}%</span>
+                              )}
+                            </div>
+                          );
+                        }}
+                      ></Column>
+                    </DataTable>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </Dialog>
     </div>
   );
