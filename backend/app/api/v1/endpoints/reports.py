@@ -143,7 +143,7 @@ def get_advanced_kardex(
                 COALESCE(w_dest.name, 'N/A') || ' - ' || COALESCE(l_dest.name, 'N/A') as dest_name
             FROM inv.stock_moves sm
             LEFT JOIN inv.stock_pickings p ON p.id = sm.picking_id
-            LEFT JOIN inv.picking_types pt ON pt.id = p.picking_type_id
+            LEFT JOIN inv.stock_picking_types pt ON pt.id = p.picking_type_id
             LEFT JOIN inv.locations l_src ON l_src.id = sm.location_src_id
             LEFT JOIN inv.warehouses w_src ON w_src.id = l_src.warehouse_id
             LEFT JOIN inv.locations l_dest ON l_dest.id = sm.location_dest_id
