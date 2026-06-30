@@ -161,10 +161,11 @@ def get_advanced_kardex(
                 0 as unit_cost, 
                 CASE WHEN il.difference_qty < 0 THEN iss.facility_id ELSE NULL END as src_facility_id,
                 CASE WHEN il.difference_qty > 0 THEN iss.facility_id ELSE NULL END as dest_facility_id,
-                CASE WHEN il.difference_qty < 0 THEN COALESCE(w.name, 'N/A') || ' - ' || COALESCE(l.name, 'N/A') ELSE 'N/A' END as src_name,
-                CASE WHEN il.difference_qty > 0 THEN COALESCE(w.name, 'N/A') || ' - ' || COALESCE(l.name, 'N/A') ELSE 'N/A' END as dest_name
+                CASE WHEN il.difference_qty < 0 THEN COALESCE(w.name || ' - ' || l.name, f.name || ' - AJUSTE') ELSE 'N/A' END as src_name,
+                CASE WHEN il.difference_qty > 0 THEN COALESCE(w.name || ' - ' || l.name, f.name || ' - AJUSTE') ELSE 'N/A' END as dest_name
             FROM inv.inventory_lines il
             JOIN inv.inventory_sessions iss ON iss.id = il.session_id
+            JOIN core.facilities f ON f.id = iss.facility_id
             LEFT JOIN inv.locations l ON l.id = il.location_id
             LEFT JOIN inv.warehouses w ON w.id = l.warehouse_id
             WHERE iss.state IN ('APPLIED', 'DONE') AND il.difference_qty != 0
@@ -180,10 +181,11 @@ def get_advanced_kardex(
                 dl.unit_price as unit_cost,
                 d.facility_id as src_facility_id,
                 NULL as dest_facility_id,
-                'SUCURSAL - VENTAS' as src_name,
+                f.name || ' - VENTAS' as src_name,
                 'CLIENTE - DESTINO' as dest_name
             FROM sales.document_lines dl
             JOIN sales.documents d ON d.id = dl.document_id
+            JOIN core.facilities f ON f.id = d.facility_id
             WHERE d.type = 'INVOICE' AND d.state = 'CONFIRMED'
         )
     """
