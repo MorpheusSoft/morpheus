@@ -288,10 +288,13 @@ export default function ProductConsultationPage() {
               field="total_stock"
               header="STOCK"
               body={(r) => {
-                const stock = r.total_stock || 0;
+                const stock = Number(r.total_stock || 0);
+                const uom = (r.uom_base || 'PZA').toUpperCase();
+                const isWeight = ['KG', 'KILOGRAMO', 'KILOGRAMOS', 'LBS', 'LIBRA', 'LIBRAS', 'G', 'GRAMOS', 'GRAMO', 'L', 'LT', 'M', 'MT', 'MTS'].includes(uom);
+                const formattedStock = isWeight ? stock.toFixed(3) : Math.round(stock).toString();
                 return (
                   <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${stock > 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>
-                    {stock} uds
+                    {formattedStock} {uom.toLowerCase()}
                   </span>
                 );
               }}

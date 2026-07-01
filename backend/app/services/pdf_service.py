@@ -176,5 +176,5 @@ def generate_purchase_order_pdf(order_id: int, db: Session) -> bytes:
     pdf.cell(200, 5, "Documento contractual autogenerado por Neo ERP. Todos los montos son vinculantes.", ln=True, align='C')
     pdf.cell(200, 5, "El proveedor reconoce y acepta cantidades y costos al procesar este documento.", ln=True, align='C')
     
-    pdf_bytes = bytes(pdf.output())
+    pdf_bytes = pdf.output(dest='S').encode('latin-1')
     return pdf_bytes
