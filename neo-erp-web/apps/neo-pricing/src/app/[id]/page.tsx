@@ -239,24 +239,48 @@ export default function PricingValidationBoardPage() {
             const productData = await ProductService.getProductById(variantData.product_id);
             if (productData) {
                description = productData.description || '';
+               const uomBase = productData.uom_base || 'PZA';
                const catData = await ProductService.getCategories();
                const categoryList = catData?.data || catData || [];
                const matchedCat = categoryList.find((c: any) => c.id === productData.category_id);
                if (matchedCat) {
                   categoryName = matchedCat.name;
                }
+               setDetailProductInfo({
+                 ...variantData,
+                 name: productName,
+                 categoryName,
+                 description,
+                 uom_base: uomBase
+               });
+            } else {
+               setDetailProductInfo({
+                 ...variantData,
+                 name: productName,
+                 categoryName,
+                 description,
+                 uom_base: 'PZA'
+               });
             }
          } catch (e) {
             console.error('Error fetching parent product details:', e);
+            setDetailProductInfo({
+              ...variantData,
+              name: productName,
+              categoryName,
+              description,
+              uom_base: 'PZA'
+            });
          }
+      } else {
+         setDetailProductInfo({
+           ...variantData,
+           name: productName,
+           categoryName,
+           description: '',
+           uom_base: 'PZA'
+         });
       }
-      
-      setDetailProductInfo({
-        ...variantData,
-        name: productName,
-        categoryName,
-        description
-      });
 
       const facs = await ProductService.getFacilities();
       const activeFacilities = facs?.data || facs || [];
@@ -1467,9 +1491,19 @@ export default function PricingValidationBoardPage() {
                     })()}
 
                     <div className="flex justify-between items-center text-sm">
-                      <span className="text-slate-500">Stock Consolidado</span>
-                      <span className="font-semibold text-slate-700">{detailProductInfo.total_stock || 0} uds</span>
-                    </div>
+                       <span className="text-slate-500">Stock Consolidado</span>
+                       {(() => {
+                         const stock = Number(detailProductInfo.total_stock || 0);
+                         const uom = (detailProductInfo.uom_base || 'PZA').toUpperCase();
+                         const isWeight = ['KG', 'KILOGRAMO', 'KILOGRAMOS', 'LBS', 'LIBRA', 'LIBRAS', 'G', 'GRAMOS', 'GRAMO'].includes(uom);
+                         const formattedStock = isWeight ? stock.toFixed(3) : Math.round(stock).toString();
+                         return (
+                           <span className="font-semibold text-slate-700">
+                             {formattedStock} {uom.toLowerCase()}
+                           </span>
+                         );
+                       })()}
+                     </div>
                   </div>
                 </div>
 
