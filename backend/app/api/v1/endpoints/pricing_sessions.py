@@ -1205,6 +1205,7 @@ def get_pricing_dashboard_metrics(
             if margin < 20:
                 critical_skus_count += 1
                 critical_skus_list.append({
+                    "variant_id": v.id,
                     "sku": v.sku,
                     "name": v.product.name if v.product else "Producto Desconocido",
                     "standard_cost": round(standard_cost, 2),

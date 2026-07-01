@@ -6,6 +6,7 @@ import { Dialog } from 'primereact/dialog';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { PricingService } from '@/services/pricing.service';
+import { ProductService } from '@/services/product.service';
 import { useRouter } from 'next/navigation';
 
 export default function MetricsDashboardPage() {
@@ -13,6 +14,13 @@ export default function MetricsDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState<any>(null);
   const [showCriticalDialog, setShowCriticalDialog] = useState(false);
+
+  // Product Detail Dialog states
+  const [showProductDetailDialog, setShowProductDetailDialog] = useState(false);
+  const [detailProductInfo, setDetailProductInfo] = useState<any>(null);
+  const [detailVariantPrices, setDetailVariantPrices] = useState<any[]>([]);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [facilities, setFacilities] = useState<any[]>([]);
 
   const fetchMetrics = async () => {
     try {
@@ -23,6 +31,135 @@ export default function MetricsDashboardPage() {
       console.error('Error fetching dashboard metrics:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleViewProductDetail = async (variantId: number, productName: string) => {
+    try {
+      setLoadingDetail(true);
+      setShowProductDetailDialog(true);
+      
+      const variantData = await ProductService.getVariantById(variantId);
+      
+      let categoryName = 'Sin Categoría';
+      let description = '';
+      
+      if (variantData && variantData.product_id) {
+         try {
+            const productData = await ProductService.getProductById(variantData.product_id);
+            if (productData) {
+               description = productData.description || '';
+               const uomBase = productData.uom_base || 'PZA';
+               const catData = await ProductService.getCategories();
+               const categoryList = catData?.data || catData || [];
+               const matchedCat = categoryList.find((c: any) => c.id === productData.category_id);
+               if (matchedCat) {
+                  categoryName = matchedCat.name;
+               }
+               setDetailProductInfo({
+                 ...variantData,
+                 name: productName,
+                 categoryName,
+                 description,
+                 uom_base: uomBase
+               });
+            } else {
+               setDetailProductInfo({
+                 ...variantData,
+                 name: productName,
+                 categoryName,
+                 description,
+                 uom_base: 'PZA'
+               });
+            }
+         } catch (e) {
+            console.error('Error fetching parent product details:', e);
+            setDetailProductInfo({
+              ...variantData,
+              name: productName,
+              categoryName,
+              description,
+              uom_base: 'PZA'
+            });
+         }
+      } else {
+         setDetailProductInfo({
+           ...variantData,
+           name: productName,
+           categoryName,
+           description: '',
+           uom_base: 'PZA'
+         });
+      }
+
+      const facs = await ProductService.getFacilities();
+      const activeFacilities = facs?.data || facs || [];
+      setFacilities(activeFacilities);
+
+      const fps = variantData?.facility_prices || [];
+      const mapped = activeFacilities.map((f: any) => {
+        const fp = fps.find((x: any) => x.facility_id === f.id);
+        return {
+          facility_id: f.id,
+          facility_name: f.name,
+          sales_price: fp ? Number(fp.sales_price) : null,
+          target_utility_pct: fp ? Number(fp.target_utility_pct) : 0
+        };
+      });
+      setDetailVariantPrices(mapped);
+    } catch (e) {
+      console.error('Error fetching product variant details:', e);
+      setDetailVariantPrices([]);
+    } finally {
+      setLoadingDetail(false);
+    }
+  };
+
+  const handleCreateSessionForVariant = async (variant: any) => {
+    try {
+      const newSession = await PricingService.createSession({
+        name: "Ajuste Margen: [" + variant.sku + "] " + variant.name,
+        source_type: 'FILTER_BULK',
+        target_cost_type: 'REPLACEMENT',
+        update_type: 'BOTH',
+        supplier_id: null
+      });
+      if (newSession && newSession.id) {
+        await PricingService.addSessionLine(newSession.id, {
+          variant_id: variant.variant_id,
+          action: 'UPDATE_COST'
+        });
+        router.push(`/${newSession.id}`);
+      }
+    } catch (e) {
+      console.error('Error creating pricing session for variant:', e);
+    }
+  };
+
+  const handleSendAllInBulk = async () => {
+    try {
+      const list = metrics?.critical_skus_list || [];
+      if (list.length === 0) return;
+      
+      const newSession = await PricingService.createSession({
+        name: "Ajuste Margen Masivo: SKUs en Riesgo Crítico",
+        source_type: 'FILTER_BULK',
+        target_cost_type: 'REPLACEMENT',
+        update_type: 'BOTH',
+        supplier_id: null
+      });
+      
+      if (newSession && newSession.id) {
+        for (const item of list) {
+          await PricingService.addSessionLine(newSession.id, {
+            variant_id: item.variant_id,
+            action: 'UPDATE_COST'
+          });
+        }
+        router.push(`/${newSession.id}`);
+      }
+    } catch (e) {
+      console.error('Error creating bulk session:', e);
     }
   };
 
@@ -153,9 +290,17 @@ export default function MetricsDashboardPage() {
         visible={showCriticalDialog}
         style={{ width: '65vw', minWidth: '700px' }}
         header={
-          <span className="text-xl font-extrabold text-slate-800 flex items-center gap-2">
-            ⚠️ Detalle de SKUs en Riesgo Crítico (&lt;20% de Margen)
-          </span>
+          <div className="flex justify-between items-center w-full pr-8">
+            <span className="text-xl font-extrabold text-slate-800 flex items-center gap-2">
+              ⚠️ Detalle de SKUs en Riesgo Crítico (&lt;20% de Margen)
+            </span>
+            <Button
+              label="⚡ Enviar Todo en Lote"
+              className="!bg-rose-600 hover:!bg-rose-700 border-none font-bold text-white text-xs px-3 py-1.5 rounded-xl ml-4 shadow-sm"
+              onClick={handleSendAllInBulk}
+              disabled={!metrics?.critical_skus_list || metrics.critical_skus_list.length === 0}
+            />
+          </div>
         }
         onHide={() => setShowCriticalDialog(false)}
         footer={
@@ -179,8 +324,8 @@ export default function MetricsDashboardPage() {
             rowHover
             responsiveLayout="scroll"
           >
-            <Column field="sku" header="SKU" className="font-mono font-bold text-slate-700 w-[20%]"></Column>
-            <Column field="name" header="PRODUCTO" className="font-semibold text-slate-800 w-[45%]"></Column>
+            <Column field="sku" header="SKU" className="font-mono font-bold text-slate-700 w-[15%]"></Column>
+            <Column field="name" header="PRODUCTO" className="font-semibold text-slate-800 w-[35%]"></Column>
             <Column 
               field="standard_cost" 
               header="COSTO ESTÁNDAR" 
@@ -206,8 +351,210 @@ export default function MetricsDashboardPage() {
               className="w-[11%] text-center"
               alignHeader="center"
             ></Column>
+            <Column 
+              header="ACCIONES" 
+              align="center"
+              className="w-[15%] text-center"
+              body={(rowData) => (
+                <div className="flex gap-2 justify-center">
+                  <Button 
+                    icon="pi pi-eye" 
+                    rounded 
+                    text 
+                    tooltip="Ver Detalle"
+                    className="p-button-rounded p-button-text p-0 w-8 h-8 text-indigo-600 hover:bg-indigo-50"
+                    onClick={() => handleViewProductDetail(rowData.variant_id, rowData.name)} 
+                  />
+                  <Button 
+                    icon="pi pi-external-link" 
+                    rounded 
+                    text 
+                    tooltip="Actualizar"
+                    className="p-button-rounded p-button-text p-0 w-8 h-8 text-emerald-600 hover:bg-emerald-50"
+                    onClick={() => handleCreateSessionForVariant(rowData)} 
+                  />
+                </div>
+              )}
+            ></Column>
           </DataTable>
         </div>
+      </Dialog>
+
+      {/* Product consultation quick-view dialog */}
+      <Dialog
+        visible={showProductDetailDialog}
+        style={{ width: '50vw', minWidth: '600px' }}
+        header={<span className="text-xl font-extrabold text-slate-800">📄 Ficha de Consulta de Producto</span>}
+        onHide={() => setShowProductDetailDialog(false)}
+        footer={
+          <div className="flex justify-end">
+            <Button 
+              label="Cerrar" 
+              icon="pi pi-times" 
+              onClick={() => setShowProductDetailDialog(false)} 
+              className="px-5 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 border-none font-bold" 
+            />
+          </div>
+        }
+      >
+        {detailProductInfo && (
+          <div className="flex flex-col gap-6 mt-2">
+            
+            {/* Header info */}
+            <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+              <h3 className="text-xl font-bold text-slate-800 mb-1">{detailProductInfo.name}</h3>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-400 text-sm font-medium mt-2">
+                <span>SKU: <span className="text-slate-600 font-semibold">{detailProductInfo.sku || 'N/A'}</span></span>
+                <span>•</span>
+                <span>Categoría: <span className="text-slate-600 font-semibold">{detailProductInfo.categoryName || 'Sin Categoría'}</span></span>
+              </div>
+              {detailProductInfo.description && (
+                <p className="text-slate-500 text-xs mt-3 bg-white p-3 rounded-lg border border-slate-100">{detailProductInfo.description}</p>
+              )}
+            </div>
+
+            {loadingDetail ? (
+              <div className="p-8 text-center">
+                 <i className="pi pi-spin pi-spinner text-3xl text-indigo-600"></i>
+                 <p className="text-xs text-slate-400 mt-2 font-medium">Cargando detalles de costos y sucursales...</p>
+              </div>
+            ) : (
+              <>
+                {/* Costs & Prices Section */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Costs Card */}
+                  <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3">
+                    <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider border-b border-slate-50 pb-2">Estructura de Costos</h4>
+                    
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">Costo Estándar (Sin IVA)</span>
+                      <span className="font-semibold text-slate-700">${Number(detailProductInfo.standard_cost || 0).toFixed(2)}</span>
+                    </div>
+                    
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">Costo Estándar (Con IVA)</span>
+                      <span className="font-semibold text-slate-700">${(Number(detailProductInfo.standard_cost || 0) * 1.16).toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-sm border-t border-slate-50 pt-2">
+                      <span className="text-slate-500">Costo Reposición</span>
+                      <span className="font-semibold text-slate-700">${Number(detailProductInfo.replacement_cost || 0).toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">Costo Promedio</span>
+                      <span className="font-semibold text-slate-700">${Number(detailProductInfo.average_cost || 0).toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">Último Costo</span>
+                      <span className="font-semibold text-slate-700">${Number(detailProductInfo.last_cost || 0).toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  {/* Margins & Prices Card */}
+                  <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3">
+                    <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider border-b border-slate-50 pb-2">Precios & Margen General</h4>
+
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">PVP Base General (Sin IVA)</span>
+                      <span className="font-semibold text-slate-700">${Number(detailProductInfo.sales_price || 0).toFixed(2)}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">PVP Base General (Con IVA)</span>
+                      <span className="font-extrabold text-emerald-600 text-lg">${(Number(detailProductInfo.sales_price || 0) * 1.16).toFixed(2)}</span>
+                    </div>
+
+                    {(() => {
+                      const cost = Number(detailProductInfo.standard_cost || 0);
+                      const price = Number(detailProductInfo.sales_price || 0);
+                      const margin = price > 0 ? ((price - cost) / price * 100.0) : 0;
+                      return (
+                        <div className="flex justify-between items-center text-sm border-t border-slate-50 pt-2">
+                          <span className="text-slate-500">Margen Bruto General</span>
+                          <span className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold ${margin >= 25 ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'}`}>
+                            {margin.toFixed(2)}%
+                          </span>
+                        </div>
+                      );
+                    })()}
+
+                    <div className="flex justify-between items-center text-sm">
+                       <span className="text-slate-500">Stock Consolidado</span>
+                       {(() => {
+                         const stock = Number(detailProductInfo.total_stock || 0);
+                         const uom = (detailProductInfo.uom_base || 'PZA').toUpperCase();
+                         const isWeight = ['KG', 'KILOGRAMO', 'KILOGRAMOS', 'LBS', 'LIBRA', 'LIBRAS', 'G', 'GRAMOS', 'GRAMO', 'L', 'LT', 'M', 'MT', 'MTS'].includes(uom);
+                         const formattedStock = isWeight ? stock.toFixed(3) : Math.round(stock).toString();
+                         return (
+                           <span className="font-semibold text-slate-700">
+                             {formattedStock} {uom.toLowerCase()}
+                           </span>
+                         );
+                       })()}
+                     </div>
+                  </div>
+                </div>
+
+                {/* Branch Pricing Subgrid */}
+                <div className="flex flex-col gap-3">
+                  <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Detalle por Sucursales</h4>
+                  <div className="border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+                    <DataTable
+                      value={detailVariantPrices}
+                      className="p-datatable-sm text-xs"
+                      emptyMessage="No hay sucursales registradas."
+                    >
+                      <Column field="facility_name" header="SUCURSAL" className="font-semibold text-slate-700"></Column>
+                      <Column
+                        header="ESTADO PRECIO"
+                        body={(r) => (
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${r.sales_price ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>
+                            {r.sales_price ? 'Precio Específico' : 'Hereda General'}
+                          </span>
+                        )}
+                      ></Column>
+                      <Column
+                        header="PVP (SIN IVA)"
+                        body={(r) => {
+                          const val = r.sales_price ?? detailProductInfo.sales_price ?? 0;
+                          return <span className={`font-semibold ${r.sales_price ? 'text-indigo-600' : 'text-slate-500'}`}>${Number(val).toFixed(2)}</span>;
+                        }}
+                      ></Column>
+                      <Column
+                        header="PVP (CON IVA)"
+                        body={(r) => {
+                          const val = r.sales_price ?? detailProductInfo.sales_price ?? 0;
+                          const valWithTax = Number(val) * 1.16;
+                          return <span className={`font-bold ${r.sales_price ? 'text-indigo-700' : 'text-emerald-600'}`}>${valWithTax.toFixed(2)}</span>;
+                        }}
+                      ></Column>
+                      <Column
+                        header="MARGEN/UTILIDAD LOCAL"
+                        body={(r) => {
+                          const val = r.sales_price ?? detailProductInfo.sales_price ?? 0;
+                          const cost = Number(detailProductInfo.standard_cost || 0);
+                          const margin = val > 0 ? ((val - cost) / val * 100.0) : 0;
+                          return (
+                            <div className="flex flex-col">
+                              <span className={`font-bold ${margin >= 25 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                {margin.toFixed(2)}%
+                              </span>
+                              {r.target_utility_pct > 0 && (
+                                <span className="text-[10px] text-slate-400">Objetivo: {r.target_utility_pct}%</span>
+                              )}
+                            </div>
+                          );
+                        }}
+                      ></Column>
+                    </DataTable>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </Dialog>
 
       {/* Middle Grid */}

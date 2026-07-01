@@ -281,6 +281,20 @@ export default function OrderDetailsPage() {
       setSaving(false);
   };
 
+  const handleDownloadPdf = async () => {
+      try {
+          const response = await api.get(`/purchase-orders/${orderId}/pdf`, {
+              responseType: 'blob'
+          });
+          const blob = new Blob([response.data], { type: 'application/pdf' });
+          const blobUrl = URL.createObjectURL(blob);
+          window.open(blobUrl);
+      } catch (err) {
+          console.error("Error generating purchase order PDF", err);
+          toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo generar el PDF de la orden de compra.' });
+      }
+  };
+
   if (loading && !order) return <div className="p-8 text-slate-500 font-bold flex items-center gap-3"><i className="pi pi-spin pi-spinner text-indigo-500 text-2xl"></i> Leyendo pergaminos corporativos...</div>;
   if (!order) return <div className="p-8 text-red-500 font-black text-2xl">Orden 404: Extraviada en el ciberespacio.</div>;
 
@@ -489,7 +503,7 @@ export default function OrderDetailsPage() {
       )}
       {!isDraft && order.status !== 'pending_approval' && (
           <div className="flex justify-end gap-4 p-6 bg-slate-50 rounded-2xl shadow-inner border border-slate-200 mt-6">
-             <Button label="Visor PDF Corporativo" icon="pi pi-file-pdf" severity="danger" outlined onClick={() => window.open(`http://localhost:8000/api/v1/purchase-orders/${orderId}/pdf`, '_blank')} className="font-bold bg-white" />
+              <Button label="Visor PDF Corporativo" icon="pi pi-file-pdf" severity="danger" outlined onClick={handleDownloadPdf} className="font-bold bg-white" />
              {(order.status === 'approved' || order.status === 'sent' || order.status === 'viewed') && (
                  <Button label="Disparar a Proveedor" icon="pi pi-whatsapp" severity="success" onClick={triggerMailer} disabled={saving} className="font-bold px-8 shadow-md" />
              )}

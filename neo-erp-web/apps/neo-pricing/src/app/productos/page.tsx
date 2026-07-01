@@ -423,7 +423,15 @@ export default function ProductConsultationPage() {
 
                     <div className="flex justify-between items-center text-sm">
                       <span className="text-slate-500">Stock Consolidado</span>
-                      <span className="font-semibold text-slate-700">{selectedVariant.total_stock || 0} uds</span>
+                      <span className="font-semibold text-slate-700">
+                        {(() => {
+                          const stock = Number(selectedVariant.total_stock || 0);
+                          const uom = (selectedProduct.uom_base || 'PZA').toUpperCase();
+                          const isWeight = ['KG', 'KILOGRAMO', 'KILOGRAMOS', 'LBS', 'LIBRA', 'LIBRAS', 'G', 'GRAMOS', 'GRAMO', 'L', 'LT', 'M', 'MT', 'MTS'].includes(uom);
+                          const formattedStock = isWeight ? stock.toFixed(3) : Math.round(stock).toString();
+                          return `${formattedStock} ${uom.toLowerCase()}`;
+                        })()}
+                      </span>
                     </div>
                   </div>
                 </div>
