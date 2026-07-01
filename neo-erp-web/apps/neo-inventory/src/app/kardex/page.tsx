@@ -133,7 +133,11 @@ export default function KardexPage() {
 
   const formatDate = (dateStr: string) => {
     if (!dateStr) return '---';
-    const d = new Date(dateStr);
+    let cleanStr = dateStr;
+    if (typeof dateStr === 'string' && !dateStr.includes('Z') && !dateStr.includes('+') && !/-\d{2}:\d{2}$/.test(dateStr)) {
+      cleanStr = dateStr.replace(' ', 'T') + 'Z';
+    }
+    const d = new Date(cleanStr);
     return d.toLocaleString('es-VE', {
       day: '2-digit', month: '2-digit', year: 'numeric',
       hour: '2-digit', minute: '2-digit'

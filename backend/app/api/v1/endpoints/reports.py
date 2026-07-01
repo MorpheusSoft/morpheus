@@ -128,7 +128,7 @@ def get_advanced_kardex(
         WITH combined_moves AS (
             SELECT 
                 sm.product_id,
-                sm.date,
+                sm.date::timestamptz as date,
                 COALESCE(sm.reference, 'MOVE-' || sm.id) as reference,
                 CASE 
                     WHEN pt.name IS NOT NULL THEN UPPER(pt.name)
@@ -154,7 +154,7 @@ def get_advanced_kardex(
             
             SELECT
                 il.product_variant_id as product_id,
-                COALESCE(iss.date_end, iss.date_start) as date,
+                COALESCE(iss.date_end, iss.date_start)::timestamptz as date,
                 iss.name as reference,
                 'AJUSTE' as source_type,
                 ABS(il.difference_qty) as qty_done,
@@ -174,7 +174,7 @@ def get_advanced_kardex(
             
             SELECT
                 dl.variant_id as product_id,
-                d.created_at as date,
+                d.created_at::timestamptz as date,
                 d.document_number as reference,
                 'VENTA' as source_type,
                 dl.quantity as qty_done,
