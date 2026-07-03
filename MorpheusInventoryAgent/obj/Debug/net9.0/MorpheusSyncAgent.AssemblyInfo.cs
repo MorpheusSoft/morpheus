@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("MorpheusSyncAgent")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+2a92f3346ce33a19ce43137ecda16501a2cb7239")]
 [assembly: System.Reflection.AssemblyProductAttribute("MorpheusSyncAgent")]
 [assembly: System.Reflection.AssemblyTitleAttribute("MorpheusSyncAgent")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -411,7 +411,7 @@ export default function PrintHabladoresPage() {
 
   const renderSequentialLabels = () => {
     return (
-      <div className="flex flex-col items-start bg-white">
+      <div className="print-parent flex flex-col items-start bg-white">
         {labelsToPrint.map((item, idx) => (
           <div
             key={idx}
@@ -452,6 +452,20 @@ export default function PrintHabladoresPage() {
           @page {
             margin: 0 !important;
           }
+          .print-parent {
+            display: block !important;
+            width: auto !important;
+            height: auto !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            box-shadow: none !important;
+          }
+          .print-page {
+            page-break-after: always !important;
+            break-after: page !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+          }
         }
 
         /* Line clamp helper */
@@ -486,8 +500,8 @@ export default function PrintHabladoresPage() {
       </div>
 
       {/* Print Document Content */}
-      <div className="flex justify-center bg-slate-100/30 min-h-screen py-8 print:p-0 print:bg-white select-none">
-        <div className="bg-white shadow-lg print:shadow-none p-4 print:p-0">
+      <div className="print-parent flex justify-center bg-slate-100/30 min-h-screen py-8 print:p-0 print:bg-white select-none">
+        <div className="print-parent bg-white shadow-lg print:shadow-none p-4 print:p-0">
           {paper_type === 'GRID' ? renderGridPages() : renderSequentialLabels()}
         </div>
       </div>

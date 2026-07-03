@@ -77,16 +77,17 @@ public class InventoryMovementsWorker : BackgroundService
         }
         
         var lastSync = syncState.LastMovementSync;
+        int facilityId = _configuration.GetValue<int>("StoreFacilityId", 1);
         
         string query = @"
-            select m.c_documento, t.c_concepto, c_tipoMov, f_fecha, c_deposito, c_codArticulo, t.n_cantidad, t.n_costo, t.n_subtotal
+            select @FacilityId as facility_id, m.c_documento, t.c_concepto, c_tipoMov, f_fecha, c_deposito, c_codArticulo, t.n_cantidad, t.n_costo, t.n_subtotal
             from tr_inventario t
             inner join ma_inventario m on t.c_concepto = m.c_concepto and t.c_documento=m.c_documento
             where m.c_status != 'ANU' and t.c_concepto not in ('VEN','DEV') 
               and f_fecha >= @LastSyncDate";
 
         using var connection = new SqlConnection(connectionString);
-        var movements = await connection.QueryAsync(query, new { LastSyncDate = lastSync.Date }, commandTimeout: 180);
+        var movements = await connection.QueryAsync(query, new { FacilityId = facilityId, LastSyncDate = lastSync.Date }, commandTimeout: 180);
 
         if (!movements.Any()) return;
 
