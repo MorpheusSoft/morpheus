@@ -18,6 +18,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 export const metadata: Metadata = {
   title: "Neo Costos y Precios",
   description: "Next-gen ERP System Module",
+  manifest: "/manifest.json",
 };
 
 export default function RootLayout({

@@ -29,11 +29,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             if (isOperator) {
               // Cashiers/Operators can only access printing page /habladores
               // and they CANNOT access designer /habladores/plantillas
-              const allowedPages = ['/habladores', '/habladores/imprimir'];
+              const allowedPages = ['/habladores', '/habladores/imprimir', '/habladores/tienda'];
               const isAllowed = allowedPages.includes(pathname || '');
 
               if (!isAllowed) {
-                router.push('/habladores');
+                router.push('/habladores/tienda');
                 return;
               }
             }
@@ -59,6 +59,18 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (isPrintPage) {
     return <main className="flex-1 bg-white min-h-screen">{children}</main>;
+  }
+
+  const isKioskMode = pathname === '/habladores/tienda';
+
+  if (isKioskMode) {
+    return (
+      <div className="flex min-h-screen bg-slate-50 font-sans text-slate-800 selection:bg-rose-200">
+        <main className="flex-1 p-3 md:p-5 lg:p-6 overflow-x-hidden animate-fade-in-up">
+          {children}
+        </main>
+      </div>
+    );
   }
 
   return (

@@ -2,7 +2,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Dropdown } from 'primereact/dropdown';
 import { InputText } from 'primereact/inputtext';
-import { InputNumber } from 'primereact/inputnumber';
 import { Button } from 'primereact/button';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
@@ -32,11 +31,14 @@ interface PrintItem {
   base_price?: number;
 }
 
-export default function HabladoresWorkbenchPage() {
+export default function StoreKioskPrintingPage() {
   const router = useRouter();
   const toast = useRef<Toast>(null);
   const [templates, setTemplates] = useState<PrintTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<PrintTemplate | null>(null);
+  const [facilities, setFacilities] = useState<any[]>([]);
+  const [selectedFacilityId, setSelectedFacilityId] = useState<number>(1);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const getVariantBarcode = (variant: any) => {
     if (variant.barcode) return variant.barcode;
@@ -49,11 +51,9 @@ export default function HabladoresWorkbenchPage() {
     return fp ? Number(fp.sales_price) : Number(variant.sales_price || 0);
   };
 
-  // Sessions, facilities and rate
+  // Sessions and rate
   const [sessions, setSessions] = useState<any[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
-  const [facilities, setFacilities] = useState<any[]>([]);
-  const [selectedFacilityId, setSelectedFacilityId] = useState<number>(1);
   const [vesRate, setVesRate] = useState<number>(40.0); // fallback rate
 
   // Search products
@@ -75,7 +75,7 @@ export default function HabladoresWorkbenchPage() {
 
   const handleFacilityChange = (facilityId: number) => {
     setSelectedFacilityId(facilityId);
-    localStorage.setItem('morpheus_default_facility_id', String(facilityId));
+    localStorage.setItem('morpheus_kiosk_facility_id', String(facilityId));
     
     // Recalculate prices in the queue
     setSelectedProducts(prev => 
@@ -110,7 +110,7 @@ export default function HabladoresWorkbenchPage() {
       const facilityList = facs?.data || facs || [];
       setFacilities(facilityList);
 
-      const cachedFac = localStorage.getItem('morpheus_default_facility_id');
+      const cachedFac = localStorage.getItem('morpheus_kiosk_facility_id');
       if (cachedFac) {
         setSelectedFacilityId(Number(cachedFac));
       } else if (facilityList.length > 0) {
@@ -129,7 +129,6 @@ export default function HabladoresWorkbenchPage() {
       if (vesRateVal > 1) {
         rate = vesRateVal;
       } else if (usdRateVal > 1) {
-        // En Saint/Stellar a veces se guarda la tasa de USD escalada por 10 (ej: 488.7732 en vez de 48.87732)
         rate = usdRateVal > 150 ? usdRateVal / 10 : usdRateVal;
       }
       setVesRate(rate);
@@ -138,14 +137,12 @@ export default function HabladoresWorkbenchPage() {
       toast.current?.show({
         severity: 'error',
         summary: 'Error',
-        detail: 'Error cargando datos iniciales de la mesa de trabajo.'
+        detail: 'Error cargando datos de tienda.'
       });
     } finally {
       setLoading(false);
     }
   };
-
-  const [isOperator, setIsOperator] = useState(false);
 
   useEffect(() => {
     loadInitialData();
@@ -159,7 +156,7 @@ export default function HabladoresWorkbenchPage() {
               const name = r.name.toLowerCase();
               return name.includes('operador') || name.includes('operator') || name.includes('cajero');
             });
-            setIsOperator(isOp);
+            setIsAdmin(!isOp);
           }
         })
         .catch(err => console.error("Error loading user in page:", err));
@@ -196,10 +193,7 @@ export default function HabladoresWorkbenchPage() {
       return;
     }
 
-    // Default to the first variant
     const variant = product.variants[0];
-
-    // Check if variant already exists in queue
     const exists = selectedProducts.find((p) => p.variant_id === variant.id);
     if (exists) {
       setSelectedProducts(
@@ -219,7 +213,7 @@ export default function HabladoresWorkbenchPage() {
     try {
       fullVariant = await ProductService.getVariantById(variant.id);
     } catch (e) {
-      console.error("Error cargando detalles extendidos de la variante:", e);
+      console.error("Error cargando detalles de variante:", e);
     }
 
     const usdPrice = getVariantPrice(fullVariant, selectedFacilityId);
@@ -249,7 +243,7 @@ export default function HabladoresWorkbenchPage() {
     toast.current?.show({
       severity: 'success',
       summary: 'Agregado',
-      detail: `Agregado ${product.name} a la cola de impresión.`
+      detail: `Agregado ${product.name} a la cola.`
     });
   };
 
@@ -273,7 +267,7 @@ export default function HabladoresWorkbenchPage() {
       toast.current?.show({
         severity: 'info',
         summary: 'Cargando',
-        detail: `Cargando ${lines.length} productos de la sesión...`
+        detail: `Cargando ${lines.length} productos...`
       });
 
       const loadedItems: PrintItem[] = [];
@@ -281,13 +275,11 @@ export default function HabladoresWorkbenchPage() {
       for (const line of lines) {
         if (!line.variant_id) continue;
         try {
-          // Fetch variant and product detail
           const variant = await ProductService.getVariantById(line.variant_id);
           if (!variant) continue;
           const product = await ProductService.getProductById(variant.product_id);
           if (!product) continue;
 
-          // Price priority: proposed_price (line) > variant branch price
           let usdPrice = Number(line.proposed_price || 0);
           if (usdPrice === 0) {
             usdPrice = getVariantPrice(variant, selectedFacilityId);
@@ -314,11 +306,10 @@ export default function HabladoresWorkbenchPage() {
             base_price: Number(variant.sales_price || 0)
           });
         } catch (e) {
-          console.error(`Error loading variant ID ${line.variant_id} for printing:`, e);
+          console.error(e);
         }
       }
 
-      // Merge new loaded items with current selected items
       const merged = [...selectedProducts];
       loadedItems.forEach((newItem) => {
         const idx = merged.findIndex((x) => x.variant_id === newItem.variant_id);
@@ -332,16 +323,11 @@ export default function HabladoresWorkbenchPage() {
       setSelectedProducts(merged);
       toast.current?.show({
         severity: 'success',
-        summary: 'Sesión Cargada',
-        detail: `Importados correctamente ${loadedItems.length} productos.`
+        summary: 'Importación Completada',
+        detail: `Importados ${loadedItems.length} productos.`
       });
     } catch (err) {
       console.error(err);
-      toast.current?.show({
-        severity: 'error',
-        summary: 'Error',
-        detail: 'No se pudo cargar la sesión de precios.'
-      });
     } finally {
       setLoading(false);
     }
@@ -371,21 +357,20 @@ export default function HabladoresWorkbenchPage() {
     if (selectedProducts.length === 0) {
       toast.current?.show({
         severity: 'warn',
-        summary: 'Validación',
-        detail: 'Debe agregar al menos un producto a la cola de impresión.'
+        summary: 'Cola vacía',
+        detail: 'Debe agregar al menos un producto.'
       });
       return;
     }
     if (!selectedTemplate) {
       toast.current?.show({
         severity: 'warn',
-        summary: 'Validación',
-        detail: 'Debe seleccionar una plantilla para imprimir.'
+        summary: 'Sin plantilla',
+        detail: 'Debe seleccionar una plantilla.'
       });
       return;
     }
 
-    // Save configuration to sessionStorage
     const printConfig = {
       products: selectedProducts,
       template: selectedTemplate,
@@ -394,12 +379,9 @@ export default function HabladoresWorkbenchPage() {
     };
 
     sessionStorage.setItem('habladores_print_data', JSON.stringify(printConfig));
-
-    // Open print-friendly layout
     window.open('/costos/habladores/imprimir', '_blank');
   };
 
-  // Interactivevisual grid selector for starting position
   const renderVisualGrid = () => {
     if (!selectedTemplate || selectedTemplate.paper_type !== 'GRID') return null;
     const r = selectedTemplate.rows || 1;
@@ -409,18 +391,19 @@ export default function HabladoresWorkbenchPage() {
     const cells = [];
     for (let i = 1; i <= totalCells; i++) {
       const isSelected = startingPosition === i;
-      const isSkipped = i < startingPosition;
+      const isSkipped = startingPosition > i;
 
       cells.push(
         <button
           key={i}
+          type="button"
           onClick={() => setStartingPosition(i)}
-          className={`h-10 w-10 border rounded-lg flex items-center justify-center font-bold text-xs transition-all duration-200 ${
+          className={`w-8 h-8 rounded-lg text-xs font-bold border transition-all duration-150 ${
             isSelected
-              ? 'bg-emerald-500 text-white border-emerald-600 shadow-md scale-105'
+              ? 'bg-rose-500 text-white border-rose-600 shadow-md shadow-rose-200'
               : isSkipped
               ? 'bg-slate-100 text-slate-400 border-slate-200 line-through'
-              : 'bg-white hover:bg-indigo-50 border-slate-300 text-indigo-600'
+              : 'bg-white hover:bg-rose-50 border-slate-300 text-rose-600'
           }`}
           title={isSelected ? 'Impresión inicia aquí' : isSkipped ? 'Posición vacía' : `Posición ${i}`}
         >
@@ -430,20 +413,17 @@ export default function HabladoresWorkbenchPage() {
     }
 
     return (
-      <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 flex flex-col gap-3">
+      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex flex-col gap-3">
         <div className="flex justify-between items-center">
           <span className="text-xs font-extrabold text-slate-500 uppercase tracking-wider">
-            Posición Inicial de Impresión
+            Posición Inicial
           </span>
-          <span className="text-[10px] font-bold bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded">
+          <span className="text-[10px] font-bold bg-rose-50 text-rose-600 px-2 py-0.5 rounded">
             Casilla {startingPosition}
           </span>
         </div>
-        <p className="text-[11px] text-slate-400 leading-tight">
-          Selecciona la casilla para iniciar la impresión si utilizas una hoja parcialmente usada.
-        </p>
         <div
-          className="grid gap-2 justify-center mx-auto my-2"
+          className="grid gap-2 justify-center mx-auto my-1"
           style={{
             gridTemplateColumns: `repeat(${c}, minmax(0, 1fr))`
           }}
@@ -455,48 +435,56 @@ export default function HabladoresWorkbenchPage() {
   };
 
   return (
-    <div className="w-full max-w-[1400px] mx-auto py-6 px-4">
+    <div className="w-full max-w-[1300px] mx-auto py-4 px-2">
       <Toast ref={toast} />
 
-      {/* Top Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
+      {/* Fullscreen Kiosk Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 bg-slate-900 text-white p-6 rounded-3xl shadow-lg border border-slate-800">
         <div>
-          <h1 className="text-3xl font-extrabold text-slate-800 tracking-tight flex items-center gap-2">
-            <Button
-              icon="pi pi-arrow-left"
-              rounded
-              text
-              severity="secondary"
-              className="p-button-sm text-slate-500 hover:bg-slate-100"
-              onClick={() => router.push('/')}
-            />
-            <span className="text-2xl">🏷️</span> Mesa de Trabajo: Habladores
-          </h1>
-          <p className="text-slate-500 mt-1 font-medium">
-            Cola de impresión de etiquetas de precios. Agrega productos manualmente o desde auditorías de precios.
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🏷️</span>
+            <h1 className="text-2xl font-extrabold tracking-tight">
+              Morpheus: Impresión de Tienda
+            </h1>
+          </div>
+          <p className="text-slate-400 text-xs mt-1 font-medium">
+            Terminal simplificado de impresión de habladores de precios.
           </p>
         </div>
-        {!isOperator && (
-          <div className="flex gap-2">
-            <Link href="/habladores/plantillas">
-              <Button
-                label="Configurar Plantillas"
-                icon="pi pi-cog"
-                className="!bg-white !text-indigo-600 hover:!bg-slate-50 !border-slate-200 !rounded-xl !shadow-sm font-semibold transition-all duration-200"
-              />
-            </Link>
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          {/* Sucursal Locked Select */}
+          <div className="flex flex-col gap-1 flex-1 sm:flex-initial">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sucursal Activa</span>
+            <Dropdown
+              value={selectedFacilityId}
+              options={facilities}
+              optionLabel="name"
+              optionValue="id"
+              onChange={(e) => handleFacilityChange(e.value)}
+              placeholder="Sucursal..."
+              className="border-slate-700 bg-slate-800 text-white rounded-xl text-xs w-full sm:w-48"
+            />
           </div>
-        )}
+
+          {isAdmin && (
+            <Button
+              label="Volver al ERP"
+              icon="pi pi-home"
+              className="!text-slate-300 hover:!text-white hover:!bg-slate-800 !bg-transparent !border-slate-700 !rounded-xl !px-3 font-semibold text-xs py-2 transition-all duration-200 mt-4 sm:mt-0"
+              onClick={() => router.push('/')}
+            />
+          )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Left Side: Product Search and Add, and Pricing Sessions */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left: Product Selection */}
         <div className="lg:col-span-4 flex flex-col gap-6">
           {/* Pricing Session Loader */}
-          <Card className="rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <Card className="rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
             <div className="mb-4">
-              <span className="text-xs font-extrabold text-slate-400 uppercase tracking-widest block mb-1">Importar Lote</span>
-              <h3 className="text-lg font-bold text-slate-800">Cargar desde Sesión de Precios</h3>
+              <span className="text-xs font-extrabold text-slate-400 uppercase tracking-widest block mb-1">Carga en Lote</span>
+              <h3 className="text-md font-bold text-slate-800">Cargar desde Auditoría de Precios</h3>
             </div>
             <div className="flex flex-col gap-3">
               <Dropdown
@@ -505,14 +493,14 @@ export default function HabladoresWorkbenchPage() {
                 optionLabel="name"
                 optionValue="id"
                 onChange={(e) => setSelectedSessionId(e.value)}
-                placeholder="Seleccione sesión..."
+                placeholder="Seleccione auditoría..."
                 className="w-full border-slate-200 bg-slate-50 rounded-xl"
                 filter
               />
               <Button
-                label="Importar Productos"
+                label="Cargar Auditoría"
                 icon="pi pi-download"
-                className="w-full !bg-indigo-600 hover:!bg-indigo-700 border-none font-bold rounded-xl mt-1 shadow-sm text-xs py-2.5"
+                className="w-full !bg-rose-500 hover:!bg-rose-600 border-none font-bold rounded-xl shadow-sm text-xs py-2.5"
                 disabled={!selectedSessionId || loading}
                 onClick={handleLoadSession}
               />
@@ -520,10 +508,10 @@ export default function HabladoresWorkbenchPage() {
           </Card>
 
           {/* Product Search */}
-          <Card className="rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <Card className="rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex-1">
             <div className="mb-4">
-              <span className="text-xs font-extrabold text-slate-400 uppercase tracking-widest block mb-1">Búsqueda Individual</span>
-              <h3 className="text-lg font-bold text-slate-800">Buscador de Productos</h3>
+              <span className="text-xs font-extrabold text-slate-400 uppercase tracking-widest block mb-1">Buscador</span>
+              <h3 className="text-md font-bold text-slate-800">Agregar de forma Individual</h3>
             </div>
             <form onSubmit={handleSearch} className="flex gap-2 mb-4">
               <span className="p-input-icon-left flex-1 relative">
@@ -531,8 +519,8 @@ export default function HabladoresWorkbenchPage() {
                 <InputText
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="SKU, barra o nombre..."
-                  className="w-full pl-9 p-2 bg-slate-50 border-slate-200 rounded-xl text-sm"
+                  placeholder="SKU, código de barras o nombre..."
+                  className="w-full pl-9 p-2.5 bg-slate-50 border-slate-200 rounded-xl text-xs"
                   style={{ paddingLeft: '2.5rem' }}
                 />
               </span>
@@ -544,31 +532,27 @@ export default function HabladoresWorkbenchPage() {
               />
             </form>
 
-            {/* Results List */}
             {searching ? (
-              <div className="text-center py-4">
-                <i className="pi pi-spin pi-spinner text-indigo-600 text-xl"></i>
+              <div className="text-center py-8">
+                <i className="pi pi-spin pi-spinner text-rose-500 text-2xl"></i>
               </div>
             ) : searchResults.length === 0 ? (
-              <p className="text-slate-400 text-xs text-center py-4">Realice una búsqueda para agregar productos.</p>
+              <p className="text-slate-400 text-xs text-center py-8">Busca un producto por código o descripción para añadirlo a la cola.</p>
             ) : (
-              <div className="flex flex-col gap-2 max-h-[40vh] overflow-y-auto">
+              <div className="flex flex-col gap-2 max-h-[45vh] overflow-y-auto pr-1">
                 {searchResults.map((product) => (
                   <div
                     key={product.id}
                     className="flex justify-between items-center p-3 border border-slate-100 rounded-xl bg-slate-50 hover:bg-slate-100/50 transition-all duration-200"
                   >
                     <div className="flex-1 min-w-0 pr-2">
-                      <div className="font-bold text-sm text-slate-700 truncate">{product.name}</div>
-                      <div className="text-slate-400 text-[10px] font-bold font-mono uppercase tracking-wider mt-0.5">
-                        {product.variants?.[0]?.sku || 'SIN SKU'} • {product.brand || 'Genérico'}
-                      </div>
+                      <p className="text-xs font-bold text-slate-800 truncate">{product.name}</p>
+                      <p className="text-[10px] text-slate-400 font-mono mt-0.5">SKU: {product.variants?.[0]?.sku || 'N/A'}</p>
                     </div>
                     <Button
                       icon="pi pi-plus"
                       rounded
-                      text
-                      className="p-button-sm text-indigo-600 hover:bg-indigo-50"
+                      className="!bg-rose-500 hover:!bg-rose-600 border-none text-white w-8 h-8 flex-shrink-0"
                       onClick={() => handleAddProduct(product)}
                     />
                   </div>
@@ -578,12 +562,12 @@ export default function HabladoresWorkbenchPage() {
           </Card>
         </div>
 
-        {/* Right Side: Print Queue list and Config */}
+        {/* Right: Print Queue Table */}
         <div className="lg:col-span-8 flex flex-col gap-6">
-          <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-6">
+          <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-6 min-h-[70vh]">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <div>
-                <h3 className="text-lg font-bold text-slate-800">Cola de Impresión de Etiquetas</h3>
+                <h3 className="text-lg font-bold text-slate-800">Cola de Impresión de Tienda</h3>
                 <p className="text-slate-400 text-xs mt-0.5">Define las cantidades para cada etiqueta de precio.</p>
               </div>
               {selectedProducts.length > 0 && (
@@ -596,12 +580,11 @@ export default function HabladoresWorkbenchPage() {
               )}
             </div>
 
-            {/* Print Queue Table */}
             <DataTable
               value={selectedProducts}
               dataKey="variant_id"
-              className="p-datatable-sm text-xs custom-table"
-              emptyMessage="No hay productos en la cola. Agrega productos de forma individual o en lote."
+              className="p-datatable-sm text-xs custom-table flex-1"
+              emptyMessage="La cola de impresión está vacía. Añade productos para comenzar."
               rowHover
               responsiveLayout="scroll"
             >
@@ -693,22 +676,7 @@ export default function HabladoresWorkbenchPage() {
                 <div className="flex flex-col gap-4">
                   <div>
                     <label className="block text-xs font-extrabold text-slate-500 mb-1.5 uppercase tracking-wider">
-                      Seleccionar Sucursal (Precios)
-                    </label>
-                    <Dropdown
-                      value={selectedFacilityId}
-                      options={facilities}
-                      optionLabel="name"
-                      optionValue="id"
-                      onChange={(e) => handleFacilityChange(e.value)}
-                      placeholder="Seleccione sucursal..."
-                      className="w-full border-slate-200 bg-slate-50 rounded-xl"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-extrabold text-slate-500 mb-1.5 uppercase tracking-wider">
-                      Seleccionar Plantilla
+                      Seleccionar Plantilla de Impresión
                     </label>
                     <Dropdown
                       value={selectedTemplate}
@@ -723,17 +691,14 @@ export default function HabladoresWorkbenchPage() {
                   {selectedTemplate && (
                     <div className="text-xs text-slate-400 bg-slate-50 p-4 rounded-xl border border-slate-100 flex flex-col gap-1">
                       <div>
-                        <strong>Dimensiones de Etiqueta:</strong> {selectedTemplate.width_mm}mm x {selectedTemplate.height_mm}mm
-                      </div>
-                      <div>
-                        <strong>Márgenes de página:</strong> T:{selectedTemplate.margin_top_mm}mm, B:{selectedTemplate.margin_bottom_mm}mm, L:{selectedTemplate.margin_left_mm}mm, R:{selectedTemplate.margin_right_mm}mm
+                        <strong>Dimensiones:</strong> {selectedTemplate.width_mm}mm x {selectedTemplate.height_mm}mm
                       </div>
                       <div>
                         <strong>Tipo de Papel:</strong> {selectedTemplate.paper_type}
                       </div>
                       {selectedTemplate.paper_type === 'GRID' && (
                         <div>
-                          <strong>Cuadrícula:</strong> {selectedTemplate.rows} filas x {selectedTemplate.cols} columnas
+                          <strong>Disposición:</strong> {selectedTemplate.rows} filas x {selectedTemplate.cols} columnas
                         </div>
                       )}
                     </div>
@@ -744,9 +709,9 @@ export default function HabladoresWorkbenchPage() {
                   {renderVisualGrid()}
 
                   <Button
-                    label="Generar Habladores"
+                    label="Imprimir Etiquetas"
                     icon="pi pi-print"
-                    className="w-full !bg-emerald-600 hover:!bg-emerald-700 border-none font-bold rounded-xl mt-auto py-3 shadow-md shadow-emerald-100 transition-all duration-200"
+                    className="w-full !bg-rose-600 hover:!bg-rose-700 border-none font-bold rounded-xl mt-auto py-3 shadow-md shadow-rose-100 transition-all duration-200"
                     onClick={handleGenerate}
                   />
                 </div>

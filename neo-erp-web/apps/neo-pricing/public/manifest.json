@@ -1,0 +1,18 @@
+{
+  "name": "Morpheus Habladores",
+  "short_name": "Habladores",
+  "description": "Módulo simplificado para la mesa de trabajo e impresión de habladores en tiendas físicas",
+  "start_url": "/habladores/tienda",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#f43f5e",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
