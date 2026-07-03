@@ -279,6 +279,7 @@ def import_inventory_baseline(
     return {"message": "Success", "imported": count, "not_found": not_found}
 
 class LegacyInventoryMovement(BaseModel):
+    facility_id: int = 1
     c_documento: str
     c_concepto: str
     c_tipoMov: str
@@ -294,7 +295,7 @@ def import_inventory_movements(
     movements_in: List[LegacyInventoryMovement],
     session: Session = Depends(deps.get_db)
 ):
-    from app.models.inventory import StockPicking, StockMove
+    from app.models.inventory import StockPicking, StockMove, Warehouse, Location
     from datetime import datetime
     
     # Pre-cache variants based on STELLAR_CODE
@@ -307,12 +308,12 @@ def import_inventory_movements(
     # Group by document
     grouped_moves = {}
     for m in movements_in:
-        key = (m.c_documento, m.c_concepto, m.c_tipoMov, m.f_fecha)
+        key = (m.c_documento, m.c_concepto, m.c_tipoMov, m.f_fecha, m.facility_id, m.c_deposito)
         if key not in grouped_moves:
             grouped_moves[key] = []
         grouped_moves[key].append(m)
         
-    for (doc, concepto, tipo_mov, fecha), lines in grouped_moves.items():
+    for (doc, concepto, tipo_mov, fecha, facility_id, deposito), lines in grouped_moves.items():
         # Deduplication check
         existing = session.query(StockPicking).filter(StockPicking.origin_document==doc).first()
         if existing:
@@ -321,8 +322,25 @@ def import_inventory_movements(
         is_in = tipo_mov.strip().lower() == 'cargo'
         doc_date = datetime.fromisoformat(fecha) if 'T' in fecha else datetime.strptime(fecha, '%Y-%m-%d %H:%M:%S')
         
+        # Resolve locations based on warehouse code
+        loc_src_id = 1
+        loc_dest_id = 1
+        
+        wh = session.query(Warehouse).filter_by(facility_id=facility_id, code=deposito.strip()).first()
+        if wh:
+            internal_loc = session.query(Location).filter_by(warehouse_id=wh.id, usage='INTERNAL').first()
+            if not internal_loc:
+                internal_loc = session.query(Location).filter_by(warehouse_id=wh.id).first()
+            if internal_loc:
+                if is_in:
+                    loc_src_id = 1 # Proveedores / Virtual
+                    loc_dest_id = internal_loc.id
+                else:
+                    loc_src_id = internal_loc.id
+                    loc_dest_id = 1 # Proveedores / Virtual
+                    
         picking = StockPicking(
-            facility_id=1,
+            facility_id=facility_id,
             name=f"LEG-{doc}-{concepto}"[:45],
             picking_type_id=1 if is_in else 2, 
             origin_document=doc,
@@ -347,8 +365,8 @@ def import_inventory_movements(
                 product_id=variant_id,
                 quantity_demand=qty,
                 quantity_done=qty,
-                location_src_id=1,
-                location_dest_id=1,
+                location_src_id=loc_src_id,
+                location_dest_id=loc_dest_id,
                 state='DONE',
                 reference=concepto
             )

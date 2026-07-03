@@ -44,9 +44,16 @@ export default function WholesalerStorePage() {
         
         // Find exchange rate for VES
         const ves = configRes.data?.find((c: any) => c.code === 'VES');
-        if (ves) {
-          setExchangeRate(Number(ves.exchange_rate));
+        const usd = configRes.data?.find((c: any) => c.code === 'USD');
+        let rate = 40.0;
+        const vesRateVal = ves ? Number(ves.exchange_rate) : 1;
+        const usdRateVal = usd ? Number(usd.exchange_rate) : 1;
+        if (vesRateVal > 1) {
+          rate = vesRateVal;
+        } else if (usdRateVal > 1) {
+          rate = usdRateVal > 150 ? usdRateVal / 10 : usdRateVal;
         }
+        setExchangeRate(rate);
       } catch (err) {
         console.error("Error cargando metadatos", err);
       }

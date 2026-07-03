@@ -1,8 +1,16 @@
 'use client';
+import { usePathname } from 'next/navigation';
 import { AppSidebar } from './AppSidebar';
 import { AppTopbar } from './AppTopbar';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const isPrintPage = pathname === '/habladores/imprimir';
+
+  if (isPrintPage) {
+    return <main className="flex-1 bg-white min-h-screen">{children}</main>;
+  }
+
   return (
     <div className="flex min-h-screen bg-slate-50 font-sans text-slate-800 selection:bg-rose-200">
       <AppSidebar />

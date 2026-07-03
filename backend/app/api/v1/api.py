@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.api import deps
-from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, inventory_session, suppliers, buyers, mrp, purchase_orders, currencies, wms, jobs, dashboard, facilities, pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b, labels, import_legacy
+from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, inventory_session, suppliers, buyers, mrp, purchase_orders, currencies, wms, jobs, dashboard, facilities, pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b, labels, import_legacy, print_templates
 
 api_router = APIRouter()
 api_router.include_router(login.router, tags=["login"])
@@ -33,6 +33,7 @@ api_router.include_router(roles.router, prefix="/roles", tags=["roles"], depende
 api_router.include_router(users.router, prefix="/users", tags=["users"], dependencies=secure_dependencies)
 api_router.include_router(inventory_valuation.router, prefix="/inventory-valuation", tags=["inventory valuation"], dependencies=secure_dependencies)
 api_router.include_router(labels.router, prefix="/labels", tags=["labels"], dependencies=secure_dependencies)
+api_router.include_router(print_templates.router, prefix="/print-templates", tags=["print templates"], dependencies=secure_dependencies)
 api_router.include_router(b2b.router, prefix="/b2b", tags=["b2b"])
 api_router.include_router(sync.router, prefix="/sync", tags=["sync"]) # Sin auth temporal para pruebas
 api_router.include_router(import_legacy.router, prefix="/import", tags=["import legacy"])

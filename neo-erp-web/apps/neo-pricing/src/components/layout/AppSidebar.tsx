@@ -35,6 +35,7 @@ export function AppSidebar() {
     { label: 'Actualizar Costos', icon: 'pi pi-percentage', href: '/costos' },
     { label: 'Actualizar Precios', icon: 'pi pi-tags', href: '/precios' },
     { label: 'Consulta Productos', icon: 'pi pi-search', href: '/productos' },
+    { label: 'Impresión Habladores', icon: 'pi pi-print', href: '/habladores' },
     { label: 'Reportes de Precios', icon: 'pi pi-file', href: '/reportes' },
     { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
   ];

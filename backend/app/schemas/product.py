@@ -125,6 +125,7 @@ class ProductBase(BaseModel):
     is_liquor: Optional[bool] = False
     track_batches: Optional[bool] = False
     tax_id: Optional[int] = None
+    tax_rate: Optional[float] = None
     
     # Multimedia
     image_main: Optional[str] = None

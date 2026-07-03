@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, ForeignKey, DateTime, Text, Numeric, BigInteger, Date
+from sqlalchemy import Boolean, Column, Integer, String, ForeignKey, DateTime, Text, Numeric, BigInteger, Date, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
@@ -82,6 +82,11 @@ class Product(Base):
     variants = relationship("ProductVariant", back_populates="product")
     packagings = relationship("ProductPackaging", backref="product", cascade="all, delete-orphan")
     category = relationship("Category")
+    tribute = relationship("Tribute")
+    
+    @property
+    def tax_rate(self) -> float:
+        return float(self.tribute.rate) if self.tribute else 0.0
 
 class ProductVariant(Base):
     __tablename__ = "product_variants"
@@ -328,3 +333,30 @@ class PricingSessionLine(Base):
     clear_facility_prices = Column(Boolean, default=False)
     
     session = relationship("PricingSession", back_populates="lines")
+
+
+class PrintTemplate(Base):
+    __tablename__ = "print_templates"
+    __table_args__ = {"schema": "inv"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    paper_type = Column(String, default="GRID", nullable=False)  # 'GRID', 'CONTINUOUS', 'INDIVIDUAL'
+    width_mm = Column(Float, nullable=False)
+    height_mm = Column(Float, nullable=False)
+    margin_top_mm = Column(Float, default=0.0, nullable=False)
+    margin_bottom_mm = Column(Float, default=0.0, nullable=False)
+    margin_left_mm = Column(Float, default=0.0, nullable=False)
+    margin_right_mm = Column(Float, default=0.0, nullable=False)
+    rows = Column(Integer, default=1, nullable=False)
+    cols = Column(Integer, default=1, nullable=False)
+    show_sku = Column(Boolean, default=True, nullable=False)
+    show_barcode = Column(Boolean, default=True, nullable=False)
+    show_price_usd = Column(Boolean, default=True, nullable=False)
+    show_price_ves = Column(Boolean, default=True, nullable=False)
+    show_price_iva = Column(Boolean, default=True, nullable=False)
+    show_uom = Column(Boolean, default=True, nullable=False)
+    show_brand = Column(Boolean, default=True, nullable=False)
+    promo_text = Column(String, nullable=True)
+    font_size_pt = Column(Integer, default=10, nullable=False)
+    layout_config = Column(JSONB, nullable=True)
