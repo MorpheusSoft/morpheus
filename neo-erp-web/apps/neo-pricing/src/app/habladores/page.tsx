@@ -116,11 +116,12 @@ export default function HabladoresWorkbenchPage() {
     import('@/lib/api').then(({ default: api }) => {
       api.get('/users/me')
         .then(res => {
-          if (res.data && res.data.active_role) {
-            const roleName = res.data.active_role.name.toLowerCase();
-            const isOp = roleName.includes('operador') || 
-                         roleName.includes('operator') || 
-                         roleName.includes('cajero');
+          if (res.data) {
+            const userRoles = res.data.roles || [];
+            const isOp = userRoles.some((r: any) => {
+              const name = r.name.toLowerCase();
+              return name.includes('operador') || name.includes('operator') || name.includes('cajero');
+            });
             setIsOperator(isOp);
           }
         })

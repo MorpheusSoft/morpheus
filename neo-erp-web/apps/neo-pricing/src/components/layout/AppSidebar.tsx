@@ -7,6 +7,7 @@ export function AppSidebar() {
   const [userName, setUserName] = React.useState('Cargando...');
   const [userRole, setUserRole] = React.useState('Verificando...');
   const [userInitials, setUserInitials] = React.useState('--');
+  const [isOperator, setIsOperator] = React.useState(false);
 
   React.useEffect(() => {
       import('@/lib/api').then(({ default: api }) => {
@@ -17,11 +18,19 @@ export function AppSidebar() {
                       const initials = nameParts.length > 1 ? nameParts[0][0] + nameParts[1][0] : nameParts[0].substring(0, 2);
                       setUserName(res.data.full_name);
                       setUserInitials(initials.toUpperCase());
-                      if (res.data.active_role) {
-                          setUserRole(res.data.active_role.name);
+                      
+                      const userRoles = res.data.roles || [];
+                      if (userRoles.length > 0) {
+                          setUserRole(userRoles[0].name);
                       } else {
                           setUserRole("Staff");
                       }
+
+                      const isOp = userRoles.some((r: any) => {
+                          const name = r.name.toLowerCase();
+                          return name.includes('operador') || name.includes('operator') || name.includes('cajero');
+                      });
+                      setIsOperator(isOp);
                   }
               })
               .catch(err => console.error("Error cargando usuario: ", err));
@@ -39,10 +48,6 @@ export function AppSidebar() {
     { label: 'Reportes de Precios', icon: 'pi pi-file', href: '/reportes' },
     { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
   ];
-
-  const isOperator = userRole.toLowerCase().includes('operador') || 
-                    userRole.toLowerCase().includes('operator') || 
-                    userRole.toLowerCase().includes('cajero');
 
   const filteredMenuItems = isOperator 
     ? menuItems.filter(item => item.href === '/habladores')
