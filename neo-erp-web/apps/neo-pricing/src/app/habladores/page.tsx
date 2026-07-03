@@ -539,6 +539,7 @@ export default function HabladoresWorkbenchPage() {
             {/* Print Queue Table */}
             <DataTable
               value={selectedProducts}
+              dataKey="variant_id"
               className="p-datatable-sm text-xs custom-table"
               emptyMessage="No hay productos en la cola. Agrega productos de forma individual o en lote."
               rowHover
@@ -578,16 +579,34 @@ export default function HabladoresWorkbenchPage() {
               <Column
                 header="CANTIDAD"
                 body={(r) => (
-                  <InputNumber
-                    value={r.qty}
-                    onValueChange={(e) => handleUpdateQty(r.variant_id, e.value || 1)}
-                    min={1}
-                    max={1000}
-                    showButtons
-                    buttonLayout="horizontal"
-                    inputClassName="text-center p-1 bg-slate-50 border-slate-200 w-10 font-bold"
-                    className="w-24 overflow-hidden rounded-lg"
-                  />
+                  <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden bg-slate-50 w-24 mx-auto select-none">
+                    <button
+                      onClick={() => handleUpdateQty(r.variant_id, r.qty - 1)}
+                      disabled={r.qty <= 1}
+                      className="px-2 py-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 font-extrabold transition-all text-sm w-7 text-center select-none"
+                      type="button"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      value={r.qty}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value) || 1;
+                        handleUpdateQty(r.variant_id, val);
+                      }}
+                      className="w-10 text-center bg-transparent border-none text-xs font-bold text-slate-700 outline-none p-0.5 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none select-none"
+                      min={1}
+                      max={1000}
+                    />
+                    <button
+                      onClick={() => handleUpdateQty(r.variant_id, r.qty + 1)}
+                      className="px-2 py-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800 font-extrabold transition-all text-sm w-7 text-center select-none"
+                      type="button"
+                    >
+                      +
+                    </button>
+                  </div>
                 )}
                 className="w-[15%]"
                 align="center"
