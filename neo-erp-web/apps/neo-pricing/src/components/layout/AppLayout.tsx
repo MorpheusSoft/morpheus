@@ -1,11 +1,60 @@
 'use client';
-import { usePathname } from 'next/navigation';
+import React from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { AppSidebar } from './AppSidebar';
 import { AppTopbar } from './AppTopbar';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [checkingAuth, setCheckingAuth] = React.useState(true);
   const isPrintPage = pathname === '/habladores/imprimir';
+
+  React.useEffect(() => {
+    if (isPrintPage) {
+      setCheckingAuth(false);
+      return;
+    }
+
+    import('@/lib/api').then(({ default: api }) => {
+      api.get('/users/me')
+        .then(res => {
+          if (res.data && res.data.active_role) {
+            const roleName = res.data.active_role.name.toLowerCase();
+            const isOperator = roleName.includes('operador') || 
+                               roleName.includes('operator') || 
+                               roleName.includes('cajero');
+
+            if (isOperator) {
+              // Cashiers/Operators can only access printing page /habladores
+              // and they CANNOT access designer /habladores/plantillas
+              const allowedPages = ['/habladores', '/habladores/imprimir'];
+              const isAllowed = allowedPages.includes(pathname || '');
+
+              if (!isAllowed) {
+                router.push('/habladores');
+                return;
+              }
+            }
+          }
+          setCheckingAuth(false);
+        })
+        .catch(err => {
+          console.error("Auth check failed:", err);
+          // If auth check fails, don't block render (let middleware handle auth redirects)
+          setCheckingAuth(false);
+        });
+    });
+  }, [pathname, isPrintPage, router]);
+
+  if (checkingAuth) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-slate-900 text-white flex-col gap-4 select-none">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-rose-500"></div>
+        <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest animate-pulse">Verificando permisos de acceso...</p>
+      </div>
+    );
+  }
 
   if (isPrintPage) {
     return <main className="flex-1 bg-white min-h-screen">{children}</main>;

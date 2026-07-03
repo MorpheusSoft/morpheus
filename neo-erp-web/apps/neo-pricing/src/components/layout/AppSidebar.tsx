@@ -40,6 +40,14 @@ export function AppSidebar() {
     { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
   ];
 
+  const isOperator = userRole.toLowerCase().includes('operador') || 
+                    userRole.toLowerCase().includes('operator') || 
+                    userRole.toLowerCase().includes('cajero');
+
+  const filteredMenuItems = isOperator 
+    ? menuItems.filter(item => item.href === '/habladores')
+    : menuItems;
+
   const isActivePath = (href: string) => {
     return pathname === href || (pathname.startsWith(href) && href !== '/');
   };
@@ -55,9 +63,11 @@ export function AppSidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto py-[24px] px-[16px] custom-scrollbar">
-        <div className="text-[11px] font-bold text-slate-500 tracking-widest uppercase mb-[16px] px-[8px]">Motor de Precios</div>
+        <div className="text-[11px] font-bold text-slate-500 tracking-widest uppercase mb-[16px] px-[8px]">
+          {isOperator ? 'Módulo de Tienda' : 'Motor de Precios'}
+        </div>
         <ul className="flex flex-col gap-[6px] mb-[32px]">
-          {menuItems.map((item) => {
+          {filteredMenuItems.map((item) => {
             const isActive = isActivePath(item.href);
             return (
               <li key={item.href}>

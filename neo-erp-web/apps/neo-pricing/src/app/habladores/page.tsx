@@ -108,8 +108,24 @@ export default function HabladoresWorkbenchPage() {
     }
   };
 
+  const [isOperator, setIsOperator] = useState(false);
+
   useEffect(() => {
     loadInitialData();
+
+    import('@/lib/api').then(({ default: api }) => {
+      api.get('/users/me')
+        .then(res => {
+          if (res.data && res.data.active_role) {
+            const roleName = res.data.active_role.name.toLowerCase();
+            const isOp = roleName.includes('operador') || 
+                         roleName.includes('operator') || 
+                         roleName.includes('cajero');
+            setIsOperator(isOp);
+          }
+        })
+        .catch(err => console.error("Error loading user in page:", err));
+    });
   }, []);
 
   // Search product handlers
@@ -418,15 +434,17 @@ export default function HabladoresWorkbenchPage() {
             Cola de impresión de etiquetas de precios. Agrega productos manualmente o desde auditorías de precios.
           </p>
         </div>
-        <div className="flex gap-2">
-          <Link href="/habladores/plantillas">
-            <Button
-              label="Configurar Plantillas"
-              icon="pi pi-cog"
-              className="!bg-white !text-indigo-600 hover:!bg-slate-50 !border-slate-200 !rounded-xl !shadow-sm font-semibold transition-all duration-200"
-            />
-          </Link>
-        </div>
+        {!isOperator && (
+          <div className="flex gap-2">
+            <Link href="/habladores/plantillas">
+              <Button
+                label="Configurar Plantillas"
+                icon="pi pi-cog"
+                className="!bg-white !text-indigo-600 hover:!bg-slate-50 !border-slate-200 !rounded-xl !shadow-sm font-semibold transition-all duration-200"
+              />
+            </Link>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
