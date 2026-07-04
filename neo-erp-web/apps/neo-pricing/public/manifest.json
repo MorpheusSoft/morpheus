@@ -9,27 +9,15 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/costos/icon.svg",
-      "sizes": "192x192",
-      "type": "image/svg+xml",
+      "src": "/costos/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/costos/icon.svg",
+      "src": "/costos/icon.png",
       "sizes": "512x512",
-      "type": "image/svg+xml",
-      "purpose": "any"
-    },
-    {
-      "src": "/costos/icon.svg",
-      "sizes": "192x192",
-      "type": "image/svg+xml",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/costos/icon.svg",
-      "sizes": "512x512",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "maskable"
     }
   ]

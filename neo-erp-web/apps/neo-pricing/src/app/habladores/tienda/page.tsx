@@ -466,14 +466,6 @@ export default function StoreKioskPrintingPage() {
             />
           </div>
 
-          {isAdmin && (
-            <Button
-              label="Volver al ERP"
-              icon="pi pi-home"
-              className="!text-slate-300 hover:!text-white hover:!bg-slate-800 !bg-transparent !border-slate-700 !rounded-xl !px-3 font-semibold text-xs py-2 transition-all duration-200 mt-4 sm:mt-0"
-              onClick={() => router.push('/')}
-            />
-          )}
         </div>
       </div>
 
