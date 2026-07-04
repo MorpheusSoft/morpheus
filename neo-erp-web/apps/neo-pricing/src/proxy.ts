@@ -12,8 +12,7 @@ export default function proxy(request: NextRequest) {
     const loginBase = isProd ? 'https://hub.qa.morpheussoft.net/login' : 'http://localhost:4000/login';
     
     // Anexar la ruta actual completa como callbackUrl usando el host real
-    const protocol = isProd ? 'https' : request.nextUrl.protocol.replace(':', '');
-    const realUrl = `${protocol}://${host}${request.nextUrl.pathname}${request.nextUrl.search}`;
+    const realUrl = isProd ? request.url.replace('http:', 'https:') : request.url;
     const currentUrl = encodeURIComponent(realUrl);
     
     return NextResponse.redirect(`${loginBase}?callbackUrl=${currentUrl}`);
