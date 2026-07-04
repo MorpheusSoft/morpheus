@@ -7,6 +7,8 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Pass-through so Chrome sees active network events
-  event.respondWith(fetch(event.request));
+  // Only intercept http and https protocols to prevent runtime errors with extensions or chrome-extension://
+  if (event.request.url.startsWith('http') || event.request.url.startsWith('https')) {
+    event.respondWith(fetch(event.request));
+  }
 });

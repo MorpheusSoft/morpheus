@@ -31,6 +31,11 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        <link rel="manifest" href="/costos/manifest.json" />
+        <meta name="theme-color" content="#f43f5e" />
+        <link rel="apple-touch-icon" href="/costos/icon-192.png" />
+      </head>
       <body className="min-h-full flex flex-col bg-slate-50 text-slate-900 m-0 p-0">
         <Providers>
           <AppLayout>{children}</AppLayout>
