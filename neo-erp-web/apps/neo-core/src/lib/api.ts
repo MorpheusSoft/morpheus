@@ -38,9 +38,10 @@ api.interceptors.response.use(
         const domain = isProd ? 'domain=.morpheussoft.net;' : '';
         document.cookie = `access_token=; Max-Age=0; path=/; ${domain}`;
         
+        const currentUrl = window.location.href;
         const loginUrl = isProd 
-          ? 'https://hub.qa.morpheussoft.net/login' 
-          : 'http://localhost:4000/login';
+          ? `https://hub.qa.morpheussoft.net/login?callbackUrl=${encodeURIComponent(currentUrl)}` 
+          : `http://localhost:4000/login?callbackUrl=${encodeURIComponent(currentUrl)}`;
           
         window.location.href = loginUrl;
       }
