@@ -40,7 +40,14 @@ def attach_calculated_fields(session: PricingSession, db: Session):
             target_utility = float(fp.target_utility_pct or 0)
             line.suggested_margin = target_utility
             
-            cost = float(line.proposed_cost or 0)
+            is_replacement = (session.target_cost_type == 'REPLACEMENT')
+            if is_replacement:
+                cost = float(line.proposed_replacement_cost or 0)
+                old_c = float(line.old_replacement_cost or 0)
+            else:
+                cost = float(line.proposed_cost or 0)
+                old_c = float(line.old_cost or 0)
+
             if utility_calc_method == 'MARGIN_ON_SALES':
                 if target_utility < 100:
                     line.suggested_price = cost / (1.0 - target_utility / 100.0)
@@ -48,14 +55,12 @@ def attach_calculated_fields(session: PricingSession, db: Session):
                     line.suggested_price = cost
                 
                 old_p = float(line.old_price or 0)
-                old_c = float(line.old_cost or 0)
                 if old_p > 0:
                     line.current_margin = (old_p - old_c) / old_p * 100.0
             else: # MARKUP_ON_COST
                 line.suggested_price = cost * (1.0 + target_utility / 100.0)
                 
                 old_p = float(line.old_price or 0)
-                old_c = float(line.old_cost or 0)
                 if old_c > 0:
                     line.current_margin = (old_p - old_c) / old_c * 100.0
 
