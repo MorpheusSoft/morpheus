@@ -341,7 +341,7 @@ def upload_csv_to_session(
     
     if api_key:
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             
             prompt = (
                 "Eres un asistente de procesamiento de datos experto para Neo ERP.\n"
@@ -694,7 +694,7 @@ def upload_pdf_to_session(
         
         if api_key:
             try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
                 
                 prompt = (
                     "Eres un asistente de procesamiento de datos experto para Neo ERP.\n"
