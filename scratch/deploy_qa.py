@@ -23,7 +23,7 @@ cmds = [
     "cd ~/Morpheus && git pull origin main",
     "cd ~/Morpheus/backend && .venv/bin/pip install -r requirements.txt",
     "cd ~/Morpheus/neo-erp-web && npm run build",
-    "pm2 restart costos hub-core compras inventario logistica",
+    "pm2 restart costos hub-core compras inventario logistica neo-api",
     "pm2 status"
 ]
 
