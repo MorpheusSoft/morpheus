@@ -75,6 +75,7 @@ export default function KioskConsultorPage() {
 
   // Sound beep ref
   const beepGenerated = useRef<boolean>(false);
+  const scannerRef = useRef<any>(null);
 
   // Global error handler to swallow camera/scanner/html5-qrcode uncaught errors
   useEffect(() => {
@@ -259,15 +260,18 @@ export default function KioskConsultorPage() {
         const { Html5Qrcode } = await import('html5-qrcode');
         
         // Clean up any existing scanner reference to avoid duplication
-        if (html5QrcodeScanner) {
+        if (scannerRef.current) {
           try {
-            await html5QrcodeScanner.stop();
+            await scannerRef.current.stop();
           } catch (e) {
             // ignore
           }
+          scannerRef.current = null;
+          setHtml5QrcodeScanner(null);
         }
 
         const scanner = new Html5Qrcode("reader");
+        scannerRef.current = scanner;
         setHtml5QrcodeScanner(scanner);
 
         const config = {
@@ -285,19 +289,23 @@ export default function KioskConsultorPage() {
             searchProduct(decodedText);
             
             // Stop scanning asynchronously in background
-            scanner.stop().then(() => {
+            if (scannerRef.current) {
+              const currentScanner = scannerRef.current;
+              scannerRef.current = null;
               setHtml5QrcodeScanner(null);
-              // Delay hiding container to allow library to finish cleanup and release tracks safely
-              setTimeout(() => {
-                setScannerActive(false);
-              }, 300);
-            }).catch(err => {
-              console.error("Error stopping scanner asynchronously:", err);
-              setHtml5QrcodeScanner(null);
-              setTimeout(() => {
-                setScannerActive(false);
-              }, 300);
-            });
+              
+              currentScanner.stop().then(() => {
+                // Delay hiding container to allow library to finish cleanup and release tracks safely
+                setTimeout(() => {
+                  setScannerActive(false);
+                }, 300);
+              }).catch((err: any) => {
+                console.error("Error stopping scanner asynchronously:", err);
+                setTimeout(() => {
+                  setScannerActive(false);
+                }, 300);
+              });
+            }
           },
           (errorMessage) => {
             // ignore scan errors
@@ -314,12 +322,13 @@ export default function KioskConsultorPage() {
 
   // Stop scanning camera
   const stopScanner = async () => {
-    if (html5QrcodeScanner) {
+    if (scannerRef.current) {
       try {
-        await html5QrcodeScanner.stop();
+        await scannerRef.current.stop();
       } catch (e) {
         console.error("Error stopping scanner:", e);
       }
+      scannerRef.current = null;
       setHtml5QrcodeScanner(null);
     }
     // Delay hiding container to allow library to release resource
@@ -392,11 +401,11 @@ export default function KioskConsultorPage() {
   // Cleanup scanner on unmount
   useEffect(() => {
     return () => {
-      if (html5QrcodeScanner) {
-        html5QrcodeScanner.stop().catch(console.error);
+      if (scannerRef.current) {
+        scannerRef.current.stop().catch(console.error);
       }
     };
-  }, [html5QrcodeScanner]);
+  }, []);
 
   // Margin calculation indicator styles
   const isMarginAlert = (margin: number) => margin < 15;
