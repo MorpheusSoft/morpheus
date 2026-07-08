@@ -85,11 +85,15 @@ export default function KioskConsultorPage() {
         setFacilities(facList);
         
         // Cache facility id
-        const cached = localStorage.getItem('morpheus_kiosk_facility_id');
-        if (cached) {
-          setSelectedFacilityId(Number(cached));
-        } else if (facList.length > 0) {
-          setSelectedFacilityId(facList[0].id);
+        try {
+          const cached = localStorage.getItem('morpheus_kiosk_facility_id');
+          if (cached) {
+            setSelectedFacilityId(Number(cached));
+          } else if (facList.length > 0) {
+            setSelectedFacilityId(facList[0].id);
+          }
+        } catch (e) {
+          console.error("localStorage access failed:", e);
         }
       })
       .catch(err => console.error("Error loading facilities:", err));
@@ -114,18 +118,22 @@ export default function KioskConsultorPage() {
       });
 
     // Load local history
-    const cachedHistory = localStorage.getItem('morpheus_scan_history');
-    if (cachedHistory) {
-      try {
+    try {
+      const cachedHistory = localStorage.getItem('morpheus_scan_history');
+      if (cachedHistory) {
         const parsed = JSON.parse(cachedHistory);
         if (Array.isArray(parsed) && parsed.every(p => p && p.sku && p.prices)) {
           setHistory(parsed);
         } else {
           localStorage.removeItem('morpheus_scan_history');
         }
-      } catch (e) {
-        console.error(e);
+      }
+    } catch (e) {
+      console.error("Failed to load history:", e);
+      try {
         localStorage.removeItem('morpheus_scan_history');
+      } catch (ex) {
+        // ignore
       }
     }
   }, []);
@@ -137,7 +145,11 @@ export default function KioskConsultorPage() {
       const arr = Array.isArray(prev) ? prev : [];
       const filtered = arr.filter(p => p && p.sku && p.sku !== product.sku);
       const newHist = [product, ...filtered].slice(0, 5);
-      localStorage.setItem('morpheus_scan_history', JSON.stringify(newHist));
+      try {
+        localStorage.setItem('morpheus_scan_history', JSON.stringify(newHist));
+      } catch (e) {
+        console.error("Failed to save history to localStorage:", e);
+      }
       return newHist;
     });
   };
@@ -145,7 +157,11 @@ export default function KioskConsultorPage() {
   // Clear history helper
   const clearHistory = () => {
     setHistory([]);
-    localStorage.removeItem('morpheus_scan_history');
+    try {
+      localStorage.removeItem('morpheus_scan_history');
+    } catch (e) {
+      console.error("Failed to clear localStorage:", e);
+    }
   };
 
   // Load cameras lists when scanner is requested
@@ -286,11 +302,12 @@ export default function KioskConsultorPage() {
       console.error("Error searching product:", err);
       const status = err.response?.status;
       const detail = err.response?.data?.detail;
+      const detailStr = typeof detail === 'string' ? detail : (detail ? JSON.stringify(detail) : '');
       
-      if (status === 404 || (detail && detail.toLowerCase().includes("not found"))) {
+      if (status === 404 || detailStr.toLowerCase().includes("not found")) {
         setErrorMsg(`Producto con código "${code}" no encontrado.`);
       } else {
-        setErrorMsg(detail || "Error al consultar el producto. Verifique su conexión.");
+        setErrorMsg(detailStr || "Error al consultar el producto. Verifique su conexión.");
       }
     } finally {
       setSearching(false);
@@ -518,7 +535,7 @@ export default function KioskConsultorPage() {
 
             {/* PRECIOS Y OFERTAS (PVP) */}
             <div className="p-5 rounded-3xl bg-slate-900/50 border border-slate-800/80 shadow-lg backdrop-blur-md relative overflow-hidden">
-              {scannedProduct.prices.has_promo && (
+              {scannedProduct.prices?.has_promo && (
                 <div className="absolute top-0 right-0 bg-gradient-to-l from-amber-500 to-amber-600 text-slate-950 font-black text-[9px] px-3.5 py-1 rounded-bl-2xl uppercase tracking-wider flex items-center gap-1 shadow-sm">
                   <span className="flex h-1.5 w-1.5 relative">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-slate-950 opacity-75"></span>
@@ -531,30 +548,30 @@ export default function KioskConsultorPage() {
               <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block mb-3">Precio al Público</span>
               
               <div className="flex flex-col gap-4">
-                {scannedProduct.prices.has_promo ? (
+                {scannedProduct.prices?.has_promo ? (
                   <>
                     {/* Oferta Prices */}
                     <div>
                       <div className="flex items-baseline gap-1.5 text-amber-400">
-                        <span className="text-3xl font-black">${(scannedProduct.prices.promo_price_usd ?? 0).toFixed(2)}</span>
+                        <span className="text-3xl font-black">${(scannedProduct.prices?.promo_price_usd ?? 0).toFixed(2)}</span>
                         <span className="text-xs font-bold">USD</span>
                       </div>
                       <div className="text-sm font-bold text-amber-500/90 mt-0.5">
-                        Bs. {(scannedProduct.prices.promo_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        Bs. {(scannedProduct.prices?.promo_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
                     </div>
                     {/* Regular Price (Strikeout) */}
                     <div className="pt-2.5 border-t border-slate-800/60 flex items-center justify-between text-xs">
                       <span className="text-slate-500 font-medium">Precio Regular:</span>
                       <div className="text-right text-slate-400">
-                        <span className="line-through font-bold">${(scannedProduct.prices.regular_price_usd ?? 0).toFixed(2)} USD</span>
+                        <span className="line-through font-bold">${(scannedProduct.prices?.regular_price_usd ?? 0).toFixed(2)} USD</span>
                         <span className="block text-[10px] text-slate-500 line-through">
-                          Bs. {(scannedProduct.prices.regular_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          Bs. {(scannedProduct.prices?.regular_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
                     </div>
                     {/* Expiration date */}
-                    {scannedProduct.prices.promo_ends_at && (
+                    {scannedProduct.prices?.promo_ends_at && (
                       <div className="mt-2 text-[9px] font-bold text-slate-400 bg-slate-800/40 p-2 rounded-xl border border-slate-800/30 flex items-center gap-1.5 justify-center">
                         <i className="pi pi-calendar-times text-slate-500 text-[10px]" />
                         <span>Oferta válida hasta el: <strong className="text-amber-400">{formatDate(scannedProduct.prices.promo_ends_at)}</strong></span>
@@ -566,11 +583,11 @@ export default function KioskConsultorPage() {
                     {/* Regular Price */}
                     <div>
                       <div className="flex items-baseline gap-1.5 text-emerald-400">
-                        <span className="text-3xl font-black">${(scannedProduct.prices.regular_price_usd ?? 0).toFixed(2)}</span>
+                        <span className="text-3xl font-black">${(scannedProduct.prices?.regular_price_usd ?? 0).toFixed(2)}</span>
                         <span className="text-xs font-bold">USD</span>
                       </div>
                       <div className="text-sm font-bold text-emerald-500/90 mt-0.5">
-                        Bs. {(scannedProduct.prices.regular_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        Bs. {(scannedProduct.prices?.regular_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
                     </div>
                   </>
@@ -583,12 +600,12 @@ export default function KioskConsultorPage() {
               <div className="flex justify-between items-center mb-3">
                 <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Existencias en Tiendas</span>
                 <span className="text-[10px] font-black bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-full">
-                  Total: {scannedProduct.stock.total_consolidated}
+                  Total: {scannedProduct.stock?.total_consolidated ?? 0}
                 </span>
               </div>
 
               <div className="flex flex-col gap-2.5">
-                {scannedProduct.stock.by_facility.map((fac) => (
+                {(scannedProduct.stock?.by_facility || []).map((fac) => (
                   <div
                     key={fac.facility_id}
                     className="flex justify-between items-center p-2.5 rounded-2xl bg-slate-950/40 border border-slate-850/60"
@@ -618,7 +635,7 @@ export default function KioskConsultorPage() {
             {/* COSTOS Y MARGENES (CONDITIONAL ROLE ROLE_GERENCIA) */}
             {showCosts && (
               <div className={`p-5 rounded-3xl bg-slate-900/50 border shadow-lg backdrop-blur-md transition-colors ${
-                isMarginAlert(scannedProduct.prices.has_promo ? scannedProduct.margins.promo_margin_pct : scannedProduct.margins.regular_margin_pct)
+                isMarginAlert(scannedProduct.prices?.has_promo ? (scannedProduct.margins?.promo_margin_pct ?? 0) : (scannedProduct.margins?.regular_margin_pct ?? 0))
                   ? 'border-rose-500/40 bg-gradient-to-b from-slate-900/50 to-rose-950/10'
                   : 'border-slate-800/80'
               }`}>
@@ -630,15 +647,15 @@ export default function KioskConsultorPage() {
                 <div className="grid grid-cols-3 gap-2.5 mb-4">
                   <div className="bg-slate-950/60 border border-slate-850 p-2.5 rounded-2xl text-center">
                     <span className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Costo Reposición</span>
-                    <strong className="text-xs font-bold text-white">${(scannedProduct.costs.replacement_cost ?? 0).toFixed(2)}</strong>
+                    <strong className="text-xs font-bold text-white">${(scannedProduct.costs?.replacement_cost ?? 0).toFixed(2)}</strong>
                   </div>
                   <div className="bg-slate-950/60 border border-slate-850 p-2.5 rounded-2xl text-center">
                     <span className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Costo Promedio</span>
-                    <strong className="text-xs font-bold text-white">${(scannedProduct.costs.average_cost ?? 0).toFixed(2)}</strong>
+                    <strong className="text-xs font-bold text-white">${(scannedProduct.costs?.average_cost ?? 0).toFixed(2)}</strong>
                   </div>
                   <div className="bg-slate-950/60 border border-slate-850 p-2.5 rounded-2xl text-center">
                     <span className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Costo Estándar</span>
-                    <strong className="text-xs font-bold text-white">${(scannedProduct.costs.standard_cost ?? 0).toFixed(2)}</strong>
+                    <strong className="text-xs font-bold text-white">${(scannedProduct.costs?.standard_cost ?? 0).toFixed(2)}</strong>
                   </div>
                 </div>
 
@@ -646,23 +663,23 @@ export default function KioskConsultorPage() {
                 <div className="p-3 rounded-2xl bg-slate-950/50 border border-slate-850 flex flex-col gap-2.5">
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-slate-400">Margen Regular:</span>
-                    <span className={`font-black ${isMarginAlert(scannedProduct.margins.regular_margin_pct) ? 'text-rose-400' : 'text-emerald-400'}`}>
-                      {scannedProduct.margins.regular_margin_pct}%
+                    <span className={`font-black ${isMarginAlert(scannedProduct.margins?.regular_margin_pct ?? 0) ? 'text-rose-400' : 'text-emerald-400'}`}>
+                      {scannedProduct.margins?.regular_margin_pct ?? 0}%
                     </span>
                   </div>
                   
-                  {scannedProduct.prices.has_promo && (
+                  {scannedProduct.prices?.has_promo && (
                     <div className="flex justify-between items-center text-xs border-t border-slate-800/80 pt-2">
                       <span className="text-slate-400">Margen de Oferta:</span>
-                      <span className={`font-black ${isMarginAlert(scannedProduct.margins.promo_margin_pct) ? 'text-rose-400' : 'text-emerald-400'}`}>
-                        {scannedProduct.margins.promo_margin_pct}%
+                      <span className={`font-black ${isMarginAlert(scannedProduct.margins?.promo_margin_pct ?? 0) ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        {scannedProduct.margins?.promo_margin_pct ?? 0}%
                       </span>
                     </div>
                   )}
                 </div>
 
                 {/* Alert threshold banner */}
-                {isMarginAlert(scannedProduct.prices.has_promo ? scannedProduct.margins.promo_margin_pct : scannedProduct.margins.regular_margin_pct) && (
+                {isMarginAlert(scannedProduct.prices?.has_promo ? (scannedProduct.margins?.promo_margin_pct ?? 0) : (scannedProduct.margins?.regular_margin_pct ?? 0)) && (
                   <div className="mt-3.5 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[10px] font-bold flex items-center gap-2">
                     <i className="pi pi-exclamation-triangle text-rose-400 text-xs animate-bounce" />
                     <span>ALERTA: Margen neto real por debajo del límite de seguridad (15%)</span>
