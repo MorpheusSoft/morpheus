@@ -221,13 +221,19 @@ export default function KioskConsultorPage() {
             playBeep();
             // Automatically stop scanning and search
             scanner.stop().then(() => {
-              setScannerActive(false);
               setHtml5QrcodeScanner(null);
               searchProduct(decodedText);
+              // Delay hiding container to allow library to finish cleanup and release tracks safely
+              setTimeout(() => {
+                setScannerActive(false);
+              }, 300);
             }).catch(err => {
               console.error("Error stopping scanner:", err);
               setHtml5QrcodeScanner(null);
               searchProduct(decodedText);
+              setTimeout(() => {
+                setScannerActive(false);
+              }, 300);
             });
           },
           (errorMessage) => {
@@ -253,7 +259,10 @@ export default function KioskConsultorPage() {
       }
       setHtml5QrcodeScanner(null);
     }
-    setScannerActive(false);
+    // Delay hiding container to allow library to release resource
+    setTimeout(() => {
+      setScannerActive(false);
+    }, 300);
   };
 
   // Perform search query to backend
@@ -266,7 +275,7 @@ export default function KioskConsultorPage() {
     try {
       const response = await api.get(`/products/by-code/${encodeURIComponent(code.trim())}?facility_id=${selectedFacilityId}`);
       const product = response.data;
-      if (!product) {
+      if (!product || typeof product !== 'object' || !product.sku || !product.prices) {
         setErrorMsg(`Producto con código "${code}" no encontrado.`);
       } else {
         setScannedProduct(product);
