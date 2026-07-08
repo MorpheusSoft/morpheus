@@ -707,62 +707,92 @@ def upload_pdf_to_session(
         
         if api_key:
             try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-                
-                prompt = (
-                    "Eres un asistente de procesamiento de datos experto para Neo ERP.\n"
-                    "Tu tarea es analizar el siguiente texto de una lista de precios o factura de un proveedor y extraer todos los productos de forma estructurada.\n\n"
-                    "Identifica las columnas de la tabla de productos. Para cada producto, extrae los siguientes campos:\n"
-                    "1. `supplier_sku`: Código del producto asignado por el proveedor o código de referencia principal (ej. BE0328). Si no hay, colócalo como null.\n"
-                    "2. `barcode`: Código de barras numérico del producto (ej. 5000267024233). Si no tiene, colócalo como null.\n"
-                    "3. `description`: Descripción o nombre del producto (ej. WHISKY JOHNNIE WALKER GOLD LABEL RESERVE).\n"
-                    "4. `cost`: Costo de adquisición unitario. Si la lista presenta precios por caja/empaque (UMD > 1) y costos por empaque, divide el costo por la cantidad para obtener el costo unitario. El costo de adquisición debe incluir los impuestos especiales no recuperables (como impuestos de licores), pero excluir el IVA. Si el formato tiene BASE e IMP (Impuesto especial), súmalos para obtener el costo unitario de adquisición.\n"
-                    "5. `suggested_price`: Precio de venta sugerido (PVP) al cliente final (incluyendo impuestos si está disponible, ej. 36.00). Si no se proporciona, colócalo como null.\n\n"
-                    "Retorna ÚNICAMENTE un JSON válido (un arreglo de objetos) con la siguiente estructura exacta, sin bloques markdown ni formateos adicionales (directamente el JSON):\n"
-                    "[\n"
-                    "  {\n"
-                    "    \"supplier_sku\": \"string o null\",\n"
-                    "    \"barcode\": \"string o null\",\n"
-                    "    \"description\": \"string\",\n"
-                    "    \"cost\": float,\n"
-                    "    \"suggested_price\": float o null\n"
-                    "  }\n"
-                    "]\n\n"
-                    f"A continuación, el texto extraído del archivo:\n{extracted_text}"
-                )
-
-                payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"responseMimeType": "application/json"}
-                }
-
+                import concurrent.futures
                 import urllib.request
                 import json
                 import urllib.error
                 import time
 
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        req = urllib.request.Request(
-                            url,
-                            data=json.dumps(payload).encode('utf-8'),
-                            headers={"Content-Type": "application/json"},
-                            method="POST"
-                        )
-                        with urllib.request.urlopen(req, timeout=120) as response:
-                            res_data = json.loads(response.read().decode('utf-8'))
-                            text_content = res_data['candidates'][0]['content']['parts'][0]['text']
-                            parsed_items = json.loads(text_content.strip())
-                            gemini_success = True
-                            break
-                    except urllib.error.HTTPError as he:
-                        if he.code in (429, 503) and attempt < max_retries - 1:
-                            wait_time = (attempt + 1) * 3
-                            print(f"Gemini API returned {he.code}. Retrying in {wait_time}s...")
-                            time.sleep(wait_time)
-                        else:
-                            raise he
+                lines = extracted_text.splitlines()
+                chunks = []
+                for i in range(0, len(lines), 100):
+                    chunk_text = "\n".join(lines[i:i+100])
+                    if chunk_text.strip():
+                        chunks.append(chunk_text)
+
+                def process_chunk(chunk_text: str) -> List[dict]:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+                    prompt = (
+                        "Eres un asistente de procesamiento de datos experto para Neo ERP.\n"
+                        "Tu tarea es analizar el siguiente texto de una lista de precios o factura de un proveedor y extraer todos los productos de forma estructurada.\n\n"
+                        "Identifica las columnas de la tabla de productos. Para cada producto, extrae los siguientes campos:\n"
+                        "1. `supplier_sku`: Código del producto asignado por el proveedor o código de referencia principal (ej. BE0328). Si no hay, colócalo como null.\n"
+                        "2. `barcode`: Código de barras numérico del producto (ej. 5000267024233). Si no tiene, colócalo como null.\n"
+                        "3. `description`: Descripción o nombre del producto (ej. WHISKY JOHNNIE WALKER GOLD LABEL RESERVE).\n"
+                        "4. `cost`: Costo de adquisición unitario. Si la lista presenta precios por caja/empaque (UMD > 1) y costos por empaque, divide el costo por la cantidad para obtener el costo unitario. El costo de adquisición debe incluir los impuestos especiales no recuperables (como impuestos de licores), pero excluir el IVA. Si el formato tiene BASE e IMP (Impuesto especial), súmalos para obtener el costo unitario de adquisición.\n"
+                        "5. `suggested_price`: Precio de venta sugerido (PVP) al cliente final (incluyendo impuestos si está disponible, ej. 36.00). Si no se proporciona, colócalo como null.\n\n"
+                        "Retorna ÚNICAMENTE un JSON válido (un arreglo de objetos) con la siguiente estructura exacta, sin bloques markdown ni formateos adicionales (directamente el JSON):\n"
+                        "[\n"
+                        "  {\n"
+                        "    \"supplier_sku\": \"string o null\",\n"
+                        "    \"barcode\": \"string o null\",\n"
+                        "    \"description\": \"string\",\n"
+                        "    \"cost\": float,\n"
+                        "    \"suggested_price\": float o null\n"
+                        "  }\n"
+                        "]\n\n"
+                        f"A continuación, el texto extraído del archivo:\n{chunk_text}"
+                    )
+
+                    payload = {
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"responseMimeType": "application/json"}
+                    }
+
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            req = urllib.request.Request(
+                                url,
+                                data=json.dumps(payload).encode('utf-8'),
+                                headers={"Content-Type": "application/json"},
+                                method="POST"
+                            )
+                            with urllib.request.urlopen(req, timeout=120) as response:
+                                res_data = json.loads(response.read().decode('utf-8'))
+                                text_content = res_data['candidates'][0]['content']['parts'][0]['text'].strip()
+                                
+                                # Clean markdown code block if present
+                                if text_content.startswith("```"):
+                                    lines_c = text_content.splitlines()
+                                    if lines_c[0].startswith("```"):
+                                        lines_c = lines_c[1:]
+                                    if lines_c and lines_c[-1].startswith("```"):
+                                        lines_c = lines_c[:-1]
+                                    text_content = "\n".join(lines_c).strip()
+
+                                parsed_chunk_items = json.loads(text_content)
+                                if isinstance(parsed_chunk_items, list):
+                                    return parsed_chunk_items
+                                else:
+                                    print(f"Warning: Gemini did not return a list for chunk: {parsed_chunk_items}")
+                                    return []
+                        except urllib.error.HTTPError as he:
+                            if he.code in (429, 503) and attempt < max_retries - 1:
+                                wait_time = (attempt + 1) * 3
+                                print(f"Gemini API returned {he.code}. Retrying in {wait_time}s...")
+                                time.sleep(wait_time)
+                            else:
+                                raise he
+                    raise Exception("Failed to process chunk")
+
+                if chunks:
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        results = executor.map(process_chunk, chunks)
+                        for chunk_result in results:
+                            if chunk_result:
+                                parsed_items.extend(chunk_result)
+                    gemini_success = True
             except Exception as e:
                 print(f"Error calling Gemini: {e}. Fallback to local regex parser.")
         
