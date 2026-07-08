@@ -290,19 +290,16 @@ export default function KioskConsultorPage() {
         const config = {
           fps: 15,
           qrbox: { width: 280, height: 140 }, // optimized for barcodes
-          aspectRatio: 1.333333
-        };
-
-        const videoConstraints = {
-          deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
-          facingMode: selectedCameraId ? undefined : "environment",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          advanced: [{ focusMode: "continuous" }]
+          aspectRatio: 1.333333,
+          videoConstraints: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            advanced: [{ focusMode: "continuous" }] as any
+          }
         };
 
         await scanner.start(
-          videoConstraints as any,
+          selectedCameraId || { facingMode: "environment" },
           config,
           (decodedText) => {
             playBeep();
