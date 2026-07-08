@@ -180,6 +180,7 @@ export default function KioskConsultorPage() {
   // Start scanning camera
   const startScanner = async () => {
     setErrorMsg('');
+    setScannerActive(true);
     await loadCameras();
     
     // Ensure element reader is ready in DOM
