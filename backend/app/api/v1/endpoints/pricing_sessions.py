@@ -635,19 +635,56 @@ def upload_pdf_to_session(
     if session.status != 'DRAFT':
         raise HTTPException(status_code=400, detail="Solamente puedes importar a borradores (DRAFT)")
 
-    # Guardar archivo PDF temporalmente
-    suffix = os.path.splitext(file.filename)[1]
+    # Guardar archivo temporalmente
+    suffix = os.path.splitext(file.filename)[1].lower()
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(file.file.read())
         tmp_path = tmp.name
 
+    extracted_text = ""
     try:
-        # Extraer texto plano con pdftotext -layout
-        result = subprocess.run(['pdftotext', '-layout', tmp_path, '-'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if result.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"Error al procesar PDF con pdftotext: {result.stderr}")
-        
-        pdf_text = result.stdout
+        if suffix in ('.xlsx', '.xls'):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(tmp_path, data_only=True)
+                sheet = wb.active
+                lines = []
+                for row_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+                    if row_idx > 500:
+                        break
+                    row_vals = [str(cell).strip() if cell is not None else "" for cell in row]
+                    if any(row_vals):
+                        lines.append(" | ".join(row_vals))
+                extracted_text = "\n".join(lines)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No se pudo procesar el archivo Excel: {str(e)}"
+                )
+        else:
+            # Intentar extraer texto plano con pdftotext -layout
+            try:
+                result = subprocess.run(['pdftotext', '-layout', tmp_path, '-'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if result.returncode == 0:
+                    extracted_text = result.stdout
+                else:
+                    raise FileNotFoundError("pdftotext execution failed")
+            except (FileNotFoundError, Exception):
+                # Fallback a pypdf
+                try:
+                    import pypdf
+                    reader = pypdf.PdfReader(tmp_path)
+                    pages_text = []
+                    for page in reader.pages:
+                        t = page.extract_text()
+                        if t:
+                            pages_text.append(t)
+                    extracted_text = "\n".join(pages_text)
+                except Exception as py_err:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Error al procesar PDF (pdftotext y fallback de pypdf fallaron): {str(py_err)}"
+                    )
         
         # Intentar parsear usando Gemini
         parsed_items = []
@@ -678,7 +715,7 @@ def upload_pdf_to_session(
                     "    \"suggested_price\": float o null\n"
                     "  }\n"
                     "]\n\n"
-                    f"A continuación, el texto extraído del archivo:\n{pdf_text}"
+                    f"A continuación, el texto extraído del archivo:\n{extracted_text}"
                 )
 
                 payload = {
@@ -716,7 +753,7 @@ def upload_pdf_to_session(
                 + r'\s+'.join([price_pattern] * 8)
             )
             pattern = re.compile(regex_str)
-            for line in pdf_text.split('\n'):
+            for line in extracted_text.split('\n'):
                 striped = line.strip()
                 if not striped or not re.match(r'^\s*BE\d+', line):
                     continue

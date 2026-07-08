@@ -13,3 +13,6 @@ python-jose[cryptography]
 Pillow
 fpdf
 bcrypt==3.2.2
+openpyxl
+pypdf
+

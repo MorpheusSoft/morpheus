@@ -952,7 +952,7 @@ export default function PricingValidationBoardPage() {
                    />
                    <input 
                      type="file" 
-                     accept={session?.source_type === 'AI_PDF_PARSER' ? ".pdf,image/*" : ".csv"} 
+                     accept={session?.source_type === 'AI_PDF_PARSER' ? ".pdf,image/*,.xlsx,.xls" : ".csv"} 
                      onChange={session?.source_type === 'AI_PDF_PARSER' ? handleUploadPdf : handleUploadCsv} 
                      className="absolute left-0 top-0 opacity-0 cursor-pointer w-full h-full" 
                    />
