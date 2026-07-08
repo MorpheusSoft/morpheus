@@ -187,6 +187,16 @@ export default function KioskConsultorPage() {
     setTimeout(async () => {
       try {
         const { Html5Qrcode } = await import('html5-qrcode');
+        
+        // Clean up any existing scanner reference to avoid duplication
+        if (html5QrcodeScanner) {
+          try {
+            await html5QrcodeScanner.stop();
+          } catch (e) {
+            // ignore
+          }
+        }
+
         const scanner = new Html5Qrcode("reader");
         setHtml5QrcodeScanner(scanner);
 
@@ -204,9 +214,11 @@ export default function KioskConsultorPage() {
             // Automatically stop scanning and search
             scanner.stop().then(() => {
               setScannerActive(false);
+              setHtml5QrcodeScanner(null);
               searchProduct(decodedText);
             }).catch(err => {
               console.error("Error stopping scanner:", err);
+              setHtml5QrcodeScanner(null);
               searchProduct(decodedText);
             });
           },
@@ -246,16 +258,23 @@ export default function KioskConsultorPage() {
     try {
       const response = await api.get(`/products/by-code/${encodeURIComponent(code.trim())}?facility_id=${selectedFacilityId}`);
       const product = response.data;
-      setScannedProduct(product);
-      updateHistory(product);
-      setCodeQuery('');
+      if (!product) {
+        setErrorMsg(`Producto con código "${code}" no encontrado.`);
+      } else {
+        setScannedProduct(product);
+        updateHistory(product);
+        setCodeQuery('');
+      }
     } catch (err: any) {
-      console.error(err);
-      setErrorMsg(
-        err.response?.status === 404 
-          ? `Producto con código "${code}" no encontrado.` 
-          : "Error al consultar el producto. Verifique su conexión."
-      );
+      console.error("Error searching product:", err);
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
+      
+      if (status === 404 || (detail && detail.toLowerCase().includes("not found"))) {
+        setErrorMsg(`Producto con código "${code}" no encontrado.`);
+      } else {
+        setErrorMsg(detail || "Error al consultar el producto. Verifique su conexión.");
+      }
     } finally {
       setSearching(false);
     }
@@ -353,67 +372,67 @@ export default function KioskConsultorPage() {
 
         {/* SCANNER CONTAINER */}
         <div className="w-full flex flex-col items-center">
-          {scannerActive ? (
-            <div className="w-full flex flex-col gap-3">
-              <div className="relative rounded-3xl overflow-hidden border border-rose-500/30 bg-slate-900/60 p-1 shadow-2xl">
-                {/* Laser scan target indicator */}
-                <div className="absolute inset-0 pointer-events-none z-10 flex flex-col justify-center items-center">
-                  <div className="w-72 h-36 border-2 border-dashed border-rose-500/60 rounded-xl relative">
-                    <div className="absolute top-1/2 left-4 right-4 h-0.5 bg-rose-500 shadow-[0_0_10px_#f43f5e] animate-pulse" />
-                  </div>
-                  <span className="text-[10px] uppercase font-bold tracking-widest text-rose-400 bg-slate-950/80 px-2 py-0.5 rounded-full mt-2">
-                    Alinee código de barras
-                  </span>
+          {/* Always mount scanner wrapper but control visibility via CSS to prevent unmounting crashes */}
+          <div className={`w-full flex flex-col gap-3 ${scannerActive ? 'block' : 'hidden'}`}>
+            <div className="relative rounded-3xl overflow-hidden border border-rose-500/30 bg-slate-900/60 p-1 shadow-2xl">
+              {/* Laser scan target indicator */}
+              <div className="absolute inset-0 pointer-events-none z-10 flex flex-col justify-center items-center">
+                <div className="w-72 h-36 border-2 border-dashed border-rose-500/60 rounded-xl relative">
+                  <div className="absolute top-1/2 left-4 right-4 h-0.5 bg-rose-500 shadow-[0_0_10px_#f43f5e] animate-pulse" />
                 </div>
-
-                <div id="reader" className="w-full rounded-2xl overflow-hidden bg-slate-950 aspect-[4/3]" />
-              </div>
-
-              <div className="flex gap-2">
-                {/* Camera selector if multiple */}
-                {cameras.length > 1 && (
-                  <select
-                    value={selectedCameraId}
-                    onChange={(e) => {
-                      setSelectedCameraId(e.target.value);
-                      stopScanner().then(() => startScanner());
-                    }}
-                    className="flex-1 bg-slate-900 border border-slate-800 text-slate-300 text-xs rounded-xl p-2.5 outline-none font-medium"
-                  >
-                    {cameras.map((c, i) => (
-                      <option key={c.id} value={c.id}>
-                        Cámara {i + 1}: {c.label || 'Principal'}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                
-                <button
-                  onClick={stopScanner}
-                  className="flex-1 bg-slate-900 hover:bg-slate-850 border border-slate-850 hover:border-slate-800 text-slate-300 text-xs font-bold py-2.5 rounded-xl transition-all"
-                >
-                  Detener Escáner
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={startScanner}
-              className="w-full py-8 px-6 rounded-3xl bg-gradient-to-br from-rose-600 to-indigo-700 hover:from-rose-500 hover:to-indigo-600 text-white flex flex-col items-center justify-center gap-3 shadow-xl hover:shadow-rose-950/20 active:scale-[0.98] transition-all border border-rose-500/20"
-            >
-              <div className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center shadow-inner relative">
-                <i className="pi pi-camera text-2xl text-white" />
-                <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500"></span>
+                <span className="text-[10px] uppercase font-bold tracking-widest text-rose-400 bg-slate-950/80 px-2 py-0.5 rounded-full mt-2">
+                  Alinee código de barras
                 </span>
               </div>
-              <div className="text-center">
-                <span className="text-base font-extrabold block">Iniciar Lector de Cámara</span>
-                <span className="text-[10px] text-white/70 block mt-0.5">Escaneo rápido de códigos de barra (EAN/SKU)</span>
-              </div>
-            </button>
-          )}
+
+              <div id="reader" className="w-full rounded-2xl overflow-hidden bg-slate-950 aspect-[4/3]" />
+            </div>
+
+            <div className="flex gap-2">
+              {/* Camera selector if multiple */}
+              {cameras.length > 1 && (
+                <select
+                  value={selectedCameraId}
+                  onChange={(e) => {
+                    setSelectedCameraId(e.target.value);
+                    stopScanner().then(() => startScanner());
+                  }}
+                  className="flex-1 bg-slate-900 border border-slate-800 text-slate-300 text-xs rounded-xl p-2.5 outline-none font-medium"
+                >
+                  {cameras.map((c, i) => (
+                    <option key={c.id} value={c.id}>
+                      Cámara {i + 1}: {c.label || 'Principal'}
+                    </option>
+                  ))}
+                </select>
+              )}
+              
+              <button
+                onClick={stopScanner}
+                className="flex-1 bg-slate-900 hover:bg-slate-850 border border-slate-850 hover:border-slate-800 text-slate-300 text-xs font-bold py-2.5 rounded-xl transition-all"
+              >
+                Detener Escáner
+              </button>
+            </div>
+          </div>
+
+          {/* Trigger button when scanner is not active */}
+          <button
+            onClick={startScanner}
+            className={`w-full py-8 px-6 rounded-3xl bg-gradient-to-br from-rose-600 to-indigo-700 hover:from-rose-500 hover:to-indigo-600 text-white flex flex-col items-center justify-center gap-3 shadow-xl hover:shadow-rose-950/20 active:scale-[0.98] transition-all border border-rose-500/20 ${scannerActive ? 'hidden' : 'flex'}`}
+          >
+            <div className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center shadow-inner relative">
+              <i className="pi pi-camera text-2xl text-white" />
+              <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500"></span>
+              </span>
+            </div>
+            <div className="text-center">
+              <span className="text-base font-extrabold block">Iniciar Lector de Cámara</span>
+              <span className="text-[10px] text-white/70 block mt-0.5">Escaneo rápido de códigos de barra (EAN/SKU)</span>
+            </div>
+          </button>
         </div>
 
         {/* MANUAL CODE ENTRY */}
