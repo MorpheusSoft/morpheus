@@ -117,17 +117,25 @@ export default function KioskConsultorPage() {
     const cachedHistory = localStorage.getItem('morpheus_scan_history');
     if (cachedHistory) {
       try {
-        setHistory(JSON.parse(cachedHistory));
+        const parsed = JSON.parse(cachedHistory);
+        if (Array.isArray(parsed)) {
+          setHistory(parsed);
+        } else {
+          localStorage.removeItem('morpheus_scan_history');
+        }
       } catch (e) {
         console.error(e);
+        localStorage.removeItem('morpheus_scan_history');
       }
     }
   }, []);
 
   // Save history helper
   const updateHistory = (product: ProductDetails) => {
+    if (!product || !product.sku) return;
     setHistory(prev => {
-      const filtered = prev.filter(p => p.sku !== product.sku);
+      const arr = Array.isArray(prev) ? prev : [];
+      const filtered = arr.filter(p => p && p.sku && p.sku !== product.sku);
       const newHist = [product, ...filtered].slice(0, 5);
       localStorage.setItem('morpheus_scan_history', JSON.stringify(newHist));
       return newHist;
@@ -519,20 +527,20 @@ export default function KioskConsultorPage() {
                     {/* Oferta Prices */}
                     <div>
                       <div className="flex items-baseline gap-1.5 text-amber-400">
-                        <span className="text-3xl font-black">${scannedProduct.prices.promo_price_usd?.toFixed(2)}</span>
+                        <span className="text-3xl font-black">${(scannedProduct.prices.promo_price_usd ?? 0).toFixed(2)}</span>
                         <span className="text-xs font-bold">USD</span>
                       </div>
                       <div className="text-sm font-bold text-amber-500/90 mt-0.5">
-                        Bs. {scannedProduct.prices.promo_price_ves?.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        Bs. {(scannedProduct.prices.promo_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
                     </div>
                     {/* Regular Price (Strikeout) */}
                     <div className="pt-2.5 border-t border-slate-800/60 flex items-center justify-between text-xs">
                       <span className="text-slate-500 font-medium">Precio Regular:</span>
                       <div className="text-right text-slate-400">
-                        <span className="line-through font-bold">${scannedProduct.prices.regular_price_usd.toFixed(2)} USD</span>
+                        <span className="line-through font-bold">${(scannedProduct.prices.regular_price_usd ?? 0).toFixed(2)} USD</span>
                         <span className="block text-[10px] text-slate-500 line-through">
-                          Bs. {scannedProduct.prices.regular_price_ves.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          Bs. {(scannedProduct.prices.regular_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
                     </div>
@@ -549,11 +557,11 @@ export default function KioskConsultorPage() {
                     {/* Regular Price */}
                     <div>
                       <div className="flex items-baseline gap-1.5 text-emerald-400">
-                        <span className="text-3xl font-black">${scannedProduct.prices.regular_price_usd.toFixed(2)}</span>
+                        <span className="text-3xl font-black">${(scannedProduct.prices.regular_price_usd ?? 0).toFixed(2)}</span>
                         <span className="text-xs font-bold">USD</span>
                       </div>
                       <div className="text-sm font-bold text-emerald-500/90 mt-0.5">
-                        Bs. {scannedProduct.prices.regular_price_ves.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        Bs. {(scannedProduct.prices.regular_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
                     </div>
                   </>
@@ -613,15 +621,15 @@ export default function KioskConsultorPage() {
                 <div className="grid grid-cols-3 gap-2.5 mb-4">
                   <div className="bg-slate-950/60 border border-slate-850 p-2.5 rounded-2xl text-center">
                     <span className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Costo Reposición</span>
-                    <strong className="text-xs font-bold text-white">${scannedProduct.costs.replacement_cost.toFixed(2)}</strong>
+                    <strong className="text-xs font-bold text-white">${(scannedProduct.costs.replacement_cost ?? 0).toFixed(2)}</strong>
                   </div>
                   <div className="bg-slate-950/60 border border-slate-850 p-2.5 rounded-2xl text-center">
                     <span className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Costo Promedio</span>
-                    <strong className="text-xs font-bold text-white">${scannedProduct.costs.average_cost.toFixed(2)}</strong>
+                    <strong className="text-xs font-bold text-white">${(scannedProduct.costs.average_cost ?? 0).toFixed(2)}</strong>
                   </div>
                   <div className="bg-slate-950/60 border border-slate-850 p-2.5 rounded-2xl text-center">
                     <span className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Costo Estándar</span>
-                    <strong className="text-xs font-bold text-white">${scannedProduct.costs.standard_cost.toFixed(2)}</strong>
+                    <strong className="text-xs font-bold text-white">${(scannedProduct.costs.standard_cost ?? 0).toFixed(2)}</strong>
                   </div>
                 </div>
 
@@ -687,7 +695,7 @@ export default function KioskConsultorPage() {
                   
                   <div className="text-right flex-shrink-0">
                     <strong className="text-xs font-black text-emerald-400">
-                      ${(product.prices.has_promo && product.prices.promo_price_usd !== null ? product.prices.promo_price_usd : product.prices.regular_price_usd).toFixed(2)}
+                      ${((product.prices.has_promo && product.prices.promo_price_usd !== null ? product.prices.promo_price_usd : product.prices.regular_price_usd) ?? 0).toFixed(2)}
                     </strong>
                     <span className="block text-[8px] text-slate-500 font-bold uppercase tracking-wider">
                       {product.prices.has_promo ? 'Oferta' : 'Regular'}
