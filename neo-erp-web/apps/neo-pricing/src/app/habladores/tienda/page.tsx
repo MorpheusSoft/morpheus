@@ -447,7 +447,7 @@ export default function StoreKioskPrintingPage() {
     const printConfig = {
       products: selectedProducts,
       template: selectedTemplate,
-      startingPosition: selectedTemplate.paper_type === 'GRID' ? startingPosition : 1,
+      startingPosition: (selectedTemplate.paper_type === 'GRID' || selectedTemplate.paper_type === 'CUSTOM') ? startingPosition : 1,
       vesRate
     };
 
@@ -456,7 +456,7 @@ export default function StoreKioskPrintingPage() {
   };
 
   const renderVisualGrid = () => {
-    if (!selectedTemplate || selectedTemplate.paper_type !== 'GRID') return null;
+    if (!selectedTemplate || (selectedTemplate.paper_type !== 'GRID' && selectedTemplate.paper_type !== 'CUSTOM')) return null;
     const r = selectedTemplate.rows || 1;
     const c = selectedTemplate.cols || 1;
     const totalCells = r * c;
@@ -775,7 +775,7 @@ export default function StoreKioskPrintingPage() {
                       <div>
                         <strong>Tipo de Papel:</strong> {selectedTemplate.paper_type}
                       </div>
-                      {selectedTemplate.paper_type === 'GRID' && (
+                      {(selectedTemplate.paper_type === 'GRID' || selectedTemplate.paper_type === 'CUSTOM') && (
                         <div>
                           <strong>Disposición:</strong> {selectedTemplate.rows} filas x {selectedTemplate.cols} columnas
                         </div>

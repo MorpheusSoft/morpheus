@@ -3,7 +3,7 @@ import api from '@/lib/api';
 export interface PrintTemplate {
   id: number;
   name: string;
-  paper_type: 'GRID' | 'CONTINUOUS' | 'INDIVIDUAL';
+  paper_type: 'GRID' | 'CONTINUOUS' | 'INDIVIDUAL' | 'CUSTOM';
   width_mm: number;
   height_mm: number;
   margin_top_mm: number;

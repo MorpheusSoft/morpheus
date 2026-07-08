@@ -150,6 +150,10 @@ export default function PrintHabladoresPage() {
 
   const getBlockValue = (key: string, item: PrintItem) => {
     const block = layout_config?.[key];
+    const cleanCurrency = (text: string) => {
+      return text.replace(/\$/g, '').replace(/Bs\./gi, '').replace(/Bs/gi, '').trim();
+    };
+
     if (block?.isCustomText) {
       let result = block.textValue || '';
       const priceUsdIva = item.price_usd * (1 + item.tax_rate / 100);
@@ -161,49 +165,51 @@ export default function PrintHabladoresPage() {
       result = result.replace(/{{modelo}}/g, item.model || '');
       result = result.replace(/{{marca}}/g, item.brand || '');
       result = result.replace(/{{uom}}/g, item.uom || '');
-      result = result.replace(/{{precio_usd}}/g, `$${item.price_usd.toFixed(2)}`);
-      result = result.replace(/{{precio_ves}}/g, `Bs. ${item.price_ves.toFixed(2)}`);
-      result = result.replace(/{{precio_usd_iva}}/g, `$${priceUsdIva.toFixed(2)}`);
-      result = result.replace(/{{precio_ves_iva}}/g, `Bs. ${priceVesIva.toFixed(2)}`);
+      result = result.replace(/{{precio_usd}}/g, `${item.price_usd.toFixed(2)}`);
+      result = result.replace(/{{precio_ves}}/g, `${item.price_ves.toFixed(2)}`);
+      result = result.replace(/{{precio_usd_iva}}/g, `${priceUsdIva.toFixed(2)}`);
+      result = result.replace(/{{precio_ves_iva}}/g, `${priceVesIva.toFixed(2)}`);
       
-      result = result.replace(/{{regular_net_usd}}/g, `$${formatF(item.regular_net_usd)}`);
-      result = result.replace(/{{regular_gross_usd}}/g, `$${formatF(item.regular_gross_usd)}`);
-      result = result.replace(/{{regular_net_ves}}/g, `Bs. ${formatF(item.regular_net_ves)}`);
-      result = result.replace(/{{regular_gross_ves}}/g, `Bs. ${formatF(item.regular_gross_ves)}`);
-      result = result.replace(/{{promo_net_usd}}/g, item.promo_net_usd !== null ? `$${formatF(item.promo_net_usd)}` : '-');
-      result = result.replace(/{{promo_gross_usd}}/g, item.promo_gross_usd !== null ? `$${formatF(item.promo_gross_usd)}` : '-');
-      result = result.replace(/{{promo_net_ves}}/g, item.promo_net_ves !== null ? `Bs. ${formatF(item.promo_net_ves)}` : '-');
-      result = result.replace(/{{promo_gross_ves}}/g, item.promo_gross_ves !== null ? `Bs. ${formatF(item.promo_gross_ves)}` : '-');
+      result = result.replace(/{{regular_net_usd}}/g, `${formatF(item.regular_net_usd)}`);
+      result = result.replace(/{{regular_gross_usd}}/g, `${formatF(item.regular_gross_usd)}`);
+      result = result.replace(/{{regular_net_ves}}/g, `${formatF(item.regular_net_ves)}`);
+      result = result.replace(/{{regular_gross_ves}}/g, `${formatF(item.regular_gross_ves)}`);
+      result = result.replace(/{{promo_net_usd}}/g, item.promo_net_usd !== null ? `${formatF(item.promo_net_usd)}` : '-');
+      result = result.replace(/{{promo_gross_usd}}/g, item.promo_gross_usd !== null ? `${formatF(item.promo_gross_usd)}` : '-');
+      result = result.replace(/{{promo_net_ves}}/g, item.promo_net_ves !== null ? `${formatF(item.promo_net_ves)}` : '-');
+      result = result.replace(/{{promo_gross_ves}}/g, item.promo_gross_ves !== null ? `${formatF(item.promo_gross_ves)}` : '-');
       result = result.replace(/{{promo_end_at}}/g, item.promo_end_at ? new Date(item.promo_end_at).toLocaleDateString() : '');
       result = result.replace(/{{promo_start_at}}/g, item.promo_start_at ? new Date(item.promo_start_at).toLocaleDateString() : '');
 
       return result;
     }
 
-    const prefix = block?.prefix || '';
+    const prefixRaw = block?.prefix || '';
+    const prefixCleaned = cleanCurrency(prefixRaw);
+    const prefix = prefixCleaned ? prefixCleaned + ' ' : '';
     
     if (key === 'brand') return prefix + (item.brand || 'Genérico');
     if (key === 'sku') return prefix + (item.sku || '');
     if (key === 'name') return prefix + (item.name || '');
     if (key === 'model') return prefix + (item.model || '');
     if (key === 'uom') return prefix + (item.uom || '');
-    if (key === 'price_usd') return prefix + `$${item.price_usd.toFixed(2)}`;
-    if (key === 'price_ves') return prefix + `Bs. ${item.price_ves.toFixed(2)}`;
+    if (key === 'price_usd') return prefix + `${item.price_usd.toFixed(2)}`;
+    if (key === 'price_ves') return prefix + `${item.price_ves.toFixed(2)}`;
     
     const priceUsdIva = item.price_usd * (1 + item.tax_rate / 100);
     const priceVesIva = item.price_ves * (1 + item.tax_rate / 100);
-    if (key === 'price_usd_iva') return prefix + `$${priceUsdIva.toFixed(2)}`;
-    if (key === 'price_ves_iva') return prefix + `Bs. ${priceVesIva.toFixed(2)}`;
+    if (key === 'price_usd_iva') return prefix + `${priceUsdIva.toFixed(2)}`;
+    if (key === 'price_ves_iva') return prefix + `${priceVesIva.toFixed(2)}`;
     
     const formatVal = (v: number | null | undefined) => v !== null && v !== undefined ? v.toFixed(2) : '-';
-    if (key === 'regular_net_usd') return prefix + `$${formatVal(item.regular_net_usd)}`;
-    if (key === 'regular_gross_usd') return prefix + `$${formatVal(item.regular_gross_usd)}`;
-    if (key === 'regular_net_ves') return prefix + `Bs. ${formatVal(item.regular_net_ves)}`;
-    if (key === 'regular_gross_ves') return prefix + `Bs. ${formatVal(item.regular_gross_ves)}`;
-    if (key === 'promo_net_usd') return prefix + (item.promo_net_usd !== null ? `$${formatVal(item.promo_net_usd)}` : '-');
-    if (key === 'promo_gross_usd') return prefix + (item.promo_gross_usd !== null ? `$${formatVal(item.promo_gross_usd)}` : '-');
-    if (key === 'promo_net_ves') return prefix + (item.promo_net_ves !== null ? `Bs. ${formatVal(item.promo_net_ves)}` : '-');
-    if (key === 'promo_gross_ves') return prefix + (item.promo_gross_ves !== null ? `Bs. ${formatVal(item.promo_gross_ves)}` : '-');
+    if (key === 'regular_net_usd') return prefix + `${formatVal(item.regular_net_usd)}`;
+    if (key === 'regular_gross_usd') return prefix + `${formatVal(item.regular_gross_usd)}`;
+    if (key === 'regular_net_ves') return prefix + `${formatVal(item.regular_net_ves)}`;
+    if (key === 'regular_gross_ves') return prefix + `${formatVal(item.regular_gross_ves)}`;
+    if (key === 'promo_net_usd') return prefix + (item.promo_net_usd !== null ? `${formatVal(item.promo_net_usd)}` : '-');
+    if (key === 'promo_gross_usd') return prefix + (item.promo_gross_usd !== null ? `${formatVal(item.promo_gross_usd)}` : '-');
+    if (key === 'promo_net_ves') return prefix + (item.promo_net_ves !== null ? `${formatVal(item.promo_net_ves)}` : '-');
+    if (key === 'promo_gross_ves') return prefix + (item.promo_gross_ves !== null ? `${formatVal(item.promo_gross_ves)}` : '-');
     if (key === 'promo_end_at') return prefix + (item.promo_end_at ? new Date(item.promo_end_at).toLocaleDateString() : '');
     if (key === 'promo_start_at') return prefix + (item.promo_start_at ? new Date(item.promo_start_at).toLocaleDateString() : '');
 
@@ -361,7 +367,7 @@ export default function PrintHabladoresPage() {
                   {item.promo_active ? 'VES Regular' : 'Precio VES'}
                 </span>
                 <span className={`font-bold text-black text-[1.1em] ${item.promo_active ? 'line-through text-gray-400 text-[0.9em]' : ''}`}>
-                  Bs. {item.price_ves.toFixed(2)}
+                  {item.price_ves.toFixed(2)}
                 </span>
               </div>
             )}
@@ -371,7 +377,7 @@ export default function PrintHabladoresPage() {
                   {item.promo_active ? 'USD Regular' : 'Precio USD'}
                 </span>
                 <span className={`font-bold text-black text-[1.3em] ${item.promo_active ? 'line-through text-gray-400 text-[1.0em]' : ''}`}>
-                  ${item.price_usd.toFixed(2)}
+                  {item.price_usd.toFixed(2)}
                 </span>
               </div>
             )}
@@ -383,13 +389,13 @@ export default function PrintHabladoresPage() {
               <div className="flex flex-col leading-none">
                 <span className="text-[0.55em] font-bold text-rose-600 uppercase">VES OFERTA</span>
                 <span className="font-extrabold text-rose-600 text-[1.2em]">
-                  Bs. {(item.promo_net_ves || 0).toFixed(2)}
+                  {(item.promo_net_ves || 0).toFixed(2)}
                 </span>
               </div>
               <div className="flex flex-col items-end leading-none">
                 <span className="text-[0.55em] font-bold text-rose-600 uppercase">USD OFERTA</span>
                 <span className="font-extrabold text-rose-600 text-[1.5em]">
-                  ${(item.promo_net_usd || 0).toFixed(2)}
+                  {(item.promo_net_usd || 0).toFixed(2)}
                 </span>
               </div>
             </div>
@@ -401,9 +407,9 @@ export default function PrintHabladoresPage() {
               <span className="text-[0.6em] font-bold text-slate-500 uppercase">Con IVA:</span>
               <span className="text-[0.75em] font-bold text-slate-800">
                 {item.promo_active && item.promo_gross_usd !== null ? (
-                  <>Bs. {item.promo_gross_ves?.toFixed(2)} / ${item.promo_gross_usd?.toFixed(2)}</>
+                  <>{item.promo_gross_ves?.toFixed(2)} / {item.promo_gross_usd?.toFixed(2)}</>
                 ) : (
-                  <>Bs. {priceVesIva.toFixed(2)} / ${priceUsdIva.toFixed(2)}</>
+                  <>{priceVesIva.toFixed(2)} / {priceUsdIva.toFixed(2)}</>
                 )}
               </span>
             </div>
@@ -500,6 +506,17 @@ export default function PrintHabladoresPage() {
     );
   };
 
+  const customPageSizeStyle = paper_type === 'CUSTOM' ? `
+          @page {
+            size: ${width_mm * cols + margin_left_mm + margin_right_mm}mm ${height_mm * rows + margin_top_mm + margin_bottom_mm}mm !important;
+            margin: 0 !important;
+          }
+  ` : `
+          @page {
+            margin: 0 !important;
+          }
+  `;
+
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: `
@@ -521,9 +538,7 @@ export default function PrintHabladoresPage() {
           body {
             background: white !important;
           }
-          @page {
-            margin: 0 !important;
-          }
+          ${customPageSizeStyle}
           .print-parent {
             display: block !important;
             width: auto !important;
@@ -574,7 +589,7 @@ export default function PrintHabladoresPage() {
       {/* Print Document Content */}
       <div className="print-parent flex justify-center bg-slate-100/30 min-h-screen py-8 print:p-0 print:bg-white select-none">
         <div className="print-parent bg-white shadow-lg print:shadow-none p-4 print:p-0">
-          {paper_type === 'GRID' ? renderGridPages() : renderSequentialLabels()}
+          {paper_type === 'GRID' || paper_type === 'CUSTOM' ? renderGridPages() : renderSequentialLabels()}
         </div>
       </div>
     </>

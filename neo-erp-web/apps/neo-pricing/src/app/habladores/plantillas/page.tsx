@@ -87,7 +87,7 @@ export default function TemplateDesignerPage() {
 
   // Form State
   const [name, setName] = useState('');
-  const [paperType, setPaperType] = useState<'GRID' | 'CONTINUOUS' | 'INDIVIDUAL'>('GRID');
+  const [paperType, setPaperType] = useState<'GRID' | 'CONTINUOUS' | 'INDIVIDUAL' | 'CUSTOM'>('GRID');
   const [widthMm, setWidthMm] = useState<number>(80);
   const [heightMm, setHeightMm] = useState<number>(50);
   const [marginTopMm, setMarginTopMm] = useState<number>(0);
@@ -119,7 +119,8 @@ export default function TemplateDesignerPage() {
   const paperTypeOptions = [
     { label: 'Cuadrícula (A4 / Carta)', value: 'GRID' },
     { label: 'Rollo Continuo', value: 'CONTINUOUS' },
-    { label: 'Individual (Etiquetas)', value: 'INDIVIDUAL' }
+    { label: 'Individual (Etiquetas)', value: 'INDIVIDUAL' },
+    { label: 'Personalizado (Hojas pre-cortadas)', value: 'CUSTOM' }
   ];
 
   const fetchTemplates = async () => {
@@ -597,7 +598,7 @@ export default function TemplateDesignerPage() {
             </div>
 
             {/* Grid Layout */}
-            {paperType === 'GRID' && (
+            {(paperType === 'GRID' || paperType === 'CUSTOM') && (
               <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100">
                 <div className="col-span-2 flex justify-between items-center">
                   <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Maquetación por Hoja</span>

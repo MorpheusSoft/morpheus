@@ -59,6 +59,9 @@ export function AppSidebar() {
     if (href === '/reportes') {
       return pathname === '/reportes';
     }
+    if (href === '/precios') {
+      return pathname.startsWith('/precios') && pathname !== '/precios/ofertas';
+    }
     return pathname === href || (pathname.startsWith(href) && href !== '/');
   };
 

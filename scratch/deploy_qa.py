@@ -5,22 +5,27 @@ ip = "217.216.83.151"
 user = "lzambrano"
 password = "Pegaso#26"
 
-print("[*] Iniciando despliegue de backend en QA...")
+def run_ssh_commands(cmds):
+    for cmd in cmds:
+        print(f"\n---> Running: {cmd}")
+        child = pexpect.spawn(f"ssh -o StrictHostKeyChecking=no {user}@{ip} \"{cmd}\"", encoding='utf-8', timeout=90)
+        try:
+            index = child.expect(['assword:', pexpect.EOF, pexpect.TIMEOUT])
+            if index == 0:
+                child.sendline(password)
+                child.expect(pexpect.EOF)
+            print(child.before)
+        except Exception as e:
+            print(f"Error executing command: {str(e)}")
 
-child = pexpect.spawn(f"ssh -o StrictHostKeyChecking=no {user}@{ip}", encoding='utf-8', timeout=180)
-child.expect('assword:')
-child.sendline(password)
-child.expect(r'lzambrano@.*:.*\$')
+cmds = [
+    "cd ~/Morpheus && git pull origin main",
+    "cd ~/Morpheus && .venv/bin/python backend/app/db/add_print_templates_promo_columns.py",
+    "cd ~/Morpheus && .venv/bin/python backend/app/db/create_campaign_tables.py",
+    "pm2 restart neo-api",
+    "pm2 restart hub-core compras inventario logistica",
+    "pm2 status"
+]
 
-print("[*] Ejecutando script de actualización en el VPS...")
-child.sendline("python3 /home/lzambrano/update_qa.py")
-
-# El script podría pedir sudo o tardar un rato compilando
-index = child.expect([r'\[sudo\] password for lzambrano:', r'lzambrano@.*:.*\$', pexpect.TIMEOUT], timeout=120)
-if index == 0:
-    child.sendline(password)
-    child.expect(r'lzambrano@.*:.*\$', timeout=120)
-
-print("[+] Despliegue de backend completado con éxito en QA VPS!")
-child.sendline("exit")
-child.expect(pexpect.EOF)
+if __name__ == "__main__":
+    run_ssh_commands(cmds)
