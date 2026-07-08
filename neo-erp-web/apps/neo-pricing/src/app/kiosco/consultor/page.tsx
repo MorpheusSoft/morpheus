@@ -156,6 +156,19 @@ export default function KioskConsultorPage() {
             return name.includes('operador') || name.includes('operator') || name.includes('cajero');
           });
           setShowCosts(!isOperator);
+
+          // Auto-select user's assigned facility if not cached yet
+          try {
+            const cached = localStorage.getItem('morpheus_kiosk_facility_id');
+            const userFacs = res.data.facilities || [];
+            if (!cached && userFacs.length > 0) {
+              const assignedId = userFacs[0].id;
+              setSelectedFacilityId(assignedId);
+              localStorage.setItem('morpheus_kiosk_facility_id', String(assignedId));
+            }
+          } catch (e) {
+            console.error("Failed to auto-select assigned facility:", e);
+          }
         }
       })
       .catch(err => {
@@ -387,7 +400,11 @@ export default function KioskConsultorPage() {
   // Switch facility & update prices
   const handleFacilityChange = (facilityId: number) => {
     setSelectedFacilityId(facilityId);
-    localStorage.setItem('morpheus_kiosk_facility_id', String(facilityId));
+    try {
+      localStorage.setItem('morpheus_kiosk_facility_id', String(facilityId));
+    } catch (e) {
+      console.error("localStorage access failed:", e);
+    }
     
     // If there is currently a scanned product, re-query it
     if (scannedProduct) {
@@ -423,13 +440,6 @@ export default function KioskConsultorPage() {
       {/* Dynamic Header */}
       <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-xl border-b border-slate-800 px-4 py-3 shadow-md flex justify-between items-center">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => router.push('/habladores/tienda')}
-            className="flex items-center justify-center w-9 h-9 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
-            title="Volver"
-          >
-            <i className="pi pi-arrow-left text-sm" />
-          </button>
           <div>
             <h1 className="text-base font-extrabold tracking-tight bg-gradient-to-r from-rose-400 via-rose-500 to-indigo-500 bg-clip-text text-transparent">
               Consultor Móvil
@@ -438,20 +448,12 @@ export default function KioskConsultorPage() {
           </div>
         </div>
 
-        {/* Facility Selector */}
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest text-right">Sucursal</span>
-          <select
-            value={selectedFacilityId}
-            onChange={(e) => handleFacilityChange(Number(e.target.value))}
-            className="bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold rounded-lg px-2 py-1 outline-none cursor-pointer focus:ring-1 focus:ring-rose-500"
-          >
-            {facilities.map((fac) => (
-              <option key={fac.id} value={fac.id}>
-                {fac.name}
-              </option>
-            ))}
-          </select>
+        {/* Facility Indicator */}
+        <div className="flex flex-col gap-0.5 items-end">
+          <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Sucursal</span>
+          <span className="text-xs font-bold text-slate-300 bg-slate-900/60 border border-slate-800 rounded-lg px-2.5 py-1">
+            {facilities.find(f => f.id === selectedFacilityId)?.name || 'Cargando...'}
+          </span>
         </div>
       </header>
 
