@@ -18,5 +18,5 @@ def run_ssh_command(cmd):
         print(f"Error executing command: {str(e)}")
 
 if __name__ == "__main__":
-    # Run curl test to Gemini API
-    run_ssh_command("curl -I -m 10 https://generativelanguage.googleapis.com/v1beta/models")
+    # Test API key on VPS via direct curl
+    run_ssh_command("curl -H 'Content-Type: application/json' -d '{\"contents\":[{\"parts\":[{\"text\":\"Hello\"}]}]}' 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=AIzaSyC4PTAMmyCqNhzN_9xqfByEPWFas-z_xnA'")

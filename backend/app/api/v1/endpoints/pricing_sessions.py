@@ -727,6 +727,10 @@ def upload_pdf_to_session(
                     prompt = (
                         "Eres un asistente de procesamiento de datos experto para Neo ERP.\n"
                         "Tu tarea es analizar el siguiente texto de una lista de precios o factura de un proveedor y extraer todos los productos de forma estructurada.\n\n"
+                        f"IMPORTANTE: El usuario ha seleccionado la moneda {currency} para esta importación. "
+                        f"Si la lista contiene precios en múltiples monedas (por ejemplo, USD y VES en columnas distintas), "
+                        f"debes extraer únicamente los valores correspondientes a la columna de {currency}. "
+                        "No mezcles monedas ni extraigas valores de otras monedas.\n\n"
                         "Identifica las columnas de la tabla de productos. Para cada producto, extrae los siguientes campos:\n"
                         "1. `supplier_sku`: Código del producto asignado por el proveedor o código de referencia principal (ej. BE0328). Si no hay, colócalo como null.\n"
                         "2. `barcode`: Código de barras numérico del producto (ej. 5000267024233). Si no tiene, colócalo como null.\n"
