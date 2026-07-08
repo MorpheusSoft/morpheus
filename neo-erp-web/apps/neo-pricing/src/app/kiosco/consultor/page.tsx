@@ -443,16 +443,8 @@ export default function KioskConsultorPage() {
             <h1 className="text-base font-extrabold tracking-tight bg-gradient-to-r from-rose-400 via-rose-500 to-indigo-500 bg-clip-text text-transparent">
               Consultor Móvil
             </h1>
-            <p className="text-[10px] text-slate-400 font-medium">Morpheus Soft PWA</p>
+            <p className="text-[10px] text-slate-400 font-medium">Neo PWA</p>
           </div>
-        </div>
-
-        {/* Facility Indicator */}
-        <div className="flex flex-col gap-0.5 items-end">
-          <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Sucursal</span>
-          <span className="text-xs font-bold text-slate-300 bg-slate-900/60 border border-slate-800 rounded-lg px-2.5 py-1">
-            {facilities.find(f => f.id === selectedFacilityId)?.name || 'Cargando...'}
-          </span>
         </div>
       </header>
 
@@ -801,7 +793,7 @@ export default function KioskConsultorPage() {
       
       {/* Footer footer information */}
       <footer className="text-center text-[9px] text-slate-600 mt-auto py-6 border-t border-slate-900">
-        © 2026 Morpheus ERP Soft. Todos los derechos reservados.
+        © 2026 Neo ERP. Todos los derechos reservados.
       </footer>
     </div>
   );

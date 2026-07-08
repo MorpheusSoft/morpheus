@@ -1,6 +1,6 @@
 {
-  "name": "Morpheus Consultor Móvil",
-  "short_name": "Morpheus PWA",
+  "name": "Neo Consultor Móvil",
+  "short_name": "Neo PWA",
   "description": "Progressive Web App para consulta de precios, stock y costos con escáner de cámara",
   "start_url": "/costos/kiosco/consultor",
   "display": "standalone",

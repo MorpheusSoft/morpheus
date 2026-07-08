@@ -517,7 +517,7 @@ export default function StoreKioskPrintingPage() {
           <div className="flex items-center gap-2">
             <span className="text-2xl">🏷️</span>
             <h1 className="text-2xl font-extrabold tracking-tight">
-              Morpheus: Impresión de Tienda
+              Neo: Impresión de Tienda
             </h1>
           </div>
           <p className="text-slate-400 text-xs mt-1 font-medium">
