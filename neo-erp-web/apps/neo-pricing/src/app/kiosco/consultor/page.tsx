@@ -235,18 +235,19 @@ export default function KioskConsultorPage() {
           config,
           (decodedText) => {
             playBeep();
-            // Automatically stop scanning and search
+            // Trigger search immediately to make UI responsive and avoid waiting for camera release
+            searchProduct(decodedText);
+            
+            // Stop scanning asynchronously in background
             scanner.stop().then(() => {
               setHtml5QrcodeScanner(null);
-              searchProduct(decodedText);
               // Delay hiding container to allow library to finish cleanup and release tracks safely
               setTimeout(() => {
                 setScannerActive(false);
               }, 300);
             }).catch(err => {
-              console.error("Error stopping scanner:", err);
+              console.error("Error stopping scanner asynchronously:", err);
               setHtml5QrcodeScanner(null);
-              searchProduct(decodedText);
               setTimeout(() => {
                 setScannerActive(false);
               }, 300);
