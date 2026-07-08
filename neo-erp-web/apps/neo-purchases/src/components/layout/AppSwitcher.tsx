@@ -28,6 +28,11 @@ export function AppSwitcher() {
     { name: "Reportes", icon: "pi pi-chart-bar", color: "text-slate-600", bg: "bg-slate-50", href: "#", disabled: true },
   ];
 
+  const extraApps = [
+    { name: "Kiosco", icon: "pi pi-tablet", color: "text-violet-600", bg: "bg-violet-50", href: isProd ? "https://costos.qa.morpheussoft.net/habladores/tienda" : "http://localhost:4004/habladores/tienda" },
+    { name: "Nueva App", icon: "pi pi-plus-circle", color: "text-slate-400", bg: "bg-slate-100", href: "#", disabled: true },
+  ];
+
   return (
     <div className="relative" ref={menuRef}>
       {/* Trigger Button */}
@@ -74,6 +79,31 @@ export function AppSwitcher() {
                 </a>
               )
             ))}
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-gray-100">
+             <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 px-1">
+               Servicios Auxiliares
+             </h4>
+             <div className="grid grid-cols-3 gap-2">
+               {extraApps.map((app, idx) => (
+                 app.disabled ? (
+                   <div key={idx} className="flex flex-col items-center justify-center p-3 rounded-2xl cursor-not-allowed opacity-50 grayscale hover:bg-slate-50 transition-colors" title="Próximamente">
+                     <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${app.bg} mb-2 shadow-inner ring-1 ring-black/5`}>
+                        <span className={`${app.icon} text-xl ${app.color}`}></span>
+                     </div>
+                     <span className="text-xs font-semibold text-slate-600 text-center">{app.name}</span>
+                   </div>
+                 ) : (
+                   <a key={idx} href={app.href} className="group flex flex-col items-center justify-center p-3 rounded-2xl hover:bg-slate-50 hover:shadow-[0_4px_12px_rgba(0,0,0,0.05)] transition-all duration-300 cursor-pointer border border-transparent hover:border-slate-100">
+                     <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${app.bg} mb-2 shadow-inner ring-1 ring-black/5 group-hover:scale-110 transition-transform`}>
+                       <span className={`${app.icon} text-xl ${app.color}`}></span>
+                     </div>
+                     <span className="text-xs font-semibold text-slate-700 text-center">{app.name}</span>
+                   </a>
+                 )
+               ))}
+             </div>
           </div>
           
           <div className="mt-4 pt-3 border-t border-gray-100">

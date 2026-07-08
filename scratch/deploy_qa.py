@@ -8,7 +8,7 @@ password = "Pegaso#26"
 def run_ssh_commands(cmds):
     for cmd in cmds:
         print(f"\n---> Running: {cmd}")
-        child = pexpect.spawn(f"ssh -o StrictHostKeyChecking=no {user}@{ip} \"{cmd}\"", encoding='utf-8', timeout=90)
+        child = pexpect.spawn(f"ssh -o StrictHostKeyChecking=no {user}@{ip} \"{cmd}\"", encoding='utf-8', timeout=180)
         try:
             index = child.expect(['assword:', pexpect.EOF, pexpect.TIMEOUT])
             if index == 0:
@@ -20,10 +20,8 @@ def run_ssh_commands(cmds):
 
 cmds = [
     "cd ~/Morpheus && git pull origin main",
-    "cd ~/Morpheus && .venv/bin/python backend/app/db/add_print_templates_promo_columns.py",
-    "cd ~/Morpheus && .venv/bin/python backend/app/db/create_campaign_tables.py",
-    "pm2 restart neo-api",
-    "pm2 restart hub-core compras inventario logistica",
+    "cd ~/Morpheus/neo-erp-web/apps/neo-pricing && npm run build",
+    "pm2 restart costos",
     "pm2 status"
 ]
 
