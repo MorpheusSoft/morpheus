@@ -76,6 +76,52 @@ export default function KioskConsultorPage() {
   // Sound beep ref
   const beepGenerated = useRef<boolean>(false);
 
+  // Global error handler to swallow camera/scanner/html5-qrcode uncaught errors
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleError = (event: ErrorEvent) => {
+      const msg = event.message || '';
+      if (
+        msg.includes('Html5Qrcode') || 
+        msg.includes('ConstraintError') || 
+        msg.includes('navigator.mediaDevices') || 
+        msg.includes('Camera') || 
+        msg.includes('ReadableStream') || 
+        msg.includes('MediaStream') ||
+        msg.includes('stop')
+      ) {
+        console.warn('Swallowed global scanner error:', msg);
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason?.message || String(event.reason || '');
+      if (
+        reason.includes('Html5Qrcode') || 
+        reason.includes('ConstraintError') || 
+        reason.includes('Camera') || 
+        reason.includes('ReadableStream') || 
+        reason.includes('MediaStream') ||
+        reason.includes('stop')
+      ) {
+        console.warn('Swallowed global scanner promise rejection:', reason);
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+
+    window.addEventListener('error', handleError, true);
+    window.addEventListener('unhandledrejection', handleRejection, true);
+
+    return () => {
+      window.removeEventListener('error', handleError, true);
+      window.removeEventListener('unhandledrejection', handleRejection, true);
+    };
+  }, []);
+
   // Load user data and facilities
   useEffect(() => {
     // Load facilities
