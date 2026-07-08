@@ -665,11 +665,23 @@ def upload_pdf_to_session(
                 sheet = wb.active
                 lines = []
                 for row_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-                    if row_idx > 500:
+                    if row_idx > 600:
                         break
                     row_vals = [str(cell).strip() if cell is not None else "" for cell in row]
-                    if any(row_vals):
-                        lines.append(" | ".join(row_vals))
+                    
+                    # Optimize columns based on currency to reduce token count and prevent mixups
+                    if len(row_vals) > 17:
+                        if currency == "USD":
+                            row_vals = row_vals[:17]
+                        elif currency == "VES":
+                            row_vals = row_vals[:8] + row_vals[17:]
+                            
+                    # Drop headers, footers, blank rows, and banners (must have at least 3 non-empty cells)
+                    non_empty_count = sum(1 for v in row_vals if v != "")
+                    if non_empty_count < 3:
+                        continue
+                        
+                    lines.append(" | ".join(row_vals))
                 extracted_text = "\n".join(lines)
             except Exception as e:
                 raise HTTPException(
