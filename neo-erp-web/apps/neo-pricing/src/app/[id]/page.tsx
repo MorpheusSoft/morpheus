@@ -10,10 +10,12 @@ import { MultiSelect } from 'primereact/multiselect';
 import { Dialog } from 'primereact/dialog';
 import { InputText } from 'primereact/inputtext';
 import { Checkbox } from 'primereact/checkbox';
+import { SelectButton } from 'primereact/selectbutton';
 import { useRouter, useParams } from 'next/navigation';
 import api from '@/lib/api';
 import { PricingService } from '@/services/pricing.service';
 import { ProductService } from '@/services/product.service';
+import { CoreService } from '@/services/core.service';
 
 function BranchPricingSubGrid({ 
     variantId, 
@@ -345,8 +347,32 @@ export default function PricingValidationBoardPage() {
   const [selectedReconcileProduct, setSelectedReconcileProduct] = useState<any>(null);
   const [reconcileSearchResults, setReconcileSearchResults] = useState([]);
 
+  // Currency & exchange rate conversion states
+  const [vesRate, setVesRate] = useState<number>(40.0);
+  const [uploadCurrency, setUploadCurrency] = useState<string>('USD');
+  const [uploadRate, setUploadRate] = useState<number>(40.0);
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
+  const [selectedUploadFile, setSelectedUploadFile] = useState<any>(null);
+
+  // Factorization post-upload states
+  const [factorRate, setFactorRate] = useState<number>(40.0);
+  const [applyingRate, setApplyingRate] = useState(false);
+
   useEffect(() => {
      ProductService.getFacilities().then(setFacilities);
+     // Fetch exchange rates from CoreService
+     CoreService.getCurrencies().then((currencies: any) => {
+       const list = currencies?.data || currencies || [];
+       const ves = list.find((c: any) => c.code === 'VES');
+       if (ves && ves.exchange_rate) {
+         const rate = parseFloat(ves.exchange_rate);
+         setVesRate(rate);
+         setUploadRate(rate);
+         setFactorRate(rate);
+       }
+     }).catch((err: any) => {
+       console.error("Error fetching currencies:", err);
+     });
   }, []);
 
   const [showWizard, setShowWizard] = useState(false);
@@ -621,15 +647,15 @@ export default function PricingValidationBoardPage() {
     }
   };
 
-  const handleUploadPdf = async (e: any) => {
-    const file = e.target.files[0];
+  const handleUploadPdfWithParams = async (file: File, currency: string, rate: number) => {
     if (!file) return;
     try {
       setParsingPdf(true);
+      setShowUploadDialog(false);
       setPdfProgressMsg('IA: Iniciando motor de lectura OCR...');
       await new Promise(r => setTimeout(r, 600));
       setPdfProgressMsg('IA: Procesando columnas y extrayendo productos con Gemini...');
-      await PricingService.uploadPdf(params.id as string, file);
+      await PricingService.uploadPdf(params.id as string, file, currency, currency === 'VES' ? rate : 1.0);
       setPdfProgressMsg('IA: Conciliación completada con éxito.');
       await new Promise(r => setTimeout(r, 400));
       fetchSession();
@@ -640,6 +666,30 @@ export default function PricingValidationBoardPage() {
     } finally {
       setParsingPdf(false);
       setPdfProgressMsg('');
+      setSelectedUploadFile(null);
+    }
+  };
+
+  const handleApplyExchangeRate = async (op: string) => {
+    if (!factorRate || factorRate <= 0) {
+      alert("Por favor ingrese una tasa válida mayor a 0.");
+      return;
+    }
+    const opMsg = op === 'DIVIDE' ? 'dividir' : 'multiplicar';
+    if (!confirm(`¿Está seguro de que desea ${opMsg} todos los nuevos costos y precios propuestos por ${factorRate}?`)) {
+      return;
+    }
+    
+    try {
+      setApplyingRate(true);
+      await PricingService.applyExchangeRate(params.id as string, factorRate, op);
+      fetchSession();
+      alert("Tasa de cambio aplicada exitosamente en lote.");
+    } catch (err: any) {
+      console.error(err);
+      alert(err.response?.data?.detail || "Error al aplicar la tasa de cambio en lote.");
+    } finally {
+      setApplyingRate(false);
     }
   };
 
@@ -942,20 +992,33 @@ export default function PricingValidationBoardPage() {
                       onClick={() => setShowExportWizard(true)} 
                   />
               )}
-              {session?.status === 'DRAFT' && (session?.source_type === 'CSV_UPLOAD' || session?.source_type === 'AI_PDF_PARSER') && (
-                <div className="relative overflow-hidden inline-block">
-                   <Button 
-                     label={session?.source_type === 'AI_PDF_PARSER' ? "Cargar Lista de Precios / PDF (IA)" : "Importar CSV"} 
-                     icon={session?.source_type === 'AI_PDF_PARSER' ? "pi pi-file-pdf" : "pi pi-upload"} 
-                     severity={session?.source_type === 'AI_PDF_PARSER' ? "help" : "secondary"} 
-                     className="border-slate-300 font-bold !rounded-xl !py-2.5 !px-5 text-sm" 
-                   />
-                   <input 
-                     type="file" 
-                     accept={session?.source_type === 'AI_PDF_PARSER' ? ".pdf,image/*,.xlsx,.xls" : ".csv"} 
-                     onChange={session?.source_type === 'AI_PDF_PARSER' ? handleUploadPdf : handleUploadCsv} 
-                     className="absolute left-0 top-0 opacity-0 cursor-pointer w-full h-full" 
-                   />
+              {session?.status === 'DRAFT' && (
+                <div className="flex items-center gap-2">
+                   {session?.source_type === 'AI_PDF_PARSER' && (
+                     <Button 
+                       label="Cargar Lista de Precios / PDF (IA)" 
+                       icon="pi pi-file-pdf" 
+                       severity="help" 
+                       className="border-slate-300 font-bold !rounded-xl !py-2.5 !px-5 text-sm" 
+                       onClick={() => setShowUploadDialog(true)}
+                     />
+                   )}
+                   {session?.source_type === 'CSV_UPLOAD' && (
+                     <div className="relative overflow-hidden inline-block">
+                        <Button 
+                          label="Importar CSV" 
+                          icon="pi pi-upload" 
+                          severity="secondary" 
+                          className="border-slate-300 font-bold !rounded-xl !py-2.5 !px-5 text-sm" 
+                        />
+                        <input 
+                          type="file" 
+                          accept=".csv" 
+                          onChange={handleUploadCsv} 
+                          className="absolute left-0 top-0 opacity-0 cursor-pointer w-full h-full" 
+                        />
+                     </div>
+                   )}
                 </div>
               )}
               {session?.status === 'DRAFT' && (
@@ -970,8 +1033,47 @@ export default function PricingValidationBoardPage() {
            </div>
        </div>
 
-       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          {session?.status === 'DRAFT' && session?.source_type === 'FILTER_BULK' && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+           {session?.status === 'DRAFT' && (session?.source_type === 'AI_PDF_PARSER' || session?.source_type === 'CSV_UPLOAD') && (
+             <div className="bg-slate-900 text-white border-b border-slate-800 p-4 flex flex-wrap items-center justify-between gap-4 relative z-10">
+                <div className="flex items-center gap-3">
+                   <span className="text-xl">💱</span>
+                   <div>
+                      <h4 className="text-sm font-bold text-slate-200">Conversión y Factorización Rápida (Mesa de Trabajo)</h4>
+                      <p className="text-slate-400 text-xs mt-0.5">Divide o multiplica todos los nuevos costos y precios propuestos en lote.</p>
+                   </div>
+                </div>
+                <div className="flex items-center gap-3">
+                   <div className="flex flex-col gap-1">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Tasa de Cambio</span>
+                      <InputNumber 
+                        value={factorRate} 
+                        onValueChange={(e) => setFactorRate(e.value ?? 1.0)} 
+                        mode="decimal" 
+                        minFractionDigits={2} 
+                        maxFractionDigits={6} 
+                        placeholder="40.00" 
+                        inputClassName="p-2 bg-slate-800 border-slate-700 text-white rounded-lg w-28 text-sm text-center font-bold" 
+                      />
+                   </div>
+                   <Button 
+                     label="Dividir (VES -> USD)" 
+                     icon="pi pi-percentage" 
+                     className="!bg-emerald-600 hover:!bg-emerald-700 border-none px-4 py-2 text-xs font-bold shadow-md h-9 mt-4" 
+                     loading={applyingRate}
+                     onClick={() => handleApplyExchangeRate('DIVIDE')}
+                   />
+                   <Button 
+                     label="Multiplicar (USD -> VES)" 
+                     icon="pi pi-times" 
+                     className="!bg-amber-600 hover:!bg-amber-700 border-none px-4 py-2 text-xs font-bold shadow-md h-9 mt-4" 
+                     loading={applyingRate}
+                     onClick={() => handleApplyExchangeRate('MULTIPLY')}
+                   />
+                </div>
+             </div>
+           )}
+           {session?.status === 'DRAFT' && session?.source_type === 'FILTER_BULK' && (
             <div className="bg-slate-55 border-b border-slate-200 p-4 flex flex-wrap items-end gap-4 relative z-10">
                <div className="flex-1 min-w-[250px]">
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Línea Manual: Buscar Producto</label>
@@ -1030,18 +1132,17 @@ export default function PricingValidationBoardPage() {
              
              <Column field="external_reference_name" header="REFERENCIA / PRODUCTO" className="font-bold" body={productTemplate}></Column>
              
-             {/* Columns for BOTH session */}
              {(session?.update_type === 'BOTH' || !session?.update_type) && (
                 <Column 
                    field="old_cost" 
-                   header="COSTO ESTÁNDAR" 
+                   header="COSTO ESTÁNDAR ($)" 
                    body={(r) => <span className="text-slate-400">${Number(r.old_cost).toFixed(2)}</span>}
                 ></Column>
              )}
              {(session?.update_type === 'BOTH' || !session?.update_type) && (
                 <Column 
                    field="proposed_cost" 
-                   header="NUEVO ESTÁNDAR" 
+                   header="NUEVO ESTÁNDAR ($)" 
                    body={(r) => <span className="text-blue-600 font-extrabold">${Number(r.proposed_cost).toFixed(2)}</span>} 
                    editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
                    onCellEditComplete={onCellEditComplete} 
@@ -1052,14 +1153,14 @@ export default function PricingValidationBoardPage() {
              {(session?.update_type === 'BOTH' || !session?.update_type) && (
                 <Column 
                    field="old_replacement_cost" 
-                   header="COSTO REPOSICIÓN" 
+                   header="COSTO REPOSICIÓN ($)" 
                    body={(r) => <span className="text-slate-400">${Number(r.old_replacement_cost || 0).toFixed(2)}</span>}
                 ></Column>
              )}
              {(session?.update_type === 'BOTH' || !session?.update_type) && (
                 <Column 
                    field="proposed_replacement_cost" 
-                   header="NUEVO REPOSICIÓN" 
+                   header="NUEVO REPOSICIÓN ($)" 
                    body={(r) => <span className="text-violet-600 font-extrabold">${Number(r.proposed_replacement_cost || 0).toFixed(2)}</span>} 
                    editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
                    onCellEditComplete={onCellEditComplete} 
@@ -1067,18 +1168,17 @@ export default function PricingValidationBoardPage() {
                 ></Column>
              )}
 
-             {/* Columns for COST-only session */}
              {session?.update_type === 'COST' && (
                 session?.target_cost_type === 'STANDARD' ? (
                    <Column 
                       field="old_cost" 
-                      header="COSTO ACTUAL" 
+                      header="COSTO ACTUAL ($)" 
                       body={(r) => <span className="text-slate-500">${Number(r.old_cost).toFixed(2)}</span>}
                    ></Column>
                 ) : (
                    <Column 
                       field="old_replacement_cost" 
-                      header="COSTO ACTUAL" 
+                      header="COSTO ACTUAL ($)" 
                       body={(r) => <span className="text-slate-500">${Number(r.old_replacement_cost || 0).toFixed(2)}</span>}
                    ></Column>
                 )
@@ -1087,7 +1187,7 @@ export default function PricingValidationBoardPage() {
                 session?.target_cost_type === 'STANDARD' ? (
                    <Column 
                       field="proposed_cost" 
-                      header="NUEVO COSTO" 
+                      header="NUEVO COSTO ($)" 
                       body={(r) => <span className="text-blue-600 font-extrabold">${Number(r.proposed_cost).toFixed(2)}</span>} 
                       editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
                       onCellEditComplete={onCellEditComplete} 
@@ -1096,7 +1196,7 @@ export default function PricingValidationBoardPage() {
                 ) : (
                    <Column 
                       field="proposed_replacement_cost" 
-                      header="NUEVO COSTO" 
+                      header="NUEVO COSTO ($)" 
                       body={(r) => <span className="text-violet-600 font-extrabold">${Number(r.proposed_replacement_cost || 0).toFixed(2)}</span>} 
                       editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
                       onCellEditComplete={onCellEditComplete} 
@@ -1105,10 +1205,9 @@ export default function PricingValidationBoardPage() {
                 )
              )}
 
-             {/* Columns for PRICE-only or BOTH sessions */}
              {session?.update_type !== 'COST' && (
                 <Column 
-                   header="COSTO BASE" 
+                   header="COSTO BASE ($)" 
                    body={(r) => {
                        const cost = session?.target_cost_type === 'REPLACEMENT' 
                            ? Number(r.proposed_replacement_cost || r.old_replacement_cost || 0)
@@ -1120,14 +1219,14 @@ export default function PricingValidationBoardPage() {
              {session?.update_type !== 'COST' && (
                 <Column 
                    field="old_price" 
-                   header="PVP ACTUAL" 
+                   header="PVP ACTUAL ($)" 
                    body={(r) => <span className="text-slate-500">${Number(r.old_price).toFixed(2)}</span>}
                 ></Column>
              )}
              {session?.update_type !== 'COST' && (
                 <Column 
                    field="proposed_price" 
-                   header="NUEVO PVP" 
+                   header="NUEVO PVP ($)" 
                    body={(r) => <span className="text-emerald-600 font-extrabold">${Number(r.proposed_price).toFixed(2)}</span>} 
                    editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
                    onCellEditComplete={onCellEditComplete} 
@@ -1136,7 +1235,7 @@ export default function PricingValidationBoardPage() {
              )}
              {session?.update_type !== 'COST' && (
                 <Column 
-                   header="NUEVO PVP (CON IVA)" 
+                   header="NUEVO PVP (CON IVA) ($)" 
                    body={(r) => <span className="text-emerald-800 font-bold">${(Number(r.proposed_price) * 1.16).toFixed(2)}</span>} 
                 ></Column>
              )}
@@ -1387,6 +1486,103 @@ export default function PricingValidationBoardPage() {
           <i className="pi pi-spin pi-spinner text-4xl text-indigo-600 animate-pulse"></i>
           <p className="font-bold text-slate-700 text-sm">{pdfProgressMsg}</p>
           <span className="text-xs text-slate-400 font-medium">Analizando archivo y cruzando datos con la base de datos...</span>
+        </div>
+      </Dialog>
+
+      {/* Diálogo de Carga de Lista (PDF / Excel / IA) */}
+      <Dialog 
+        header="Cargar Lista de Precios / PDF (IA)" 
+        visible={showUploadDialog} 
+        style={{ width: '450px' }} 
+        modal 
+        onHide={() => {
+          setShowUploadDialog(false);
+          setSelectedUploadFile(null);
+        }}
+        className="!rounded-2xl"
+      >
+        <div className="flex flex-col gap-4 mt-2">
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Moneda del Documento</label>
+            <SelectButton 
+              value={uploadCurrency} 
+              options={[
+                { label: 'Dólares (USD)', value: 'USD' },
+                { label: 'Bolívares (VES)', value: 'VES' }
+              ]} 
+              onChange={(e) => setUploadCurrency(e.value || 'USD')} 
+              className="w-full text-center"
+            />
+          </div>
+
+          {uploadCurrency === 'VES' && (
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Tasa de Cambio a aplicar (dividirá costos y precios)</label>
+              <div className="flex items-center gap-2">
+                <InputNumber 
+                  value={uploadRate} 
+                  onValueChange={(e) => setUploadRate(e.value ?? 1.0)} 
+                  mode="decimal" 
+                  minFractionDigits={2} 
+                  maxFractionDigits={6}
+                  className="w-full"
+                  inputClassName="p-2 border border-slate-300 rounded-lg w-full text-sm"
+                />
+                <Button 
+                  icon="pi pi-sync" 
+                  severity="secondary" 
+                  outlined 
+                  onClick={() => setUploadRate(vesRate)} 
+                  tooltip="Restablecer a Tasa Oficial" 
+                  className="h-10"
+                />
+              </div>
+              <p className="text-[10px] text-slate-500 italic">
+                * Tasa oficial de referencia: {vesRate.toFixed(4)} VES/USD.
+              </p>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2 mt-2">
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Seleccionar Archivo (PDF, Excel o Imagen)</label>
+            <div className="flex items-center justify-center w-full">
+              <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-slate-300 border-dashed rounded-lg cursor-pointer bg-slate-50 hover:bg-slate-100 transition-all">
+                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                  <span className="text-2xl mb-2">📁</span>
+                  <p className="mb-1 text-xs text-slate-500 font-bold">
+                    {selectedUploadFile ? selectedUploadFile.name : 'Haz clic para seleccionar archivo'}
+                  </p>
+                  <p className="text-[10px] text-slate-400">
+                    PDF, XLSX, XLS, JPG o PNG
+                  </p>
+                </div>
+                <input 
+                  type="file" 
+                  accept=".pdf,image/*,.xlsx,.xls" 
+                  className="hidden" 
+                  onChange={(e) => setSelectedUploadFile(e.target.files?.[0] || null)}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 mt-4">
+            <Button 
+              label="Cancelar" 
+              className="p-button-text text-sm font-bold" 
+              onClick={() => {
+                setShowUploadDialog(false);
+                setSelectedUploadFile(null);
+              }} 
+            />
+            <Button 
+              label="Procesar con IA" 
+              severity="help" 
+              className="font-bold text-sm px-4" 
+              disabled={!selectedUploadFile} 
+              onClick={() => handleUploadPdfWithParams(selectedUploadFile, uploadCurrency, uploadRate)}
+            />
+          </div>
         </div>
       </Dialog>
 

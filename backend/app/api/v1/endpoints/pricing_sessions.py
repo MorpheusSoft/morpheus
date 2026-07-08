@@ -633,7 +633,9 @@ def upload_pdf_to_session(
     *,
     db: Session = Depends(deps.get_db),
     id: int,
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    currency: str = "USD",
+    exchange_rate: float = 1.0
 ) -> Any:
     """ Sube un PDF, lo parsea usando Inteligencia Artificial (Gemini) o regex local, y concilia las variantes """
     import os
@@ -891,6 +893,12 @@ def upload_pdf_to_session(
             # Crear o actualizar PricingSessionLine
             proposed_cost_val = float(item.get("cost") or 0.0)
             proposed_price_val = float(item.get("suggested_price") or 0.0)
+
+            # Si la moneda de origen es VES y la tasa de cambio es valida, se convierte a USD
+            rate_factor = float(exchange_rate) if exchange_rate and float(exchange_rate) > 0 else 1.0
+            if currency == "VES":
+                proposed_cost_val = proposed_cost_val / rate_factor
+                proposed_price_val = proposed_price_val / rate_factor
             
             if variant:
                 existing_line = db.query(PricingSessionLine).filter(
@@ -1400,3 +1408,40 @@ def delete_session(session_id: int, db: Session = Depends(deps.get_db)) -> Any:
     db.delete(session)
     db.commit()
     return {"message": "Session deleted successfully"}
+
+from pydantic import BaseModel
+class ApplyRatePayload(BaseModel):
+    rate: float
+    op: str = "DIVIDE" # "DIVIDE" or "MULTIPLY"
+
+@router.post("/{id}/apply-rate")
+def apply_rate_to_session(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    payload: ApplyRatePayload
+) -> Any:
+    """ Aplica una tasa (dividir o multiplicar) a todas las líneas de costo y precio de una sesión en borrador """
+    from decimal import Decimal
+    session = db.query(PricingSession).filter(PricingSession.id == id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Pricing session not found")
+    if session.status != 'DRAFT':
+        raise HTTPException(status_code=400, detail="Only DRAFT sessions can be modified.")
+        
+    rate_val = Decimal(str(payload.rate))
+    if rate_val <= 0:
+        raise HTTPException(status_code=400, detail="Rate must be greater than zero")
+        
+    for line in session.lines:
+        if payload.op == "DIVIDE":
+            line.proposed_cost = line.proposed_cost / rate_val
+            line.proposed_replacement_cost = line.proposed_replacement_cost / rate_val
+            line.proposed_price = line.proposed_price / rate_val
+        elif payload.op == "MULTIPLY":
+            line.proposed_cost = line.proposed_cost * rate_val
+            line.proposed_replacement_cost = line.proposed_replacement_cost * rate_val
+            line.proposed_price = line.proposed_price * rate_val
+            
+    db.commit()
+    return {"message": "Tasa aplicada exitosamente", "lines_affected": len(session.lines)}

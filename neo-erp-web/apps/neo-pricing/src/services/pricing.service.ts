@@ -29,12 +29,23 @@ export const PricingService = {
     });
     return data;
   },
-  uploadPdf: async (id: string | number, file: File) => {
+  uploadPdf: async (id: string | number, file: File, currency?: string, exchangeRate?: number) => {
     const formData = new FormData();
     formData.append('file', file);
-    const { data } = await api.post(`/pricing-sessions/${id}/upload-pdf`, formData, {
+    let url = `/pricing-sessions/${id}/upload-pdf`;
+    const params = [];
+    if (currency) params.push(`currency=${encodeURIComponent(currency)}`);
+    if (exchangeRate) params.push(`exchange_rate=${exchangeRate}`);
+    if (params.length > 0) {
+      url += `?${params.join('&')}`;
+    }
+    const { data } = await api.post(url, formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     });
+    return data;
+  },
+  applyExchangeRate: async (id: string | number, rate: number, op: string = 'DIVIDE') => {
+    const { data } = await api.post(`/pricing-sessions/${id}/apply-rate`, { rate, op });
     return data;
   },
   associateLine: async (sessionId: string | number, lineId: string | number, variantId: number) => {
