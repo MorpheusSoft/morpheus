@@ -280,8 +280,16 @@ export default function KioskConsultorPage() {
           aspectRatio: 1.333333
         };
 
+        const videoConstraints = {
+          deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
+          facingMode: selectedCameraId ? undefined : "environment",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          advanced: [{ focusMode: "continuous" }]
+        };
+
         await scanner.start(
-          selectedCameraId || { facingMode: "environment" },
+          videoConstraints as any,
           config,
           (decodedText) => {
             playBeep();
