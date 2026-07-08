@@ -118,7 +118,7 @@ export default function KioskConsultorPage() {
     if (cachedHistory) {
       try {
         const parsed = JSON.parse(cachedHistory);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.every(p => p && p.sku && p.prices)) {
           setHistory(parsed);
         } else {
           localStorage.removeItem('morpheus_scan_history');
@@ -695,10 +695,10 @@ export default function KioskConsultorPage() {
                   
                   <div className="text-right flex-shrink-0">
                     <strong className="text-xs font-black text-emerald-400">
-                      ${((product.prices.has_promo && product.prices.promo_price_usd !== null ? product.prices.promo_price_usd : product.prices.regular_price_usd) ?? 0).toFixed(2)}
+                      ${((product.prices?.has_promo && product.prices?.promo_price_usd !== null ? product.prices?.promo_price_usd : product.prices?.regular_price_usd) ?? 0).toFixed(2)}
                     </strong>
                     <span className="block text-[8px] text-slate-500 font-bold uppercase tracking-wider">
-                      {product.prices.has_promo ? 'Oferta' : 'Regular'}
+                      {product.prices?.has_promo ? 'Oferta' : 'Regular'}
                     </span>
                   </div>
                 </div>
