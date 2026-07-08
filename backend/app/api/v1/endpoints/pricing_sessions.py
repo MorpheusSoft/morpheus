@@ -371,26 +371,39 @@ def upload_csv_to_session(
                 "generationConfig": {"responseMimeType": "application/json"}
             }
 
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode('utf-8'),
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
+            import time
+            import urllib.error
 
-            with urllib.request.urlopen(req, timeout=15) as response:
-                res_data = json.loads(response.read().decode('utf-8'))
-                text_content = res_data['candidates'][0]['content']['parts'][0]['text'].strip()
-                # Clean markdown code block if present
-                if text_content.startswith("```"):
-                    lines_c = text_content.splitlines()
-                    if lines_c[0].startswith("```"):
-                        lines_c = lines_c[1:]
-                    if lines_c and lines_c[-1].startswith("```"):
-                        lines_c = lines_c[:-1]
-                    text_content = "\n".join(lines_c).strip()
-                parsed_mapping = json.loads(text_content)
-                gemini_success = True
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps(payload).encode('utf-8'),
+                        headers={"Content-Type": "application/json"},
+                        method="POST"
+                    )
+                    with urllib.request.urlopen(req, timeout=120) as response:
+                        res_data = json.loads(response.read().decode('utf-8'))
+                        text_content = res_data['candidates'][0]['content']['parts'][0]['text'].strip()
+                        # Clean markdown code block if present
+                        if text_content.startswith("```"):
+                            lines_c = text_content.splitlines()
+                            if lines_c[0].startswith("```"):
+                                lines_c = lines_c[1:]
+                            if lines_c and lines_c[-1].startswith("```"):
+                                lines_c = lines_c[:-1]
+                            text_content = "\n".join(lines_c).strip()
+                        parsed_mapping = json.loads(text_content)
+                        gemini_success = True
+                        break
+                except urllib.error.HTTPError as he:
+                    if he.code in (429, 503) and attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 3
+                        print(f"Gemini API returned {he.code}. Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        raise he
         except Exception as e:
             print(f"Error calling Gemini: {e}. Fallback to local column heuristics.")
 
@@ -725,18 +738,31 @@ def upload_pdf_to_session(
 
                 import urllib.request
                 import json
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode('utf-8'),
-                    headers={"Content-Type": "application/json"},
-                    method="POST"
-                )
+                import urllib.error
+                import time
 
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    res_data = json.loads(response.read().decode('utf-8'))
-                    text_content = res_data['candidates'][0]['content']['parts'][0]['text']
-                    parsed_items = json.loads(text_content.strip())
-                    gemini_success = True
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        req = urllib.request.Request(
+                            url,
+                            data=json.dumps(payload).encode('utf-8'),
+                            headers={"Content-Type": "application/json"},
+                            method="POST"
+                        )
+                        with urllib.request.urlopen(req, timeout=120) as response:
+                            res_data = json.loads(response.read().decode('utf-8'))
+                            text_content = res_data['candidates'][0]['content']['parts'][0]['text']
+                            parsed_items = json.loads(text_content.strip())
+                            gemini_success = True
+                            break
+                    except urllib.error.HTTPError as he:
+                        if he.code in (429, 503) and attempt < max_retries - 1:
+                            wait_time = (attempt + 1) * 3
+                            print(f"Gemini API returned {he.code}. Retrying in {wait_time}s...")
+                            time.sleep(wait_time)
+                        else:
+                            raise he
             except Exception as e:
                 print(f"Error calling Gemini: {e}. Fallback to local regex parser.")
         
