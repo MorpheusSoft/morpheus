@@ -19,6 +19,11 @@ export interface PrintTemplate {
   show_price_iva: boolean;
   show_uom: boolean;
   show_brand: boolean;
+  show_promo_price_usd?: boolean;
+  show_promo_price_ves?: boolean;
+  show_promo_price_usd_iva?: boolean;
+  show_promo_price_ves_iva?: boolean;
+  show_promo_end_date?: boolean;
   promo_text?: string;
   font_size_pt: number;
   layout_config?: Record<string, any> | null;

@@ -43,9 +43,11 @@ export function AppSidebar() {
     { label: 'Análisis y Métricas', icon: 'pi pi-chart-bar', href: '/' },
     { label: 'Actualizar Costos', icon: 'pi pi-percentage', href: '/costos' },
     { label: 'Actualizar Precios', icon: 'pi pi-tags', href: '/precios' },
+    { label: 'Planificar Ofertas', icon: 'pi pi-calendar-plus', href: '/precios/ofertas' },
     { label: 'Consulta Productos', icon: 'pi pi-search', href: '/productos' },
     { label: 'Impresión Habladores', icon: 'pi pi-print', href: '/habladores' },
     { label: 'Reportes de Precios', icon: 'pi pi-file', href: '/reportes' },
+    { label: 'Ventas por Tienda', icon: 'pi pi-chart-line', href: '/reportes/ventas-tienda' },
     { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
   ];
 
@@ -54,6 +56,9 @@ export function AppSidebar() {
     : menuItems;
 
   const isActivePath = (href: string) => {
+    if (href === '/reportes') {
+      return pathname === '/reportes';
+    }
     return pathname === href || (pathname.startsWith(href) && href !== '/');
   };
 

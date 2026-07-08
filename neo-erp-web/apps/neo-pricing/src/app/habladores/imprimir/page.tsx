@@ -15,6 +15,17 @@ interface PrintItem {
   qty: number;
   tax_rate: number;
   custom_text?: string;
+  regular_net_usd: number;
+  regular_gross_usd: number;
+  regular_net_ves: number;
+  regular_gross_ves: number;
+  promo_net_usd: number | null;
+  promo_gross_usd: number | null;
+  promo_net_ves: number | null;
+  promo_gross_ves: number | null;
+  promo_start_at: string | null;
+  promo_end_at: string | null;
+  promo_active: boolean;
 }
 
 interface PrintConfig {
@@ -144,6 +155,8 @@ export default function PrintHabladoresPage() {
       const priceUsdIva = item.price_usd * (1 + item.tax_rate / 100);
       const priceVesIva = item.price_ves * (1 + item.tax_rate / 100);
       
+      const formatF = (v: number | null | undefined) => v !== null && v !== undefined ? v.toFixed(2) : '-';
+
       result = result.replace(/{{sku}}/g, item.sku || '');
       result = result.replace(/{{modelo}}/g, item.model || '');
       result = result.replace(/{{marca}}/g, item.brand || '');
@@ -152,6 +165,18 @@ export default function PrintHabladoresPage() {
       result = result.replace(/{{precio_ves}}/g, `Bs. ${item.price_ves.toFixed(2)}`);
       result = result.replace(/{{precio_usd_iva}}/g, `$${priceUsdIva.toFixed(2)}`);
       result = result.replace(/{{precio_ves_iva}}/g, `Bs. ${priceVesIva.toFixed(2)}`);
+      
+      result = result.replace(/{{regular_net_usd}}/g, `$${formatF(item.regular_net_usd)}`);
+      result = result.replace(/{{regular_gross_usd}}/g, `$${formatF(item.regular_gross_usd)}`);
+      result = result.replace(/{{regular_net_ves}}/g, `Bs. ${formatF(item.regular_net_ves)}`);
+      result = result.replace(/{{regular_gross_ves}}/g, `Bs. ${formatF(item.regular_gross_ves)}`);
+      result = result.replace(/{{promo_net_usd}}/g, item.promo_net_usd !== null ? `$${formatF(item.promo_net_usd)}` : '-');
+      result = result.replace(/{{promo_gross_usd}}/g, item.promo_gross_usd !== null ? `$${formatF(item.promo_gross_usd)}` : '-');
+      result = result.replace(/{{promo_net_ves}}/g, item.promo_net_ves !== null ? `Bs. ${formatF(item.promo_net_ves)}` : '-');
+      result = result.replace(/{{promo_gross_ves}}/g, item.promo_gross_ves !== null ? `Bs. ${formatF(item.promo_gross_ves)}` : '-');
+      result = result.replace(/{{promo_end_at}}/g, item.promo_end_at ? new Date(item.promo_end_at).toLocaleDateString() : '');
+      result = result.replace(/{{promo_start_at}}/g, item.promo_start_at ? new Date(item.promo_start_at).toLocaleDateString() : '');
+
       return result;
     }
 
@@ -170,6 +195,18 @@ export default function PrintHabladoresPage() {
     if (key === 'price_usd_iva') return prefix + `$${priceUsdIva.toFixed(2)}`;
     if (key === 'price_ves_iva') return prefix + `Bs. ${priceVesIva.toFixed(2)}`;
     
+    const formatVal = (v: number | null | undefined) => v !== null && v !== undefined ? v.toFixed(2) : '-';
+    if (key === 'regular_net_usd') return prefix + `$${formatVal(item.regular_net_usd)}`;
+    if (key === 'regular_gross_usd') return prefix + `$${formatVal(item.regular_gross_usd)}`;
+    if (key === 'regular_net_ves') return prefix + `Bs. ${formatVal(item.regular_net_ves)}`;
+    if (key === 'regular_gross_ves') return prefix + `Bs. ${formatVal(item.regular_gross_ves)}`;
+    if (key === 'promo_net_usd') return prefix + (item.promo_net_usd !== null ? `$${formatVal(item.promo_net_usd)}` : '-');
+    if (key === 'promo_gross_usd') return prefix + (item.promo_gross_usd !== null ? `$${formatVal(item.promo_gross_usd)}` : '-');
+    if (key === 'promo_net_ves') return prefix + (item.promo_net_ves !== null ? `Bs. ${formatVal(item.promo_net_ves)}` : '-');
+    if (key === 'promo_gross_ves') return prefix + (item.promo_gross_ves !== null ? `Bs. ${formatVal(item.promo_gross_ves)}` : '-');
+    if (key === 'promo_end_at') return prefix + (item.promo_end_at ? new Date(item.promo_end_at).toLocaleDateString() : '');
+    if (key === 'promo_start_at') return prefix + (item.promo_start_at ? new Date(item.promo_start_at).toLocaleDateString() : '');
+
     if (key === 'promo_text') return prefix + (item.custom_text || promo_text || '');
     return '';
   };
@@ -296,12 +333,17 @@ export default function PrintHabladoresPage() {
           {item.name} {item.model ? `(${item.model})` : ''}
         </div>
 
-        {/* Custom Promo Text badge */}
-        {(item.custom_text || promo_text) && (
+        {/* Custom Promo Text badge or active offer badge */}
+        {item.promo_active && item.promo_net_usd !== null ? (
+          <div className="bg-rose-600 text-white font-extrabold text-center py-0.5 px-1 rounded uppercase text-[0.7em] tracking-wide mb-0.5 flex justify-between items-center px-2">
+            <span>🔥 PRECIO EN OFERTA</span>
+            {item.promo_end_at && <span>Vence: {new Date(item.promo_end_at).toLocaleDateString()}</span>}
+          </div>
+        ) : (item.custom_text || promo_text) ? (
           <div className="bg-rose-600 text-white font-extrabold text-center py-0.5 px-1 rounded uppercase text-[0.7em] tracking-wide mb-0.5">
             {item.custom_text || promo_text}
           </div>
-        )}
+        ) : null}
 
         {/* UoM Row */}
         {show_uom && (
@@ -315,24 +357,54 @@ export default function PrintHabladoresPage() {
           <div className="flex justify-between items-end">
             {show_price_ves && (
               <div className="flex flex-col leading-none">
-                <span className="text-[0.55em] font-bold text-gray-400 uppercase">Precio VES</span>
-                <span className="font-extrabold text-black text-[1.1em]">Bs. {item.price_ves.toFixed(2)}</span>
+                <span className="text-[0.55em] font-bold text-gray-400 uppercase">
+                  {item.promo_active ? 'VES Regular' : 'Precio VES'}
+                </span>
+                <span className={`font-bold text-black text-[1.1em] ${item.promo_active ? 'line-through text-gray-400 text-[0.9em]' : ''}`}>
+                  Bs. {item.price_ves.toFixed(2)}
+                </span>
               </div>
             )}
             {show_price_usd && (
               <div className="flex flex-col items-end leading-none">
-                <span className="text-[0.55em] font-bold text-gray-400 uppercase">Precio USD</span>
-                <span className="font-extrabold text-black text-[1.4em]">${item.price_usd.toFixed(2)}</span>
+                <span className="text-[0.55em] font-bold text-gray-400 uppercase">
+                  {item.promo_active ? 'USD Regular' : 'Precio USD'}
+                </span>
+                <span className={`font-bold text-black text-[1.3em] ${item.promo_active ? 'line-through text-gray-400 text-[1.0em]' : ''}`}>
+                  ${item.price_usd.toFixed(2)}
+                </span>
               </div>
             )}
           </div>
+
+          {/* Active Promo Prices */}
+          {item.promo_active && item.promo_net_usd !== null && (
+            <div className="flex justify-between items-end mt-1 pt-1 border-t border-dashed border-rose-200 bg-rose-50/50 p-1 rounded">
+              <div className="flex flex-col leading-none">
+                <span className="text-[0.55em] font-bold text-rose-600 uppercase">VES OFERTA</span>
+                <span className="font-extrabold text-rose-600 text-[1.2em]">
+                  Bs. {(item.promo_net_ves || 0).toFixed(2)}
+                </span>
+              </div>
+              <div className="flex flex-col items-end leading-none">
+                <span className="text-[0.55em] font-bold text-rose-600 uppercase">USD OFERTA</span>
+                <span className="font-extrabold text-rose-600 text-[1.5em]">
+                  ${(item.promo_net_usd || 0).toFixed(2)}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Show price with IVA underneath if enabled */}
           {show_price_iva && (
             <div className="flex justify-between items-end mt-0.5 pt-0.5 border-t border-dashed border-gray-100">
               <span className="text-[0.6em] font-bold text-slate-500 uppercase">Con IVA:</span>
               <span className="text-[0.75em] font-bold text-slate-800">
-                Bs. {priceVesIva.toFixed(2)} / ${priceUsdIva.toFixed(2)}
+                {item.promo_active && item.promo_gross_usd !== null ? (
+                  <>Bs. {item.promo_gross_ves?.toFixed(2)} / ${item.promo_gross_usd?.toFixed(2)}</>
+                ) : (
+                  <>Bs. {priceVesIva.toFixed(2)} / ${priceUsdIva.toFixed(2)}</>
+                )}
               </span>
             </div>
           )}

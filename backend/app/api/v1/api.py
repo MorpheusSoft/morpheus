@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.api import deps
-from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, inventory_session, suppliers, buyers, mrp, purchase_orders, currencies, wms, jobs, dashboard, facilities, pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b, labels, import_legacy, print_templates
+from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, inventory_session, suppliers, buyers, mrp, purchase_orders, currencies, wms, jobs, dashboard, facilities, pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b, labels, import_legacy, print_templates, promotions, sales_report
 
 api_router = APIRouter()
 api_router.include_router(login.router, tags=["login"])
@@ -9,11 +9,13 @@ api_router.include_router(login.router, tags=["login"])
 secure_dependencies = [Depends(deps.get_current_active_user)]
 
 api_router.include_router(products.router, prefix="/products", tags=["products"], dependencies=secure_dependencies)
+api_router.include_router(promotions.router, prefix="/promotions", tags=["promotions"], dependencies=secure_dependencies)
 api_router.include_router(catalog.router, tags=["catalog"], dependencies=secure_dependencies)
 api_router.include_router(stock.router, prefix="/stock", tags=["stock"], dependencies=secure_dependencies)
 api_router.include_router(inventory.router, prefix="/inventory", tags=["inventory"], dependencies=secure_dependencies)
 api_router.include_router(inventory_session.router, prefix="/inventory-session", tags=["inventory session"], dependencies=secure_dependencies)
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"], dependencies=secure_dependencies)
+api_router.include_router(sales_report.router, prefix="/sales-report", tags=["sales report"], dependencies=secure_dependencies)
 api_router.include_router(utils.router, prefix="/utils", tags=["utils"], dependencies=secure_dependencies)
 api_router.include_router(customers.router, prefix="/customers", tags=["customers"], dependencies=secure_dependencies)
 api_router.include_router(inventory_bulk.router, prefix="/inventory-bulk", tags=["inventory bulk"], dependencies=secure_dependencies)

@@ -24,6 +24,17 @@ class ProductBarcode(ProductBarcodeBase):
     class Config:
         from_attributes = True
 
+class InventorySnapshotSchema(BaseModel):
+    variant_id: int
+    facility_id: int
+    stock_qty: Decimal
+    avg_cost: Optional[Decimal] = None
+    current_cost: Optional[Decimal] = None
+    replacement_cost: Optional[Decimal] = None
+
+    class Config:
+        from_attributes = True
+
 # =================
 # PACKAGING SCHEMAS
 # =================
@@ -49,6 +60,10 @@ class ProductFacilityPriceBase(BaseModel):
     facility_id: int
     sales_price: Decimal = 0
     target_utility_pct: Optional[Decimal] = None
+    promo_price: Optional[Decimal] = None
+    promo_target_utility_pct: Optional[Decimal] = None
+    promo_start_at: Optional[datetime] = None
+    promo_end_at: Optional[datetime] = None
 
 class ProductFacilityPriceCreate(ProductFacilityPriceBase):
     id: Optional[int] = None
@@ -108,6 +123,7 @@ class ProductVariant(ProductVariantBase):
 
     barcodes: List[ProductBarcode] = []
     facility_prices: List[ProductFacilityPrice] = []
+    inventory_snapshots: List[InventorySnapshotSchema] = []
 
     class Config:
         from_attributes = True

@@ -30,6 +30,17 @@ interface PrintItem {
   custom_text?: string;
   facility_prices?: any[];
   base_price?: number;
+  regular_net_usd: number;
+  regular_gross_usd: number;
+  regular_net_ves: number;
+  regular_gross_ves: number;
+  promo_net_usd: number | null;
+  promo_gross_usd: number | null;
+  promo_net_ves: number | null;
+  promo_gross_ves: number | null;
+  promo_start_at: string | null;
+  promo_end_at: string | null;
+  promo_active: boolean;
 }
 
 export default function HabladoresWorkbenchPage() {
@@ -47,6 +58,51 @@ export default function HabladoresWorkbenchPage() {
   const getVariantPrice = (variant: any, facilityId: number = 1) => {
     const fp = variant.facility_prices?.find((f: any) => f.facility_id === facilityId);
     return fp ? Number(fp.sales_price) : Number(variant.sales_price || 0);
+  };
+
+  const getVariantPricesForFacility = (
+    variant: any,
+    facilityId: number,
+    taxRate: number,
+    rateVes: number
+  ) => {
+    const fp = variant.facility_prices?.find((f: any) => f.facility_id === facilityId);
+    const regular_net_usd = fp ? Number(fp.sales_price) : Number(variant.sales_price || 0);
+    const regular_gross_usd = regular_net_usd * (1 + taxRate / 100);
+    const regular_net_ves = regular_net_usd * rateVes;
+    const regular_gross_ves = regular_gross_usd * rateVes;
+
+    const promo_net_usd = fp && fp.promo_price !== null ? Number(fp.promo_price) : null;
+    const promo_gross_usd = promo_net_usd !== null ? promo_net_usd * (1 + taxRate / 100) : null;
+    const promo_net_ves = promo_net_usd !== null ? promo_net_usd * rateVes : null;
+    const promo_gross_ves = promo_gross_usd !== null ? promo_gross_usd * rateVes : null;
+
+    const promo_start_at = fp ? fp.promo_start_at : null;
+    const promo_end_at = fp ? fp.promo_end_at : null;
+
+    let promo_active = false;
+    if (promo_net_usd !== null) {
+      const now = new Date();
+      const start = promo_start_at ? new Date(promo_start_at) : null;
+      const end = promo_end_at ? new Date(promo_end_at) : null;
+      const startValid = !start || isNaN(start.getTime()) || now >= start;
+      const endValid = !end || isNaN(end.getTime()) || now <= end;
+      promo_active = startValid && endValid;
+    }
+
+    return {
+      regular_net_usd,
+      regular_gross_usd,
+      regular_net_ves,
+      regular_gross_ves,
+      promo_net_usd,
+      promo_gross_usd,
+      promo_net_ves,
+      promo_gross_ves,
+      promo_start_at,
+      promo_end_at,
+      promo_active,
+    };
   };
 
   // Sessions, facilities and rate
@@ -81,10 +137,16 @@ export default function HabladoresWorkbenchPage() {
     setSelectedProducts(prev => 
       prev.map(p => {
         const usdPrice = getPriceForFacility(p.facility_prices, p.base_price || 0, facilityId);
+        const dummyVariant = {
+          sales_price: p.base_price,
+          facility_prices: p.facility_prices
+        };
+        const calc = getVariantPricesForFacility(dummyVariant, facilityId, p.tax_rate, vesRate);
         return {
           ...p,
           price_usd: usdPrice,
-          price_ves: usdPrice * vesRate
+          price_ves: usdPrice * vesRate,
+          ...calc
         };
       })
     );
@@ -227,6 +289,7 @@ export default function HabladoresWorkbenchPage() {
     const barcode = getVariantBarcode(fullVariant);
     const taxRate = Number(product.tax_rate || 0);
     const model = product.model || '';
+    const calc = getVariantPricesForFacility(fullVariant, selectedFacilityId, taxRate, vesRate);
 
     const newItem: PrintItem = {
       variant_id: variant.id,
@@ -242,7 +305,8 @@ export default function HabladoresWorkbenchPage() {
       tax_rate: taxRate,
       custom_text: '',
       facility_prices: fullVariant.facility_prices || [],
-      base_price: Number(fullVariant.sales_price || 0)
+      base_price: Number(fullVariant.sales_price || 0),
+      ...calc
     };
 
     setSelectedProducts([...selectedProducts, newItem]);
@@ -297,6 +361,14 @@ export default function HabladoresWorkbenchPage() {
           const taxRate = Number(product.tax_rate || 0);
           const model = product.model || '';
 
+          const calc = getVariantPricesForFacility(variant, selectedFacilityId, taxRate, vesRate);
+          if (Number(line.proposed_price || 0) > 0) {
+            calc.regular_net_usd = Number(line.proposed_price);
+            calc.regular_gross_usd = calc.regular_net_usd * (1 + taxRate / 100);
+            calc.regular_net_ves = calc.regular_net_usd * vesRate;
+            calc.regular_gross_ves = calc.regular_gross_usd * vesRate;
+          }
+
           loadedItems.push({
             variant_id: variant.id,
             sku: variant.sku,
@@ -311,7 +383,8 @@ export default function HabladoresWorkbenchPage() {
             tax_rate: taxRate,
             custom_text: '',
             facility_prices: variant.facility_prices || [],
-            base_price: Number(variant.sales_price || 0)
+            base_price: Number(variant.sales_price || 0),
+            ...calc
           });
         } catch (e) {
           console.error(`Error loading variant ID ${line.variant_id} for printing:`, e);
@@ -626,15 +699,29 @@ export default function HabladoresWorkbenchPage() {
               ></Column>
               <Column
                 field="price_usd"
-                header="PRECIO USD"
-                body={(r) => <span className="font-semibold text-slate-600">${r.price_usd.toFixed(2)}</span>}
-                className="w-[10%]"
+                header="P. REGULAR"
+                body={(r) => (
+                  <div className="flex flex-col leading-tight">
+                    <span className="font-semibold text-slate-600">${r.price_usd.toFixed(2)}</span>
+                    <span className="text-[10px] text-slate-400">Bs. {r.price_ves.toFixed(2)}</span>
+                  </div>
+                )}
+                className="w-[12%]"
               ></Column>
               <Column
-                field="price_ves"
-                header="PRECIO VES"
-                body={(r) => <span className="font-bold text-slate-700">Bs. {r.price_ves.toFixed(2)}</span>}
-                className="w-[15%]"
+                header="P. OFERTA"
+                body={(r) => {
+                  if (r.promo_net_usd === null) return <span className="text-slate-400 font-normal">No programado</span>;
+                  return (
+                    <div className="flex flex-col leading-tight">
+                      <span className={`font-bold ${r.promo_active ? 'text-rose-600' : 'text-slate-500'}`}>
+                        ${r.promo_net_usd.toFixed(2)} {r.promo_active ? '(Activa)' : '(Inactiva)'}
+                      </span>
+                      <span className="text-[10px] text-slate-400">Bs. {r.promo_net_ves.toFixed(2)}</span>
+                    </div>
+                  );
+                }}
+                className="w-[18%]"
               ></Column>
               <Column
                 header="CANTIDAD"

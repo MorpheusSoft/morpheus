@@ -36,6 +36,8 @@ export default function ProductConsultationPage() {
   const [variantBranchPrices, setVariantBranchPrices] = useState<any[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
+
+
   useEffect(() => {
     const loadMetadata = async () => {
       try {
@@ -106,13 +108,20 @@ export default function ProductConsultationPage() {
       setLoadingDetail(true);
       const res = await ProductService.getVariantById(variant.id);
       const fps = res?.facility_prices || [];
+      const snaps = res?.inventory_snapshots || [];
       const mapped = facilities.map(f => {
         const fp = fps.find((x: any) => x.facility_id === f.id);
+        const snap = snaps.find((x: any) => x.facility_id === f.id);
         return {
           facility_id: f.id,
           facility_name: f.name,
           sales_price: fp ? Number(fp.sales_price) : null,
-          target_utility_pct: fp ? Number(fp.target_utility_pct) : 0
+          target_utility_pct: fp ? Number(fp.target_utility_pct) : 0,
+          promo_price: fp?.promo_price ? Number(fp.promo_price) : null,
+          promo_target_utility_pct: fp?.promo_target_utility_pct ? Number(fp.promo_target_utility_pct) : null,
+          promo_start_at: fp?.promo_start_at ? fp.promo_start_at : null,
+          promo_end_at: fp?.promo_end_at ? fp.promo_end_at : null,
+          stock: snap ? Number(snap.stock_qty) : 0
         };
       });
       setVariantBranchPrices(mapped);
@@ -123,6 +132,8 @@ export default function ProductConsultationPage() {
       setLoadingDetail(false);
     }
   };
+
+
 
   // Helper calculation for VAT (IVA)
   const getTaxRate = (product: any) => {
@@ -320,7 +331,7 @@ export default function ProductConsultationPage() {
       {/* Product Detail Dialog (Omits Specs/Images) */}
       <Dialog
         visible={showDetailDialog}
-        style={{ width: '50vw', minWidth: '600px' }}
+        style={{ width: '80vw', maxWidth: '1200px' }}
         header={<span className="text-xl font-extrabold text-slate-800">📄 Ficha de Consulta de Producto</span>}
         onHide={() => setShowDetailDialog(false)}
         footer={
@@ -461,6 +472,20 @@ export default function ProductConsultationPage() {
                           )}
                         ></Column>
                         <Column
+                          header="STOCK"
+                          body={(r) => {
+                            const uom = (selectedProduct.uom_base || 'PZA').toUpperCase();
+                            const isWeight = ['KG', 'KILOGRAMO', 'KILOGRAMOS', 'LBS', 'LIBRA', 'LIBRAS', 'G', 'GRAMOS', 'GRAMO', 'L', 'LT', 'M', 'MT', 'MTS'].includes(uom);
+                            const formattedStock = isWeight ? r.stock.toFixed(3) : Math.round(r.stock).toString();
+                            return (
+                              <span className={`px-2.5 py-1 rounded-xl text-xs font-bold ${r.stock > 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>
+                                {formattedStock} {uom.toLowerCase()}
+                              </span>
+                            );
+                          }}
+                          align="center"
+                        ></Column>
+                        <Column
                           header="PVP (SIN IVA)"
                           body={(r) => {
                             const val = r.sales_price ?? selectedVariant.sales_price ?? 0;
@@ -475,6 +500,40 @@ export default function ProductConsultationPage() {
                             return <span className={`font-bold ${r.sales_price ? 'text-indigo-700' : 'text-emerald-600'}`}>${valWithTax.toFixed(2)}</span>;
                           }}
                         ></Column>
+                        <Column
+                          header="PRECIO OFERTA (NETO)"
+                          body={(r) => {
+                            if (r.promo_price === null) return <span className="text-slate-400 font-normal">No programado</span>;
+                            return <span className="font-bold text-rose-600">${Number(r.promo_price).toFixed(2)}</span>;
+                          }}
+                        ></Column>
+                        <Column
+                          header="PRECIO OFERTA (CON IVA)"
+                          body={(r) => {
+                            if (r.promo_price === null) return <span className="text-slate-400 font-normal">No programado</span>;
+                            const valWithTax = Number(r.promo_price) * (1.0 + getTaxRate(selectedProduct) / 100.0);
+                            return <span className="font-extrabold text-rose-700">${valWithTax.toFixed(2)}</span>;
+                          }}
+                        ></Column>
+                        <Column
+                          header="VIGENCIA (INICIO - FIN)"
+                          body={(r) => {
+                            const formatDate = (dateStr: string | null) => {
+                              if (!dateStr) return '-';
+                              const d = new Date(dateStr);
+                              if (isNaN(d.getTime())) return '-';
+                              const pad = (n: number) => n.toString().padStart(2, '0');
+                              return `${pad(d.getDate())}/${pad(d.getMonth()+1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                            };
+                            if (!r.promo_start_at && !r.promo_end_at) return <span className="text-slate-400">-</span>;
+                            return (
+                              <div className="flex flex-col text-[10px] text-slate-600 leading-tight">
+                                <span>I: {formatDate(r.promo_start_at)}</span>
+                                <span>F: {formatDate(r.promo_end_at)}</span>
+                              </div>
+                            );
+                          }}
+                        ></Column>
                       </DataTable>
                     </div>
                   )}
@@ -484,6 +543,8 @@ export default function ProductConsultationPage() {
           </div>
         )}
       </Dialog>
+
+
     </div>
   );
 }

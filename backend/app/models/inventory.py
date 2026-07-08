@@ -124,6 +124,7 @@ class ProductVariant(Base):
     product = relationship("Product", back_populates="variants")
     barcodes = relationship("ProductBarcode", backref="variant")
     facility_prices = relationship("ProductFacilityPrice", backref="variant", cascade="all, delete-orphan")
+    inventory_snapshots = relationship("InventorySnapshot", backref="variant", cascade="all, delete-orphan")
 
 class ProductBarcode(Base):
     __tablename__ = "product_barcodes"
@@ -157,6 +158,11 @@ class ProductFacilityPrice(Base):
     facility_id = Column(Integer, ForeignKey("core.facilities.id"), primary_key=True)
     sales_price = Column(Numeric(19, 4), default=0)
     target_utility_pct = Column(Numeric(5, 2))
+    
+    promo_price = Column(Numeric(19, 4))
+    promo_target_utility_pct = Column(Numeric(5, 2))
+    promo_start_at = Column(DateTime(timezone=True))
+    promo_end_at = Column(DateTime(timezone=True))
 
 class InventorySnapshot(Base):
     __tablename__ = "inventory_snapshots"
@@ -360,3 +366,37 @@ class PrintTemplate(Base):
     promo_text = Column(String, nullable=True)
     font_size_pt = Column(Integer, default=10, nullable=False)
     layout_config = Column(JSONB, nullable=True)
+    
+    show_promo_price_usd = Column(Boolean, default=True, nullable=False)
+    show_promo_price_ves = Column(Boolean, default=True, nullable=False)
+    show_promo_price_usd_iva = Column(Boolean, default=True, nullable=False)
+    show_promo_price_ves_iva = Column(Boolean, default=True, nullable=False)
+    show_promo_end_date = Column(Boolean, default=True, nullable=False)
+
+class PromotionCampaign(Base):
+    __tablename__ = "promotion_campaigns"
+    __table_args__ = {"schema": "inv"}
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    discount_pct = Column(Numeric(5, 2), nullable=True)
+    fixed_price = Column(Numeric(19, 4), nullable=True)
+    start_at = Column(DateTime(timezone=True), nullable=False)
+    end_at = Column(DateTime(timezone=True), nullable=False)
+    status = Column(String, default='ACTIVE', nullable=False) # 'ACTIVE', 'CANCELLED'
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    scope = Column(JSONB, nullable=True)
+
+class PromotionCampaignLine(Base):
+    __tablename__ = "promotion_campaign_lines"
+    __table_args__ = {"schema": "inv"}
+    
+    id = Column(Integer, primary_key=True, index=True)
+    campaign_id = Column(Integer, ForeignKey("inv.promotion_campaigns.id", ondelete="CASCADE"), nullable=False)
+    variant_id = Column(Integer, ForeignKey("inv.product_variants.id"), nullable=False)
+    facility_id = Column(Integer, ForeignKey("core.facilities.id"), nullable=False)
+    applied_promo_price = Column(Numeric(19, 4), nullable=False)
+
+    campaign = relationship("PromotionCampaign", back_populates="campaign_lines")
+
+PromotionCampaign.campaign_lines = relationship("PromotionCampaignLine", back_populates="campaign", cascade="all, delete-orphan")

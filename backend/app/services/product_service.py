@@ -113,7 +113,11 @@ class ProductService:
                     variant_id=db_variant.id,
                     facility_id=fprice.facility_id,
                     sales_price=fprice.sales_price,
-                    target_utility_pct=fprice.target_utility_pct
+                    target_utility_pct=fprice.target_utility_pct,
+                    promo_price=fprice.promo_price,
+                    promo_target_utility_pct=fprice.promo_target_utility_pct,
+                    promo_start_at=fprice.promo_start_at,
+                    promo_end_at=fprice.promo_end_at
                 )
                 db.add(db_fprice)
         
@@ -178,7 +182,11 @@ class ProductService:
                         variant_id=variant.id,
                         facility_id=fprice['facility_id'],
                         sales_price=fprice.get('sales_price', 0),
-                        target_utility_pct=fprice.get('target_utility_pct', 0)
+                        target_utility_pct=fprice.get('target_utility_pct', 0),
+                        promo_price=fprice.get('promo_price', None),
+                        promo_target_utility_pct=fprice.get('promo_target_utility_pct', None),
+                        promo_start_at=fprice.get('promo_start_at', None),
+                        promo_end_at=fprice.get('promo_end_at', None)
                     )
                     db.add(db_fprice)
         

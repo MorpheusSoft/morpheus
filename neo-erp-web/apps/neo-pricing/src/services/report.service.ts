@@ -38,6 +38,24 @@ export const ReportService = {
     return data;
   },
   
+  getSalesByFacilityReport: async (params: {
+    start_date?: string;
+    end_date?: string;
+    code_type?: string;
+    supplier_id?: number;
+    search_term?: string;
+  }) => {
+    const queryParams = new URLSearchParams();
+    if (params.start_date) queryParams.append('start_date', params.start_date);
+    if (params.end_date) queryParams.append('end_date', params.end_date);
+    if (params.code_type) queryParams.append('code_type', params.code_type);
+    if (params.supplier_id) queryParams.append('supplier_id', params.supplier_id.toString());
+    if (params.search_term) queryParams.append('search_term', params.search_term);
+    
+    const { data } = await api.get(`/sales-report?${queryParams.toString()}`);
+    return data;
+  },
+  
   sendAIChat: async (message: string, history: any[] = []) => {
     const { data } = await api.post('/reports/ai-chat', { message, history });
     return data;

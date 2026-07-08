@@ -56,5 +56,39 @@ export const ProductService = {
   getSuppliers: async () => {
     const { data } = await api.get('/suppliers?limit=1000');
     return data;
+  },
+  updatePromotion: async (payload: {
+    variant_id: number;
+    facility_id: number;
+    promo_price: number | null;
+    promo_target_utility_pct: number | null;
+    promo_start_at: string | null;
+    promo_end_at: string | null;
+  }) => {
+    const { data } = await api.put('/promotions/', payload);
+    return data;
+  },
+  applyBulkPromotion: async (payload: {
+    name: string;
+    supplier_ids: number[];
+    category_ids: number[];
+    facility_ids: number[];
+    variant_ids?: number[] | null;
+    discount_pct?: number | null;
+    fixed_price?: number | null;
+    start_at: string;
+    end_at: string;
+    custom_prices?: { variant_id: number; promo_price: number; }[] | null;
+  }) => {
+    const { data } = await api.post('/promotions/apply-bulk', payload);
+    return data;
+  },
+  getPromotionCampaigns: async () => {
+    const { data } = await api.get('/promotions/campaigns');
+    return data;
+  },
+  voidPromotionCampaign: async (id: number) => {
+    const { data } = await api.post(`/promotions/campaigns/${id}/void`);
+    return data;
   }
 };

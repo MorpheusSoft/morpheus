@@ -64,7 +64,11 @@ const schema = yup.object().shape({
     yup.object().shape({
       facility_id: yup.number().required(),
       target_utility_pct: yup.number().default(0),
-      sales_price: yup.number().default(0)
+      sales_price: yup.number().default(0),
+      promo_price: yup.number().nullable().default(null),
+      promo_target_utility_pct: yup.number().nullable().default(null),
+      promo_start_at: yup.string().nullable().default(null),
+      promo_end_at: yup.string().nullable().default(null)
     })
   ).default([])
 }).required();
@@ -781,7 +785,7 @@ function ProductFormContent() {
                       <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-widest">Matriz de Precios por Sucursal / Localidad</h3>
                       <p className="text-slate-500 text-xs mt-1">Configura sobrecargos o precios específicos si difieren del Precio de Venta BASE global.</p>
                     </div>
-                    <Button type="button" label="Añadir Localidad" icon="pi pi-plus" onClick={() => append({ facility_id: undefined as any, sales_price: 0, target_utility_pct: 0 })} className="!bg-indigo-50 !text-indigo-700 hover:!bg-indigo-100 !border-indigo-200 !rounded-xl !px-4 !py-2 !shadow-none font-bold text-xs shrink-0" />
+                    <Button type="button" label="Añadir Localidad" icon="pi pi-plus" onClick={() => append({ facility_id: undefined as any, sales_price: 0, target_utility_pct: 0, promo_price: null, promo_target_utility_pct: null, promo_start_at: null, promo_end_at: null })} className="!bg-indigo-50 !text-indigo-700 hover:!bg-indigo-100 !border-indigo-200 !rounded-xl !px-4 !py-2 !shadow-none font-bold text-xs shrink-0" />
                  </div>
                  
                  {facilityPrices.length === 0 ? (
@@ -796,7 +800,7 @@ function ProductFormContent() {
                          <Controller name={`facility_prices.${options.rowIndex}.facility_id`} control={control} render={({ field }) => (
                            <Dropdown value={field.value} onChange={e => field.onChange(e.value)} options={facilities} optionLabel="name" optionValue="id" placeholder="Seleccionar Sucursal..." className="w-full !rounded-lg border-slate-200 shadow-sm p-inputtext-sm" />
                          )} />
-                       )} className="w-[50%]" />
+                       )} className="w-[30%]" />
                        <Column header="PRECIO EXCLUSIVO (Sin IVA)" body={(rowData, options) => (
                          <Controller name={`facility_prices.${options.rowIndex}.sales_price`} control={control} render={({ field }) => (
                            <div className="relative w-full">
@@ -808,16 +812,40 @@ function ProductFormContent() {
                              />
                            </div>
                          )} />
-                       )} className="w-[30%]" />
+                       )} className="w-[15%]" />
                        <Column header="MARGEN (%)" body={(rowData) => (
                           <FacilityMarginCell price={rowData.sales_price || 0} cost={activeCost} />
-                       )} className="w-[10%]" />
+                       )} className="w-[8%]" />
                        <Column header="P.V.P (Con IVA)" body={(rowData) => (
                           <FacilityPVPCell price={rowData.sales_price || 0} tributes={tributes} taxId={taxId || 0} />
-                       )} className="w-[10%]" />
+                       )} className="w-[12%]" />
+                       <Column header="PRECIO OFERTA (Sin IVA)" body={(rowData) => {
+                          const val = rowData.promo_price;
+                          return <span className="font-bold text-rose-700">{val !== null && val !== undefined ? `$${Number(val).toFixed(2)}` : 'No programado'}</span>;
+                        }} className="w-[15%]" />
+                        <Column header="UTILIDAD OFERTA (%)" body={(rowData) => {
+                          const val = rowData.promo_target_utility_pct;
+                          return <span className="font-semibold text-slate-700">{val !== null && val !== undefined ? `${Number(val).toFixed(2)}%` : '-'}</span>;
+                        }} className="w-[10%]" />
+                        <Column header="VIGENCIA OFERTA" body={(rowData) => {
+                          const formatDate = (dateStr: string | null) => {
+                            if (!dateStr) return '-';
+                            const d = new Date(dateStr);
+                            if (isNaN(d.getTime())) return '-';
+                            const pad = (n: number) => n.toString().padStart(2, '0');
+                            return `${pad(d.getDate())}/${pad(d.getMonth()+1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                          };
+                          if (!rowData.promo_start_at && !rowData.promo_end_at) return <span className="text-slate-400">-</span>;
+                          return (
+                            <div className="flex flex-col text-[10px] text-slate-600 leading-tight">
+                              <span>I: {formatDate(rowData.promo_start_at)}</span>
+                              <span>F: {formatDate(rowData.promo_end_at)}</span>
+                            </div>
+                          );
+                        }} className="w-[20%]" />
                        <Column body={(rowData, options) => (
                          <Button type="button" icon="pi pi-trash" onClick={() => remove(options.rowIndex)} className="p-button-rounded p-button-danger p-button-text hover:bg-rose-100 w-10 h-10 transition-colors" title="Eliminar Excepción" />
-                       )} style={{ width: '10%' }} align="center" />
+                       )} style={{ width: '5%' }} align="center" />
                      </DataTable>
                    </div>
                  )}

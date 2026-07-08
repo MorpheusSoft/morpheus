@@ -21,7 +21,12 @@ const defaultLayout = {
   price_usd_iva: { x: 55, y: 46, fontSize: 10, bold: true, visible: false, prefix: '$ c/IVA: ', fontFamily: 'system-ui, sans-serif' },
   barcode: { x: 15, y: 41, width: 50, height: 8, visible: true },
   company_logo: { x: 5, y: 41, width: 8, height: 8, visible: false },
-  promo_text: { x: 5, y: 22, fontSize: 8, bold: true, visible: false, prefix: '', fontFamily: 'system-ui, sans-serif' }
+  promo_text: { x: 5, y: 22, fontSize: 8, bold: true, visible: false, prefix: '', fontFamily: 'system-ui, sans-serif' },
+  promo_price_usd: { x: 55, y: 54, fontSize: 14, bold: true, visible: false, prefix: 'Ref. Oferta: $', fontFamily: 'system-ui, sans-serif' },
+  promo_price_ves: { x: 5, y: 54, fontSize: 12, bold: true, visible: false, prefix: 'Bs. Oferta: ', fontFamily: 'system-ui, sans-serif' },
+  promo_price_usd_iva: { x: 55, y: 62, fontSize: 10, bold: true, visible: false, prefix: 'Ref. c/IVA: $', fontFamily: 'system-ui, sans-serif' },
+  promo_price_ves_iva: { x: 5, y: 62, fontSize: 10, bold: true, visible: false, prefix: 'Bs. c/IVA: Bs. ', fontFamily: 'system-ui, sans-serif' },
+  promo_end_date: { x: 5, y: 70, fontSize: 8, bold: false, visible: false, prefix: 'Oferta hasta: ', fontFamily: 'system-ui, sans-serif' }
 };
 
 const fontFamilyOptions = [
@@ -47,7 +52,12 @@ const blockLabels: Record<string, string> = {
   price_usd_iva: 'Precio USD + IVA',
   barcode: 'Código de Barras',
   company_logo: 'Logo de la Empresa',
-  promo_text: 'Texto Promocional'
+  promo_text: 'Texto Promocional',
+  promo_price_usd: 'Precio Oferta USD',
+  promo_price_ves: 'Precio Oferta VES',
+  promo_price_usd_iva: 'Precio Oferta USD c/IVA',
+  promo_price_ves_iva: 'Precio Oferta VES c/IVA',
+  promo_end_date: 'Vigencia Oferta (Fin)'
 };
 
 const sampleValues: Record<string, string> = {
@@ -60,7 +70,12 @@ const sampleValues: Record<string, string> = {
   price_usd: '$3.05',
   price_ves_iva: 'Bs. 172.92',
   price_usd_iva: '$3.54',
-  promo_text: '¡OFERTA ESPECIAL!'
+  promo_text: '¡OFERTA ESPECIAL!',
+  promo_price_usd: '$2.50',
+  promo_price_ves: 'Bs. 122.18',
+  promo_price_usd_iva: '$2.90',
+  promo_price_ves_iva: 'Bs. 141.73',
+  promo_end_date: '31/07/2026'
 };
 
 export default function TemplateDesignerPage() {
@@ -89,6 +104,11 @@ export default function TemplateDesignerPage() {
   const [showUom, setShowUom] = useState<boolean>(true);
   const [showBrand, setShowBrand] = useState<boolean>(true);
   const [showLogo, setShowLogo] = useState<boolean>(false);
+  const [showPromoPriceUsd, setShowPromoPriceUsd] = useState<boolean>(false);
+  const [showPromoPriceVes, setShowPromoPriceVes] = useState<boolean>(false);
+  const [showPromoPriceUsdIva, setShowPromoPriceUsdIva] = useState<boolean>(false);
+  const [showPromoPriceVesIva, setShowPromoPriceVesIva] = useState<boolean>(false);
+  const [showPromoEndDate, setShowPromoEndDate] = useState<boolean>(false);
   const [promoText, setPromoText] = useState<string>('');
   const [fontSizePt, setFontSizePt] = useState<number>(10);
   
@@ -126,7 +146,7 @@ export default function TemplateDesignerPage() {
     fetchTemplates();
   }, []);
 
-  const loadTemplateIntoForm = (template: PrintTemplate) => {
+  const loadTemplateIntoForm = (template: any) => {
     setSelectedTemplate(template);
     setName(template.name);
     setPaperType(template.paper_type);
@@ -145,6 +165,11 @@ export default function TemplateDesignerPage() {
     setShowPriceIva(template.show_price_iva);
     setShowUom(template.show_uom);
     setShowBrand(template.show_brand);
+    setShowPromoPriceUsd(template.show_promo_price_usd ?? false);
+    setShowPromoPriceVes(template.show_promo_price_ves ?? false);
+    setShowPromoPriceUsdIva(template.show_promo_price_usd_iva ?? false);
+    setShowPromoPriceVesIva(template.show_promo_price_ves_iva ?? false);
+    setShowPromoEndDate(template.show_promo_end_date ?? false);
     setShowLogo(template.layout_config?.company_logo?.visible || false);
     setPromoText(template.promo_text || '');
     setFontSizePt(template.font_size_pt);
@@ -171,6 +196,11 @@ export default function TemplateDesignerPage() {
     setShowPriceIva(true);
     setShowUom(true);
     setShowBrand(true);
+    setShowPromoPriceUsd(false);
+    setShowPromoPriceVes(false);
+    setShowPromoPriceUsdIva(false);
+    setShowPromoPriceVesIva(false);
+    setShowPromoEndDate(false);
     setShowLogo(false);
     setPromoText('');
     setFontSizePt(10);
@@ -235,9 +265,14 @@ export default function TemplateDesignerPage() {
       if (copy.price_ves_iva) copy.price_ves_iva.visible = showPriceIva;
       if (copy.price_usd_iva) copy.price_usd_iva.visible = showPriceIva;
       if (copy.promo_text) copy.promo_text.visible = !!promoText;
+      if (copy.promo_price_usd) copy.promo_price_usd.visible = showPromoPriceUsd;
+      if (copy.promo_price_ves) copy.promo_price_ves.visible = showPromoPriceVes;
+      if (copy.promo_price_usd_iva) copy.promo_price_usd_iva.visible = showPromoPriceUsdIva;
+      if (copy.promo_price_ves_iva) copy.promo_price_ves_iva.visible = showPromoPriceVesIva;
+      if (copy.promo_end_date) copy.promo_end_date.visible = showPromoEndDate;
       return copy;
     });
-  }, [showBrand, showSku, showUom, showBarcode, showLogo, showPriceUsd, showPriceVes, showPriceIva, promoText]);
+  }, [showBrand, showSku, showUom, showBarcode, showLogo, showPriceUsd, showPriceVes, showPriceIva, promoText, showPromoPriceUsd, showPromoPriceVes, showPromoPriceUsdIva, showPromoPriceVesIva, showPromoEndDate]);
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -267,6 +302,11 @@ export default function TemplateDesignerPage() {
       show_price_iva: showPriceIva,
       show_uom: showUom,
       show_brand: showBrand,
+      show_promo_price_usd: showPromoPriceUsd,
+      show_promo_price_ves: showPromoPriceVes,
+      show_promo_price_usd_iva: showPromoPriceUsdIva,
+      show_promo_price_ves_iva: showPromoPriceVesIva,
+      show_promo_end_date: showPromoEndDate,
       promo_text: promoText || undefined,
       font_size_pt: fontSizePt,
       layout_config: layoutConfig
@@ -665,6 +705,26 @@ export default function TemplateDesignerPage() {
                 <div className="flex items-center gap-2">
                   <Checkbox inputId="show_price_iva" checked={showPriceIva} onChange={(e) => setShowPriceIva(!!e.checked)} />
                   <label htmlFor="show_price_iva" className="text-xs font-semibold text-slate-600 cursor-pointer">Precio con IVA</label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox inputId="show_promo_price_usd" checked={showPromoPriceUsd} onChange={(e) => setShowPromoPriceUsd(!!e.checked)} />
+                  <label htmlFor="show_promo_price_usd" className="text-xs font-semibold text-rose-600 cursor-pointer">Precio Oferta USD</label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox inputId="show_promo_price_ves" checked={showPromoPriceVes} onChange={(e) => setShowPromoPriceVes(!!e.checked)} />
+                  <label htmlFor="show_promo_price_ves" className="text-xs font-semibold text-rose-600 cursor-pointer">Precio Oferta VES</label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox inputId="show_promo_price_usd_iva" checked={showPromoPriceUsdIva} onChange={(e) => setShowPromoPriceUsdIva(!!e.checked)} />
+                  <label htmlFor="show_promo_price_usd_iva" className="text-xs font-semibold text-rose-700 cursor-pointer">P. Oferta USD c/IVA</label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox inputId="show_promo_price_ves_iva" checked={showPromoPriceVesIva} onChange={(e) => setShowPromoPriceVesIva(!!e.checked)} />
+                  <label htmlFor="show_promo_price_ves_iva" className="text-xs font-semibold text-rose-700 cursor-pointer">P. Oferta VES c/IVA</label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox inputId="show_promo_end_date" checked={showPromoEndDate} onChange={(e) => setShowPromoEndDate(!!e.checked)} />
+                  <label htmlFor="show_promo_end_date" className="text-xs font-semibold text-purple-600 cursor-pointer">Vigencia Oferta (Fin)</label>
                 </div>
               </div>
             </div>

@@ -22,6 +22,11 @@ class PrintTemplateBase(BaseModel):
     promo_text: Optional[str] = None
     font_size_pt: int = 10
     layout_config: Optional[Dict[str, Any]] = None
+    show_promo_price_usd: bool = True
+    show_promo_price_ves: bool = True
+    show_promo_price_usd_iva: bool = True
+    show_promo_price_ves_iva: bool = True
+    show_promo_end_date: bool = True
 
 class PrintTemplateCreate(PrintTemplateBase):
     pass
@@ -47,6 +52,11 @@ class PrintTemplateUpdate(BaseModel):
     promo_text: Optional[str] = None
     font_size_pt: Optional[int] = None
     layout_config: Optional[Dict[str, Any]] = None
+    show_promo_price_usd: Optional[bool] = None
+    show_promo_price_ves: Optional[bool] = None
+    show_promo_price_usd_iva: Optional[bool] = None
+    show_promo_price_ves_iva: Optional[bool] = None
+    show_promo_end_date: Optional[bool] = None
 
 class PrintTemplate(PrintTemplateBase):
     id: int
