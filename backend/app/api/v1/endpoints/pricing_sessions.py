@@ -715,8 +715,8 @@ def upload_pdf_to_session(
 
                 lines = extracted_text.splitlines()
                 chunks = []
-                for i in range(0, len(lines), 100):
-                    chunk_text = "\n".join(lines[i:i+100])
+                for i in range(0, len(lines), 400):
+                    chunk_text = "\n".join(lines[i:i+400])
                     if chunk_text.strip():
                         chunks.append(chunk_text)
 
