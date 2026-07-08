@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 # Add the backend directory to the path so we can import app modules
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -8,7 +9,12 @@ from app.core.config import settings
 
 def add_columns():
     try:
-        engine = create_engine(settings.SQLALCHEMY_DATABASE_URI)
+        db_uri = settings.SQLALCHEMY_DATABASE_URI
+        # Replace user and password with superuser postgres / Pegaso#26 (URL encoded as Pegaso%2326)
+        su_uri = re.sub(r'postgresql://[^@]+@', 'postgresql://postgres:Pegaso%2326@', db_uri)
+        
+        print("Connecting to database as superuser...")
+        engine = create_engine(su_uri)
         with engine.connect() as conn:
             print("Adding promotions columns to inv.product_facility_prices...")
             commands = [
