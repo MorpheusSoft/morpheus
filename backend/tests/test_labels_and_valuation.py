@@ -331,3 +331,16 @@ def test_b2b_register_and_approval_flow(db_session: Session, auth_headers):
             db_session.query(UserRole).filter(UserRole.user_id == db_user.id).delete()
             db_session.delete(db_user)
         db_session.commit()
+
+
+def test_get_product_by_code(setup_test_data, auth_headers):
+    sku = setup_test_data["variant"].sku
+    response = client.get(f"/api/v1/products/by-code/{sku}", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sku"] == sku
+    assert data["name"] == setup_test_data["product"].name
+    assert "prices" in data
+    assert "costs" in data
+    assert "stock" in data
+    assert data["stock"]["total_consolidated"] == 50.0

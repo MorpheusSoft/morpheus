@@ -1,8 +1,8 @@
 {
-  "name": "Morpheus Habladores",
-  "short_name": "Habladores",
-  "description": "Módulo simplificado para la mesa de trabajo e impresión de habladores en tiendas físicas",
-  "start_url": "/costos/habladores/tienda",
+  "name": "Morpheus Consultor Móvil",
+  "short_name": "Morpheus PWA",
+  "description": "Progressive Web App para consulta de precios, stock y costos con escáner de cámara",
+  "start_url": "/costos/kiosco/consultor",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#f43f5e",

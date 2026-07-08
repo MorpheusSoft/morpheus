@@ -12,6 +12,7 @@
     "@hookform/resolvers": "^5.2.2",
     "axios": "^1.13.6",
     "date-fns": "^4.1.0",
+    "html5-qrcode": "^2.3.8",
     "next": "16.2.1",
     "primeicons": "^7.0.0",
     "primereact": "^10.9.7",
