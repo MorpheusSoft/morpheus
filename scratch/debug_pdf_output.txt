@@ -1,5 +1,0 @@
-Testing gemini-2.5-flash on page 5 with 120s timeout...
-Response from gemini-2.5-flash received in 70.40 seconds.
-Length of response: 4163
-Successfully parsed 25 items.
-First item: {'supplier_sku': '15405', 'barcode': '7591141258410', 'description': 'TELISTO LIMON 12 X 800 G', 'cost': 456.7475, 'suggested_price': None}

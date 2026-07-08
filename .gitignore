@@ -39,3 +39,7 @@ MorpheusInventoryAgent/publish/
 MorpheusInventoryAgent/publish_win64/
 MorpheusInventoryAgent/publish_windows/
 MorpheusInventoryAgent/publish_windows_final/
+
+# Local workspace custom overrides
+scratch/
+.venv_local/
