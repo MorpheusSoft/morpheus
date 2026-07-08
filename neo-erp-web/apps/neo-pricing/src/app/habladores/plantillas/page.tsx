@@ -66,15 +66,15 @@ const sampleValues: Record<string, string> = {
   name: 'Caraotas Negras Pantera 900gr',
   model: 'Modelo E-900',
   uom: 'PAQUETE (PZA)',
-  price_ves: 'Bs. 149.07',
-  price_usd: '$3.05',
-  price_ves_iva: 'Bs. 172.92',
-  price_usd_iva: '$3.54',
+  price_ves: '149.07',
+  price_usd: '3.05',
+  price_ves_iva: '172.92',
+  price_usd_iva: '3.54',
   promo_text: '¡OFERTA ESPECIAL!',
-  promo_price_usd: '$2.50',
-  promo_price_ves: 'Bs. 122.18',
-  promo_price_usd_iva: '$2.90',
-  promo_price_ves_iva: 'Bs. 141.73',
+  promo_price_usd: '2.50',
+  promo_price_ves: '122.18',
+  promo_price_usd_iva: '2.90',
+  promo_price_ves_iva: '141.73',
   promo_end_date: '31/07/2026'
 };
 
@@ -815,7 +815,12 @@ export default function TemplateDesignerPage() {
                   renderedText = renderedText.replace(/{{precio_ves_iva}}/g, sampleValues.price_ves_iva);
                 } else if (key !== 'barcode' && key !== 'company_logo') {
                   const sampleVal = sampleValues[key] || '';
-                  renderedText = block.prefix ? `${block.prefix}${sampleVal}` : sampleVal;
+                  const cleanCurrency = (text: string) => {
+                    return text.replace(/\$/g, '').replace(/Bs\./gi, '').replace(/Bs/gi, '').trim();
+                  };
+                  const prefixCleaned = cleanCurrency(block.prefix || '');
+                  const prefix = prefixCleaned ? prefixCleaned + ' ' : '';
+                  renderedText = prefix + sampleVal;
                 }
 
                 if (key === 'barcode') {
