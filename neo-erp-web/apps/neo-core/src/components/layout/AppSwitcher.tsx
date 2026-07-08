@@ -29,8 +29,8 @@ export function AppSwitcher() {
   ];
 
   const extraApps = [
-    { name: "Kiosco", icon: "pi pi-tablet", color: "text-violet-600", bg: "bg-violet-50", href: isProd ? "https://costos.qa.morpheussoft.net/costos/habladores/tienda" : "http://localhost:4004/costos/habladores/tienda" },
-    { name: "Nueva App", icon: "pi pi-plus-circle", color: "text-slate-400", bg: "bg-slate-100", href: "#", disabled: true },
+    { name: "Kiosco (Habladores)", icon: "pi pi-tablet", color: "text-violet-600", bg: "bg-violet-50", href: isProd ? "https://costos.qa.morpheussoft.net/costos/habladores/tienda" : "http://localhost:4004/costos/habladores/tienda" },
+    { name: "Consultor Móvil", icon: "pi pi-mobile", color: "text-indigo-600", bg: "bg-indigo-50", href: isProd ? "https://costos.qa.morpheussoft.net/costos/kiosco/consultor" : "http://localhost:4004/costos/kiosco/consultor" },
   ];
 
   return (
