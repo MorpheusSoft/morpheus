@@ -8,7 +8,8 @@ password = "Pegaso#26"
 def run_ssh_commands(cmds):
     for cmd in cmds:
         print(f"\n---> Running: {cmd}")
-        child = pexpect.spawn(f"ssh -o StrictHostKeyChecking=no {user}@{ip} \"{cmd}\"", encoding='utf-8', timeout=180)
+        # Turborepo build of all projects can take some time, let's use 240s timeout
+        child = pexpect.spawn(f"ssh -o StrictHostKeyChecking=no {user}@{ip} \"{cmd}\"", encoding='utf-8', timeout=240)
         try:
             index = child.expect(['assword:', pexpect.EOF, pexpect.TIMEOUT])
             if index == 0:
@@ -20,8 +21,8 @@ def run_ssh_commands(cmds):
 
 cmds = [
     "cd ~/Morpheus && git pull origin main",
-    "cd ~/Morpheus/neo-erp-web/apps/neo-pricing && npm run build",
-    "pm2 restart costos",
+    "cd ~/Morpheus/neo-erp-web && npm run build",
+    "pm2 restart costos hub-core compras inventario logistica",
     "pm2 status"
 ]
 
