@@ -495,7 +495,7 @@ export default function PrintHabladoresPage() {
             key={idx}
             className="label-container"
             style={{
-              pageBreakAfter: paper_type === 'INDIVIDUAL' ? 'always' : 'auto',
+              pageBreakAfter: (paper_type === 'INDIVIDUAL' || paper_type === 'CONTINUOUS') ? 'always' : 'auto',
               marginBottom: paper_type === 'CONTINUOUS' ? '2mm' : '0'
             }}
           >
@@ -506,9 +506,9 @@ export default function PrintHabladoresPage() {
     );
   };
 
-  const customPageSizeStyle = paper_type === 'CUSTOM' ? `
+  const customPageSizeStyle = (paper_type === 'CUSTOM' || paper_type === 'CONTINUOUS' || paper_type === 'INDIVIDUAL') ? `
           @page {
-            size: ${width_mm * cols + margin_left_mm + margin_right_mm}mm ${height_mm * rows + margin_top_mm + margin_bottom_mm}mm !important;
+            size: ${paper_type === 'CUSTOM' ? (width_mm * cols + margin_left_mm + margin_right_mm) : width_mm}mm ${paper_type === 'CUSTOM' ? (height_mm * rows + margin_top_mm + margin_bottom_mm) : height_mm}mm !important;
             margin: 0 !important;
           }
   ` : `
@@ -547,7 +547,7 @@ export default function PrintHabladoresPage() {
             margin: 0 !important;
             box-shadow: none !important;
           }
-          .print-page {
+          .print-page, .label-container {
             page-break-after: always !important;
             break-after: page !important;
             page-break-inside: avoid !important;
