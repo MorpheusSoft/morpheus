@@ -539,30 +539,35 @@ export default function PrintHabladoresPage() {
           .no-print {
             display: none !important;
           }
-          body {
+          html, body, main, .print-parent {
             background: white !important;
-          }
-          ${customPageSizeStyle}
-          .print-parent {
             display: block !important;
-            width: auto !important;
             height: auto !important;
+            min-height: 0 !important;
+            overflow: visible !important;
+            position: static !important;
+            width: auto !important;
             padding: 0 !important;
             margin: 0 !important;
             box-shadow: none !important;
           }
+          ${customPageSizeStyle}
           .print-page, .label-container {
             page-break-after: always !important;
             break-after: page !important;
             page-break-inside: avoid !important;
             break-inside: avoid !important;
           }
-          .label-box {
-            border: none !important;
-          }
           .label-container {
+            display: block !important;
+            position: relative !important;
             margin: 0 !important;
             padding: 0 !important;
+            height: auto !important;
+          }
+          .label-box {
+            border: none !important;
+            position: relative !important;
           }
         }
 
