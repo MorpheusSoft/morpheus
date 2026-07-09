@@ -499,7 +499,7 @@ export default function PrintHabladoresPage() {
             key={idx}
             className="label-container"
             style={{
-              pageBreakAfter: (paper_type === 'INDIVIDUAL' || paper_type === 'CONTINUOUS') ? 'always' : 'auto',
+              pageBreakAfter: paper_type === 'INDIVIDUAL' ? 'always' : 'auto',
               marginBottom: paper_type === 'CONTINUOUS' ? '2mm' : '0'
             }}
           >
