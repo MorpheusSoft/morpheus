@@ -883,9 +883,13 @@ export default function TemplateDesignerPage() {
                       }}
                       title="Logo de la empresa. Arrastra para mover o redimensionar."
                     >
-                      <svg viewBox="0 0 100 100" className="w-full h-full text-slate-800 fill-current opacity-85">
-                        <path d="M50,10 L90,30 L90,70 L50,90 L10,70 L10,30 Z M50,25 A 25 25 0 1 0 50,75 A 25 25 0 1 0 50,25 Z M50,38 L62,50 L50,62 L38,50 Z" />
-                      </svg>
+                      {block.imageUrl ? (
+                        <img src={block.imageUrl} alt="Logo" className="w-full h-full object-contain pointer-events-none" />
+                      ) : (
+                        <svg viewBox="0 0 100 100" className="w-full h-full text-slate-800 fill-current opacity-85">
+                          <path d="M50,10 L90,30 L90,70 L50,90 L10,70 L10,30 Z M50,25 A 25 25 0 1 0 50,75 A 25 25 0 1 0 50,25 Z M50,38 L62,50 L50,62 L38,50 Z" />
+                        </svg>
+                      )}
                       {isSelected && (
                         <div
                           onMouseDown={(e) => handleResizeMouseDown(e, key, scale)}
@@ -1037,6 +1041,44 @@ export default function TemplateDesignerPage() {
                         inputClassName="p-1.5 bg-slate-800 border-slate-700 text-white w-full rounded font-bold"
                       />
                     </div>
+                    {selectedBlock === 'company_logo' && (
+                      <div className="col-span-2 mt-2">
+                        <label className="block text-[9px] font-bold text-slate-500 uppercase mb-1">Logotipo Personalizado</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            id="logo-upload-input"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                const reader = new FileReader();
+                                reader.onload = (event) => {
+                                  const base64 = event.target?.result as string;
+                                  handleUpdateBlockProp('company_logo', 'imageUrl', base64);
+                                };
+                                reader.readAsDataURL(file);
+                              }
+                            }}
+                          />
+                          <Button
+                            label={layoutConfig.company_logo.imageUrl ? "Cambiar Imagen" : "Subir Logo"}
+                            icon="pi pi-upload"
+                            className="p-button-sm !bg-indigo-600 hover:!bg-indigo-700 !border-none !rounded-xl text-xs py-1.5 px-3"
+                            onClick={() => document.getElementById('logo-upload-input')?.click()}
+                          />
+                          {layoutConfig.company_logo.imageUrl && (
+                            <Button
+                              label="Eliminar"
+                              icon="pi pi-trash"
+                              className="p-button-sm p-button-danger p-button-text !text-rose-500 hover:!bg-rose-950/20 text-xs py-1.5 px-3"
+                              onClick={() => handleUpdateBlockProp('company_logo', 'imageUrl', null)}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
 

@@ -276,9 +276,13 @@ export default function PrintHabladoresPage() {
                     boxSizing: 'border-box'
                   }}
                 >
-                  <svg viewBox="0 0 100 100" style={{ width: '100%', height: '100%', fill: 'currentColor', color: '#000000' }}>
-                    <path d="M50,10 L90,30 L90,70 L50,90 L10,70 L10,30 Z M50,25 A 25 25 0 1 0 50,75 A 25 25 0 1 0 50,25 Z M50,38 L62,50 L50,62 L38,50 Z" />
-                  </svg>
+                  {block.imageUrl ? (
+                    <img src={block.imageUrl} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  ) : (
+                    <svg viewBox="0 0 100 100" style={{ width: '100%', height: '100%', fill: 'currentColor', color: '#000000' }}>
+                      <path d="M50,10 L90,30 L90,70 L50,90 L10,70 L10,30 Z M50,25 A 25 25 0 1 0 50,75 A 25 25 0 1 0 50,25 Z M50,38 L62,50 L50,62 L38,50 Z" />
+                    </svg>
+                  )}
                 </div>
               );
             }
