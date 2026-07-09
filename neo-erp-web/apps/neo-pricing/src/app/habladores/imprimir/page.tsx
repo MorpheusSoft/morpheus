@@ -510,9 +510,9 @@ export default function PrintHabladoresPage() {
     );
   };
 
-  const customPageSizeStyle = (paper_type === 'CUSTOM' || paper_type === 'CONTINUOUS' || paper_type === 'INDIVIDUAL') ? `
+  const customPageSizeStyle = paper_type === 'CUSTOM' ? `
           @page {
-            size: ${paper_type === 'CUSTOM' ? (width_mm * cols + margin_left_mm + margin_right_mm) : width_mm}mm ${paper_type === 'CUSTOM' ? (height_mm * rows + margin_top_mm + margin_bottom_mm) : height_mm}mm !important;
+            size: ${width_mm * cols + margin_left_mm + margin_right_mm}mm ${height_mm * rows + margin_top_mm + margin_bottom_mm}mm !important;
             margin: 0 !important;
           }
   ` : `
@@ -556,6 +556,13 @@ export default function PrintHabladoresPage() {
             break-after: page !important;
             page-break-inside: avoid !important;
             break-inside: avoid !important;
+          }
+          .label-box {
+            border: none !important;
+          }
+          .label-container {
+            margin: 0 !important;
+            padding: 0 !important;
           }
         }
 
