@@ -510,9 +510,9 @@ export default function PrintHabladoresPage() {
     );
   };
 
-  const customPageSizeStyle = paper_type === 'CUSTOM' ? `
+  const customPageSizeStyle = (paper_type === 'CUSTOM' || paper_type === 'CONTINUOUS' || paper_type === 'INDIVIDUAL') ? `
           @page {
-            size: ${width_mm * cols + margin_left_mm + margin_right_mm}mm ${height_mm * rows + margin_top_mm + margin_bottom_mm}mm !important;
+            size: ${paper_type === 'CUSTOM' ? (width_mm * cols + margin_left_mm + margin_right_mm) : width_mm}mm ${paper_type === 'CUSTOM' ? (height_mm * rows + margin_top_mm + margin_bottom_mm) : height_mm}mm !important;
             margin: 0 !important;
           }
   ` : `
