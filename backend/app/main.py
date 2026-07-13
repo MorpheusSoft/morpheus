@@ -16,12 +16,62 @@ async def run_background_poller():
             print(f"[CRON FATAL ERROR] {e}")
         await asyncio.sleep(60)
 
+async def run_mrp_bot_scheduler():
+    from app.services.mrp_bot_service import run_mrp_bot
+    from app.api.deps import SessionLocal
+    from app.models.purchasing import MRPBotLog
+    import datetime
+    import asyncio
+    import pytz
+    
+    print("[MRP BOT SCHEDULER] Iniciando...")
+    tz = pytz.timezone("America/Caracas")
+    while True:
+        try:
+            now = datetime.datetime.now(tz)
+            if now.hour == 3:
+                db = SessionLocal()
+                try:
+                    today_start = datetime.datetime.combine(now.date(), datetime.time.min).replace(tzinfo=tz)
+                    already_run = db.query(MRPBotLog).filter(
+                        MRPBotLog.executed_at >= today_start
+                    ).first()
+                    if not already_run:
+                        print(f"[MRP BOT SCHEDULER] Ejecutando bot automático diario a las {now}...")
+                        await run_mrp_bot(db)
+                except Exception as ex:
+                    print(f"[MRP BOT SCHEDULER ERROR] Fallo durante ejecución: {ex}")
+                finally:
+                    db.close()
+        except Exception as e:
+            print(f"[MRP BOT SCHEDULER ERROR] {e}")
+        await asyncio.sleep(60)
+
+def init_bot_log_db():
+    from app.api.deps import engine
+    from app.db.base_class import Base
+    from app.models.purchasing import MRPBotLog
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("CREATE SCHEMA IF NOT EXISTS pur;"))
+            conn.commit()
+        Base.metadata.create_all(bind=engine, tables=[MRPBotLog.__table__])
+        print("[DATABASE] Table pur.mrp_bot_logs verified/created successfully.")
+    except Exception as e:
+        print(f"[DATABASE ERROR] Failed to initialize bot log table: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initiate the polling daemon
+    # Auto-initialize database tables for bot log
+    init_bot_log_db()
+    # Initiate the polling daemon and bot scheduler
     daemon_task = asyncio.create_task(run_background_poller())
+    bot_scheduler_task = asyncio.create_task(run_mrp_bot_scheduler())
     yield
     daemon_task.cancel()
+    bot_scheduler_task.cancel()
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

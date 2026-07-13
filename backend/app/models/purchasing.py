@@ -82,3 +82,15 @@ class SupplierProduct(Base):
     is_primary = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+class MRPBotLog(Base):
+    __tablename__ = "mrp_bot_logs"
+    __table_args__ = {"schema": "pur"}
+    
+    id = Column(Integer, primary_key=True, index=True)
+    executed_at = Column(DateTime(timezone=True), server_default=func.now())
+    status = Column(String(50)) # 'success', 'failed'
+    orders_generated = Column(Integer, default=0)
+    items_evaluated = Column(Integer, default=0)
+    details = Column(Text) # JSON string containing details of what was bought and omitted
+

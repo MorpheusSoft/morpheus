@@ -52,3 +52,31 @@ def read_ai_recommendations(
     Obtener alertas proactivas e inteligentes de compra basadas en demanda predictiva y efectividad de entrega.
     """
     return MRPService.get_ai_recommendations(db, facility_id=facility_id)
+
+from app.services.mrp_bot_service import run_mrp_bot
+from app.models.purchasing import MRPBotLog
+from sqlalchemy import desc
+
+@router.post("/bot/run", response_model=schemas.MRPBotLogResponse)
+async def run_bot(db: Session = Depends(deps.get_db)) -> Any:
+    """
+    Execute the Automated Purchase Order AI Bot manually.
+    """
+    try:
+        log_record = await run_mrp_bot(db)
+        return log_record
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error executing bot: {str(e)}")
+
+@router.get("/bot/logs", response_model=List[schemas.MRPBotLogResponse])
+def get_bot_logs(
+    db: Session = Depends(deps.get_db),
+    limit: int = Query(50, description="Cantidad de registros a obtener"),
+    skip: int = Query(0, description="Desplazamiento para paginación")
+) -> Any:
+    """
+    Get the historical execution logs of the MRP Bot, ordered by executed_at descending.
+    """
+    logs = db.query(MRPBotLog).order_by(desc(MRPBotLog.executed_at)).offset(skip).limit(limit).all()
+    return logs
+

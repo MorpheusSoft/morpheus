@@ -1,4 +1,5 @@
 from typing import Optional, List
+from datetime import datetime
 from pydantic import BaseModel
 from decimal import Decimal
 
@@ -42,3 +43,15 @@ class GenerateOrdersRequest(BaseModel):
     lines: List[MRPSimulatorLine]
     facility_id: int
     buyer_id: int
+
+class MRPBotLogResponse(BaseModel):
+    id: int
+    executed_at: datetime
+    status: str
+    orders_generated: int
+    items_evaluated: int
+    details: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
