@@ -421,6 +421,33 @@ function ProductFormContent() {
       handlePriceSansTaxChange(newPrice);
   };
 
+  const onError = (errors: any) => {
+    console.error("Validation errors:", errors);
+    const errorFields = Object.keys(errors);
+    
+    // Friendly field names map
+    const fieldMap: Record<string, string> = {
+      name: "Nombre del Artículo",
+      category_id: "Categoría Maestra",
+      tax_id: "Impuesto Aplicable",
+      uom_base: "Unidad Logística Base (UOM)",
+      origin: "Procedencia"
+    };
+
+    const messages = errorFields.map(field => {
+      const fieldName = fieldMap[field] || field;
+      const err = errors[field];
+      const message = err.message || "Es obligatorio o tiene un valor inválido";
+      return `- ${fieldName}: ${message}`;
+    }).join("\n");
+
+    alert(
+      "No se puede guardar el producto porque faltan completar campos obligatorios:\n\n" + 
+      messages + 
+      "\n\nPor favor, revise las pestañas 'Información General' o 'Rentabilidad y Costos'."
+    );
+  };
+
   const onSubmit = async (data: any) => {
     setIsSaving(true);
     try {
@@ -511,7 +538,7 @@ function ProductFormContent() {
             })}
           </div>
 
-          <form onSubmit={handleSubmit(onSubmit)}>
+          <form onSubmit={handleSubmit(onSubmit, onError)}>
             {/* TAB 1: GENERAL */}
             <div className={activeTab === _tabs.findIndex(t => t.label === 'Información General') ? 'block' : 'hidden animate-fade-in'}>
               <div className="flex flex-col md:flex-row gap-6 mb-6 w-full">
