@@ -716,12 +716,13 @@ export default function PricingValidationBoardPage() {
 
   const handleCreateAsNew = async (line: any) => {
      let desc = line.external_reference_name;
-     try {
-         if (desc.startsWith('{') && desc.endsWith('}')) {
-             const parsed = JSON.parse(desc);
-             desc = parsed.description || desc;
-         }
-     } catch(e){}
+      try {
+          const match = desc.match(/(\{.*\})/);
+          if (match) {
+              const parsed = JSON.parse(match[1]);
+              desc = parsed.description || desc;
+          }
+      } catch(e){}
      
      const confirmed = window.confirm(`¿Estás seguro de crear "${desc}" como un nuevo producto en la categoría Licores?`);
      if (!confirmed) return;
@@ -747,8 +748,9 @@ export default function PricingValidationBoardPage() {
       let barcode = '';
 
       try {
-          if (name.startsWith('{') && name.endsWith('}')) {
-              const parsed = JSON.parse(name);
+          const match = name.match(/(\{.*\})/);
+          if (match) {
+              const parsed = JSON.parse(match[1]);
               sku = parsed.supplier_sku || '';
               barcode = parsed.barcode || '';
               name = parsed.description || '';

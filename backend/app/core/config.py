@@ -6,8 +6,8 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     
     # PRODUCT SKU CONFIGURATION
-    PRODUCT_SKU_PREFIX: str = "PROD"
-    PRODUCT_SKU_SEQUENCE_DIGITS: int = 5
+    PRODUCT_SKU_PREFIX: str = "PRD"
+    PRODUCT_SKU_SEQUENCE_DIGITS: int = 6
 
     # DATABASE
     POSTGRES_SERVER: str = "localhost"

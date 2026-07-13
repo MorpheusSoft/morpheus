@@ -265,8 +265,10 @@ def apply_pricing_session(
                             sku = None
                             if line.external_reference_name:
                                 try:
-                                    if line.external_reference_name.startswith('{') and line.external_reference_name.endswith('}'):
-                                        parsed = json.loads(line.external_reference_name)
+                                    import re
+                                    match = re.search(r'(\{.*\})', line.external_reference_name)
+                                    if match:
+                                        parsed = json.loads(match.group(1))
                                         sku = parsed.get("supplier_sku")
                                 except Exception:
                                     pass
@@ -1009,8 +1011,10 @@ def associate_line_to_variant(
     desc = line.external_reference_name
     
     try:
-        if line.external_reference_name.startswith('{') and line.external_reference_name.endswith('}'):
-            parsed = json.loads(line.external_reference_name)
+        import re
+        match = re.search(r'(\{.*\})', line.external_reference_name)
+        if match:
+            parsed = json.loads(match.group(1))
             sku = parsed.get("supplier_sku")
             barcode = parsed.get("barcode")
             desc = parsed.get("description", desc)
@@ -1079,8 +1083,10 @@ def create_product_from_line(
     desc = line.external_reference_name
     
     try:
-        if line.external_reference_name.startswith('{') and line.external_reference_name.endswith('}'):
-            parsed = json.loads(line.external_reference_name)
+        import re
+        match = re.search(r'(\{.*\})', line.external_reference_name)
+        if match:
+            parsed = json.loads(match.group(1))
             sku = parsed.get("supplier_sku")
             barcode = parsed.get("barcode")
             desc = parsed.get("description", desc)
