@@ -81,11 +81,26 @@ async def run_mrp_bot(db: Session) -> MRPBotLog:
     orders_to_create: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
     
     try:
-        # 1. Fetch active primary supplier products
-        supplier_products = db.query(SupplierProduct).filter(
-            SupplierProduct.is_active == True,
-            SupplierProduct.is_primary == True
+        # 1. Fetch active supplier products with primary fallback
+        all_active_sp = db.query(SupplierProduct).filter(
+            SupplierProduct.is_active == True
         ).all()
+        
+        # Group active supplier products by variant_id
+        sp_by_variant: Dict[int, List[SupplierProduct]] = {}
+        for sp in all_active_sp:
+            sp_by_variant.setdefault(sp.variant_id, []).append(sp)
+            
+        supplier_products = []
+        for var_id, sp_list in sp_by_variant.items():
+            if len(sp_list) == 1:
+                # If there is exactly one active supplier for this product, use it
+                supplier_products.append(sp_list[0])
+            else:
+                # If there are multiple active suppliers, look for the primary one
+                primary_sps = [sp for sp in sp_list if sp.is_primary]
+                if primary_sps:
+                    supplier_products.append(primary_sps[0])
         
         # 2. Fetch active facilities
         facilities = db.query(Facility).filter(Facility.is_active == True).all()

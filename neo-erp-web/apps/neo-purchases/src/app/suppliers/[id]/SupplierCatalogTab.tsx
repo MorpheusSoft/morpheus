@@ -114,6 +114,21 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
     setCatalog(catalog.filter(c => c.variant_id !== variantId));
   };
 
+  const handleMarkAllPrimary = () => {
+    if (catalog.length === 0) return;
+    const confirmed = window.confirm(
+      "¿Está seguro de marcar TODOS los insumos de este proveedor como PRINCIPAL?\n" +
+      "Esto indicará al bot de compras que compre estos productos preferentemente a este proveedor."
+    );
+    if (!confirmed) return;
+
+    const arr = catalog.map(item => ({
+      ...item,
+      is_primary: true
+    }));
+    setCatalog(arr);
+  };
+
   const header = (
       <div className="flex justify-between items-center w-full bg-slate-50 p-2">
          <span className="text-xs text-slate-500 font-bold uppercase tracking-wider pl-2">Ítems Vinculados</span>
@@ -147,7 +162,10 @@ const SupplierCatalogTab = forwardRef(({ supplierId }: { supplierId: number }, r
             className="w-1/2 border rounded-md" 
           />
         </div>
-        <Button type="button" label="Vincular Insumo" icon="pi pi-plus" onClick={() => setShowAdd(true)} className="p-button-outlined p-button-sm p-button-success" />
+        <div className="flex gap-2">
+          <Button type="button" label="Marcar Todo Principal" icon="pi pi-star-fill" onClick={handleMarkAllPrimary} className="p-button-outlined p-button-sm p-button-warning" />
+          <Button type="button" label="Vincular Insumo" icon="pi pi-plus" onClick={() => setShowAdd(true)} className="p-button-outlined p-button-sm p-button-success" />
+        </div>
       </div>
 
       <DataTable value={catalog} loading={loading} header={header} globalFilter={globalFilter} paginator rows={10} rowsPerPageOptions={[10, 25, 50, 100]} className="border border-slate-200 rounded-xl overflow-hidden text-sm" emptyMessage="Sin insumos vinculados en este borrador.">
