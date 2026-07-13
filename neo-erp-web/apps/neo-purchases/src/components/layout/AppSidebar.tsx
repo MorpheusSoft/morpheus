@@ -44,6 +44,8 @@ export function AppSidebar() {
     { label: 'Categorías', icon: 'pi pi-tags', href: '/categories' },
     { label: 'Perfiles de Compradores', icon: 'pi pi-id-card', href: '/buyers' },
     { label: 'Reglas Logísticas', icon: 'pi pi-cog', href: '#rules' },
+    { label: 'Autómata de Compras (AI)', icon: 'pi pi-sparkles', href: '/settings/bot' },
+    { label: 'Tareas de Fondo', icon: 'pi pi-calendar', href: '/settings/crons' },
   ];
 
   const isActivePath = (href: string) => {
