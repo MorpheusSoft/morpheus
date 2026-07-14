@@ -103,6 +103,7 @@ def read_purchase_order_details(
         lines_rich.append({
             "id": line.id,
             "variant_id": line.variant_id,
+            "pack_id": line.pack_id,
             "sku": variant.sku if variant else "N/A",
             "product_name": prod.name if prod else "N/A",
             "uom_base": prod.uom_base if prod else "PZA",
