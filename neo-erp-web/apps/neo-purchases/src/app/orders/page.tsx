@@ -9,12 +9,33 @@ import { Tag } from 'primereact/tag';
 import api from '@/lib/api';
 import { format } from 'date-fns';
 import { useRouter } from 'next/navigation';
+import { Dropdown } from 'primereact/dropdown';
 
 export default function PurchaseOrdersPage() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [selectedSupplier, setSelectedSupplier] = useState<string | null>(null);
+  const [selectedFacility, setSelectedFacility] = useState<string | null>(null);
   const toast = useRef<Toast>(null);
   const router = useRouter();
+
+  const supplierOptions = React.useMemo(() => {
+    const names = Array.from(new Set(orders.map((o: any) => o.supplier?.name).filter(Boolean)));
+    return names.sort().map(name => ({ label: name, value: name }));
+  }, [orders]);
+
+  const facilityOptions = React.useMemo(() => {
+    const names = Array.from(new Set(orders.map((o: any) => o.dest_facility?.name).filter(Boolean)));
+    return names.sort().map(name => ({ label: name, value: name }));
+  }, [orders]);
+
+  const filteredOrders = React.useMemo(() => {
+    return orders.filter((o: any) => {
+      const matchSupplier = !selectedSupplier || o.supplier?.name === selectedSupplier;
+      const matchFacility = !selectedFacility || o.dest_facility?.name === selectedFacility;
+      return matchSupplier && matchFacility;
+    });
+  }, [orders, selectedSupplier, selectedFacility]);
 
   const fetchOrders = async () => {
     setLoading(true);
@@ -91,8 +112,44 @@ export default function PurchaseOrdersPage() {
         </div>
       </div>
       
+      {/* Filtros de Proveedor y Tienda Destino */}
+      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-wrap gap-4 items-center">
+         <div className="flex flex-col gap-1 w-full md:w-80">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Filtrar por Proveedor</span>
+            <Dropdown 
+               value={selectedSupplier} 
+               onChange={e => setSelectedSupplier(e.value)} 
+               options={supplierOptions} 
+               placeholder="Todos los Proveedores" 
+               showClear
+               filter
+               className="w-full text-sm !rounded-xl border-slate-200" 
+            />
+         </div>
+         <div className="flex flex-col gap-1 w-full md:w-80">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Filtrar por Destino (Tienda)</span>
+            <Dropdown 
+               value={selectedFacility} 
+               onChange={e => setSelectedFacility(e.value)} 
+               options={facilityOptions} 
+               placeholder="Todas las Tiendas" 
+               showClear
+               filter
+               className="w-full text-sm !rounded-xl border-slate-200" 
+            />
+         </div>
+         {(selectedSupplier || selectedFacility) && (
+            <Button 
+               label="Limpiar Filtros" 
+               icon="pi pi-filter-slash" 
+               onClick={() => { setSelectedSupplier(null); setSelectedFacility(null); }} 
+               className="p-button-text p-button-sm text-slate-500 font-bold mt-4" 
+            />
+         )}
+      </div>
+      
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
-        <DataTable value={orders} loading={loading} emptyMessage="No tienes órdenes de compra pendientes en el radar." size="small" stripedRows rowHover className="text-sm border-t border-slate-100">
+        <DataTable value={filteredOrders} loading={loading} emptyMessage="No tienes órdenes de compra pendientes en el radar." size="small" stripedRows rowHover className="text-sm border-t border-slate-100">
           <Column header="NÚMERO DE ODC" field="reference" body={r => (
               <span className="font-black tracking-widest text-slate-700 bg-slate-100 px-3 py-1.5 rounded text-xs border border-slate-200">{r.reference}</span>
           )} style={{ width: '12rem' }} />
