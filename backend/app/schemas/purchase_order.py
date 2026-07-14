@@ -3,6 +3,7 @@ from typing import List, Optional
 from datetime import datetime, date
 from decimal import Decimal
 from typing import Any
+from app.schemas.core import Facility
 
 class PurchaseOrderLineBase(BaseModel):
     variant_id: int
@@ -83,6 +84,7 @@ class PurchaseOrderResponse(PurchaseOrderBase):
     created_at: datetime
     lines: List[PurchaseOrderLineResponse] = []
     supplier: Optional[SupplierBasic] = None
+    dest_facility: Optional[Facility] = None
     
     class Config:
         from_attributes = True

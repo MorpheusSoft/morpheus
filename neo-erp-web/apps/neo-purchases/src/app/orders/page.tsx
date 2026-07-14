@@ -104,6 +104,17 @@ export default function PurchaseOrdersPage() {
              </span>
           )} />
           
+          <Column header="PROVEEDOR" body={(r: any) => (
+             <span className="font-bold text-slate-800">{r.supplier ? r.supplier.name : 'S/N'}</span>
+          )} style={{ minWidth: '15rem' }} />
+
+          <Column header="DESTINO" body={(r: any) => (
+             <span className="font-semibold text-slate-600 bg-slate-50 border border-slate-200 px-2 py-1 rounded text-xs">
+                <i className="pi pi-building text-[10px] mr-1 text-slate-400"></i>
+                {r.dest_facility ? r.dest_facility.name : 'General (Libre)'}
+             </span>
+          )} style={{ minWidth: '12rem' }} />
+          
           <Column header="ESTADO OPERATIVO" body={r => (
              <Tag severity={getStatusSeverity(r.status)} value={getStatusName(r.status)} className="font-extrabold tracking-wide uppercase text-[9px] px-2 py-1 shadow-sm border border-black/5" />
           )} align="center" />

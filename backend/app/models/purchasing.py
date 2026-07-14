@@ -37,6 +37,7 @@ class PurchaseOrder(Base):
     conciliated_at = Column(DateTime(timezone=True))
     
     supplier = relationship("Supplier")
+    dest_facility = relationship("Facility")
     lines = relationship("PurchaseOrderLine", back_populates="order")
 
 class PurchaseOrderLine(Base):
