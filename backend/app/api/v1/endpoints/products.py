@@ -524,3 +524,31 @@ def get_product_by_code(
             "by_facility": by_facility
         }
     }
+
+@router.put("/packagings/{id}")
+def update_product_packaging(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    payload: dict,
+) -> Any:
+    """
+    Update a product packaging name and conversion factor.
+    """
+    from app.models.inventory import ProductPackaging
+    db_pack = db.query(ProductPackaging).filter(ProductPackaging.id == id).first()
+    if not db_pack:
+        raise HTTPException(status_code=404, detail="Packaging not found")
+        
+    if "name" in payload:
+        db_pack.name = payload["name"]
+    if "qty_per_unit" in payload:
+        db_pack.qty_per_unit = payload["qty_per_unit"]
+        
+    db.commit()
+    db.refresh(db_pack)
+    return {
+        "id": db_pack.id,
+        "name": db_pack.name,
+        "qty_per_unit": float(db_pack.qty_per_unit)
+    }

@@ -16,6 +16,7 @@ import { Calendar } from 'primereact/calendar';
 import { Dialog } from 'primereact/dialog';
 import { Dropdown } from 'primereact/dropdown';
 import { Checkbox } from 'primereact/checkbox';
+import { InputNumber } from 'primereact/inputnumber';
 import ConciliationPanel from './components/ConciliationPanel';
 
 export default function OrderDetailsPage() {
@@ -47,6 +48,41 @@ export default function OrderDetailsPage() {
   const [catalog, setCatalog] = useState<any[]>([]);
   const [selectedRegalia, setSelectedRegalia] = useState<any>(null);
   const [regaliaInBaseUnit, setRegaliaInBaseUnit] = useState(false);
+
+  // New ODC Experience enhancements state
+  const [globalVariants, setGlobalVariants] = useState<any[]>([]);
+  const [searchMode, setSearchMode] = useState<'CATALOG' | 'GLOBAL'>('CATALOG');
+  const searchModeOptions = [
+      { label: 'Catálogo Proveedor', value: 'CATALOG' },
+      { label: 'Maestro Global', value: 'GLOBAL' }
+  ];
+  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [showProductModal, setShowProductModal] = useState(false);
+  const [creatingProduct, setCreatingProduct] = useState(false);
+  const [newProductForm, setNewProductForm] = useState({
+      name: '',
+      category_id: null,
+      brand: '',
+      currency_id: null,
+      unit_cost: 0
+  });
+
+  // Deletion with deactivation state
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletingLineRow, setDeletingLineRow] = useState<any>(null);
+  const [deletingIndex, setDeletingIndex] = useState<number | null>(null);
+  const [deactivateProduct, setDeactivateProduct] = useState(false);
+
+  // Hot packaging edit state
+  const [showEditPackModal, setShowEditPackModal] = useState(false);
+  const [editingPackRow, setEditingPackRow] = useState<any>(null);
+  const [editingPackIndex, setEditingPackIndex] = useState<number | null>(null);
+  const [packForm, setPackForm] = useState({
+      name: '',
+      qty_per_unit: 1,
+      updatePermanently: true
+  });
 
   const fetchOrder = async () => {
     setLoading(true);
@@ -83,6 +119,50 @@ export default function OrderDetailsPage() {
     if (orderId) fetchOrder();
     api.get('/currencies/').then(res => setCurrencies(res.data)).catch(console.error);
   }, [orderId]);
+
+  useEffect(() => {
+    if (order && order.supplier) {
+      api.get(`/suppliers/${order.supplier.id}/catalog`)
+        .then(res => {
+            const mapped = res.data.map((item: any) => ({
+                ...item,
+                display_name: `${item.product_name} (${item.variant_sku}) - Costo: $${item.replacement_cost} | Empaque: ${item.pack_name || 'Unidad Base'}`
+            }));
+            setCatalog(mapped);
+        })
+        .catch(console.error);
+    }
+  }, [order]);
+
+  useEffect(() => {
+    api.get('/products/?limit=5000')
+      .then(res => {
+          const variants: any[] = [];
+          const productsList = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
+          productsList.forEach((p: any) => {
+              if (p.variants) {
+                  p.variants.forEach((v: any) => {
+                      variants.push({
+                          variant_id: v.id,
+                          variant_sku: v.sku,
+                          product_name: p.name,
+                          pack_id: null,
+                          pack_name: 'Und. Base',
+                          qty_per_unit: 1,
+                          replacement_cost: v.replacement_cost || p.replacement_cost || 0,
+                          display_name: `[GLOBAL] ${v.sku || ''} - ${p.name} - $${v.replacement_cost || p.replacement_cost || 0}`
+                      });
+                  });
+              }
+          });
+          setGlobalVariants(variants);
+      })
+      .catch(err => console.error(err));
+
+    api.get('/categories/')
+      .then(res => setCategories(res.data.data || res.data.items || res.data || []))
+      .catch(console.error);
+  }, []);
 
   const calcDiscountCascade = (base: number, str: string) => {
       if (!str) return base;
@@ -192,6 +272,167 @@ export default function OrderDetailsPage() {
           updatedLines[rowIndex] = row;
           return updatedLines;
       });
+  };
+
+  const handleCreateFastProduct = async () => {
+      if (!newProductForm.name || !newProductForm.category_id || !newProductForm.currency_id) {
+          toast.current?.show({ severity: 'warn', summary: 'Campos Obligatorios', detail: 'Nombre, Categoría y Moneda son requeridos.' });
+          return;
+      }
+      setCreatingProduct(true);
+      try {
+          const productPayload = {
+              name: newProductForm.name,
+              category_id: newProductForm.category_id,
+              brand: newProductForm.brand || 'Genérica',
+              currency_id: newProductForm.currency_id,
+              has_variants: false,
+              is_active: true
+          };
+          const prodRes = await api.post('/products/', productPayload);
+          const newProduct = prodRes.data;
+          const defaultVariant = newProduct.variants && newProduct.variants.length > 0 ? newProduct.variants[0] : null;
+
+          if (!defaultVariant) {
+              throw new Error("No se generó la variante por defecto.");
+          }
+
+          const suppPayload = {
+              supplier_id: order.supplier.id,
+              variant_id: defaultVariant.id,
+              currency_id: newProductForm.currency_id,
+              replacement_cost: newProductForm.unit_cost,
+              min_order_qty: 1,
+              is_active: true
+          };
+          await api.post(`/suppliers/${order.supplier.id}/catalog`, suppPayload);
+
+          toast.current?.show({ severity: 'success', summary: 'Magia', detail: 'Insumo creado y enlazado al proveedor.' });
+          
+          // Reload Catalog
+          const catRes = await api.get(`/suppliers/${order.supplier.id}/catalog`);
+          const mapped = catRes.data.map((item: any) => ({
+              ...item,
+              display_name: `${item.product_name} (${item.variant_sku}) - Costo: $${item.replacement_cost} | Empaque: ${item.pack_name || 'Unidad Base'}`
+          }));
+          setCatalog(mapped);
+          
+          const matched = mapped.find((c: any) => c.variant_id === defaultVariant.id);
+          if (matched) setSelectedProduct(matched);
+          
+          setShowProductModal(false);
+          setNewProductForm({ name: '', category_id: null, brand: '', currency_id: newProductForm.currency_id, unit_cost: 0 });
+      } catch (e: any) {
+          toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo la creación rápida.' });
+      }
+      setCreatingProduct(false);
+  };
+
+  const handleAddProductLine = () => {
+      if (!selectedProduct) return;
+      
+      if (lines.some(l => l.variant_id === selectedProduct.variant_id && l.pack_id === selectedProduct.pack_id)) {
+          toast.current?.show({ severity: 'warn', summary: 'Aviso', detail: 'Este producto ya está en la orden.' });
+          return;
+      }
+      
+      const qty_per_unit = selectedProduct.qty_per_unit || selectedProduct.qty_per_pack || 1;
+      const initial_qty = 1;
+      const replacement_cost = selectedProduct.replacement_cost || 0;
+      
+      const newLine = {
+          id: null,
+          variant_id: selectedProduct.variant_id,
+          sku: selectedProduct.variant_sku || 'N/A',
+          product_name: selectedProduct.product_name,
+          pack_id: selectedProduct.pack_id,
+          pack_name: selectedProduct.pack_name || 'Und. Base',
+          qty_per_pack: qty_per_unit,
+          qty_ordered: initial_qty,
+          expected_base_qty: initial_qty * qty_per_unit,
+          unit_cost: replacement_cost,
+          line_discount_str: '',
+          subtotal: initial_qty * qty_per_unit * replacement_cost
+      };
+      setLines(prev => [...prev, newLine]);
+      setSelectedProduct(null);
+      toast.current?.show({ severity: 'success', summary: 'Agregado', detail: 'Producto añadido al borrador de la orden.' });
+  };
+
+  const handlePromptDelete = (row: any, index: number) => {
+      setDeletingLineRow(row);
+      setDeletingIndex(index);
+      setDeactivateProduct(false);
+      setShowDeleteModal(true);
+  };
+
+  const confirmDeleteRow = async () => {
+      if (deletingIndex === null || !deletingLineRow) return;
+      
+      if (deactivateProduct && deletingLineRow.variant_id) {
+          try {
+              await api.put(`/products/variants/${deletingLineRow.variant_id}`, { is_active: false });
+              toast.current?.show({ severity: 'success', summary: 'Desactivado', detail: 'Producto marcado como INACTIVO en inventario.' });
+          } catch (e) {
+              console.error("Fallo al desactivar la variante:", e);
+              toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo desactivar el producto en inventario.' });
+          }
+      }
+      
+      setLines(prev => prev.filter((_, idx) => idx !== deletingIndex));
+      setShowDeleteModal(false);
+      setDeletingLineRow(null);
+      setDeletingIndex(null);
+      toast.current?.show({ severity: 'info', summary: 'Eliminado', detail: 'Renglón removido de la orden.' });
+  };
+
+  const handleOpenEditPack = (row: any, index: number) => {
+      setEditingPackRow(row);
+      setEditingPackIndex(index);
+      setPackForm({
+          name: row.pack_name || '',
+          qty_per_unit: row.qty_per_pack || 1,
+          updatePermanently: true
+      });
+      setShowEditPackModal(true);
+  };
+
+  const handleSavePack = async () => {
+      if (editingPackIndex === null || !editingPackRow) return;
+      
+      const newName = packForm.name.trim();
+      const newQty = parseFloat(packForm.qty_per_unit as any) || 1;
+      
+      if (packForm.updatePermanently && editingPackRow.pack_id) {
+          try {
+              await api.put(`/products/packagings/${editingPackRow.pack_id}`, {
+                  name: newName,
+                  qty_per_unit: newQty
+              });
+              toast.current?.show({ severity: 'success', summary: 'Empaque Actualizado', detail: 'Ficha maestra del empaque guardada permanentemente.' });
+          } catch (e) {
+              console.error("Fallo al actualizar el empaque maestro:", e);
+              toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo guardar el empaque maestro.' });
+          }
+      }
+      
+      setLines(prev => {
+          const updated = [...prev];
+          const row = { ...updated[editingPackIndex] };
+          row.pack_name = newName;
+          row.qty_per_pack = newQty;
+          row.expected_base_qty = row.qty_ordered * newQty;
+          
+          const gross = row.expected_base_qty * row.unit_cost;
+          row.subtotal = calcDiscountCascade(gross, row.line_discount_str);
+          
+          updated[editingPackIndex] = row;
+          return updated;
+      });
+      
+      setShowEditPackModal(false);
+      setEditingPackRow(null);
+      setEditingPackIndex(null);
   };
 
   const calculateTotal = () => {
@@ -317,10 +558,12 @@ export default function OrderDetailsPage() {
                  {order.status === 'sent' && <Tag severity="success" value="ENVIADA (SIN LEER)" className="ml-2 font-bold tracking-widest px-3 py-1 bg-sky-500 border-none" icon="pi pi-send" />}
                  {order.status === 'viewed' && <Tag severity="success" value="LEÍDA (DOBLE CHECK)" className="ml-2 font-bold tracking-widest px-3 py-1 bg-indigo-600 border-none" icon="pi pi-check-circle" />}
               </div>
-              <p className="text-slate-500 ml-12 text-sm mt-2">
-                  <i className="pi pi-building mr-2 text-indigo-400"></i> Proveedor: <span className="font-bold text-slate-700">{order.supplier.name}</span>
+              <p className="text-slate-500 ml-12 text-sm mt-2 flex flex-wrap items-center gap-y-1">
+                  <span className="flex items-center"><i className="pi pi-building mr-2 text-indigo-400"></i> Proveedor: <span className="font-bold text-slate-700 ml-1">{order.supplier.name}</span></span>
                   <span className="mx-3 text-slate-200">|</span>
-                  <i className="pi pi-calendar mr-2 text-indigo-400"></i> {format(new Date(order.created_at), 'dd de MMM yyyy - HH:mm')}
+                  <span className="flex items-center"><i className="pi pi-map-marker mr-2 text-indigo-400"></i> Destino: <span className="font-bold text-slate-700 ml-1">{order.dest_facility ? order.dest_facility.name : 'General (Libre)'}</span></span>
+                  <span className="mx-3 text-slate-200">|</span>
+                  <span className="flex items-center"><i className="pi pi-calendar mr-2 text-indigo-400"></i> {format(new Date(order.created_at), 'dd de MMM yyyy - HH:mm')}</span>
               </p>
           </div>
           
@@ -367,16 +610,70 @@ export default function OrderDetailsPage() {
                 {isDraft && <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 shadow-sm"><i className="pi pi-pencil text-[10px] mr-2"></i>Edición Abierta</span>}
             </div>
         </div>
+        
+        {/* BARRA DE BÚSQUEDA Y AGREGADO DE PRODUCTOS (SOLO BORRADOR) */}
+        {isDraft && (
+           <div className="bg-slate-50/50 p-4 border-b border-slate-100 flex flex-wrap gap-4 items-center">
+              <Dropdown 
+                 value={searchMode} 
+                 options={searchModeOptions} 
+                 onChange={(e) => setSearchMode(e.value)} 
+                 className="w-44 text-xs font-bold border-slate-200" 
+              />
+              <div className="flex-1 min-w-[250px]">
+                 <Dropdown 
+                    value={selectedProduct} 
+                    options={searchMode === 'CATALOG' ? catalog : globalVariants} 
+                    onChange={(e) => setSelectedProduct(e.value)} 
+                    optionLabel="display_name" 
+                    filter 
+                    filterBy="display_name"
+                    placeholder={searchMode === 'CATALOG' ? "Buscar en catálogo del proveedor..." : "Buscar en maestro global de productos..."} 
+                    className="w-full text-xs border-slate-200" 
+                 />
+              </div>
+              <Button 
+                 label="Añadir a Orden" 
+                 icon="pi pi-plus-circle" 
+                 onClick={handleAddProductLine} 
+                 disabled={!selectedProduct} 
+                 className="bg-indigo-600 hover:bg-indigo-700 border-none font-bold px-6 shadow-md shadow-indigo-500/20" 
+              />
+              {searchMode === 'CATALOG' && (
+                 <Button 
+                    label="Crear Insumo Rápido" 
+                    icon="pi pi-bolt" 
+                    severity="success" 
+                    outlined
+                    onClick={() => setShowProductModal(true)} 
+                    className="font-bold border-2" 
+                 />
+              )}
+           </div>
+        )}
+
         <DataTable dataKey="id" value={lines} emptyMessage="Esta orden está vacía como el desierto." size="small" stripedRows rowHover className="text-sm">
           <Column header="SKU" field="sku" body={r => <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{r.sku}</span>} />
           
           <Column header="Nomenclatura" field="product_name" body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
           
-          <Column header="Unidad de Compra" body={r => (
-             <div className="flex justify-end">
+          <Column header="Unidad de Compra" body={(r, options) => (
+             <div className="flex justify-end items-center gap-2">
                  <span className="text-xs font-bold text-slate-500 bg-slate-50 px-2 py-1.5 rounded border border-slate-200 uppercase tracking-wide">
                     {r.pack_name || 'UND. BASE'} {r.qty_per_pack && r.qty_per_pack > 1 ? `(x${r.qty_per_pack})` : '(x1)'} <i className="pi pi-box ml-1 text-slate-400 text-[10px]"></i>
                  </span>
+                 {isDraft && r.pack_id && (
+                     <Button 
+                        icon="pi pi-pencil" 
+                        rounded 
+                        text 
+                        severity="secondary" 
+                        size="small" 
+                        onClick={() => handleOpenEditPack(r, options.rowIndex)} 
+                        tooltip="Editar unidades por empaque" 
+                        className="p-button-sm !p-1 text-slate-400 hover:text-slate-600"
+                     />
+                 )}
              </div>
           )} align="right" />
           
@@ -423,6 +720,22 @@ export default function OrderDetailsPage() {
           }} align="right" />
           
           <Column header="Subtotal" body={r => <span className="font-black text-emerald-700 text-base">{currencies.find(c => c.id === currencyId)?.symbol || '$'}{parseFloat(r.subtotal).toLocaleString('en-US', {minimumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2, maximumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2})}</span>} align="right" />
+          
+          {isDraft && (
+              <Column header="Acciones" body={(r, options) => (
+                  <div className="flex justify-center">
+                      <Button 
+                          icon="pi pi-trash" 
+                          rounded 
+                          severity="danger" 
+                          text 
+                          onClick={() => handlePromptDelete(r, options.rowIndex)} 
+                          tooltip="Eliminar renglón" 
+                          className="p-button-sm !p-1 text-red-500 hover:text-red-700"
+                      />
+                  </div>
+              )} align="center" style={{ width: '5rem' }} />
+          )}
           
         </DataTable>
       </div>
@@ -533,6 +846,130 @@ export default function OrderDetailsPage() {
               </div>
 
               <Button label="Insertar Fila Gratuita" icon="pi pi-plus" severity="success" onClick={addRegalia} disabled={!selectedRegalia} className="mt-4 w-full font-bold" />
+          </div>
+      </Dialog>
+
+      {/* DIÁLOGO DE CONFIRMACIÓN DE ELIMINACIÓN CON DESACTIVACIÓN */}
+      <Dialog header="Eliminar Insumo de la Orden" visible={showDeleteModal} style={{ width: '450px' }} onHide={() => setShowDeleteModal(false)} footer={
+          <div className="flex justify-end gap-2 mt-4">
+              <Button label="Cancelar" icon="pi pi-times" onClick={() => setShowDeleteModal(false)} className="p-button-text text-slate-500 font-bold" />
+              <Button label="Eliminar" icon="pi pi-trash" severity="danger" onClick={confirmDeleteRow} className="font-bold" />
+          </div>
+      }>
+          <div className="flex flex-col gap-4 py-2">
+              <p className="text-slate-600">
+                  ¿Está seguro de que desea eliminar <strong>{deletingLineRow?.product_name}</strong> de esta orden de compra?
+              </p>
+              
+              <div className="flex items-start mt-2 bg-red-50 p-3 rounded-lg border border-red-200 cursor-pointer transition-colors hover:bg-red-100" onClick={() => setDeactivateProduct(!deactivateProduct)}>
+                  <Checkbox inputId="cb_deactivate" checked={deactivateProduct} onChange={(e) => setDeactivateProduct(e.checked || false)} />
+                  <label htmlFor="cb_deactivate" className="ml-3 text-sm font-bold text-red-700 cursor-pointer flex-1">
+                      Desactivar este producto en el catálogo general
+                      <span className="block text-xs font-normal text-red-500 mt-1">
+                          Esto evitará que el bot de IA o los analistas vuelvan a sugerir o comprar este producto en el futuro.
+                      </span>
+                  </label>
+              </div>
+          </div>
+      </Dialog>
+
+      {/* DIÁLOGO DE MODIFICACIÓN DE EMPAQUE */}
+      <Dialog header="Modificar Empaque de Compra" visible={showEditPackModal} style={{ width: '450px' }} onHide={() => setShowEditPackModal(false)} footer={
+          <div className="flex justify-end gap-2 mt-4">
+              <Button label="Cancelar" icon="pi pi-times" onClick={() => setShowEditPackModal(false)} className="p-button-text text-slate-500 font-bold" />
+              <Button label="Aplicar" icon="pi pi-check" severity="success" onClick={handleSavePack} className="font-bold" />
+          </div>
+      }>
+          <div className="flex flex-col gap-4 py-2">
+              <p className="text-sm text-slate-500">
+                  Ajuste la nomenclatura del empaque y la cantidad de unidades que contiene para <strong>{editingPackRow?.product_name}</strong>.
+              </p>
+              <div>
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Nombre del Empaque</label>
+                  <InputText value={packForm.name} onChange={(e) => setPackForm(prev => ({ ...prev, name: e.target.value }))} className="w-full !rounded-xl border-slate-200" placeholder="Ej: CAJA X12" />
+              </div>
+              <div>
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Unidades por Empaque</label>
+                  <InputNumber value={packForm.qty_per_unit} onValueChange={(e) => setPackForm(prev => ({ ...prev, qty_per_unit: e.value || 1 }))} min={1} className="w-full" inputClassName="w-full !rounded-xl border-slate-200" />
+              </div>
+              <div className="flex items-center mt-2 bg-slate-50 p-3 rounded-lg border border-slate-200 cursor-pointer transition-colors hover:bg-slate-100" onClick={() => setPackForm(prev => ({ ...prev, updatePermanently: !prev.updatePermanently }))}>
+                  <Checkbox inputId="cb_updatepack" checked={packForm.updatePermanently} onChange={(e) => setPackForm(prev => ({ ...prev, updatePermanently: e.checked || false }))} />
+                  <label htmlFor="cb_updatepack" className="ml-3 text-sm font-bold text-slate-700 cursor-pointer flex-1">
+                      Actualizar permanentemente en la ficha del producto
+                      <span className="block text-xs font-normal text-slate-500 mt-1">Guarda este cambio en la base de datos maestra para futuras compras de este insumo.</span>
+                  </label>
+              </div>
+          </div>
+      </Dialog>
+
+      {/* CREADOR FAST-TRACK DE PRODUCTOS */}
+      <Dialog header={<div className="flex items-center gap-2 text-xl font-black text-slate-800"><i className="pi pi-bolt text-emerald-500"></i> Creador Fast-Track</div>} visible={showProductModal} style={{ width: '35vw' }} onHide={() => setShowProductModal(false)} className="rounded-2xl overflow-hidden">
+          <div className="flex flex-col gap-4 mt-2 p-2">
+              <div>
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Nombre del Insumo / Producto</label>
+                  <InputText 
+                      value={newProductForm.name} 
+                      onChange={(e) => setNewProductForm(prev => ({ ...prev, name: e.target.value }))} 
+                      placeholder="Ej: HARINA DE TRIGO 1KG" 
+                      className="w-full !rounded-xl border-slate-200" 
+                  />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                  <div>
+                      <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Categoría Maestra</label>
+                      <Dropdown 
+                          value={newProductForm.category_id} 
+                          options={categories} 
+                          onChange={(e) => setNewProductForm(prev => ({ ...prev, category_id: e.value }))} 
+                          optionLabel="name" 
+                          optionValue="id" 
+                          placeholder="Seleccionar..." 
+                          className="w-full border-slate-200" 
+                      />
+                  </div>
+                  <div>
+                      <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Marca (Opcional)</label>
+                      <InputText 
+                          value={newProductForm.brand} 
+                          onChange={(e) => setNewProductForm(prev => ({ ...prev, brand: e.target.value }))} 
+                          placeholder="Ej: PAN" 
+                          className="w-full !rounded-xl border-slate-200" 
+                      />
+                  </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                  <div>
+                      <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Moneda del Costo</label>
+                      <Dropdown 
+                          value={newProductForm.currency_id} 
+                          options={currencies} 
+                          onChange={(e) => setNewProductForm(prev => ({ ...prev, currency_id: e.value }))} 
+                          optionLabel="code" 
+                          optionValue="id" 
+                          placeholder="USD / VES" 
+                          className="w-full border-slate-200" 
+                      />
+                  </div>
+                  <div>
+                      <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Costo Negociado</label>
+                      <InputNumber 
+                          value={newProductForm.unit_cost} 
+                          onValueChange={(e) => setNewProductForm(prev => ({ ...prev, unit_cost: e.value || 0 }))} 
+                          mode="currency" 
+                          currency={currencies.find(c => c.id === newProductForm.currency_id)?.code || "USD"} 
+                          locale="en-US" 
+                          className="w-full" 
+                          inputClassName="w-full !rounded-xl border-slate-200" 
+                      />
+                  </div>
+              </div>
+
+              <div className="flex justify-end gap-2 mt-6">
+                  <Button label="Cancelar" icon="pi pi-times" onClick={() => setShowProductModal(false)} className="p-button-text text-slate-500 font-bold" />
+                  <Button label="Crear y Vincular" icon="pi pi-check" loading={creatingProduct} onClick={handleCreateFastProduct} className="bg-emerald-600 hover:bg-emerald-700 border-none font-bold px-6 shadow-md shadow-emerald-500/20" />
+              </div>
           </div>
       </Dialog>
     </div>

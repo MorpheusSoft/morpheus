@@ -83,7 +83,7 @@ def read_purchase_order_details(
     id: int,
 ) -> Any:
     from app.models.inventory import ProductVariant, Product, ProductPackaging
-    from app.models.core import Supplier, Currency
+    from app.models.core import Supplier, Currency, Facility
     
     order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
     if not order:
@@ -92,6 +92,7 @@ def read_purchase_order_details(
     supp = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
     currency = db.query(Currency).filter(Currency.id == supp.currency_id).first() if supp and supp.currency_id else None
     currency_decimals = currency.decimal_places if currency else 2
+    facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first() if order.dest_facility_id else None
     
     lines_rich = []
     for line in order.lines:
@@ -133,6 +134,11 @@ def read_purchase_order_details(
             "name": supp.name if supp else "N/A",
             "tax_id": supp.tax_id if supp else "N/A"
         },
+        "dest_facility": {
+            "id": facility.id,
+            "name": facility.name,
+            "code": facility.code
+        } if facility else None,
         "lines": lines_rich
     }
 
@@ -225,9 +231,19 @@ def update_purchase_order(
     order.expiration_date = payload.expiration_date
     if payload.allow_partial_deliveries is not None:
         order.allow_partial_deliveries = payload.allow_partial_deliveries
+    if payload.currency_id is not None:
+        order.currency_id = payload.currency_id
+    if payload.exchange_rate is not None:
+        order.exchange_rate = payload.exchange_rate
         
     total_gross = Decimal(0)
     line_map = {line.id: line for line in order.lines}
+    
+    # Eliminar líneas huérfanas que no están en el payload
+    payload_line_ids = {l_up.id for l_up in payload.lines if l_up.id}
+    for db_line_id, db_line in list(line_map.items()):
+        if db_line_id not in payload_line_ids:
+            db.delete(db_line)
     
     for l_up in payload.lines:
         qty = Decimal(str(l_up.qty_ordered))
