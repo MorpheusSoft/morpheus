@@ -243,3 +243,47 @@ def test_mrp_bot_execution(db_session: Session, setup_mrp_data, auth_headers):
     logs_list = logs_response.json()
     assert len(logs_list) >= 1
     assert logs_list[0]["id"] == db_log.id
+
+def test_purchase_order_details_and_pdf(db_session: Session, setup_mrp_data, auth_headers):
+    # 1. Fetch generated purchase order in draft
+    po = db_session.query(PurchaseOrder).filter(PurchaseOrder.supplier_id == 901).first()
+    assert po is not None
+    
+    # Associate a buyer to the PO for testing
+    from app.models.core import Buyer
+    buyer = db_session.query(Buyer).filter(Buyer.id == 1).first()
+    if not buyer:
+        buyer = Buyer(id=1, user_id=1, approval_limit=Decimal("5000.00"))
+        db_session.add(buyer)
+        db_session.commit()
+    po.buyer_id = buyer.id
+    db_session.commit()
+    
+    # 2. Get details
+    response = client.get(f"/api/v1/purchase-orders/{po.id}/details", headers=auth_headers)
+    assert response.status_code == 200
+    details = response.json()
+    
+    assert "buyer_name" in details
+    assert details["buyer_name"] == "Administrador Master" # From default user ID 1 created in fixture
+    
+    lines = details["lines"]
+    assert len(lines) > 0
+    first_line = lines[0]
+    assert "ai_analysis" in first_line
+    ai = first_line["ai_analysis"]
+    assert "stock_qty" in ai
+    assert "daily_sales_avg" in ai
+    assert "monthly_sales_avg" in ai
+    assert "seasonal_factor" in ai
+    assert "safety_stock" in ai
+    
+    # 3. Check PDF endpoints
+    pdf_barcode_resp = client.get(f"/api/v1/purchase-orders/{po.id}/pdf?code_type=barcode", headers=auth_headers)
+    assert pdf_barcode_resp.status_code == 200
+    assert pdf_barcode_resp.headers["content-type"] == "application/pdf"
+    
+    pdf_sku_resp = client.get(f"/api/v1/purchase-orders/{po.id}/pdf?code_type=sku", headers=auth_headers)
+    assert pdf_sku_resp.status_code == 200
+    assert pdf_sku_resp.headers["content-type"] == "application/pdf"
+

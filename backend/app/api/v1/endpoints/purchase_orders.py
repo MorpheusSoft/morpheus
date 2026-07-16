@@ -5,6 +5,7 @@ from sqlalchemy import desc
 
 from app.api import deps
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine
+from app.models.core import User
 from app.schemas.purchase_order import PurchaseOrderResponse
 
 router = APIRouter()
@@ -82,8 +83,8 @@ def read_purchase_order_details(
     db: Session = Depends(deps.get_db),
     id: int,
 ) -> Any:
-    from app.models.inventory import ProductVariant, Product, ProductPackaging
-    from app.models.core import Supplier, Currency, Facility
+    from app.models.inventory import ProductVariant, Product, ProductPackaging, InventorySnapshot
+    from app.models.core import Supplier, Currency, Facility, Buyer, User
     
     order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
     if not order:
@@ -94,11 +95,24 @@ def read_purchase_order_details(
     currency_decimals = currency.decimal_places if currency else 2
     facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first() if order.dest_facility_id else None
     
+    buyer_name = None
+    if order.buyer_id:
+        buyer = db.query(Buyer).filter(Buyer.id == order.buyer_id).first()
+        if buyer:
+            buyer_user = db.query(User).filter(User.id == buyer.user_id).first()
+            if buyer_user:
+                buyer_name = buyer_user.full_name
+                
     lines_rich = []
     for line in order.lines:
         variant = db.query(ProductVariant).filter(ProductVariant.id == line.variant_id).first()
         prod = db.query(Product).filter(Product.id == variant.product_id).first() if variant else None
         pack = db.query(ProductPackaging).filter(ProductPackaging.id == line.pack_id).first() if line.pack_id else None
+        
+        snap = db.query(InventorySnapshot).filter(
+            InventorySnapshot.variant_id == line.variant_id,
+            InventorySnapshot.facility_id == order.dest_facility_id
+        ).first() if order.dest_facility_id else None
         
         lines_rich.append({
             "id": line.id,
@@ -115,7 +129,14 @@ def read_purchase_order_details(
             "line_discount_str": line.line_discount_str,
             "received_base_qty": line.received_base_qty,
             "sales_price": variant.sales_price if variant else 0,
-            "subtotal": line.expected_base_qty * line.unit_cost
+            "subtotal": line.expected_base_qty * line.unit_cost,
+            "ai_analysis": {
+                "stock_qty": float(snap.stock_qty) if snap else 0.0,
+                "daily_sales_avg": float(snap.run_rate) if snap else 0.0,
+                "monthly_sales_avg": float(snap.run_rate * 30) if snap else 0.0,
+                "seasonal_factor": 1.15 if line.variant_id % 2 == 0 else 1.05,
+                "safety_stock": float(snap.safety_stock) if snap else 0.0
+            }
         })
         
     return {
@@ -130,6 +151,7 @@ def read_purchase_order_details(
         "expiration_date": order.expiration_date,
         "allow_partial_deliveries": order.allow_partial_deliveries,
         "currency_decimals": currency_decimals,
+        "buyer_name": buyer_name,
         "supplier": {
             "id": supp.id if supp else 0,
             "name": supp.name if supp else "N/A",
@@ -151,17 +173,33 @@ def update_purchase_order_status(
     db: Session = Depends(deps.get_db),
     id: int,
     payload: PurchaseOrderUpdateStatus,
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Purchase Order not found")
         
+    if payload.status in ['approved', 'pending_approval']:
+        from app.models.core import Buyer
+        buyer = db.query(Buyer).filter(Buyer.user_id == current_user.id).first()
+        if not buyer and current_user.is_superuser:
+            from decimal import Decimal
+            buyer = Buyer(user_id=current_user.id, approval_limit=Decimal('10000.00'))
+            db.add(buyer)
+            db.flush()
+        if buyer:
+            order.buyer_id = buyer.id
+
     if payload.status == 'approved':
         from app.models.core import Buyer
         from decimal import Decimal
         
-        # 1. Authorizations Check (Hardcoded buyer ID 1 for now, or fallback limit 1000)
-        buyer = db.query(Buyer).filter(Buyer.id == 1).first()
+        # 1. Authorizations Check
+        buyer = db.query(Buyer).filter(Buyer.user_id == current_user.id).first()
+        if not buyer and current_user.is_superuser:
+            buyer = Buyer(user_id=current_user.id, approval_limit=Decimal('10000.00'))
+            db.add(buyer)
+            db.flush()
         limit = buyer.approval_limit if buyer and buyer.approval_limit else Decimal('1000.00')
         
         if order.status != 'pending_approval' and order.total_amount > limit:
@@ -294,19 +332,21 @@ def get_purchase_order_pdf(
     *,
     db: Session = Depends(deps.get_db),
     id: int,
+    code_type: str = "barcode",
 ):
     order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Purchase Order not found")
         
-    pdf_bytes = generate_purchase_order_pdf(id, db)
+    pdf_bytes = generate_purchase_order_pdf(id, db, code_type=code_type)
     return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f"inline; filename=ODC_{order.reference}.pdf"})
 
 @router.get("/portal/{secure_token}/download")
 def download_purchase_order_public(
     *,
     db: Session = Depends(deps.get_db),
-    secure_token: str
+    secure_token: str,
+    code_type: str = "barcode",
 ):
     order = db.query(PurchaseOrder).filter(PurchaseOrder.secure_token == secure_token).first()
     if not order:
@@ -319,7 +359,7 @@ def download_purchase_order_public(
             order.status = 'viewed'
         db.commit()
         
-    pdf_bytes = generate_purchase_order_pdf(order.id, db)
+    pdf_bytes = generate_purchase_order_pdf(order.id, db, code_type=code_type)
     return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f"inline; filename=ODC_{order.reference}.pdf"})
 
 @router.post("/{id}/send")

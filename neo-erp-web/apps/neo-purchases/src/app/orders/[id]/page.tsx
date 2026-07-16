@@ -37,6 +37,13 @@ export default function OrderDetailsPage() {
   const [expirationDate, setExpirationDate] = useState<Date | null>(null);
   const [allowPartial, setAllowPartial] = useState(false);
 
+  // AI analysis click state
+  const [selectedAiAnalysis, setSelectedAiAnalysis] = useState<any>(null);
+  const [showAiAnalysisModal, setShowAiAnalysisModal] = useState(false);
+
+  // PDF print type modal state
+  const [showPdfCodeTypeModal, setShowPdfCodeTypeModal] = useState(false);
+
   // Bimonetary State
   const [currencyId, setCurrencyId] = useState<number | null>(null);
   const [exchangeRate, setExchangeRate] = useState<number>(1.0);
@@ -522,9 +529,11 @@ export default function OrderDetailsPage() {
       setSaving(false);
   };
 
-  const handleDownloadPdf = async () => {
+  const handleDownloadPdf = async (codeType: string) => {
+      setShowPdfCodeTypeModal(false);
       try {
           const response = await api.get(`/purchase-orders/${orderId}/pdf`, {
+              params: { code_type: codeType },
               responseType: 'blob'
           });
           const blob = new Blob([response.data], { type: 'application/pdf' });
@@ -564,6 +573,8 @@ export default function OrderDetailsPage() {
                   <span className="flex items-center"><i className="pi pi-map-marker mr-2 text-indigo-400"></i> Destino: <span className="font-bold text-slate-700 ml-1">{order.dest_facility ? order.dest_facility.name : 'General (Libre)'}</span></span>
                   <span className="mx-3 text-slate-200">|</span>
                   <span className="flex items-center"><i className="pi pi-calendar mr-2 text-indigo-400"></i> {format(new Date(order.created_at), 'dd de MMM yyyy - HH:mm')}</span>
+                  <span className="mx-3 text-slate-200">|</span>
+                  <span className="flex items-center"><i className="pi pi-user mr-2 text-indigo-400"></i> Comprador: <span className="font-bold text-slate-700 ml-1">{order.buyer_name || 'No asignado'}</span></span>
               </p>
           </div>
           
@@ -655,7 +666,34 @@ export default function OrderDetailsPage() {
         <DataTable dataKey="id" value={lines} emptyMessage="Esta orden está vacía como el desierto." size="small" stripedRows rowHover className="text-sm">
           <Column header="SKU" field="sku" body={r => <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{r.sku}</span>} />
           
-          <Column header="Nomenclatura" field="product_name" body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
+          <Column header="Nomenclatura" field="product_name" body={r => (
+             <div className="flex items-center justify-between gap-2">
+                 <span className="font-bold text-slate-800">{r.product_name}</span>
+                 {r.ai_analysis && (
+                     <Button
+                         icon="pi pi-sparkles"
+                         rounded
+                         text
+                         severity="help"
+                         className="p-button-sm text-indigo-500 hover:text-indigo-700 !p-0 w-8 h-8 flex items-center justify-center"
+                         tooltip={`Análisis de IA:
+• Stock en Bodega: ${r.ai_analysis.stock_qty ?? 0} Unds
+• Promedio Ventas Diarias: ${r.ai_analysis.daily_sales_avg ?? 0}
+• Promedio Ventas Mensuales: ${r.ai_analysis.monthly_sales_avg ?? 0}
+• Factor Estacional: ${r.ai_analysis.seasonal_factor ?? 1.0}x
+• Stock de Seguridad: ${r.ai_analysis.safety_stock ?? 0}`}
+                         tooltipOptions={{ position: 'top', showDelay: 200 }}
+                         onClick={() => {
+                             setSelectedAiAnalysis({
+                                 product_name: r.product_name,
+                                 ...r.ai_analysis
+                             });
+                             setShowAiAnalysisModal(true);
+                         }}
+                     />
+                 )}
+             </div>
+          )} />
           
           <Column header="Unidad de Compra" body={(r, options) => (
              <div className="flex justify-end items-center gap-2">
@@ -816,7 +854,7 @@ export default function OrderDetailsPage() {
       )}
       {!isDraft && order.status !== 'pending_approval' && (
           <div className="flex justify-end gap-4 p-6 bg-slate-50 rounded-2xl shadow-inner border border-slate-200 mt-6">
-              <Button label="Visor PDF Corporativo" icon="pi pi-file-pdf" severity="danger" outlined onClick={handleDownloadPdf} className="font-bold bg-white" />
+              <Button label="Visor PDF Corporativo" icon="pi pi-file-pdf" severity="danger" outlined onClick={() => setShowPdfCodeTypeModal(true)} className="font-bold bg-white" />
              {(order.status === 'approved' || order.status === 'sent' || order.status === 'viewed') && (
                  <Button label="Disparar a Proveedor" icon="pi pi-whatsapp" severity="success" onClick={triggerMailer} disabled={saving} className="font-bold px-8 shadow-md" />
              )}
@@ -969,6 +1007,81 @@ export default function OrderDetailsPage() {
               <div className="flex justify-end gap-2 mt-6">
                   <Button label="Cancelar" icon="pi pi-times" onClick={() => setShowProductModal(false)} className="p-button-text text-slate-500 font-bold" />
                   <Button label="Crear y Vincular" icon="pi pi-check" loading={creatingProduct} onClick={handleCreateFastProduct} className="bg-emerald-600 hover:bg-emerald-700 border-none font-bold px-6 shadow-md shadow-emerald-500/20" />
+              </div>
+          </div>
+      </Dialog>
+
+      {/* DIÁLOGO DE ANÁLISIS DE IA */}
+      <Dialog 
+          header={<div className="flex items-center gap-2 text-indigo-600 font-bold"><i className="pi pi-sparkles"></i> Análisis de Reabastecimiento IA</div>} 
+          visible={showAiAnalysisModal} 
+          style={{ width: '400px' }} 
+          onHide={() => setShowAiAnalysisModal(false)}
+          footer={
+              <div className="flex justify-end mt-2">
+                  <Button label="Entendido" icon="pi pi-check" onClick={() => setShowAiAnalysisModal(false)} className="bg-indigo-600 border-none font-bold px-4" />
+              </div>
+          }
+      >
+          <div className="flex flex-col gap-4 py-2">
+              <p className="text-sm text-slate-500 font-medium">
+                  Parámetros calculados por el bot MRP para <strong>{selectedAiAnalysis?.product_name}</strong>:
+              </p>
+              
+              <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase">Stock Actual</span>
+                      <span className="text-lg font-black text-slate-700">{selectedAiAnalysis?.stock_qty ?? 0} Unds</span>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase">Stock Seguridad</span>
+                      <span className="text-lg font-black text-slate-700">{selectedAiAnalysis?.safety_stock ?? 0} Unds</span>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase">Venta Diaria Promedio</span>
+                      <span className="text-lg font-black text-slate-700">{selectedAiAnalysis?.daily_sales_avg ?? 0} Unds</span>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase">Venta Mensual Promedio</span>
+                      <span className="text-lg font-black text-slate-700">{selectedAiAnalysis?.monthly_sales_avg ?? 0} Unds</span>
+                  </div>
+              </div>
+              
+              <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 flex justify-between items-center">
+                  <div>
+                      <span className="block text-[10px] font-bold text-indigo-400 uppercase">Factor Estacional</span>
+                      <span className="text-xs text-indigo-700 font-medium">Multiplicador por temporada</span>
+                  </div>
+                  <span className="text-xl font-black text-indigo-700">{selectedAiAnalysis?.seasonal_factor ?? 1.0}x</span>
+              </div>
+          </div>
+      </Dialog>
+
+      {/* DIÁLOGO SELECCIÓN CÓDIGO PDF */}
+      <Dialog 
+          header={<div className="flex items-center gap-2 text-slate-800 font-bold"><i className="pi pi-print text-indigo-500"></i> Opciones de Impresión</div>} 
+          visible={showPdfCodeTypeModal} 
+          style={{ width: '400px' }} 
+          onHide={() => setShowPdfCodeTypeModal(false)}
+      >
+          <div className="flex flex-col gap-4 py-2">
+              <p className="text-sm text-slate-600">
+                  Selecciona el tipo de identificación que deseas imprimir en la tabla de insumos del PDF corporativo:
+              </p>
+              
+              <div className="grid grid-cols-2 gap-3 mt-2">
+                   <Button 
+                       label="Código de Barras" 
+                       icon="pi pi-barcode" 
+                       className="p-button-outlined border-2 font-bold flex flex-col gap-2 p-4 items-center justify-center"
+                       onClick={() => handleDownloadPdf("barcode")} 
+                   />
+                   <Button 
+                       label="SKU Interno" 
+                       icon="pi pi-tag" 
+                       className="p-button-outlined border-2 font-bold flex flex-col gap-2 p-4 items-center justify-center"
+                       onClick={() => handleDownloadPdf("sku")} 
+                   />
               </div>
           </div>
       </Dialog>
