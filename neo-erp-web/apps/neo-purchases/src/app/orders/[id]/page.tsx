@@ -1050,7 +1050,11 @@ export default function OrderDetailsPage() {
               <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 flex justify-between items-center">
                   <div>
                       <span className="block text-[10px] font-bold text-indigo-400 uppercase">Factor Estacional</span>
-                      <span className="text-xs text-indigo-700 font-medium">Multiplicador por temporada</span>
+                      <span className="text-xs text-indigo-700 font-semibold">
+                           {Number(selectedAiAnalysis?.seasonal_factor) === 1.0 
+                               ? 'Tienda Nueva / Sin histórico (Neutral)' 
+                               : 'Ajuste estacional interanual'}
+                      </span>
                   </div>
                   <span className="text-xl font-black text-indigo-700">{selectedAiAnalysis?.seasonal_factor ?? 1.0}x</span>
               </div>

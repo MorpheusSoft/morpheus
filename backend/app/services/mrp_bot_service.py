@@ -9,17 +9,19 @@ from sqlalchemy import func
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine, SupplierProduct, MRPBotLog
 from app.models.inventory import InventorySnapshot, ProductVariant, Product, ProductPackaging
 from app.models.core import Supplier, Facility, Buyer
+from app.models.sales import Document, DocumentLine
 
 def predict_demand_and_safety_stock(
     variant_id: int,
     lead_time_days: int,
     run_rate: float,
-    safety_stock_configured: float
+    safety_stock_configured: float,
+    seasonal_index: float = 1.0
 ) -> Tuple[Decimal, Decimal]:
     """
     Mocked predictive AI estimator.
     Calculates:
-      1. Predicted Demand = daily_sales (run_rate) * Lead Time * Seasonal Multiplier
+      1. Predicted Demand = daily_sales (run_rate) * Lead Time * Seasonal Index
       2. Statistical Safety Stock = Z * sqrt(LT * Demand_StdDev^2 + Daily_Sales^2 * LT_Variance)
     Uses a service level target of 95% (Z-score = 1.65).
     """
@@ -29,9 +31,8 @@ def predict_demand_and_safety_stock(
     # Lead time in days (fallback to 5 if not configured)
     lt_days = lead_time_days if lead_time_days and lead_time_days > 0 else 5
     
-    # Predict demand with seasonal factor (simulating 15% increase for even IDs, 5% for odd IDs)
-    seasonal_multiplier = 1.15 if variant_id % 2 == 0 else 1.05
-    predicted_demand = daily_sales * lt_days * seasonal_multiplier
+    # Predict demand with dynamic seasonal factor
+    predicted_demand = daily_sales * lt_days * seasonal_index
     
     # Statistical Safety Stock:
     # Z-score for 95% service level
@@ -134,7 +135,62 @@ async def run_mrp_bot(db: Session) -> MRPBotLog:
                 
                 stock_qty = Decimal(str(snapshot.stock_qty)) if snapshot else Decimal('0')
                 safety_stock_conf = Decimal(str(snapshot.safety_stock)) if snapshot else Decimal('0')
-                run_rate = Decimal(str(snapshot.run_rate)) if snapshot else Decimal('0')
+                
+                # Dynamic 90-day daily sales average (run_rate)
+                from datetime import timedelta
+                limit_date_90 = datetime.now() - timedelta(days=90)
+                total_qty_90 = db.query(func.sum(DocumentLine.quantity))\
+                    .join(Document, Document.id == DocumentLine.document_id)\
+                    .filter(
+                        Document.facility_id == facility_id,
+                        DocumentLine.variant_id == variant.id,
+                        Document.type == 'INVOICE',
+                        Document.state == 'PAID',
+                        Document.created_at >= limit_date_90
+                    ).scalar() or Decimal('0')
+                
+                run_rate = total_qty_90 / Decimal('90.0')
+                snapshot_run_rate = Decimal(str(snapshot.run_rate)) if snapshot and snapshot.run_rate else Decimal('0')
+                
+                # Fallback to static snapshot run_rate if no dynamic sales registered
+                if run_rate <= 0:
+                    run_rate = snapshot_run_rate
+
+                # Dynamic interannual seasonal index
+                mid_date_last_year = datetime.now() - timedelta(days=365)
+                start_date_month = mid_date_last_year - timedelta(days=15)
+                end_date_month = mid_date_last_year + timedelta(days=15)
+                
+                total_qty_month_ly = db.query(func.sum(DocumentLine.quantity))\
+                    .join(Document, Document.id == DocumentLine.document_id)\
+                    .filter(
+                        Document.facility_id == facility_id,
+                        DocumentLine.variant_id == variant.id,
+                        Document.type == 'INVOICE',
+                        Document.state == 'PAID',
+                        Document.created_at >= start_date_month,
+                        Document.created_at <= end_date_month
+                    ).scalar() or Decimal('0')
+                
+                start_date_year_ly = mid_date_last_year - timedelta(days=180)
+                end_date_year_ly = mid_date_last_year + timedelta(days=185)
+                total_qty_year_ly = db.query(func.sum(DocumentLine.quantity))\
+                    .join(Document, Document.id == DocumentLine.document_id)\
+                    .filter(
+                        Document.facility_id == facility_id,
+                        DocumentLine.variant_id == variant.id,
+                        Document.type == 'INVOICE',
+                        Document.state == 'PAID',
+                        Document.created_at >= start_date_year_ly,
+                        Document.created_at <= end_date_year_ly
+                    ).scalar() or Decimal('0')
+                
+                if total_qty_year_ly > 0:
+                    avg_monthly_ly = total_qty_year_ly / Decimal('12.0')
+                    seasonal_index = float(total_qty_month_ly / avg_monthly_ly)
+                else:
+                    # Fallback for new stores / new products: seasonal index is 1.0 (omit interannual)
+                    seasonal_index = 1.0
                 
                 # 4. Calculate transit stock (open ODCs)
                 transit_qty = db.query(func.sum(PurchaseOrderLine.expected_base_qty))\
@@ -153,7 +209,8 @@ async def run_mrp_bot(db: Session) -> MRPBotLog:
                     variant_id=variant.id,
                     lead_time_days=supplier.lead_time_days or 5,
                     run_rate=float(run_rate),
-                    safety_stock_configured=float(safety_stock_conf)
+                    safety_stock_configured=float(safety_stock_conf),
+                    seasonal_index=seasonal_index
                 )
                 
                 # 7. Umbral Crítico

@@ -1,7 +1,7 @@
 from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 
 from app.api import deps
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine
@@ -114,6 +114,70 @@ def read_purchase_order_details(
             InventorySnapshot.facility_id == order.dest_facility_id
         ).first() if order.dest_facility_id else None
         
+        stock_qty = snap.stock_qty if snap else 0.0
+        safety_stock = snap.safety_stock if snap else 0.0
+        
+        # Calculate dynamic 90-day daily sales average (run_rate)
+        from datetime import timedelta
+        from app.models.sales import Document, DocumentLine
+        
+        run_rate = 0.0
+        seasonal_index = 1.0
+        
+        if order.dest_facility_id:
+            limit_date_90 = datetime.now() - timedelta(days=90)
+            total_qty_90 = db.query(func.sum(DocumentLine.quantity))\
+                .join(Document, Document.id == DocumentLine.document_id)\
+                .filter(
+                    Document.facility_id == order.dest_facility_id,
+                    DocumentLine.variant_id == line.variant_id,
+                    Document.type == 'INVOICE',
+                    Document.state == 'PAID',
+                    Document.created_at >= limit_date_90
+                ).scalar() or 0.0
+            
+            run_rate = float(total_qty_90) / 90.0
+            
+            # Fallback to static snapshot run_rate if no dynamic sales
+            if run_rate <= 0 and snap and snap.run_rate:
+                run_rate = float(snap.run_rate)
+                
+            # Calculate dynamic interannual seasonal index
+            mid_date_last_year = datetime.now() - timedelta(days=365)
+            start_date_month = mid_date_last_year - timedelta(days=15)
+            end_date_month = mid_date_last_year + timedelta(days=15)
+            
+            total_qty_month_ly = db.query(func.sum(DocumentLine.quantity))\
+                .join(Document, Document.id == DocumentLine.document_id)\
+                .filter(
+                    Document.facility_id == order.dest_facility_id,
+                    DocumentLine.variant_id == line.variant_id,
+                    Document.type == 'INVOICE',
+                    Document.state == 'PAID',
+                    Document.created_at >= start_date_month,
+                    Document.created_at <= end_date_month
+                ).scalar() or 0.0
+            
+            start_date_year_ly = mid_date_last_year - timedelta(days=180)
+            end_date_year_ly = mid_date_last_year + timedelta(days=185)
+            total_qty_year_ly = db.query(func.sum(DocumentLine.quantity))\
+                .join(Document, Document.id == DocumentLine.document_id)\
+                .filter(
+                    Document.facility_id == order.dest_facility_id,
+                    DocumentLine.variant_id == line.variant_id,
+                    Document.type == 'INVOICE',
+                    Document.state == 'PAID',
+                    Document.created_at >= start_date_year_ly,
+                    Document.created_at <= end_date_year_ly
+                ).scalar() or 0.0
+            
+            if total_qty_year_ly > 0:
+                avg_monthly_ly = float(total_qty_year_ly) / 12.0
+                seasonal_index = float(total_qty_month_ly) / avg_monthly_ly
+            else:
+                # Fallback to 1.0 if no interannual sales (e.g. new store)
+                seasonal_index = 1.0
+        
         lines_rich.append({
             "id": line.id,
             "variant_id": line.variant_id,
@@ -131,11 +195,11 @@ def read_purchase_order_details(
             "sales_price": variant.sales_price if variant else 0,
             "subtotal": line.expected_base_qty * line.unit_cost,
             "ai_analysis": {
-                "stock_qty": float(snap.stock_qty) if snap else 0.0,
-                "daily_sales_avg": float(snap.run_rate) if snap else 0.0,
-                "monthly_sales_avg": float(snap.run_rate * 30) if snap else 0.0,
-                "seasonal_factor": 1.15 if line.variant_id % 2 == 0 else 1.05,
-                "safety_stock": float(snap.safety_stock) if snap else 0.0
+                "stock_qty": float(stock_qty),
+                "daily_sales_avg": round(run_rate, 4),
+                "monthly_sales_avg": round(run_rate * 30.0, 4),
+                "seasonal_factor": round(seasonal_index, 4),
+                "safety_stock": float(safety_stock)
             }
         })
         
