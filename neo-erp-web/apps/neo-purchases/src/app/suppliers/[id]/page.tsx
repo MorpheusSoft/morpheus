@@ -30,6 +30,7 @@ export default function SupplierEdit() {
   const [fetching, setFetching] = useState(true);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [facilities, setFacilities] = useState<any[]>([]);
+  const [buyers, setBuyers] = useState<any[]>([]);
 
   const { control, handleSubmit, reset } = useForm<any>({
     defaultValues: {
@@ -39,6 +40,7 @@ export default function SupplierEdit() {
       international_tax_id: '',
       fiscal_address: '',
       is_active: true,
+      buyer_id: null,
 
       currency_id: null,
       default_facility_id: null,
@@ -71,12 +73,25 @@ export default function SupplierEdit() {
     Promise.all([
       api.get('/currencies/'),
       api.get('/facilities/'),
+      api.get('/buyers/'),
+      api.get('/users/'),
       api.get(`/suppliers/${supplierId}`)
-    ]).then(([currRes, facRes, suppRes]) => {
+    ]).then(([currRes, facRes, buyersRes, usersRes, suppRes]) => {
       setCurrencies(currRes.data);
       setFacilities(facRes.data);
+      
+      const mappedBuyers = buyersRes.data.map((b: any) => {
+        const u = usersRes.data.find((x: any) => x.id === b.user_id);
+        return {
+          id: b.id,
+          name: u ? u.full_name || u.email : `Comprador ID ${b.id}`
+        };
+      });
+      setBuyers(mappedBuyers);
+
       const parsedData = {
         ...suppRes.data,
+        buyer_id: suppRes.data.buyer_id || null,
         commercial_name: suppRes.data.commercial_name || '',
         international_tax_id: suppRes.data.international_tax_id || '',
         fiscal_address: suppRes.data.fiscal_address || '',
@@ -191,6 +206,24 @@ export default function SupplierEdit() {
                   <InputText {...field} className="p-2.5 border rounded-lg w-full" placeholder="Id fiscal exterior (opcional)" />
                 )} />
               </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-semibold text-slate-700">Comprador Responsable</label>
+                <Controller name="buyer_id" control={control} render={({ field }) => (
+                  <Dropdown 
+                    value={field.value} 
+                    onChange={(e) => field.onChange(e.value)} 
+                    options={buyers} 
+                    optionLabel="name" 
+                    optionValue="id" 
+                    placeholder="Sin comprador asignado (Acceso Libre)" 
+                    showClear 
+                    className="w-full border rounded-lg p-inputtext-sm" 
+                  />
+                )} />
+              </div>
+
+              <div className="hidden md:block"></div>
 
               <div className="flex flex-col gap-2 col-span-1 md:col-span-2">
                 <label className="text-sm font-semibold text-slate-700">Dirección Fiscal / Principal</label>

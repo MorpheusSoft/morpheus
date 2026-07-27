@@ -11,7 +11,7 @@ export async function loginAction(prevState: any, formData: FormData) {
     const password = (formData.get("password") as string).trim()
     callbackUrl = formData.get("callbackUrl") as string || "/dashboard"
 
-    let apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.qa.morpheussoft.net/api/v1"
+    let apiUrl = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === "production" ? "https://api.qa.morpheussoft.net/api/v1" : "http://127.0.0.1:8000/api/v1")
     if (apiUrl.endsWith("/")) apiUrl = apiUrl.slice(0, -1)
     
     console.log(`Fetching from: ${apiUrl}/login/access-token`)

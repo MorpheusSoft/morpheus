@@ -66,6 +66,19 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
 
     # 4. Procesar Lineas y asentar Inventario
     for in_line in payload.lines:
+        # Validar si el producto está bloqueado en la sucursal de destino
+        from app.models.inventory import ProductFacilityPrice, ProductVariant, Product
+        fac_price = db.query(ProductFacilityPrice).filter(
+            ProductFacilityPrice.variant_id == in_line.variant_id,
+            ProductFacilityPrice.facility_id == order.dest_facility_id
+        ).first()
+        if fac_price and not fac_price.is_active:
+            prod_name = db.query(Product.name).join(ProductVariant).filter(ProductVariant.id == in_line.variant_id).scalar() or "desconocido"
+            raise HTTPException(
+                status_code=400,
+                detail=f"El producto '{prod_name}' está deshabilitado/bloqueado en la sucursal de destino."
+            )
+
         po_line = db.query(PurchaseOrderLine).filter(PurchaseOrderLine.id == in_line.po_line_id).first()
         if not po_line:
             continue

@@ -64,6 +64,7 @@ class ProductFacilityPriceBase(BaseModel):
     promo_target_utility_pct: Optional[Decimal] = None
     promo_start_at: Optional[datetime] = None
     promo_end_at: Optional[datetime] = None
+    is_active: bool = True
 
 class ProductFacilityPriceCreate(ProductFacilityPriceBase):
     id: Optional[int] = None

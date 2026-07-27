@@ -5,6 +5,7 @@ import { ProgressBar } from 'primereact/progressbar';
 import { Dialog } from 'primereact/dialog';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
+import { InputSwitch } from 'primereact/inputswitch';
 import { PricingService } from '@/services/pricing.service';
 import { ProductService } from '@/services/product.service';
 import { useRouter } from 'next/navigation';
@@ -103,7 +104,12 @@ export default function MetricsDashboardPage() {
           facility_id: f.id,
           facility_name: f.name,
           sales_price: fp ? Number(fp.sales_price) : null,
-          target_utility_pct: fp ? Number(fp.target_utility_pct) : 0
+          target_utility_pct: fp ? Number(fp.target_utility_pct) : 0,
+          promo_price: fp?.promo_price ? Number(fp.promo_price) : null,
+          promo_target_utility_pct: fp?.promo_target_utility_pct ? Number(fp.promo_target_utility_pct) : null,
+          promo_start_at: fp?.promo_start_at ? fp.promo_start_at : null,
+          promo_end_at: fp?.promo_end_at ? fp.promo_end_at : null,
+          is_active: fp ? fp.is_active !== false : true
         };
       });
       setDetailVariantPrices(mapped);
@@ -112,6 +118,47 @@ export default function MetricsDashboardPage() {
       setDetailVariantPrices([]);
     } finally {
       setLoadingDetail(false);
+    }
+  };
+
+  const handleToggleBranchActive = async (facilityId: number, active: boolean) => {
+    if (!detailProductInfo) return;
+
+    const updated = detailVariantPrices.map(bp => {
+      if (bp.facility_id === facilityId) {
+        return { ...bp, is_active: active };
+      }
+      return bp;
+    });
+    setDetailVariantPrices(updated);
+
+    try {
+      const facilityPricesPayload = updated.map(bp => {
+        return {
+          facility_id: bp.facility_id,
+          sales_price: bp.sales_price || 0,
+          target_utility_pct: bp.target_utility_pct || 0,
+          promo_price: bp.promo_price,
+          promo_target_utility_pct: bp.promo_target_utility_pct,
+          promo_start_at: bp.promo_start_at,
+          promo_end_at: bp.promo_end_at,
+          is_active: bp.is_active
+        };
+      });
+
+      await ProductService.updateProduct(detailProductInfo.product_id, {
+        facility_prices: facilityPricesPayload
+      });
+    } catch (err) {
+      console.error('Error updating product branch status:', err);
+      alert('Error al actualizar el estado en sucursal.');
+      const reverted = detailVariantPrices.map(bp => {
+        if (bp.facility_id === facilityId) {
+          return { ...bp, is_active: !active };
+        }
+        return bp;
+      });
+      setDetailVariantPrices(reverted);
     }
   };
 
@@ -504,9 +551,27 @@ export default function MetricsDashboardPage() {
                     <DataTable
                       value={detailVariantPrices}
                       className="p-datatable-sm text-xs"
+                      rowClassName={(rowData) => {
+                        return { 'opacity-50 transition-opacity bg-slate-50': rowData.is_active === false };
+                      }}
                       emptyMessage="No hay sucursales registradas."
                     >
                       <Column field="facility_name" header="SUCURSAL" className="font-semibold text-slate-700"></Column>
+                      <Column
+                        header="ESTADO EN TIENDA"
+                        body={(r) => (
+                          <div className="flex items-center gap-2">
+                            <InputSwitch 
+                              checked={r.is_active !== false} 
+                              onChange={(e) => handleToggleBranchActive(r.facility_id, e.value)}
+                            />
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${r.is_active !== false ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'}`}>
+                              {r.is_active !== false ? 'Habilitado' : 'Bloqueado'}
+                            </span>
+                          </div>
+                        )}
+                        style={{ minWidth: '10rem' }}
+                      ></Column>
                       <Column
                         header="ESTADO PRECIO"
                         body={(r) => (

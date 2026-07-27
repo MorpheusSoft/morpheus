@@ -117,7 +117,8 @@ class ProductService:
                     promo_price=fprice.promo_price,
                     promo_target_utility_pct=fprice.promo_target_utility_pct,
                     promo_start_at=fprice.promo_start_at,
-                    promo_end_at=fprice.promo_end_at
+                    promo_end_at=fprice.promo_end_at,
+                    is_active=getattr(fprice, 'is_active', True)
                 )
                 db.add(db_fprice)
         
@@ -186,7 +187,8 @@ class ProductService:
                         promo_price=fprice.get('promo_price', None),
                         promo_target_utility_pct=fprice.get('promo_target_utility_pct', None),
                         promo_start_at=fprice.get('promo_start_at', None),
-                        promo_end_at=fprice.get('promo_end_at', None)
+                        promo_end_at=fprice.get('promo_end_at', None),
+                        is_active=fprice.get('is_active', True)
                     )
                     db.add(db_fprice)
         

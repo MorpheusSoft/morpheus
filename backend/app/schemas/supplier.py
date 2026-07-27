@@ -52,6 +52,7 @@ class SupplierBase(BaseModel):
     financial_contact_name: Optional[str] = None
     financial_contact_phone: Optional[str] = None
     financial_email: Optional[str] = None
+    buyer_id: Optional[int] = None
 
 class SupplierCreate(SupplierBase):
     banks: Optional[List[SupplierBankCreate]] = []

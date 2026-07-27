@@ -158,6 +158,7 @@ class ProductFacilityPrice(Base):
     facility_id = Column(Integer, ForeignKey("core.facilities.id"), primary_key=True)
     sales_price = Column(Numeric(19, 4), default=0)
     target_utility_pct = Column(Numeric(5, 2))
+    is_active = Column(Boolean, default=True, server_default='true')
     
     promo_price = Column(Numeric(19, 4))
     promo_target_utility_pct = Column(Numeric(5, 2))

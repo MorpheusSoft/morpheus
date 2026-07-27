@@ -157,9 +157,24 @@ class StockService:
         if picking.status == 'DONE':
             raise HTTPException(status_code=400, detail="Picking already done")
 
-        # 1. Check Availability for all moves
+        # 1. Check Availability and blockades for all moves
         # We process everything in a transaction.
         for move in picking.moves:
+            # Validar bloqueo en la sucursal
+            from app.models.inventory import ProductFacilityPrice
+            fac_price = db.query(ProductFacilityPrice).filter(
+                ProductFacilityPrice.variant_id == move.product_id,
+                ProductFacilityPrice.facility_id == picking.facility_id
+            ).first()
+            if fac_price and not fac_price.is_active:
+                from app.models.inventory import ProductVariant, Product
+                variant = db.query(ProductVariant).get(move.product_id)
+                prod_name = db.query(Product.name).filter(Product.id == variant.product_id).scalar() if variant else f"SKU {move.product_id}"
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El producto '{prod_name}' está deshabilitado/bloqueado en la sucursal."
+                )
+
             # Get Source Location to check if it's INTERNAL
             location_src = db.query(Location).get(move.location_src_id)
             if not location_src:

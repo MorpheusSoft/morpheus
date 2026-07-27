@@ -149,6 +149,8 @@ class Supplier(Base):
     financial_contact_phone = Column(String)
     financial_email = Column(String)
 
+    buyer_id = Column(Integer, ForeignKey("core.buyers.id"), nullable=True)
+
     banks = relationship("SupplierBank", backref="supplier", cascade="all, delete-orphan")
 
 class SupplierBank(Base):
