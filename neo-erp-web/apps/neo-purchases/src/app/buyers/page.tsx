@@ -24,24 +24,19 @@ export default function BuyersPage() {
   const [userId, setUserId] = useState<number>(0);
   const [isActive, setIsActive] = useState<boolean>(true);
   const [assignedCategories, setAssignedCategories] = useState<number[]>([]);
-  
-  // Mocking users (in a real app, fetch from IAM/core.users)
-  const [users] = useState<any[]>([
-      { id: 1, name: 'Admin Principal' },
-      { id: 2, name: 'Alejandro Zambrano (Compras)' },
-      { id: 3, name: 'María García (Alimentos)' },
-      { id: 4, name: 'Pedro Pérez (Ferretería)' }
-  ]);
+  const [users, setUsers] = useState<any[]>([]);
 
   const loadData = async () => {
       setLoading(true);
       try {
-          const [bRes, cRes] = await Promise.all([
+          const [bRes, cRes, uRes] = await Promise.all([
               api.get('/buyers/'),
-              api.get('/categories/')
+              api.get('/categories/'),
+              api.get('/users/')
           ]);
           setBuyers(bRes.data);
           setCategories(cRes.data);
+          setUsers(uRes.data);
       } catch (e) {
           console.error(e);
       }
@@ -121,7 +116,7 @@ export default function BuyersPage() {
                <Column field="id" header="ID" className="font-bold text-slate-500 w-16" />
                <Column header="USUARIO SISTEMA" body={(r) => {
                    const u = users.find(x => x.id === r.user_id);
-                   return <span className="font-bold text-slate-800">{u ? u.name : `User ID ${r.user_id}`}</span>;
+                   return <span className="font-bold text-slate-800">{u ? u.full_name || u.email : `User ID ${r.user_id}`}</span>;
                }} />
                <Column header="NIVEL DE ACCESO Y CATEGORÍAS" body={(r) => (
                    <div className="flex flex-wrap gap-1">
@@ -157,7 +152,7 @@ export default function BuyersPage() {
                      disabled={isEditing}
                  >
                      <option value={0}>Seleccione Usuario...</option>
-                     {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                     {users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
                  </select>
              </div>
 
