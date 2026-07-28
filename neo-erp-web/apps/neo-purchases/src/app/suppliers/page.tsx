@@ -33,12 +33,31 @@ export default function SuppliersCatalog() {
     });
     const [totalRecords, setTotalRecords] = useState(0);
 
+    const [selectedBuyer, setSelectedBuyer] = useState<number | null>(null);
+    const [buyers, setBuyers] = useState<any[]>([]);
+    const [users, setUsers] = useState<any[]>([]);
+
+    useEffect(() => {
+        import('@/lib/api').then(({ default: api }) => {
+            Promise.all([
+                api.get('/buyers/'),
+                api.get('/users/')
+            ]).then(([bRes, uRes]) => {
+                setBuyers(bRes.data || []);
+                setUsers(uRes.data || []);
+            }).catch(err => console.error(err));
+        });
+    }, []);
+
     const loadLazyData = () => {
         setLoading(true);
         import('@/lib/api').then(({ default: api }) => {
             let url = `/suppliers/?skip=${lazyParams.first}&limit=${lazyParams.rows}`;
             if (globalFilter) {
                 url += `&q=${encodeURIComponent(globalFilter)}`;
+            }
+            if (selectedBuyer !== null) {
+                url += `&buyer_id=${selectedBuyer}`;
             }
             api.get(url)
                 .then(res => {
@@ -61,7 +80,7 @@ export default function SuppliersCatalog() {
 
     useEffect(() => {
         loadLazyData();
-    }, [lazyParams]);
+    }, [lazyParams, selectedBuyer]);
 
     useEffect(() => {
         const timeout = setTimeout(() => {
@@ -84,14 +103,36 @@ export default function SuppliersCatalog() {
 
     const header = (
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="relative w-full md:w-auto flex items-center">
-                <i className="pi pi-search absolute left-3 text-slate-400 z-10" />
-                <InputText 
-                    type="search" 
-                    onInput={(e) => setGlobalFilter(e.currentTarget.value)} 
-                    placeholder="Buscar proveedor..." 
-                    className="w-full md:w-[20rem] !pl-10" 
-                />
+            <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+                <div className="relative w-full md:w-auto flex items-center">
+                    <i className="pi pi-search absolute left-3 text-slate-400 z-10" />
+                    <InputText 
+                        type="search" 
+                        onInput={(e) => setGlobalFilter(e.currentTarget.value)} 
+                        placeholder="Buscar proveedor..." 
+                        className="w-full md:w-[15rem] !pl-10 !rounded-xl" 
+                    />
+                </div>
+                
+                <select
+                    value={selectedBuyer ?? 0}
+                    onChange={(e) => {
+                        const val = Number(e.target.value);
+                        setSelectedBuyer(val === 0 ? null : val);
+                    }}
+                    className="p-2 border border-slate-200 rounded-xl text-xs bg-slate-50 text-slate-700 font-semibold focus:outline-none"
+                    style={{ minWidth: '12rem' }}
+                >
+                    <option value={0}>Todos los Compradores</option>
+                    {buyers.map(b => {
+                        const u = users.find(x => x.id === b.user_id);
+                        return (
+                            <option key={b.id} value={b.id}>
+                                {u ? u.full_name || u.email : `Comprador #${b.id}`}
+                            </option>
+                        );
+                    })}
+                </select>
             </div>
             <Link href="/suppliers/new" passHref>
                 <Button label="Nuevo Proveedor" icon="pi pi-plus" className="bg-emerald-600 hover:bg-emerald-700 border-none px-4 py-2 text-white font-medium rounded-lg" />
@@ -126,6 +167,17 @@ export default function SuppliersCatalog() {
                 >
                     <Column field="tax_id" header="RUC / NIT" sortable style={{ minWidth: '10rem' }}></Column>
                     <Column field="name" header="Razón Social" sortable style={{ minWidth: '15rem' }}></Column>
+                    <Column 
+                        header="Comprador" 
+                        body={(rowData) => {
+                            if (!rowData.buyer_id) return <span className="text-slate-400 italic text-xs">Sin asignar</span>;
+                            const b = buyers.find(x => x.id === rowData.buyer_id);
+                            if (!b) return <span className="text-slate-500">...</span>;
+                            const u = users.find(x => x.id === b.user_id);
+                            return <span className="font-semibold text-slate-700">{u ? u.full_name || u.email : `Comprador #${rowData.buyer_id}`}</span>;
+                        }} 
+                        style={{ minWidth: '12rem' }}
+                    ></Column>
                     <Column field="commercial_email" header="Email Comercial" style={{ minWidth: '15rem' }}></Column>
                     <Column field="lead_time_days" header="Lead Time (Días)" sortable style={{ minWidth: '10rem' }}></Column>
                     <Column body={statusBodyTemplate} header="Estado" style={{ minWidth: '8rem' }}></Column>

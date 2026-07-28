@@ -55,7 +55,13 @@ def install_cost_trigger(db: Session = Depends(get_db)):
         return {"error": str(e)}
 
 @router.get("/", response_model=SupplierPaginated)
-def get_suppliers(db: Session = Depends(get_db), skip: int = 0, limit: int = 100, q: str = None) -> Any:
+def get_suppliers(
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100,
+    q: str = None,
+    buyer_id: int = None
+) -> Any:
     from sqlalchemy import or_
     from sqlalchemy.orm import joinedload
     query = db.query(Supplier).options(joinedload(Supplier.banks))
@@ -68,6 +74,9 @@ def get_suppliers(db: Session = Depends(get_db), skip: int = 0, limit: int = 100
                 Supplier.commercial_email.ilike(f"%{q}%")
             )
         )
+        
+    if buyer_id is not None:
+        query = query.filter(Supplier.buyer_id == buyer_id)
         
     total = query.count()
     suppliers = query.offset(skip).limit(limit).all()
