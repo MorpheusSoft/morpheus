@@ -175,6 +175,7 @@ class Buyer(Base):
     assigned_facilities = Column(JSONB)
     assigned_suppliers = Column(JSONB)
     approval_limit = Column(Numeric(19, 4), default=0)
+    is_active = Column(Boolean, default=True)
 
 class Tribute(Base):
     __tablename__ = "tributes"

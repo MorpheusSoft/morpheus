@@ -6,6 +6,7 @@ class BuyerBase(BaseModel):
     assigned_categories: Optional[Any] = None
     assigned_facilities: Optional[Any] = None
     assigned_suppliers: Optional[Any] = None
+    is_active: Optional[bool] = True
 
 class BuyerCreate(BuyerBase):
     pass
@@ -14,6 +15,7 @@ class BuyerUpdate(BaseModel):
     assigned_categories: Optional[Any] = None
     assigned_facilities: Optional[Any] = None
     assigned_suppliers: Optional[Any] = None
+    is_active: Optional[bool] = None
 
 class BuyerResponse(BuyerBase):
     id: int
