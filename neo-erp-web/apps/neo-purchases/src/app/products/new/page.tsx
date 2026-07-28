@@ -68,7 +68,8 @@ const schema = yup.object().shape({
       promo_price: yup.number().nullable().default(null),
       promo_target_utility_pct: yup.number().nullable().default(null),
       promo_start_at: yup.string().nullable().default(null),
-      promo_end_at: yup.string().nullable().default(null)
+      promo_end_at: yup.string().nullable().default(null),
+      is_active: yup.boolean().default(true)
     })
   ).default([])
 }).required();
@@ -805,14 +806,13 @@ function ProductFormContent() {
                   </div>
               </div>
 
-              {/* Matriz de Precios por Localidad */}
-              <div className="mt-8 border-t border-slate-100 pt-6">
+<div className="mt-8 border-t border-slate-100 pt-6">
                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
                     <div>
                       <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-widest">Matriz de Precios por Sucursal / Localidad</h3>
                       <p className="text-slate-500 text-xs mt-1">Configura sobrecargos o precios específicos si difieren del Precio de Venta BASE global.</p>
                     </div>
-                    <Button type="button" label="Añadir Localidad" icon="pi pi-plus" onClick={() => append({ facility_id: undefined as any, sales_price: 0, target_utility_pct: 0, promo_price: null, promo_target_utility_pct: null, promo_start_at: null, promo_end_at: null })} className="!bg-indigo-50 !text-indigo-700 hover:!bg-indigo-100 !border-indigo-200 !rounded-xl !px-4 !py-2 !shadow-none font-bold text-xs shrink-0" />
+                    <Button type="button" label="Añadir Localidad" icon="pi pi-plus" onClick={() => append({ facility_id: undefined as any, sales_price: 0, target_utility_pct: 0, promo_price: null, promo_target_utility_pct: null, promo_start_at: null, promo_end_at: null, is_active: true })} className="!bg-indigo-50 !text-indigo-700 hover:!bg-indigo-100 !border-indigo-200 !rounded-xl !px-4 !py-2 !shadow-none font-bold text-xs shrink-0" />
                  </div>
                  
                  {facilityPrices.length === 0 ? (
@@ -822,12 +822,31 @@ function ProductFormContent() {
                    </div>
                  ) : (
                    <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden mt-4 shadow-sm">
-                     <DataTable value={facilityPrices} responsiveLayout="scroll">
+                     <DataTable 
+                        value={facilityPrices} 
+                        responsiveLayout="scroll"
+                        rowClassName={(rowData) => {
+                          return { 'opacity-50 transition-opacity bg-slate-50': rowData.is_active === false };
+                        }}
+                      >
                        <Column header="SUCURSAL / LOCALIDAD" body={(rowData, options) => (
                          <Controller name={`facility_prices.${options.rowIndex}.facility_id`} control={control} render={({ field }) => (
                            <Dropdown value={field.value} onChange={e => field.onChange(e.value)} options={facilities} optionLabel="name" optionValue="id" placeholder="Seleccionar Sucursal..." className="w-full !rounded-lg border-slate-200 shadow-sm p-inputtext-sm" />
                          )} />
-                       )} className="w-[30%]" />
+                       )} className="w-[25%]" />
+                       <Column header="ESTADO" body={(rowData, options) => (
+                          <Controller name={`facility_prices.${options.rowIndex}.is_active`} control={control} render={({ field }) => (
+                            <div className="flex items-center gap-2">
+                              <InputSwitch 
+                                checked={field.value !== false} 
+                                onChange={(e) => field.onChange(e.value)} 
+                              />
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${field.value !== false ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'}`}>
+                                {field.value !== false ? 'Activo' : 'Inactivo'}
+                              </span>
+                            </div>
+                          )} />
+                        )} className="w-[15%]" />
                        <Column header="PRECIO EXCLUSIVO (Sin IVA)" body={(rowData, options) => (
                          <Controller name={`facility_prices.${options.rowIndex}.sales_price`} control={control} render={({ field }) => (
                            <div className="relative w-full">
