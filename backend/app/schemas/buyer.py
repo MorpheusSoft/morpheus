@@ -7,6 +7,7 @@ class BuyerBase(BaseModel):
     assigned_facilities: Optional[Any] = None
     assigned_suppliers: Optional[Any] = None
     is_active: Optional[bool] = True
+    approval_limit: Optional[float] = 0.0
 
 class BuyerCreate(BuyerBase):
     pass
@@ -16,6 +17,7 @@ class BuyerUpdate(BaseModel):
     assigned_facilities: Optional[Any] = None
     assigned_suppliers: Optional[Any] = None
     is_active: Optional[bool] = None
+    approval_limit: Optional[float] = None
 
 class BuyerResponse(BuyerBase):
     id: int

@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends
 from app.api import deps
 from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, inventory_session, suppliers, buyers, mrp, purchase_orders, currencies, wms, jobs, dashboard, facilities, pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b, labels, import_legacy, print_templates, promotions, sales_report
 
+from app.api.v1.endpoints import public_orders
+
 api_router = APIRouter()
 api_router.include_router(login.router, tags=["login"])
 
@@ -39,5 +41,6 @@ api_router.include_router(print_templates.router, prefix="/print-templates", tag
 api_router.include_router(b2b.router, prefix="/b2b", tags=["b2b"])
 api_router.include_router(sync.router, prefix="/sync", tags=["sync"]) # Sin auth temporal para pruebas
 api_router.include_router(import_legacy.router, prefix="/import", tags=["import legacy"])
+api_router.include_router(public_orders.router, prefix="/public/orders", tags=["public-orders"])
 
 

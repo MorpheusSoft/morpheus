@@ -8,6 +8,7 @@ import { Dialog } from 'primereact/dialog';
 import { MultiSelect } from 'primereact/multiselect';
 import { InputText } from 'primereact/inputtext';
 import { Checkbox } from 'primereact/checkbox';
+import { InputNumber } from 'primereact/inputnumber';
 import api from '@/lib/api';
 
 export default function BuyersPage() {
@@ -24,6 +25,7 @@ export default function BuyersPage() {
   const [userId, setUserId] = useState<number>(0);
   const [isActive, setIsActive] = useState<boolean>(true);
   const [assignedCategories, setAssignedCategories] = useState<number[]>([]);
+  const [approvalLimit, setApprovalLimit] = useState<number>(1000.0);
   const [users, setUsers] = useState<any[]>([]);
 
   const loadData = async () => {
@@ -52,6 +54,7 @@ export default function BuyersPage() {
       setUserId(0);
       setIsActive(true);
       setAssignedCategories([]);
+      setApprovalLimit(1000.0);
       setIsEditing(false);
       setShowDialog(true);
   };
@@ -61,6 +64,7 @@ export default function BuyersPage() {
       setUserId(buyer.user_id);
       setIsActive(buyer.is_active);
       setAssignedCategories(buyer.assigned_categories || []);
+      setApprovalLimit(buyer.approval_limit || 0.0);
       setIsEditing(true);
       setShowDialog(true);
   };
@@ -72,6 +76,7 @@ export default function BuyersPage() {
           user_id: userId,
           is_active: isActive,
           assigned_categories: assignedCategories,
+          approval_limit: approvalLimit,
           assigned_facilities: [],
           assigned_suppliers: []
       };
@@ -126,6 +131,9 @@ export default function BuyersPage() {
                       }) : <span className="text-slate-400 italic font-medium text-xs">Acceso Global Remoto</span>}
                    </div>
                )} />
+               <Column header="LÍMITE APROBACIÓN (USD)" body={(r) => (
+                   <span className="font-extrabold text-slate-800">${Number(r.approval_limit || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
+               )} className="w-48 text-right pr-4" />
                <Column header="ESTADO" body={(r) => (
                    r.is_active 
                      ? <span className="bg-emerald-50 text-emerald-600 px-3 py-1 rounded-full text-xs font-bold border border-emerald-200">Activo</span>
@@ -170,6 +178,19 @@ export default function BuyersPage() {
                      className="w-full !rounded-xl !border-slate-200 p-inputtext-sm" 
                  />
                  <small className="text-slate-400 font-medium">Dejar en blanco para otorgar permisos a todas las familias de insumos.</small>
+             </div>
+
+             <div className="flex flex-col gap-2">
+                 <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Límite de Autorización de ODC (USD)</label>
+                 <InputNumber 
+                     value={approvalLimit} 
+                     onValueChange={(e) => setApprovalLimit(e.value || 0)} 
+                     mode="currency" 
+                     currency="USD" 
+                     locale="en-US" 
+                     inputClassName="p-3 bg-slate-50 border border-slate-200 rounded-xl w-full text-slate-800 font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-none" 
+                 />
+                 <small className="text-slate-400 font-medium">Límite máximo permitido para aprobar órdenes de compra sin firma de gerencia.</small>
              </div>
 
              <div className="flex gap-3 items-center bg-slate-50 p-4 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => setIsActive(!isActive)}>

@@ -5,6 +5,8 @@ import uuid
 from sqlalchemy.sql import func
 from app.db.base_class import Base
 
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
 class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
     __table_args__ = {"schema": "pur"}
@@ -20,6 +22,11 @@ class PurchaseOrder(Base):
     
     secure_token = Column(String, unique=True, index=True, default=lambda: str(uuid.uuid4()))
     supplier_viewed_at = Column(DateTime(timezone=True), nullable=True)
+    
+    public_token = Column(PG_UUID(as_uuid=True), unique=True, default=uuid.uuid4)
+    seen_by_supplier_at = Column(DateTime(timezone=True), nullable=True)
+    accepted_by_supplier_at = Column(DateTime(timezone=True), nullable=True)
+    supplier_ip_accepted = Column(String(45), nullable=True)
     
     # Financial Negotiations & Legal Rules (Phase 6.7)
     invoice_discount_str = Column(String) # Ej: "10+5"

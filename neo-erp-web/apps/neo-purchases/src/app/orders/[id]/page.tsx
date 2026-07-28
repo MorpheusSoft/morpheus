@@ -835,6 +835,122 @@ export default function OrderDetailsPage() {
           </div>
       </div>
 
+      {/* SEGUIMIENTO Y COMPARTICIÓN CON PROVEEDOR */}
+      {!isDraft && order?.public_token && (
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mt-6">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                  <div>
+                      <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+                          <i className="pi pi-share-alt text-blue-500"></i>
+                          Seguimiento y Compartición de ODC con Proveedor
+                      </h3>
+                      <p className="text-slate-500 text-xs mt-1">Comparta este enlace único con el proveedor para constancia de recepción y aceptación formal.</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                      <span className={`px-3 py-1 rounded-full text-xs font-bold border ${
+                          order.accepted_by_supplier_at 
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-100' 
+                              : order.seen_by_supplier_at 
+                                  ? 'bg-blue-50 text-blue-700 border-blue-100' 
+                                  : 'bg-slate-100 text-slate-600 border-slate-200'
+                      }`}>
+                          {order.accepted_by_supplier_at 
+                              ? 'Aceptado por Proveedor' 
+                              : order.seen_by_supplier_at 
+                                  ? 'Visto por Proveedor' 
+                                  : 'No enviado / No visto'}
+                      </span>
+                  </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Link sharing info */}
+                  <div className="lg:col-span-2 flex flex-col gap-3">
+                      <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Enlace de Visualización Seguro</label>
+                      <div className="flex gap-2">
+                          <input 
+                              type="text" 
+                              readOnly 
+                              value={typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.host}/compras/public/orders/${order.public_token}` : ''} 
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 font-mono text-xs text-slate-600 select-all outline-none" 
+                          />
+                          <Button 
+                              icon="pi pi-copy" 
+                              onClick={() => {
+                                  const link = `${window.location.protocol}//${window.location.host}/compras/public/orders/${order.public_token}`;
+                                  navigator.clipboard.writeText(link);
+                                  toast.current?.show({ severity: 'success', summary: 'Copiado', detail: 'Enlace público copiado.' });
+                              }} 
+                              className="!bg-slate-100 !text-slate-700 hover:!bg-slate-200 !border-slate-200 !rounded-xl px-4" 
+                              title="Copiar Enlace" 
+                          />
+                      </div>
+                      
+                      {/* Share buttons */}
+                      <div className="flex flex-wrap gap-2 mt-2">
+                          <Button 
+                              label="WhatsApp" 
+                              icon="pi pi-whatsapp" 
+                              severity="success" 
+                              onClick={() => {
+                                  const link = `${window.location.protocol}//${window.location.host}/compras/public/orders/${order.public_token}`;
+                                  const text = encodeURIComponent(`Hola, le adjunto la orden de compra oficial ${order.reference}. Por favor revise los detalles, descargue el PDF y confirme su aceptación ingresando a este enlace: ${link}`);
+                                  window.open(`https://wa.me/?text=${text}`, '_blank');
+                              }} 
+                              className="!rounded-xl text-xs font-bold" 
+                          />
+                          <Button 
+                              label="Telegram" 
+                              icon="pi pi-telegram" 
+                              className="!rounded-xl text-xs font-bold !bg-sky-500 hover:!bg-sky-600 border-none" 
+                              onClick={() => {
+                                  const link = `${window.location.protocol}//${window.location.host}/compras/public/orders/${order.public_token}`;
+                                  const text = encodeURIComponent(`Orden de Compra ${order.reference}`);
+                                  window.open(`https://t.me/share/url?url=${link}&text=${text}`, '_blank');
+                              }} 
+                          />
+                          <Button 
+                              label="Correo" 
+                              icon="pi pi-envelope" 
+                              className="!rounded-xl text-xs font-bold !bg-slate-700 hover:!bg-slate-800 border-none" 
+                              onClick={() => {
+                                  const link = `${window.location.protocol}//${window.location.host}/compras/public/orders/${order.public_token}`;
+                                  const subject = encodeURIComponent(`Orden de Compra ${order.reference}`);
+                                  const body = encodeURIComponent(`Estimado Proveedor,\n\nAdjuntamos la orden de compra ${order.reference}.\n\nPuede ver el detalle interactivo y descargar el PDF aquí: ${link}\n\nQuedamos atentos a su confirmación.`);
+                                  window.open(`mailto:?subject=${subject}&body=${body}`, '_self');
+                              }} 
+                          />
+                      </div>
+                  </div>
+
+                  {/* Audit Timeline */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-col gap-3 justify-center">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block border-b pb-1.5 mb-1">Registro de Actividad</span>
+                      
+                      <div className="flex justify-between items-center text-xs font-medium">
+                          <span className="text-slate-500 flex items-center gap-1.5"><i className="pi pi-eye text-blue-500"></i> Visto por Proveedor:</span>
+                          <span className="text-slate-800 font-bold">
+                              {order.seen_by_supplier_at ? format(new Date(order.seen_by_supplier_at), 'dd/MM/yyyy HH:mm') : 'Pendiente'}
+                          </span>
+                      </div>
+                      
+                      <div className="flex justify-between items-center text-xs font-medium">
+                          <span className="text-slate-500 flex items-center gap-1.5"><i className="pi pi-check text-emerald-500"></i> Aceptado por Proveedor:</span>
+                          <span className="text-slate-800 font-bold">
+                              {order.accepted_by_supplier_at ? format(new Date(order.accepted_by_supplier_at), 'dd/MM/yyyy HH:mm') : 'Pendiente'}
+                          </span>
+                      </div>
+                      
+                      {order.supplier_ip_accepted && (
+                          <div className="text-[10px] text-slate-400 font-bold mt-1 text-right">
+                              IP Autorizado: {order.supplier_ip_accepted}
+                          </div>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* CONSOLA DE ACCIONES */}
       {isDraft && (
           <div className="flex justify-end gap-4 p-6 bg-white rounded-2xl shadow-sm border border-slate-200 mt-6">

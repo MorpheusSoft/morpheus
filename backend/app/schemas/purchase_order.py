@@ -86,6 +86,37 @@ class PurchaseOrderResponse(PurchaseOrderBase):
     supplier: Optional[SupplierBasic] = None
     dest_facility: Optional[Facility] = None
     
+    public_token: Optional[Any] = None
+    seen_by_supplier_at: Optional[datetime] = None
+    accepted_by_supplier_at: Optional[datetime] = None
+    supplier_ip_accepted: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class PublicPurchaseOrderLine(BaseModel):
+    variant_sku: Optional[str] = None
+    variant_name: Optional[str] = None
+    qty_ordered: Decimal
+    expected_base_qty: Decimal
+    unit_cost: Decimal
+    packaging_name: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class PublicPurchaseOrderResponse(BaseModel):
+    id: int
+    reference: str
+    status: str
+    total_amount: Decimal
+    created_at: datetime
+    seen_by_supplier_at: Optional[datetime] = None
+    accepted_by_supplier_at: Optional[datetime] = None
+    supplier_name: str
+    dest_facility_name: str
+    lines: List[PublicPurchaseOrderLine] = []
+    
     class Config:
         from_attributes = True
 
