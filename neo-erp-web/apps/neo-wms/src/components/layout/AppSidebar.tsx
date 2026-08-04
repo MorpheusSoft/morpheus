@@ -35,13 +35,14 @@ export function AppSidebar() {
   const menuItems = [
     { label: 'Dashboard Muelle', icon: 'pi pi-home', href: '/' },
     { label: 'Recepción (Inbound)', icon: 'pi pi-truck', href: '/receipts' },
-    { label: 'Mapa WMS', icon: 'pi pi-sitemap', href: '#map' },
+    { label: 'Transferencias (Outbound)', icon: 'pi pi-arrow-right-arrow-left', href: '/transfers' },
+    { label: 'Mapa de Almacén', icon: 'pi pi-sitemap', href: '/locations' },
     { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
   ];
 
   const coreItems = [
-    { label: 'Control de Lotes', icon: 'pi pi-calendar-plus', href: '#lots' },
-    { label: 'Ajustes Físicos', icon: 'pi pi-sort-alt', href: '#adjustments' },
+    { label: 'Control de Lotes (FEFO)', icon: 'pi pi-calendar-plus', href: '/lots' },
+    { label: 'Ajustes Físicos', icon: 'pi pi-sort-alt', href: '/adjustments' },
   ];
 
   const isActivePath = (href: string) => {

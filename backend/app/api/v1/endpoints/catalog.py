@@ -176,7 +176,9 @@ def create_warehouse(
         code=warehouse_in.code,
         facility_id=warehouse_in.facility_id,
         is_scrap=warehouse_in.is_scrap,
-        is_transit=warehouse_in.is_transit
+        is_transit=warehouse_in.is_transit,
+        requires_dock_staging=warehouse_in.requires_dock_staging,
+        default_dock_location_id=warehouse_in.default_dock_location_id
     )
     db.add(db_obj)
     db.commit()

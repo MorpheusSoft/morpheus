@@ -87,6 +87,8 @@ class WarehouseBase(BaseModel):
     facility_id: int
     is_scrap: bool = False
     is_transit: bool = False
+    requires_dock_staging: bool = False
+    default_dock_location_id: Optional[int] = None
 
 class WarehouseCreate(WarehouseBase):
     pass
@@ -97,6 +99,8 @@ class WarehouseUpdate(BaseModel):
     facility_id: Optional[int] = None
     is_scrap: Optional[bool] = None
     is_transit: Optional[bool] = None
+    requires_dock_staging: Optional[bool] = None
+    default_dock_location_id: Optional[int] = None
 
 class Warehouse(WarehouseBase):
     id: int

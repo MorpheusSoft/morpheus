@@ -17,6 +17,8 @@ class Warehouse(Base):
     code = Column(String, unique=True, nullable=False)
     is_scrap = Column(Boolean, default=False)
     is_transit = Column(Boolean, default=False)
+    requires_dock_staging = Column(Boolean, default=False, server_default='false')
+    default_dock_location_id = Column(Integer, ForeignKey("inv.locations.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Location(Base):

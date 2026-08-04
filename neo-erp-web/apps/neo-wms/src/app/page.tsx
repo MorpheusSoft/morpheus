@@ -11,7 +11,7 @@ export default function WmsDashboard() {
              <i className="pi pi-box mr-3 text-slate-500"></i>
              Central de Almacén (WMS)
           </h1>
-          <p className="text-slate-500 mt-2 font-medium">Recepción y control de inventarios.</p>
+          <p className="text-slate-500 mt-2 font-medium">Recepción, control de ubicaciones, lotes y despachos.</p>
         </div>
       </div>
 
@@ -26,14 +26,46 @@ export default function WmsDashboard() {
                   </p>
               </div>
           </Link>
-          
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm opacity-50 cursor-not-allowed">
-              <i className="pi pi-sitemap text-4xl mb-4 text-slate-400"></i>
-              <h2 className="text-xl font-bold tracking-tight text-slate-700">Mapa de Almacén</h2>
-              <p className="text-slate-500 mt-2 text-sm leading-relaxed">
-                  Próximamente: Rutas de montacargas y localizadores jerárquicos.
-              </p>
-          </div>
+
+          <Link href="/locations" className="block">
+              <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-md hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer relative overflow-hidden group">
+                  <i className="pi pi-sitemap text-4xl mb-4 text-emerald-600"></i>
+                  <h2 className="text-xl font-bold tracking-tight text-slate-800">Mapa de Almacén</h2>
+                  <p className="text-slate-500 mt-2 text-sm leading-relaxed">
+                      Control jerárquico de pasillos, racks y movimientos Putaway.
+                  </p>
+              </div>
+          </Link>
+
+          <Link href="/transfers" className="block">
+              <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-md hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer relative overflow-hidden group">
+                  <i className="pi pi-arrow-right-arrow-left text-4xl mb-4 text-blue-600"></i>
+                  <h2 className="text-xl font-bold tracking-tight text-slate-800">Transferencias (Outbound)</h2>
+                  <p className="text-slate-500 mt-2 text-sm leading-relaxed">
+                      Despacho y traslado de mercancía entre tiendas y sucursales.
+                  </p>
+              </div>
+          </Link>
+
+          <Link href="/lots" className="block">
+              <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-md hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer relative overflow-hidden group">
+                  <i className="pi pi-calendar-plus text-4xl mb-4 text-teal-600"></i>
+                  <h2 className="text-xl font-bold tracking-tight text-slate-800">Control de Lotes & FEFO</h2>
+                  <p className="text-slate-500 mt-2 text-sm leading-relaxed">
+                      Trazabilidad por lote y monitor de vencimientos.
+                  </p>
+              </div>
+          </Link>
+
+          <Link href="/adjustments" className="block">
+              <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-md hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer relative overflow-hidden group">
+                  <i className="pi pi-sort-alt text-4xl mb-4 text-indigo-600"></i>
+                  <h2 className="text-xl font-bold tracking-tight text-slate-800">Ajustes & Tomas Físicas</h2>
+                  <p className="text-slate-500 mt-2 text-sm leading-relaxed">
+                      Auditoría ciega e inventarios por ubicación.
+                  </p>
+              </div>
+          </Link>
       </div>
     </div>
   );

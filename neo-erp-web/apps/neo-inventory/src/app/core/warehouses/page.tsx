@@ -33,7 +33,7 @@ export default function WarehousesPage() {
 
   // Forms
   const { control: whControl, handleSubmit: whHandleSubmit, reset: whReset } = useForm({
-    defaultValues: { facility_id: null as number | null, name: '', code: '', is_scrap: false, is_transit: false }
+    defaultValues: { facility_id: null as number | null, name: '', code: '', is_scrap: false, is_transit: false, requires_dock_staging: false }
   });
 
   const { control: locControl, handleSubmit: locHandleSubmit, reset: locReset } = useForm({
@@ -595,6 +595,23 @@ export default function WarehousesPage() {
               />
               <label htmlFor="is_transit" className="text-xs text-slate-600 font-medium cursor-pointer selection:bg-transparent">
                 Es Depósito de Tránsito / Puertos (Transit)
+              </label>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Controller
+                name="requires_dock_staging"
+                control={whControl}
+                render={({ field }) => (
+                  <Checkbox
+                    inputId="requires_dock_staging"
+                    checked={field.value}
+                    onChange={(e) => field.onChange(e.checked)}
+                  />
+                )}
+              />
+              <label htmlFor="requires_dock_staging" className="text-xs text-blue-700 font-bold cursor-pointer selection:bg-transparent">
+                Requiere Bahía de Recepción WMS (CD / 2 Pasos DOCK)
               </label>
             </div>
           </div>
