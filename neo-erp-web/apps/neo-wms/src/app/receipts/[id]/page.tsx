@@ -62,11 +62,22 @@ export default function ReceiptExecutionPage() {
 
       // Cargar almacenes de la sucursal de destino
       if (res.data.dest_facility_id) {
-          const whRes = await api.get(`/catalog/warehouses/`);
-          const facilityWhs = whRes.data.filter((w: any) => w.facility_id === res.data.dest_facility_id && !w.is_scrap);
-          setWarehouses(facilityWhs);
-          if (facilityWhs.length > 0) {
-              setSelectedWarehouseId(facilityWhs[0].id);
+          try {
+              const whRes = await api.get(`/warehouses/`);
+              const facilityWhs = (whRes.data || []).filter((w: any) => w.facility_id === res.data.dest_facility_id && !w.is_scrap);
+              if (facilityWhs.length > 0) {
+                  setWarehouses(facilityWhs);
+                  setSelectedWarehouseId(facilityWhs[0].id);
+              } else {
+                  // Fallback si la sucursal no tiene almacén explícito creado aún
+                  const allWhs = whRes.data || [];
+                  if (allWhs.length > 0) {
+                      setWarehouses(allWhs);
+                      setSelectedWarehouseId(allWhs[0].id);
+                  }
+              }
+          } catch(err) {
+              console.error("Error cargando almacenes:", err);
           }
       }
     } catch (e) {
@@ -245,13 +256,14 @@ export default function ReceiptExecutionPage() {
               </div>
 
               <Button 
-                  label="Ticket 80mm" 
                   icon="pi pi-print" 
+                  rounded 
                   severity="secondary" 
                   outlined 
                   onClick={openTicketDialog} 
-                  className="font-bold text-xs shadow-sm h-full" 
-                  tooltip="Imprimir manifiesto para tickera térmica de 80mm"
+                  tooltip="Imprimir Ticket 80mm" 
+                  tooltipOptions={{ position: 'top' }}
+                  className="font-bold border-slate-300 text-slate-700 hover:bg-slate-100 shadow-sm"
               />
           </div>
       </div>
