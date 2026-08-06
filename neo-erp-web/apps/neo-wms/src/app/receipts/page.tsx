@@ -175,7 +175,7 @@ export default function WmsReceiptsPage() {
       
       {/* FILTROS DE MUELLE (SUCURSAL DESTINO Y PROVEEDOR) */}
       <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-wrap gap-4 items-center">
-         <div className="flex flex-col gap-1 w-full md:w-80">
+         <div className="flex flex-col gap-1 w-full md:w-80 relative">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center">
                 <i className="pi pi-building mr-1 text-slate-400"></i>Sucursal / Tienda de Destino:
             </span>
@@ -186,11 +186,13 @@ export default function WmsReceiptsPage() {
                placeholder="Todas las Sucursales" 
                showClear
                filter
+               appendTo="self"
+               panelClassName="!w-full !min-w-[280px] shadow-2xl rounded-xl border border-slate-200"
                className="w-full text-sm !rounded-xl border-slate-200 font-bold" 
             />
          </div>
 
-         <div className="flex flex-col gap-1 w-full md:w-80">
+         <div className="flex flex-col gap-1 w-full md:w-80 relative">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center">
                 <i className="pi pi-users mr-1 text-slate-400"></i>Proveedor Origen:
             </span>
@@ -201,6 +203,8 @@ export default function WmsReceiptsPage() {
                placeholder="Todos los Proveedores" 
                showClear
                filter
+               appendTo="self"
+               panelClassName="!w-full !min-w-[280px] shadow-2xl rounded-xl border border-slate-200"
                className="w-full text-sm !rounded-xl border-slate-200 font-bold" 
             />
          </div>
