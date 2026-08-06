@@ -204,10 +204,12 @@ export default function ReceiptExecutionPage() {
           const res = await api.post(`/wms/receipts/${orderId}`, payload);
           toast.current?.show({ 
               severity: 'success', 
-              summary: 'Recepción Exitosa', 
-              detail: `Mercancía ingresada a ${res.data.location_dest || 'Inventario'}.` 
+              summary: 'Recepción Confirmada', 
+              detail: `Mercancía ingresada a inventario. Abriendo Acta Definitiva...` 
           });
-          setTimeout(() => router.push('/receipts'), 1500);
+          
+          setOrder((prev: any) => ({ ...prev, status: 'received' }));
+          await openTicketDialog();
       } catch(e: any) {
           toast.current?.show({ severity: 'error', summary: 'Error de Recepción', detail: e.response?.data?.detail || 'Fallo de conexión WMS' });
       }
@@ -218,6 +220,7 @@ export default function ReceiptExecutionPage() {
   if (!order) return <div className="p-8 text-red-500 font-black text-2xl">ODC no encontrada en el Muelle.</div>;
 
   const selectedWarehouse = warehouses.find(w => w.id === selectedWarehouseId);
+  const isReadOnly = order?.status === 'received';
 
   return (
     <div className="p-4 sm:p-8 w-full max-w-[1400px] mx-auto fade-in">
@@ -265,6 +268,20 @@ export default function ReceiptExecutionPage() {
           </div>
       </div>
 
+      {/* BANNER DE RECEPCIÓN CERRADA Y CONFIRMADA */}
+      {isReadOnly && (
+        <div className="bg-emerald-50 border-2 border-emerald-500 text-emerald-800 p-5 rounded-2xl mb-6 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <i className="pi pi-check-circle text-3xl text-emerald-600"></i>
+            <div>
+              <h3 className="font-black text-lg text-emerald-900">RECEPCIÓN REGISTRADA Y ASENTADA EN INVENTARIO</h3>
+              <p className="text-xs text-emerald-700 font-medium">Esta orden fue recibida y cerrada. No se permiten modificaciones para preservar la validez legal del acta impresa.</p>
+            </div>
+          </div>
+          <Button label="Imprimir Acta Definitiva 🖨️" icon="pi pi-print" severity="success" onClick={openTicketDialog} className="font-bold bg-emerald-600 text-white border-none px-6 py-3 shadow-md hover:bg-emerald-700 shrink-0" />
+        </div>
+      )}
+
       {/* MATRIZ DE RECEPCIÓN (CIEGA) */}
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden mb-6">
         <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
@@ -275,14 +292,16 @@ export default function ReceiptExecutionPage() {
                 )}
             </h3>
 
-            <Button 
-                label="Agregar Producto Inesperado" 
-                icon="pi pi-plus-circle" 
-                severity="info" 
-                text 
-                className="font-bold text-xs" 
-                onClick={() => setUnplannedDialogVisible(true)} 
-            />
+            {!isReadOnly && (
+                <Button 
+                    label="Agregar Producto Inesperado" 
+                    icon="pi pi-plus-circle" 
+                    severity="info" 
+                    text 
+                    className="font-bold text-xs" 
+                    onClick={() => setUnplannedDialogVisible(true)} 
+                />
+            )}
         </div>
         
         <DataTable dataKey="id" value={lines} emptyMessage="No hay productos para recibir." size="small" stripedRows rowHover className="text-sm">
@@ -313,7 +332,8 @@ export default function ReceiptExecutionPage() {
                         onValueChange={(e) => handleQtyChange(options.rowIndex, e.value === null ? '' : e.value)}
                         minFractionDigits={dec}
                         maxFractionDigits={dec}
-                        inputClassName="w-24 text-right text-lg font-black p-2 rounded-lg border-2 border-blue-200 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 bg-blue-50/50 transition-all text-blue-700 shadow-inner" 
+                        disabled={isReadOnly}
+                        inputClassName="w-24 text-right text-lg font-black p-2 rounded-lg border-2 border-blue-200 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 bg-blue-50/50 transition-all text-blue-700 shadow-inner disabled:bg-slate-100 disabled:border-slate-300 disabled:text-slate-700" 
                      />
                  </div>
              )
@@ -337,7 +357,8 @@ export default function ReceiptExecutionPage() {
                  value={r.lot_number} 
                  onChange={(e) => handleTextChange(options.rowIndex, 'lot_number', e.target.value)} 
                  placeholder="Ej: L-204" 
-                 className="w-28 text-xs font-bold text-center uppercase" 
+                 disabled={isReadOnly}
+                 className="w-28 text-xs font-bold text-center uppercase disabled:bg-slate-100 disabled:border-slate-300" 
              />
           )} align="center" />
 
@@ -347,6 +368,7 @@ export default function ReceiptExecutionPage() {
                  onChange={(e) => handleDateChange(options.rowIndex, e.value as Date)} 
                  dateFormat="dd/mm/yy" 
                  placeholder="Opcional" 
+                 disabled={isReadOnly}
                  className="w-32 p-inputtext-sm text-xs" 
              />
           )} align="center" />
@@ -356,6 +378,7 @@ export default function ReceiptExecutionPage() {
                  icon="pi pi-exclamation-triangle" 
                  rounded 
                  text 
+                 disabled={isReadOnly}
                  severity={r.damaged_qty > 0 ? "danger" : "secondary"} 
                  tooltip={r.damaged_qty > 0 ? `${r.damaged_qty} unds dañadas` : "Reportar Avería"}
                  onClick={() => openDiscrepancyDialog(r)} 
@@ -365,7 +388,14 @@ export default function ReceiptExecutionPage() {
       </div>
 
       <div className="flex justify-end gap-4 p-6 bg-white rounded-2xl shadow-sm border border-slate-200 mt-6">
-         <Button label="Confirmar e Ingresar a Inventario" icon="pi pi-check-circle" severity="success" onClick={confirmReceipt} disabled={saving} className="font-bold px-8 shadow-lg hover:shadow-xl transition-all shadow-emerald-500/30 text-lg bg-emerald-600 border-none" />
+         {isReadOnly ? (
+             <div className="flex items-center gap-4">
+                 <Tag value="✓ RECEPCIÓN COMPLETADA Y CERRADA" severity="success" className="font-extrabold px-4 py-2 text-xs tracking-wider" />
+                 <Button label="Imprimir Comprobante Definitivo 🖨️" icon="pi pi-print" severity="info" onClick={openTicketDialog} className="font-bold px-6 shadow-md" />
+             </div>
+         ) : (
+             <Button label="Confirmar e Ingresar a Inventario" icon="pi pi-check-circle" severity="success" onClick={confirmReceipt} disabled={saving} className="font-bold px-8 shadow-lg hover:shadow-xl transition-all shadow-emerald-500/30 text-lg bg-emerald-600 border-none" />
+         )}
       </div>
 
       {/* DIÁLOGO TICKET Y ACTA DE RECEPCIÓN 80MM */}
