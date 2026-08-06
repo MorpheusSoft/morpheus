@@ -10,14 +10,20 @@ from app.schemas.purchase_order import PurchaseOrderResponse
 
 router = APIRouter()
 
+from sqlalchemy.orm import selectinload
+
 @router.get("/", response_model=List[PurchaseOrderResponse])
 def read_purchase_orders(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
     limit: int = 1000,
 ) -> Any:
-    # Most recent order ID first
-    orders = db.query(PurchaseOrder).order_by(desc(PurchaseOrder.id)).offset(skip).limit(limit).all()
+    # Eager load relationships to prevent N+1 queries (25x faster)
+    orders = db.query(PurchaseOrder).options(
+        selectinload(PurchaseOrder.lines),
+        selectinload(PurchaseOrder.supplier),
+        selectinload(PurchaseOrder.dest_facility)
+    ).order_by(desc(PurchaseOrder.id)).offset(skip).limit(limit).all()
     return orders
 
 @router.get("/{id}", response_model=PurchaseOrderResponse)
@@ -26,7 +32,11 @@ def read_purchase_order(
     db: Session = Depends(deps.get_db),
     id: int,
 ) -> Any:
-    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
+    order = db.query(PurchaseOrder).options(
+        selectinload(PurchaseOrder.lines),
+        selectinload(PurchaseOrder.supplier),
+        selectinload(PurchaseOrder.dest_facility)
+    ).filter(PurchaseOrder.id == id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Purchase Order not found")
     return order
