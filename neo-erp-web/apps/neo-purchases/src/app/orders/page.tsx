@@ -31,19 +31,30 @@ export default function PurchaseOrdersPage() {
     return names.sort().map(name => ({ label: name, value: name }));
   }, [orders]);
 
-  const filteredOrders = React.useMemo(() => {
+  // 1. Filtrar por Proveedor y Tienda Destino primero
+  const baseFilteredOrders = React.useMemo(() => {
     return orders.filter((o: any) => {
       const matchSupplier = !selectedSupplier || o.supplier?.name === selectedSupplier;
       const matchFacility = !selectedFacility || o.dest_facility?.name === selectedFacility;
-      
-      if (!matchSupplier || !matchFacility) return false;
+      return matchSupplier && matchFacility;
+    });
+  }, [orders, selectedSupplier, selectedFacility]);
 
+  // 2. Contadores dinámicos que cambian en tiempo real al aplicar filtros
+  const allCount = baseFilteredOrders.length;
+  const draftCount = baseFilteredOrders.filter((o: any) => ['draft', 'pending_approval'].includes(o.status)).length;
+  const transitCount = baseFilteredOrders.filter((o: any) => ['approved', 'sent', 'viewed', 'partial'].includes(o.status)).length;
+  const receivedCount = baseFilteredOrders.filter((o: any) => o.status === 'received').length;
+
+  // 3. Filtrar por la Pestaña activa
+  const filteredOrders = React.useMemo(() => {
+    return baseFilteredOrders.filter((o: any) => {
       if (activeIndex === 1) return ['draft', 'pending_approval'].includes(o.status);
       if (activeIndex === 2) return ['approved', 'sent', 'viewed', 'partial'].includes(o.status);
       if (activeIndex === 3) return o.status === 'received';
-      return true; // Tab 0: All orders
+      return true; // Tab 0: Todas
     });
-  }, [orders, selectedSupplier, selectedFacility, activeIndex]);
+  }, [baseFilteredOrders, activeIndex]);
 
   const fetchOrders = async () => {
     setLoading(true);
@@ -104,10 +115,6 @@ export default function PurchaseOrdersPage() {
           default: return status.toUpperCase();
       }
   };
-  
-  const draftCount = orders.filter((o: any) => ['draft', 'pending_approval'].includes(o.status)).length;
-  const transitCount = orders.filter((o: any) => ['approved', 'sent', 'viewed', 'partial'].includes(o.status)).length;
-  const receivedCount = orders.filter((o: any) => o.status === 'received').length;
 
   return (
     <div className="p-8 w-full max-w-[1400px] mx-auto fade-in">
@@ -159,15 +166,30 @@ export default function PurchaseOrdersPage() {
          )}
       </div>
       
+      {/* BANNER DE FILTROS ACTIVOS */}
+      {(selectedSupplier || selectedFacility) && (
+          <div className="mb-4 p-3 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between text-xs text-indigo-900 font-bold shadow-sm">
+              <div className="flex items-center gap-2">
+                  <i className="pi pi-filter-fill text-indigo-600"></i>
+                  <span>
+                      Filtro Aplicado: {selectedFacility ? `Tienda "${selectedFacility}" ` : ''} 
+                      {selectedSupplier ? `| Proveedor "${selectedSupplier}" ` : ''} 
+                      — Mostrando {filteredOrders.length} de {orders.length} órdenes totales
+                  </span>
+              </div>
+              <Button label="Quitar Filtros" icon="pi pi-times" text size="small" className="p-0 text-indigo-700 font-black hover:underline" onClick={() => { setSelectedSupplier(null); setSelectedFacility(null); }} />
+          </div>
+      )}
+
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden p-2">
         <TabView activeIndex={activeIndex} onTabChange={(e) => setActiveIndex(e.index)}>
-          <TabPanel header={`Todas (${orders.length})`} leftIcon="pi pi-list mr-2" />
+          <TabPanel header={`Todas (${allCount})`} leftIcon="pi pi-list mr-2" />
           <TabPanel header={`Por Autorizar (${draftCount})`} leftIcon="pi pi-clock mr-2" />
           <TabPanel header={`Aprobadas / En Tránsito (${transitCount})`} leftIcon="pi pi-send mr-2" />
           <TabPanel header={`Recibidas WMS (${receivedCount})`} leftIcon="pi pi-check-circle mr-2" />
         </TabView>
 
-        <DataTable value={filteredOrders} loading={loading} emptyMessage="No hay órdenes de compra registradas en este estado." size="small" stripedRows rowHover className="text-sm border-t border-slate-100 mt-2">
+        <DataTable value={filteredOrders} loading={loading} emptyMessage="No hay órdenes de compra que coincidan con el filtro seleccionado." size="small" stripedRows rowHover className="text-sm border-t border-slate-100 mt-2">
           <Column header="NÚMERO DE ODC" field="reference" body={r => (
               <span className="font-black tracking-widest text-slate-700 bg-slate-100 px-3 py-1.5 rounded text-xs border border-slate-200">{r.reference}</span>
           )} style={{ width: '12rem' }} />
