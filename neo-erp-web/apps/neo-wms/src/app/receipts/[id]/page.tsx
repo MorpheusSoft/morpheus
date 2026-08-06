@@ -260,10 +260,11 @@ export default function ReceiptExecutionPage() {
                   rounded 
                   severity="secondary" 
                   outlined 
+                  disabled={isReadOnly}
                   onClick={openTicketDialog} 
-                  tooltip="Imprimir Ticket 80mm" 
+                  tooltip={isReadOnly ? "Recepción completada (Use 'Imprimir Acta Definitiva')" : "Imprimir Hoja de Conteo de Descarga"} 
                   tooltipOptions={{ position: 'top' }}
-                  className="font-bold border-slate-300 text-slate-700 hover:bg-slate-100 shadow-sm"
+                  className="font-bold border-slate-300 text-slate-700 hover:bg-slate-100 shadow-sm disabled:opacity-40 cursor-not-allowed"
               />
           </div>
       </div>
@@ -391,7 +392,6 @@ export default function ReceiptExecutionPage() {
          {isReadOnly ? (
              <div className="flex items-center gap-4">
                  <Tag value="✓ RECEPCIÓN COMPLETADA Y CERRADA" severity="success" className="font-extrabold px-4 py-2 text-xs tracking-wider" />
-                 <Button label="Imprimir Comprobante Definitivo 🖨️" icon="pi pi-print" severity="info" onClick={openTicketDialog} className="font-bold px-6 shadow-md" />
              </div>
          ) : (
              <Button label="Confirmar e Ingresar a Inventario" icon="pi pi-check-circle" severity="success" onClick={confirmReceipt} disabled={saving} className="font-bold px-8 shadow-lg hover:shadow-xl transition-all shadow-emerald-500/30 text-lg bg-emerald-600 border-none" />
@@ -399,62 +399,107 @@ export default function ReceiptExecutionPage() {
       </div>
 
       {/* DIÁLOGO TICKET Y ACTA DE RECEPCIÓN 80MM */}
-      <Dialog header="Vista Previa Ticket / Acta de Recepción 80mm" visible={ticketDialogVisible} onHide={() => setTicketDialogVisible(false)} style={{ width: '420px' }}>
+      <Dialog header={ticketData?.is_confirmed ? "Vista Previa Acta Definitiva 80mm" : "Vista Previa Guía de Descarga en Muelle"} visible={ticketDialogVisible} onHide={() => setTicketDialogVisible(false)} style={{ width: '420px' }}>
           {ticketData && (
               <div className="font-mono text-xs p-4 bg-white border border-slate-300 rounded shadow-inner text-slate-900 leading-tight">
                   <div className="text-center font-black text-sm mb-1">NEO WMS LOGÍSTICA</div>
-                  <div className="text-center font-bold text-[11px] mb-2 border-b pb-2 border-dashed border-slate-400">
-                      ACTA DE RECEPCIÓN Y DISCREPANCIAS
+                  <div className="text-center font-bold text-[11px] mb-2 border-b pb-2 border-dashed border-slate-400 uppercase">
+                      {ticketData.is_confirmed ? "ACTA DE RECEPCIÓN Y DISCREPANCIAS" : "GUÍA DE CONTEO Y DESCARGA EN MUELLE"}
                   </div>
                   <p><strong>ODC:</strong> {ticketData.order_reference}</p>
                   <p><strong>FECHA:</strong> {ticketData.created_at}</p>
                   <p><strong>PROVEEDOR:</strong> {ticketData.supplier_name}</p>
                   <p><strong>SUCURSAL:</strong> {ticketData.facility_name}</p>
-                  {ticketData.has_discrepancies && (
-                      <div className="my-2 p-1.5 bg-slate-100 font-bold text-center border border-slate-400 text-[10px]">
-                          ⚠️ CONTIENE DISCREPANCIAS / RECHAZOS EN MUELLE
-                      </div>
+
+                  {ticketData.is_confirmed ? (
+                      <>
+                          {ticketData.has_discrepancies && (
+                              <div className="my-2 p-1.5 bg-slate-100 font-bold text-center border border-slate-400 text-[10px]">
+                                  ⚠️ CONTIENE DISCREPANCIAS / RECHAZOS EN MUELLE
+                              </div>
+                          )}
+                          <div className="my-2 border-b border-dashed border-slate-400"></div>
+                          <table className="w-full text-left">
+                              <thead>
+                                  <tr className="border-b border-slate-400 text-[10px]">
+                                      <th className="py-1">CÓD/PRODUCTO</th>
+                                      <th className="py-1 text-center">PED</th>
+                                      <th className="py-1 text-center">REC</th>
+                                      <th className="py-1 text-right">DEV</th>
+                                  </tr>
+                              </thead>
+                              <tbody>
+                                  {ticketData.items.map((it: any, idx: number) => (
+                                      <tr key={idx} className="border-b border-slate-200">
+                                          <td className="py-1 max-w-[150px]">
+                                              <div className="font-bold text-[11px]">{it.sku}</div>
+                                              <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
+                                          </td>
+                                          <td className="py-1 text-center font-bold">{it.expected_qty}</td>
+                                          <td className="py-1 text-center font-bold text-emerald-700">{it.received_qty}</td>
+                                          <td className="py-1 text-right font-black text-red-600">{it.rejected_qty > 0 ? `-${it.rejected_qty}` : '0'}</td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+                          <div className="my-4 border-b border-dashed border-slate-400"></div>
+                          
+                          {/* BLOQUE DE FIRMAS LEGALES */}
+                          <div className="mt-6 flex flex-col gap-6 text-[10px]">
+                              <div>
+                                  <p className="border-b border-slate-400 w-full mb-1"></p>
+                                  <p className="font-bold text-center">Firma y Cédula Chofer / Transportista</p>
+                              </div>
+                              <div>
+                                  <p className="border-b border-slate-400 w-full mb-1"></p>
+                                  <p className="font-bold text-center">Firma y Cédula Recibidor WMS / Muelle</p>
+                              </div>
+                          </div>
+                      </>
+                  ) : (
+                      <>
+                          <div className="my-2 p-1.5 bg-blue-50 font-bold text-center border border-blue-300 text-[10px] text-blue-800">
+                              📋 CONTROL FÍSICO DE CONTEO EN MUELLE
+                          </div>
+                          <div className="my-2 border-b border-dashed border-slate-400"></div>
+                          <table className="w-full text-left">
+                              <thead>
+                                  <tr className="border-b border-slate-400 text-[10px]">
+                                      <th className="py-1">CÓD/PRODUCTO</th>
+                                      <th className="py-1 text-center">ESPERADO</th>
+                                      <th className="py-1 text-right">CONTEO FÍSICO</th>
+                                  </tr>
+                              </thead>
+                              <tbody>
+                                  {ticketData.items.map((it: any, idx: number) => (
+                                      <tr key={idx} className="border-b border-slate-200">
+                                          <td className="py-1 max-w-[160px]">
+                                              <div className="font-bold text-[11px]">{it.sku}</div>
+                                              <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
+                                          </td>
+                                          <td className="py-1 text-center font-bold text-slate-800">{it.expected_qty}</td>
+                                          <td className="py-1 text-right font-bold text-slate-400">[ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ]</td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+                          <div className="my-4 border-b border-dashed border-slate-400"></div>
+                          <div className="mt-4 text-[10px] text-center text-slate-600">
+                              <p className="border-b border-slate-400 w-full mb-1 mt-6"></p>
+                              <p className="font-bold">Firma Fiscal / Revisor Muelle</p>
+                          </div>
+                      </>
                   )}
-                  <div className="my-2 border-b border-dashed border-slate-400"></div>
-                  <table className="w-full text-left">
-                      <thead>
-                          <tr className="border-b border-slate-400 text-[10px]">
-                              <th className="py-1">CÓD/PRODUCTO</th>
-                              <th className="py-1 text-center">PED</th>
-                              <th className="py-1 text-center">REC</th>
-                              <th className="py-1 text-right">DEV</th>
-                          </tr>
-                      </thead>
-                      <tbody>
-                          {ticketData.items.map((it: any, idx: number) => (
-                              <tr key={idx} className="border-b border-slate-200">
-                                  <td className="py-1 max-w-[150px]">
-                                      <div className="font-bold text-[11px]">{it.sku}</div>
-                                      <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
-                                  </td>
-                                  <td className="py-1 text-center font-bold">{it.expected_qty}</td>
-                                  <td className="py-1 text-center font-bold text-emerald-700">{it.received_qty}</td>
-                                  <td className="py-1 text-right font-black text-red-600">{it.rejected_qty > 0 ? `-${it.rejected_qty}` : '0'}</td>
-                              </tr>
-                          ))}
-                      </tbody>
-                  </table>
-                  <div className="my-4 border-b border-dashed border-slate-400"></div>
-                  
-                  {/* BLOQUE DE FIRMAS LEGALES */}
-                  <div className="mt-6 flex flex-col gap-6 text-[10px]">
-                      <div>
-                          <p className="border-b border-slate-400 w-full mb-1"></p>
-                          <p className="font-bold text-center">Firma y Cédula Chofer / Transportista</p>
-                      </div>
-                      <div>
-                          <p className="border-b border-slate-400 w-full mb-1"></p>
-                          <p className="font-bold text-center">Firma y Cédula Recibidor WMS / Muelle</p>
-                      </div>
-                  </div>
 
                   <div className="mt-5 flex justify-center">
-                      <Button label="Imprimir Comprobante" icon="pi pi-print" severity="info" size="small" onClick={() => window.print()} className="font-bold" />
+                      <Button 
+                          label={ticketData.is_confirmed ? "Imprimir Acta Definitiva" : "Imprimir Guía de Descarga"} 
+                          icon="pi pi-print" 
+                          severity={ticketData.is_confirmed ? "success" : "info"} 
+                          size="small" 
+                          onClick={() => window.print()} 
+                          className="font-bold" 
+                      />
                   </div>
               </div>
           )}

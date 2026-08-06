@@ -371,6 +371,7 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
     supplier = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
     facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first()
 
+    is_confirmed = (order.status == 'received')
     items = []
     has_discrepancies = False
     for l in order.lines:
@@ -379,9 +380,9 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         sku = variant.sku if variant else "N/A"
         barcode = variant.barcode if variant else "N/A"
         exp_q = float(l.expected_base_qty or 0)
-        rec_q = float(l.received_base_qty or 0)
-        rej_q = max(0.0, exp_q - rec_q)
-        if rej_q > 0:
+        rec_q = float(l.received_base_qty or 0) if is_confirmed else 0.0
+        rej_q = max(0.0, exp_q - rec_q) if is_confirmed else 0.0
+        if is_confirmed and rej_q > 0:
             has_discrepancies = True
             
         items.append({
@@ -400,6 +401,8 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         "created_at": order.created_at.strftime("%d/%m/%Y %H:%M") if order.created_at else "",
         "supplier_name": supplier.name if supplier else "N/A",
         "facility_name": facility.name if facility else "N/A",
+        "order_status": order.status,
+        "is_confirmed": is_confirmed,
         "has_discrepancies": has_discrepancies,
         "items": items
     }
