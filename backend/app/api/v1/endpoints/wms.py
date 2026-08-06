@@ -19,6 +19,8 @@ class ReceiptLineInput(BaseModel):
     variant_id: int
     received_qty: float
     damaged_qty: Optional[float] = 0.0
+    reject_at_dock: Optional[bool] = True
+    rejection_reason: Optional[str] = None
     lot_number: Optional[str] = None
     expiration_date: Optional[date] = None
 
@@ -31,6 +33,7 @@ class DiscrepancyPayload(BaseModel):
     warehouse_id: Optional[int] = None
     damaged_qty: float
     reason: str
+    reject_at_dock: Optional[bool] = True
     lot_number: Optional[str] = None
 
 class PutawayPayload(BaseModel):
@@ -59,7 +62,6 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
         ).first()
     
     if not warehouse:
-        # Usar el almacén principal por defecto de la sucursal
         warehouse = db.query(Warehouse).filter(
             Warehouse.facility_id == order.dest_facility_id,
             Warehouse.is_scrap == False,
@@ -123,7 +125,7 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
             db.add(dest_loc)
             db.flush()
 
-    # Ubicación de Averías / Scrap
+    # Ubicación de Averías / Scrap (Solo si se decide conservar mercancía dañada)
     scrap_loc = db.query(Location).filter(
         Location.warehouse_id == warehouse.id,
         Location.location_type == 'LOSS'
@@ -153,6 +155,7 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
 
     total_expected = 0
     total_received = 0
+    rejection_notes = []
 
     # 5. Procesar Líneas y Asentar Inventario
     for in_line in payload.lines:
@@ -171,7 +174,6 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
         if in_line.po_line_id and in_line.po_line_id > 0:
             po_line = db.query(PurchaseOrderLine).filter(PurchaseOrderLine.id == in_line.po_line_id).first()
 
-        # Si es un Producto Inesperado (no estaba en la ODC original), crear la línea en caliente
         if not po_line:
             variant = db.query(ProductVariant).filter(ProductVariant.id == in_line.variant_id).first()
             if not variant:
@@ -190,12 +192,9 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
 
         qty_good = float(in_line.received_qty or 0)
         qty_damaged = float(in_line.damaged_qty or 0)
-        total_line_received = qty_good + qty_damaged
 
-        if total_line_received <= 0:
-            continue
-
-        po_line.received_base_qty = float(po_line.received_base_qty or 0) + total_line_received
+        # Si se rechazó en muelle, solo la cantidad en buen estado ingresa a inventario
+        po_line.received_base_qty = float(po_line.received_base_qty or 0) + qty_good
         total_expected += float(po_line.expected_base_qty or 0)
         total_received += float(po_line.received_base_qty or 0)
 
@@ -218,7 +217,7 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
 
         unit_cost = float(po_line.unit_cost or 0)
 
-        # A) Stock Move para Unidades en Buen Estado
+        # A) Stock Move para Unidades en Buen Estado (Ingresan a Inventario)
         if qty_good > 0:
             move_good = StockMove(
                 picking_id=picking.id,
@@ -259,22 +258,30 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
                 )
                 db.add(snapshot)
 
-        # B) Stock Move para Unidades Dañadas / Avería
+        # B) Manejo de Rechazo vs Avería Interna
         if qty_damaged > 0:
-            move_scrap = StockMove(
-                picking_id=picking.id,
-                product_id=in_line.variant_id,
-                location_src_id=supplier_loc.id,
-                location_dest_id=scrap_loc.id,
-                quantity_demand=0,
-                quantity_done=qty_damaged,
-                state='DONE',
-                batch_id=batch_id,
-                supplier_id=order.supplier_id,
-                unit_cost=unit_cost,
-                reference=f"SCRAP-{order.reference}"
-            )
-            db.add(move_scrap)
+            if in_line.reject_at_dock:
+                # Rechazo en Puerta: NO entra a inventario SCRAP, solo se registra para la acta/comprobante
+                variant = db.query(ProductVariant).filter(ProductVariant.id == in_line.variant_id).first()
+                sku = variant.sku if variant else "N/A"
+                reason_str = in_line.rejection_reason or "Rechazado en muelle / Devuelto al chofer"
+                rejection_notes.append(f"{sku}: {qty_damaged} unds devueltas al chofer ({reason_str})")
+            else:
+                # Merma/Avería Interna: Se conserva y mueve a ubicación SCRAP
+                move_scrap = StockMove(
+                    picking_id=picking.id,
+                    product_id=in_line.variant_id,
+                    location_src_id=supplier_loc.id,
+                    location_dest_id=scrap_loc.id,
+                    quantity_demand=0,
+                    quantity_done=qty_damaged,
+                    state='DONE',
+                    batch_id=batch_id,
+                    supplier_id=order.supplier_id,
+                    unit_cost=unit_cost,
+                    reference=f"SCRAP-{order.reference}"
+                )
+                db.add(move_scrap)
 
     # Cierre Logístico de la ODC
     if total_received >= total_expected and total_expected > 0:
@@ -365,19 +372,27 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
     facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first()
 
     items = []
+    has_discrepancies = False
     for l in order.lines:
         variant = db.query(ProductVariant).filter(ProductVariant.id == l.variant_id).first()
         product_name = variant.product.name if (variant and variant.product) else f"SKU: {l.variant_id}"
         sku = variant.sku if variant else "N/A"
         barcode = variant.barcode if variant else "N/A"
+        exp_q = float(l.expected_base_qty or 0)
+        rec_q = float(l.received_base_qty or 0)
+        rej_q = max(0.0, exp_q - rec_q)
+        if rej_q > 0:
+            has_discrepancies = True
+            
         items.append({
             "line_id": l.id,
             "variant_id": l.variant_id,
             "sku": sku,
             "barcode": barcode,
             "product_name": product_name,
-            "expected_qty": float(l.expected_base_qty),
-            "received_qty": float(l.received_base_qty or 0)
+            "expected_qty": exp_q,
+            "received_qty": rec_q,
+            "rejected_qty": rej_q
         })
 
     ticket_data = {
@@ -385,6 +400,7 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         "created_at": order.created_at.strftime("%d/%m/%Y %H:%M") if order.created_at else "",
         "supplier_name": supplier.name if supplier else "N/A",
         "facility_name": facility.name if facility else "N/A",
+        "has_discrepancies": has_discrepancies,
         "items": items
     }
     return ticket_data

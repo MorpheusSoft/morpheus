@@ -368,58 +368,89 @@ export default function ReceiptExecutionPage() {
          <Button label="Confirmar e Ingresar a Inventario" icon="pi pi-check-circle" severity="success" onClick={confirmReceipt} disabled={saving} className="font-bold px-8 shadow-lg hover:shadow-xl transition-all shadow-emerald-500/30 text-lg bg-emerald-600 border-none" />
       </div>
 
-      {/* DIÁLOGO TICKET 80MM */}
-      <Dialog header="Vista Previa Ticket 80mm" visible={ticketDialogVisible} onHide={() => setTicketDialogVisible(false)} style={{ width: '380px' }}>
+      {/* DIÁLOGO TICKET Y ACTA DE RECEPCIÓN 80MM */}
+      <Dialog header="Vista Previa Ticket / Acta de Recepción 80mm" visible={ticketDialogVisible} onHide={() => setTicketDialogVisible(false)} style={{ width: '420px' }}>
           {ticketData && (
-              <div className="font-mono text-xs p-4 bg-slate-50 border border-slate-300 rounded shadow-inner text-slate-800 leading-tight">
-                  <div className="text-center font-bold text-sm mb-2 border-b pb-2 border-dashed border-slate-400">
-                      NEO WMS - MANIFIESTO DE RECEPCIÓN
+              <div className="font-mono text-xs p-4 bg-white border border-slate-300 rounded shadow-inner text-slate-900 leading-tight">
+                  <div className="text-center font-black text-sm mb-1">NEO WMS LOGÍSTICA</div>
+                  <div className="text-center font-bold text-[11px] mb-2 border-b pb-2 border-dashed border-slate-400">
+                      ACTA DE RECEPCIÓN Y DISCREPANCIAS
                   </div>
                   <p><strong>ODC:</strong> {ticketData.order_reference}</p>
                   <p><strong>FECHA:</strong> {ticketData.created_at}</p>
                   <p><strong>PROVEEDOR:</strong> {ticketData.supplier_name}</p>
-                  <p><strong>DESTINO:</strong> {ticketData.facility_name}</p>
+                  <p><strong>SUCURSAL:</strong> {ticketData.facility_name}</p>
+                  {ticketData.has_discrepancies && (
+                      <div className="my-2 p-1.5 bg-slate-100 font-bold text-center border border-slate-400 text-[10px]">
+                          ⚠️ CONTIENE DISCREPANCIAS / RECHAZOS EN MUELLE
+                      </div>
+                  )}
                   <div className="my-2 border-b border-dashed border-slate-400"></div>
                   <table className="w-full text-left">
                       <thead>
-                          <tr className="border-b border-slate-300">
-                              <th className="py-1">CÓD/SKU</th>
-                              <th className="py-1 text-right">CANT</th>
+                          <tr className="border-b border-slate-400 text-[10px]">
+                              <th className="py-1">CÓD/PRODUCTO</th>
+                              <th className="py-1 text-center">PED</th>
+                              <th className="py-1 text-center">REC</th>
+                              <th className="py-1 text-right">DEV</th>
                           </tr>
                       </thead>
                       <tbody>
                           {ticketData.items.map((it: any, idx: number) => (
                               <tr key={idx} className="border-b border-slate-200">
-                                  <td className="py-1">
-                                      <div className="font-bold">{it.sku}</div>
-                                      <div className="text-[10px] text-slate-600">{it.product_name}</div>
+                                  <td className="py-1 max-w-[150px]">
+                                      <div className="font-bold text-[11px]">{it.sku}</div>
+                                      <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
                                   </td>
-                                  <td className="py-1 text-right font-bold text-sm align-top">[ {it.expected_qty} ]</td>
+                                  <td className="py-1 text-center font-bold">{it.expected_qty}</td>
+                                  <td className="py-1 text-center font-bold text-emerald-700">{it.received_qty}</td>
+                                  <td className="py-1 text-right font-black text-red-600">{it.rejected_qty > 0 ? `-${it.rejected_qty}` : '0'}</td>
                               </tr>
                           ))}
                       </tbody>
                   </table>
-                  <div className="my-3 border-b border-dashed border-slate-400"></div>
-                  <div className="text-center text-[10px] text-slate-500 mt-2">
-                      Firma Conforme Operador Muelle: _______________
+                  <div className="my-4 border-b border-dashed border-slate-400"></div>
+                  
+                  {/* BLOQUE DE FIRMAS LEGALES */}
+                  <div className="mt-6 flex flex-col gap-6 text-[10px]">
+                      <div>
+                          <p className="border-b border-slate-400 w-full mb-1"></p>
+                          <p className="font-bold text-center">Firma y Cédula Chofer / Transportista</p>
+                      </div>
+                      <div>
+                          <p className="border-b border-slate-400 w-full mb-1"></p>
+                          <p className="font-bold text-center">Firma y Cédula Recibidor WMS / Muelle</p>
+                      </div>
                   </div>
-                  <div className="mt-4 flex justify-center">
-                      <Button label="Imprimir Ticket" icon="pi pi-print" severity="info" size="small" onClick={() => window.print()} />
+
+                  <div className="mt-5 flex justify-center">
+                      <Button label="Imprimir Comprobante" icon="pi pi-print" severity="info" size="small" onClick={() => window.print()} className="font-bold" />
                   </div>
               </div>
           )}
       </Dialog>
 
-      {/* DIÁLOGO REPORTAR AVERÍA */}
-      <Dialog header="Reportar Avería / Producto Dañado" visible={discrepancyDialogVisible} onHide={() => setDiscrepancyDialogVisible(false)} style={{ width: '400px' }}>
+      {/* DIÁLOGO REPORTAR AVERÍA / RECHAZO */}
+      <Dialog header="Reportar Avería o Rechazo en Muelle" visible={discrepancyDialogVisible} onHide={() => setDiscrepancyDialogVisible(false)} style={{ width: '420px' }}>
           {discrepancyLine && (
               <div className="flex flex-col gap-4 py-2">
                   <div className="bg-slate-50 p-3 rounded border border-slate-200">
                       <p className="font-bold text-slate-800">{discrepancyLine.product_name}</p>
                       <p className="text-xs text-slate-500">SKU: {discrepancyLine.sku}</p>
                   </div>
+
                   <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad Física Dañada (Avería):</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Tipo de Evento:</label>
+                      <div className="flex flex-col gap-2 p-2 bg-blue-50/50 border border-blue-200 rounded text-xs">
+                          <label className="flex items-center gap-2 font-bold text-slate-800 cursor-pointer">
+                              <input type="radio" name="reject_type" checked={true} readOnly />
+                              Devolver al Chofer (Rechazo en Puerta - NO entra a Inventario)
+                          </label>
+                      </div>
+                  </div>
+
+                  <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad Devuelta / Rechazada:</label>
                       <InputNumber 
                           value={discrepancyDamagedQty} 
                           onValueChange={(e) => setDiscrepancyDamagedQty(e.value || 0)} 
@@ -427,18 +458,20 @@ export default function ReceiptExecutionPage() {
                           min={0}
                       />
                   </div>
+
                   <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Motivo / Observación:</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Motivo / Observación del Rechazo:</label>
                       <InputText 
                           value={discrepancyReason} 
                           onChange={(e) => setDiscrepancyReason(e.target.value)} 
-                          placeholder="Ej: Empaque roto en transporte" 
+                          placeholder="Ej: Devuelto por empaque roto / mala calidad" 
                           className="w-full text-xs"
                       />
                   </div>
+
                   <div className="flex justify-end gap-2 mt-2">
                       <Button label="Cancelar" text severity="secondary" onClick={() => setDiscrepancyDialogVisible(false)} />
-                      <Button label="Registrar Avería" severity="danger" onClick={submitDiscrepancy} />
+                      <Button label="Registrar Rechazo" severity="danger" onClick={submitDiscrepancy} className="font-bold" />
                   </div>
               </div>
           )}
