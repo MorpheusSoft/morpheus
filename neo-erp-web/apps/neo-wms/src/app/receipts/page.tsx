@@ -11,35 +11,65 @@ import api from '@/lib/api';
 import { format } from 'date-fns';
 import { useRouter } from 'next/navigation';
 
+// Global in-memory cache for instant zero-latency page transitions
+let globalWmsOrdersCache: any[] | null = null;
+let globalWmsCacheTimestamp: number = 0;
+
 export default function WmsReceiptsPage() {
-  const [pendingOrders, setPendingOrders] = useState([]);
-  const [completedOrders, setCompletedOrders] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [pendingOrders, setPendingOrders] = useState<any[]>([]);
+  const [completedOrders, setCompletedOrders] = useState<any[]>([]);
+  const [loading, setLoading] = useState<boolean>(!globalWmsOrdersCache);
+  
+  const [activeIndex, setActiveIndex] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const savedTab = sessionStorage.getItem('wms_activeIndex');
+      return savedTab ? parseInt(savedTab, 10) : 0;
+    }
+    return 0;
+  });
+
   const toast = useRef<Toast>(null);
   const router = useRouter();
 
-  const fetchOrders = async () => {
-    setLoading(true);
+  const handleTabChange = (index: number) => {
+    setActiveIndex(index);
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('wms_activeIndex', index.toString());
+    }
+  };
+
+  const processAndSetOrders = (allOrders: any[]) => {
+    const pending = allOrders.filter((o: any) => ['approved', 'sent', 'viewed', 'partial'].includes(o.status));
+    const completed = allOrders.filter((o: any) => o.status === 'received');
+    setPendingOrders(pending);
+    setCompletedOrders(completed);
+  };
+
+  const fetchOrders = async (silent: boolean = false) => {
+    if (!silent && !globalWmsOrdersCache) setLoading(true);
     try {
       const res = await api.get('/purchase-orders/');
       const allOrders = res.data || [];
-      
-      // Pendientes: Órdenes en tránsito o parciales
-      const pending = allOrders.filter((o: any) => ['approved', 'sent', 'viewed', 'partial'].includes(o.status));
-      // Completadas: Órdenes recibidas físicamente
-      const completed = allOrders.filter((o: any) => o.status === 'received');
-
-      setPendingOrders(pending);
-      setCompletedOrders(completed);
+      globalWmsOrdersCache = allOrders;
+      globalWmsCacheTimestamp = Date.now();
+      processAndSetOrders(allOrders);
     } catch (e) {
-      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Fallo al conectar con la base de logística.' });
+      if (!silent) {
+        toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Fallo al conectar con la base de logística.' });
+      }
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchOrders();
+    const isFresh = (Date.now() - globalWmsCacheTimestamp) < 30000;
+    if (globalWmsOrdersCache && isFresh) {
+      processAndSetOrders(globalWmsOrdersCache);
+      setLoading(false);
+      fetchOrders(true); // Revalidar en segundo plano
+    } else {
+      fetchOrders(false);
+    }
   }, []);
 
   const getStatusSeverity = (status: string) => {
@@ -76,12 +106,12 @@ export default function WmsReceiptsPage() {
           <p className="text-slate-500 text-sm mt-1">Gestión de recepciones en tránsito y consulta de actas históricas.</p>
         </div>
         <div className="flex gap-4">
-          <Button icon="pi pi-refresh" rounded outlined aria-label="Actualizar" onClick={fetchOrders} className="text-slate-600 border-slate-300 hover:bg-slate-50 font-bold" />
+          <Button icon="pi pi-refresh" rounded outlined aria-label="Actualizar" onClick={() => fetchOrders(false)} className="text-slate-600 border-slate-300 hover:bg-slate-50 font-bold" />
         </div>
       </div>
       
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden p-2">
-        <TabView activeIndex={activeIndex} onTabChange={(e) => setActiveIndex(e.index)}>
+        <TabView activeIndex={activeIndex} onTabChange={(e) => handleTabChange(e.index)}>
           <TabPanel header={`Por Recibir (${pendingOrders.length})`} leftIcon="pi pi-inbox mr-2">
             <DataTable value={pendingOrders} loading={loading} emptyMessage="Muelle despejado. No hay camiones en cola ni ODCs pendientes." size="small" stripedRows rowHover className="text-sm border-t border-slate-100 mt-2">
               <Column header="NÚMERO DE ODC" field="reference" body={r => (

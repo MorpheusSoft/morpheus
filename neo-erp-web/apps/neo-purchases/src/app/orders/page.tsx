@@ -12,14 +12,72 @@ import { format } from 'date-fns';
 import { useRouter } from 'next/navigation';
 import { Dropdown } from 'primereact/dropdown';
 
+// Global in-memory cache for instant zero-latency page transitions
+let globalOrdersCache: any[] | null = null;
+let globalCacheTimestamp: number = 0;
+
 export default function PurchaseOrdersPage() {
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [selectedSupplier, setSelectedSupplier] = useState<string | null>(null);
-  const [selectedFacility, setSelectedFacility] = useState<string | null>(null);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [orders, setOrders] = useState<any[]>(() => globalOrdersCache || []);
+  const [loading, setLoading] = useState<boolean>(!globalOrdersCache);
+  
+  // Persistir estado de filtros en sessionStorage para que no se pierdan al entrar/salir de una orden
+  const [selectedSupplier, setSelectedSupplier] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('pur_selectedSupplier') || null;
+    }
+    return null;
+  });
+
+  const [selectedFacility, setSelectedFacility] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('pur_selectedFacility') || null;
+    }
+    return null;
+  });
+
+  const [activeIndex, setActiveIndex] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const savedTab = sessionStorage.getItem('pur_activeIndex');
+      return savedTab ? parseInt(savedTab, 10) : 0;
+    }
+    return 0;
+  });
+
   const toast = useRef<Toast>(null);
   const router = useRouter();
+
+  // Guardar en sessionStorage al cambiar filtros
+  const handleSupplierChange = (val: string | null) => {
+    setSelectedSupplier(val);
+    if (typeof window !== 'undefined') {
+      if (val) sessionStorage.setItem('pur_selectedSupplier', val);
+      else sessionStorage.removeItem('pur_selectedSupplier');
+    }
+  };
+
+  const handleFacilityChange = (val: string | null) => {
+    setSelectedFacility(val);
+    if (typeof window !== 'undefined') {
+      if (val) sessionStorage.setItem('pur_selectedFacility', val);
+      else sessionStorage.removeItem('pur_selectedFacility');
+    }
+  };
+
+  const handleTabChange = (index: number) => {
+    setActiveIndex(index);
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('pur_activeIndex', index.toString());
+    }
+  };
+
+  const clearAllFilters = () => {
+    setSelectedSupplier(null);
+    setSelectedFacility(null);
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('pur_selectedSupplier');
+      sessionStorage.removeItem('pur_selectedFacility');
+    }
+  };
 
   const supplierOptions = React.useMemo(() => {
     const names = Array.from(new Set(orders.map((o: any) => o.supplier?.name).filter(Boolean)));
@@ -56,30 +114,42 @@ export default function PurchaseOrdersPage() {
     });
   }, [baseFilteredOrders, activeIndex]);
 
-  const fetchOrders = async () => {
-    setLoading(true);
+  const fetchOrders = async (silent: boolean = false) => {
+    if (!silent && !globalOrdersCache) setLoading(true);
     try {
       const res = await api.get('/purchase-orders/');
-      setOrders(res.data || []);
+      const data = res.data || [];
+      setOrders(data);
+      globalOrdersCache = data;
+      globalCacheTimestamp = Date.now();
     } catch (e) {
-      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar las órdenes de compra.' });
+      if (!silent) {
+        toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar las órdenes de compra.' });
+      }
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchOrders();
+    // Si la caché tiene menos de 30 segundos, usar caché e invocar revalidación silenciosa
+    const isFresh = (Date.now() - globalCacheTimestamp) < 30000;
+    if (globalOrdersCache && isFresh) {
+      setLoading(false);
+      fetchOrders(true); // Revalidar en segundo plano sin pantalla de carga
+    } else {
+      fetchOrders(false);
+    }
   }, []);
 
   const approveOrder = async (id: number) => {
     try {
         await api.put(`/purchase-orders/${id}/status`, { status: 'approved' });
         toast.current?.show({ severity: 'success', summary: 'Aprobada', detail: 'La Autorización Oficial fue registrada.', life: 3000 });
-        fetchOrders();
+        fetchOrders(true);
     } catch(e: any) {
         const msg = e.response?.data?.detail || 'Fallo al autorizar la orden transaccional.';
         toast.current?.show({ severity: 'info', summary: 'Aviso de Autorización', detail: msg, life: 5000 });
-        fetchOrders();
+        fetchOrders(true);
     }
   };
 
@@ -88,7 +158,7 @@ export default function PurchaseOrdersPage() {
     try {
         await api.delete(`/purchase-orders/${id}`);
         toast.current?.show({ severity: 'success', summary: 'Eliminada', detail: 'La orden fue eliminada.', life: 3000 });
-        fetchOrders();
+        fetchOrders(true);
     } catch(e: any) {
         toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al eliminar la orden.' });
     }
@@ -126,7 +196,7 @@ export default function PurchaseOrdersPage() {
         </div>
         <div className="flex gap-4">
           <Button label="Nueva Orden" icon="pi pi-plus" className="bg-indigo-600 hover:bg-indigo-700 border-none font-bold px-6 shadow-md shadow-indigo-500/20" onClick={() => router.push('/orders/new')} />
-          <Button icon="pi pi-refresh" rounded outlined aria-label="Actualizar" onClick={fetchOrders} />
+          <Button icon="pi pi-refresh" rounded outlined aria-label="Actualizar" onClick={() => fetchOrders(false)} />
         </div>
       </div>
       
@@ -136,7 +206,7 @@ export default function PurchaseOrdersPage() {
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Filtrar por Proveedor</span>
             <Dropdown 
                value={selectedSupplier} 
-               onChange={e => setSelectedSupplier(e.value)} 
+               onChange={e => handleSupplierChange(e.value)} 
                options={supplierOptions} 
                placeholder="Todos los Proveedores" 
                showClear
@@ -148,7 +218,7 @@ export default function PurchaseOrdersPage() {
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Filtrar por Destino (Tienda)</span>
             <Dropdown 
                value={selectedFacility} 
-               onChange={e => setSelectedFacility(e.value)} 
+               onChange={e => handleFacilityChange(e.value)} 
                options={facilityOptions} 
                placeholder="Todas las Tiendas" 
                showClear
@@ -160,7 +230,7 @@ export default function PurchaseOrdersPage() {
             <Button 
                label="Limpiar Filtros" 
                icon="pi pi-filter-slash" 
-               onClick={() => { setSelectedSupplier(null); setSelectedFacility(null); }} 
+               onClick={clearAllFilters} 
                className="p-button-text p-button-sm text-slate-500 font-bold mt-4" 
             />
          )}
@@ -172,17 +242,17 @@ export default function PurchaseOrdersPage() {
               <div className="flex items-center gap-2">
                   <i className="pi pi-filter-fill text-indigo-600"></i>
                   <span>
-                      Filtro Aplicado: {selectedFacility ? `Tienda "${selectedFacility}" ` : ''} 
+                      Filtro Conservado: {selectedFacility ? `Tienda "${selectedFacility}" ` : ''} 
                       {selectedSupplier ? `| Proveedor "${selectedSupplier}" ` : ''} 
                       — Mostrando {filteredOrders.length} de {orders.length} órdenes totales
                   </span>
               </div>
-              <Button label="Quitar Filtros" icon="pi pi-times" text size="small" className="p-0 text-indigo-700 font-black hover:underline" onClick={() => { setSelectedSupplier(null); setSelectedFacility(null); }} />
+              <Button label="Quitar Filtros" icon="pi pi-times" text size="small" className="p-0 text-indigo-700 font-black hover:underline" onClick={clearAllFilters} />
           </div>
       )}
 
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden p-2">
-        <TabView activeIndex={activeIndex} onTabChange={(e) => setActiveIndex(e.index)}>
+        <TabView activeIndex={activeIndex} onTabChange={(e) => handleTabChange(e.index)}>
           <TabPanel header={`Todas (${allCount})`} leftIcon="pi pi-list mr-2" />
           <TabPanel header={`Por Autorizar (${draftCount})`} leftIcon="pi pi-clock mr-2" />
           <TabPanel header={`Aprobadas / En Tránsito (${transitCount})`} leftIcon="pi pi-send mr-2" />
