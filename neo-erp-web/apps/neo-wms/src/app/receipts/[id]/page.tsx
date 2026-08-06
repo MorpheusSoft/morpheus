@@ -61,24 +61,21 @@ export default function ReceiptExecutionPage() {
       setLines(initialLines);
 
       // Cargar almacenes de la sucursal de destino
-      if (res.data.dest_facility_id) {
-          try {
-              const whRes = await api.get(`/warehouses/`);
-              const facilityWhs = (whRes.data || []).filter((w: any) => w.facility_id === res.data.dest_facility_id && !w.is_scrap);
-              if (facilityWhs.length > 0) {
-                  setWarehouses(facilityWhs);
-                  setSelectedWarehouseId(facilityWhs[0].id);
-              } else {
-                  // Fallback si la sucursal no tiene almacén explícito creado aún
-                  const allWhs = whRes.data || [];
-                  if (allWhs.length > 0) {
-                      setWarehouses(allWhs);
-                      setSelectedWarehouseId(allWhs[0].id);
-                  }
-              }
-          } catch(err) {
-              console.error("Error cargando almacenes:", err);
+      const facilityId = res.data.dest_facility_id || res.data.dest_facility?.id;
+      try {
+          const whRes = await api.get('/warehouses/');
+          const allWhs = whRes.data || [];
+          const facilityWhs = facilityId 
+              ? allWhs.filter((w: any) => Number(w.facility_id) === Number(facilityId) && !w.is_scrap)
+              : allWhs.filter((w: any) => !w.is_scrap);
+          
+          const finalWhs = facilityWhs.length > 0 ? facilityWhs : allWhs;
+          setWarehouses(finalWhs);
+          if (finalWhs.length > 0) {
+              setSelectedWarehouseId(finalWhs[0].id);
           }
+      } catch(err) {
+          console.error("Error cargando almacenes:", err);
       }
     } catch (e) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo cargar la orden.' });
