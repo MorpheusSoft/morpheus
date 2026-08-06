@@ -14,10 +14,10 @@ router = APIRouter()
 def read_purchase_orders(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 1000,
 ) -> Any:
-    # Most recent first
-    orders = db.query(PurchaseOrder).order_by(desc(PurchaseOrder.created_at)).offset(skip).limit(limit).all()
+    # Most recent order ID first
+    orders = db.query(PurchaseOrder).order_by(desc(PurchaseOrder.id)).offset(skip).limit(limit).all()
     return orders
 
 @router.get("/{id}", response_model=PurchaseOrderResponse)
@@ -68,8 +68,8 @@ def create_purchase_order(
             expected_base_qty=base_qty,
             unit_cost=cost
         )
-        total_amount += base_qty * cost
         db.add(line)
+        total_amount += (qty * cost)
         
     order.total_amount = total_amount
     db.commit()

@@ -6,6 +6,7 @@ import { Column } from 'primereact/column';
 import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
 import { Tag } from 'primereact/tag';
+import { TabView, TabPanel } from 'primereact/tabview';
 import api from '@/lib/api';
 import { format } from 'date-fns';
 import { useRouter } from 'next/navigation';
@@ -16,6 +17,7 @@ export default function PurchaseOrdersPage() {
   const [loading, setLoading] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState<string | null>(null);
   const [selectedFacility, setSelectedFacility] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
   const toast = useRef<Toast>(null);
   const router = useRouter();
 
@@ -33,15 +35,21 @@ export default function PurchaseOrdersPage() {
     return orders.filter((o: any) => {
       const matchSupplier = !selectedSupplier || o.supplier?.name === selectedSupplier;
       const matchFacility = !selectedFacility || o.dest_facility?.name === selectedFacility;
-      return matchSupplier && matchFacility;
+      
+      if (!matchSupplier || !matchFacility) return false;
+
+      if (activeIndex === 1) return ['draft', 'pending_approval'].includes(o.status);
+      if (activeIndex === 2) return ['approved', 'sent', 'viewed', 'partial'].includes(o.status);
+      if (activeIndex === 3) return o.status === 'received';
+      return true; // Tab 0: All orders
     });
-  }, [orders, selectedSupplier, selectedFacility]);
+  }, [orders, selectedSupplier, selectedFacility, activeIndex]);
 
   const fetchOrders = async () => {
     setLoading(true);
     try {
       const res = await api.get('/purchase-orders/');
-      setOrders(res.data);
+      setOrders(res.data || []);
     } catch (e) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar las órdenes de compra.' });
     }
@@ -57,8 +65,10 @@ export default function PurchaseOrdersPage() {
         await api.put(`/purchase-orders/${id}/status`, { status: 'approved' });
         toast.current?.show({ severity: 'success', summary: 'Aprobada', detail: 'La Autorización Oficial fue registrada.', life: 3000 });
         fetchOrders();
-    } catch(e) {
-        toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Fallo al autorizar la orden transaccional.' });
+    } catch(e: any) {
+        const msg = e.response?.data?.detail || 'Fallo al autorizar la orden transaccional.';
+        toast.current?.show({ severity: 'info', summary: 'Aviso de Autorización', detail: msg, life: 5000 });
+        fetchOrders();
     }
   };
 
@@ -79,6 +89,7 @@ export default function PurchaseOrdersPage() {
           case 'pending_approval': return 'danger';
           case 'approved': return 'info';
           case 'sent': return 'success';
+          case 'received': return 'success';
           default: return 'info';
       }
   };
@@ -94,9 +105,9 @@ export default function PurchaseOrdersPage() {
       }
   };
   
-  const pendingApprovalCount = orders.filter((o: any) => o.status === 'draft' || o.status === 'pending_approval').length;
-  const pendingSendCount = orders.filter((o: any) => o.status === 'approved').length;
-  const pendingReceiptCount = orders.filter((o: any) => o.status === 'sent').length;
+  const draftCount = orders.filter((o: any) => ['draft', 'pending_approval'].includes(o.status)).length;
+  const transitCount = orders.filter((o: any) => ['approved', 'sent', 'viewed', 'partial'].includes(o.status)).length;
+  const receivedCount = orders.filter((o: any) => o.status === 'received').length;
 
   return (
     <div className="p-8 w-full max-w-[1400px] mx-auto fade-in">
@@ -104,7 +115,7 @@ export default function PurchaseOrdersPage() {
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-black text-slate-800 tracking-tight">Autorización de Compras</h1>
-          <p className="text-slate-500 text-sm mt-1">Inbox de Órdenes (Drafts, Aprobadas, Enviadas)</p>
+          <p className="text-slate-500 text-sm mt-1">Gestión integral de Órdenes de Compra (Borradores, Aprobaciones, En Tránsito y Recibidas)</p>
         </div>
         <div className="flex gap-4">
           <Button label="Nueva Orden" icon="pi pi-plus" className="bg-indigo-600 hover:bg-indigo-700 border-none font-bold px-6 shadow-md shadow-indigo-500/20" onClick={() => router.push('/orders/new')} />
@@ -148,8 +159,15 @@ export default function PurchaseOrdersPage() {
          )}
       </div>
       
-      <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
-        <DataTable value={filteredOrders} loading={loading} emptyMessage="No tienes órdenes de compra pendientes en el radar." size="small" stripedRows rowHover className="text-sm border-t border-slate-100">
+      <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden p-2">
+        <TabView activeIndex={activeIndex} onTabChange={(e) => setActiveIndex(e.index)}>
+          <TabPanel header={`Todas (${orders.length})`} leftIcon="pi pi-list mr-2" />
+          <TabPanel header={`Por Autorizar (${draftCount})`} leftIcon="pi pi-clock mr-2" />
+          <TabPanel header={`Aprobadas / En Tránsito (${transitCount})`} leftIcon="pi pi-send mr-2" />
+          <TabPanel header={`Recibidas WMS (${receivedCount})`} leftIcon="pi pi-check-circle mr-2" />
+        </TabView>
+
+        <DataTable value={filteredOrders} loading={loading} emptyMessage="No hay órdenes de compra registradas en este estado." size="small" stripedRows rowHover className="text-sm border-t border-slate-100 mt-2">
           <Column header="NÚMERO DE ODC" field="reference" body={r => (
               <span className="font-black tracking-widest text-slate-700 bg-slate-100 px-3 py-1.5 rounded text-xs border border-slate-200">{r.reference}</span>
           )} style={{ width: '12rem' }} />
@@ -183,12 +201,14 @@ export default function PurchaseOrdersPage() {
              </span>
           )} align="right" />
           
-          <Column header="SELLO" body={r => (
+          <Column header="SELLO / ACCIONES" body={r => (
              <div className="flex justify-end gap-2">
                  <Button onClick={() => router.push('/orders/' + r.id)} icon="pi pi-eye" rounded severity="secondary" text aria-label="Ver Detalles" tooltip="Examinar Productos" tooltipOptions={{position: 'top', showDelay: 400}} />
-                 {r.status === 'draft' && (
+                 {(r.status === 'draft' || r.status === 'pending_approval') && (
                      <>
-                        <Button onClick={() => deleteOrder(r.id)} icon="pi pi-trash" rounded severity="danger" text aria-label="Eliminar" tooltip="Eliminar Borrador" tooltipOptions={{position: 'top', showDelay: 400}} />
+                        {r.status === 'draft' && (
+                            <Button onClick={() => deleteOrder(r.id)} icon="pi pi-trash" rounded severity="danger" text aria-label="Eliminar" tooltip="Eliminar Borrador" tooltipOptions={{position: 'top', showDelay: 400}} />
+                        )}
                         <Button onClick={() => approveOrder(r.id)} icon="pi pi-check" rounded severity="success" aria-label="Aprobar" tooltip="Aprobar Oficialmente" tooltipOptions={{position: 'top', showDelay: 400}} className="shadow-md hover:shadow-lg transition-all shadow-emerald-500/30" />
                      </>
                  )}
