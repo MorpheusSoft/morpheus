@@ -542,3 +542,198 @@ def execute_putaway(payload: PutawayPayload, db: Session = Depends(get_db)):
     db.commit()
 
     return {"message": "Ubicación Putaway completada con éxito", "move_id": move.id}
+
+
+class DirectReceiptLineInput(BaseModel):
+    variant_id: int
+    received_qty: float
+    unit_cost: Optional[float] = 0.0
+    damaged_qty: Optional[float] = 0.0
+    rejection_reason: Optional[str] = None
+    lot_number: Optional[str] = None
+    expiration_date: Optional[date] = None
+
+class DirectReceiptPayload(BaseModel):
+    supplier_id: int
+    facility_id: int
+    warehouse_id: Optional[int] = None
+    invoice_number: Optional[str] = None
+    notes: Optional[str] = None
+    lines: List[DirectReceiptLineInput]
+
+@router.post("/receipts/direct")
+def create_direct_receipt(
+    payload: DirectReceiptPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    # 1. Verificar permiso RBAC: superuser o permiso neo_logistics.direct_receipts.write / approve / read
+    has_perm = current_user.is_superuser
+    if not has_perm and current_user.roles:
+        for r in current_user.roles:
+            perms = r.permissions or {}
+            log_perms = perms.get("neo_logistics", {})
+            dr_perms = log_perms.get("direct_receipts", {})
+            if dr_perms.get("write") or dr_perms.get("approve") or dr_perms.get("read"):
+                has_perm = True
+                break
+
+    if not has_perm:
+        raise HTTPException(
+            status_code=403,
+            detail="Su perfil de usuario no posee el permiso 'Recepciones Directas (Sin ODC)' para ejecutar esta operación."
+        )
+
+    # 2. Validar Proveedor y Sucursal
+    supplier = db.query(Supplier).filter(Supplier.id == payload.supplier_id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Proveedor especificado no existe.")
+
+    facility = db.query(Facility).filter(Facility.id == payload.facility_id).first()
+    if not facility:
+        raise HTTPException(status_code=404, detail="Sucursal especificada no existe.")
+
+    # 3. Crear Registro de Orden de Compra Directa (REC-DIR-...)
+    ref_code = f"REC-DIR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    
+    total_amount = sum(float(l.received_qty * (l.unit_cost or 0)) for l in payload.lines)
+    
+    order = PurchaseOrder(
+        supplier_id=payload.supplier_id,
+        dest_facility_id=payload.facility_id,
+        reference=ref_code,
+        status='received',
+        total_amount=total_amount,
+        notes=f"Recepción Directa sin ODC. Factura/Guía: {payload.invoice_number or 'S/N'}. {payload.notes or ''}".strip(),
+        currency_id=supplier.currency_id
+    )
+    db.add(order)
+    db.flush()
+
+    # 4. Determinar Almacén y Ubicación de Destino
+    warehouse = None
+    if payload.warehouse_id:
+        warehouse = db.query(Warehouse).filter(
+            Warehouse.id == payload.warehouse_id,
+            Warehouse.facility_id == payload.facility_id
+        ).first()
+    
+    if not warehouse:
+        warehouse = db.query(Warehouse).filter(
+            Warehouse.facility_id == payload.facility_id,
+            Warehouse.is_scrap == False,
+            Warehouse.is_transit == False
+        ).first()
+
+    if not warehouse:
+        warehouse = Warehouse(
+            facility_id=payload.facility_id,
+            name=f"Almacén Principal {facility.name}",
+            code=f"WH-{payload.facility_id}"
+        )
+        db.add(warehouse)
+        db.flush()
+
+    dest_loc = db.query(Location).filter(
+        Location.warehouse_id == warehouse.id,
+        Location.usage == 'INTERNAL'
+    ).first()
+    if not dest_loc:
+        dest_loc = Location(
+            warehouse_id=warehouse.id,
+            name=f"Almacén Principal {warehouse.code}",
+            code=f"STOCK-{warehouse.code}",
+            location_type='SHELF',
+            usage='INTERNAL'
+        )
+        db.add(dest_loc)
+        db.flush()
+
+    supplier_loc = db.query(Location).filter(Location.usage == 'EXTERNAL', Location.code == 'VEN').first()
+    if not supplier_loc:
+        supplier_loc = Location(name="Proveedores Externos", code="VEN", location_type="SHELF", usage="EXTERNAL")
+        db.add(supplier_loc)
+        db.flush()
+
+    picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'RECEIPT').first()
+    if not picking_type:
+        picking_type = StockPickingType(name="Recepción de Compras", code="RECEIPT", sequence_prefix="IN")
+        db.add(picking_type)
+        db.flush()
+
+    picking = StockPicking(
+        picking_type_id=picking_type.id,
+        name=f"IN-{ref_code}",
+        origin_document=ref_code,
+        facility_id=payload.facility_id,
+        status='DONE',
+        date_done=func.now()
+    )
+    db.add(picking)
+    db.flush()
+
+    # 5. Crear Renglones e Ingresar a Inventario
+    for l in payload.lines:
+        variant = db.query(ProductVariant).filter(ProductVariant.id == l.variant_id).first()
+        if not variant:
+            continue
+
+        cost = float(l.unit_cost or variant.average_cost or variant.standard_cost or 0)
+        po_line = PurchaseOrderLine(
+            order_id=order.id,
+            variant_id=l.variant_id,
+            qty_ordered=l.received_qty,
+            expected_base_qty=l.received_qty,
+            received_base_qty=l.received_qty,
+            unit_cost=cost
+        )
+        db.add(po_line)
+        db.flush()
+
+        qty_good = float(l.received_qty or 0)
+        if qty_good > 0:
+            move = StockMove(
+                picking_id=picking.id,
+                product_id=l.variant_id,
+                location_src_id=supplier_loc.id,
+                location_dest_id=dest_loc.id,
+                quantity_demand=qty_good,
+                quantity_done=qty_good,
+                state='DONE',
+                supplier_id=payload.supplier_id,
+                unit_cost=cost,
+                reference=ref_code
+            )
+            db.add(move)
+
+            snapshot = db.query(InventorySnapshot).filter(
+                InventorySnapshot.variant_id == l.variant_id,
+                InventorySnapshot.facility_id == payload.facility_id
+            ).first()
+
+            if snapshot:
+                old_qty = float(snapshot.stock_qty or 0)
+                old_cost = float(snapshot.avg_cost or 0)
+                total_val = (old_qty * old_cost) + (qty_good * cost)
+                new_qty = old_qty + qty_good
+                snapshot.stock_qty = new_qty
+                snapshot.avg_cost = (total_val / new_qty) if new_qty > 0 else cost
+            else:
+                snapshot = InventorySnapshot(
+                    variant_id=l.variant_id,
+                    facility_id=payload.facility_id,
+                    stock_qty=qty_good,
+                    avg_cost=cost,
+                    current_cost=cost
+                )
+                db.add(snapshot)
+
+    db.commit()
+    db.refresh(order)
+    return {
+        "status": "success",
+        "id": order.id,
+        "order_id": order.id,
+        "reference": order.reference,
+        "message": f"Recepción directa {ref_code} procesada exitosamente."
+    }

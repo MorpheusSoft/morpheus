@@ -31,6 +31,7 @@ const initialPermissions: any = {
   neo_logistics: {
       routes: { read: false, write: false, delete: false, approve: false },
       vehicles: { read: false, write: false, delete: false, approve: false },
+      direct_receipts: { read: false, write: false, delete: false, approve: false },
   }
 };
 
@@ -47,7 +48,7 @@ const featureNames: any = {
   products: "Maestro de Productos", categories: "Categorías", warehouses: "Almacenes",
   suppliers: "Directorio de Proveedores", orders: "Gestor de Órdenes", prices: "Tarifas de Compra",
   pricing_metrics: "Métricas y Desviaciones", pricing_costs: "Auditoría de Costos", pricing_prices: "Mesa de Trabajo de Precios", pricing_reports: "Reportes de Precios y Márgenes",
-  routes: "Rutas", vehicles: "Flota de Vehículos"
+  routes: "Rutas", vehicles: "Flota de Vehículos", direct_receipts: "Recepciones Directas (Sin ODC)"
 };
 
 

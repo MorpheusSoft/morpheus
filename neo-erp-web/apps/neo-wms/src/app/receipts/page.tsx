@@ -155,6 +155,34 @@ export default function WmsReceiptsPage() {
       }
   };
 
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  const fetchCurrentUser = async () => {
+    try {
+      const res = await api.get('/users/me');
+      setCurrentUser(res.data);
+    } catch(e) {
+      console.error(e);
+    }
+  };
+
+  const canDirectReceive = React.useMemo(() => {
+    if (!currentUser) return false;
+    if (currentUser.is_superuser) return true;
+    if (currentUser.roles) {
+      for (const r of currentUser.roles) {
+        const perms = r.permissions || {};
+        const dr = perms?.neo_logistics?.direct_receipts;
+        if (dr && (dr.write || dr.approve || dr.read)) return true;
+      }
+    }
+    return false;
+  }, [currentUser]);
+
+  useEffect(() => {
+    fetchCurrentUser();
+  }, []);
+
   return (
     <div className="p-8 w-full max-w-[1400px] mx-auto fade-in">
       <Toast ref={toast} position="bottom-right" />
@@ -168,7 +196,15 @@ export default function WmsReceiptsPage() {
           </h1>
           <p className="text-slate-500 text-sm mt-1">Inspección de camiones en muelle y descarga por Sucursal / Tienda de Destino.</p>
         </div>
-        <div className="flex gap-4">
+        <div className="flex items-center gap-3">
+          {canDirectReceive && (
+             <Button 
+                label="Recepción Directa (Sin ODC)" 
+                icon="pi pi-plus-circle" 
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold border-none shadow-md shadow-emerald-500/20 px-4" 
+                onClick={() => router.push('/receipts/direct')} 
+             />
+          )}
           <Button icon="pi pi-refresh" rounded outlined aria-label="Actualizar" onClick={() => fetchOrders(false)} className="text-slate-600 border-slate-300 hover:bg-slate-50 font-bold" />
         </div>
       </div>
