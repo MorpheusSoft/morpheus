@@ -42,15 +42,19 @@ export default function DirectReceiptPage() {
       const [supRes, facRes, prodRes] = await Promise.all([
         api.get('/suppliers/'),
         api.get('/facilities/'),
-        api.get('/products/')
+        api.get('/products/?limit=1000')
       ]);
       
-      setSuppliers((supRes.data || []).map((s: any) => ({ label: s.name, value: s.id })));
-      setFacilities((facRes.data || []).map((f: any) => ({ label: f.name, value: f.id })));
+      const suppliersList = Array.isArray(supRes.data) ? supRes.data : (supRes.data?.items || []);
+      const facilitiesList = Array.isArray(facRes.data) ? facRes.data : (facRes.data?.items || []);
+      const productsList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.items || []);
+
+      setSuppliers(suppliersList.map((s: any) => ({ label: s.name, value: s.id })));
+      setFacilities(facilitiesList.map((f: any) => ({ label: f.name, value: f.id })));
 
       // Flatten product variants for easy selection
       const variantList: any[] = [];
-      (prodRes.data || []).forEach((p: any) => {
+      productsList.forEach((p: any) => {
         if (p.variants && p.variants.length > 0) {
           p.variants.forEach((v: any) => {
             variantList.push({
@@ -64,7 +68,8 @@ export default function DirectReceiptPage() {
         }
       });
       setProducts(variantList);
-    } catch (e) {
+    } catch (e: any) {
+      console.error("Error loading direct receipt catalogs:", e);
       toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Fallo al obtener catálogos para recepción directa.' });
     }
   };
