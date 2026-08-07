@@ -546,6 +546,7 @@ def execute_putaway(payload: PutawayPayload, db: Session = Depends(get_db)):
 
 class DirectReceiptLineInput(BaseModel):
     variant_id: int
+    expected_qty: Optional[float] = None
     received_qty: float
     unit_cost: Optional[float] = 0.0
     damaged_qty: Optional[float] = 0.0
@@ -679,11 +680,12 @@ def create_direct_receipt(
             continue
 
         cost = float(l.unit_cost or variant.average_cost or variant.standard_cost or 0)
+        expected = float(l.expected_qty if l.expected_qty is not None else l.received_qty)
         po_line = PurchaseOrderLine(
             order_id=order.id,
             variant_id=l.variant_id,
-            qty_ordered=l.received_qty,
-            expected_base_qty=l.received_qty,
+            qty_ordered=expected,
+            expected_base_qty=expected,
             received_base_qty=l.received_qty,
             unit_cost=cost
         )

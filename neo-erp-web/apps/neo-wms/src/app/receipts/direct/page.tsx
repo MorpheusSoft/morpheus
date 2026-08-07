@@ -25,9 +25,9 @@ export default function DirectReceiptPage() {
 
   // Line item drafting
   const [selectedVariant, setSelectedVariant] = useState<any | null>(null);
+  const [inputExpectedQty, setInputExpectedQty] = useState<number>(1);
   const [inputQty, setInputQty] = useState<number>(1);
   const [inputCost, setInputCost] = useState<number>(0);
-  const [inputDamagedQty, setInputDamagedQty] = useState<number>(0);
   const [rejectionReason, setRejectionReason] = useState('');
 
   const [lines, setLines] = useState<any[]>([]);
@@ -45,9 +45,9 @@ export default function DirectReceiptPage() {
         api.get('/products/?limit=1000')
       ]);
       
-      const suppliersList = Array.isArray(supRes.data) ? supRes.data : (supRes.data?.items || []);
-      const facilitiesList = Array.isArray(facRes.data) ? facRes.data : (facRes.data?.items || []);
-      const productsList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.items || []);
+      const suppliersList = Array.isArray(supRes.data) ? supRes.data : (supRes.data?.data || supRes.data?.items || []);
+      const facilitiesList = Array.isArray(facRes.data) ? facRes.data : (facRes.data?.data || facRes.data?.items || []);
+      const productsList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.data || prodRes.data?.items || []);
 
       setSuppliers(suppliersList.map((s: any) => ({ label: s.name, value: s.id })));
       setFacilities(facilitiesList.map((f: any) => ({ label: f.name, value: f.id })));
@@ -58,7 +58,7 @@ export default function DirectReceiptPage() {
         if (p.variants && p.variants.length > 0) {
           p.variants.forEach((v: any) => {
             variantList.push({
-              label: `${p.name} - SKU: ${v.sku}`,
+              label: `${p.name} (SKU: ${v.sku})`,
               value: v.id,
               sku: v.sku,
               product_name: p.name,
@@ -91,16 +91,19 @@ export default function DirectReceiptPage() {
       toast.current?.show({ severity: 'warn', summary: 'Atención', detail: 'Seleccione un producto para ingresar.' });
       return;
     }
-    if (inputQty <= 0) {
-      toast.current?.show({ severity: 'warn', summary: 'Atención', detail: 'La cantidad debe ser mayor a cero.' });
+    if (inputExpectedQty <= 0 || inputQty < 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Atención', detail: 'Verifique las cantidades ingresadas.' });
       return;
     }
+
+    const diff = inputExpectedQty - inputQty;
 
     const existingIndex = lines.findIndex(l => l.variant_id === selectedVariant.value);
     if (existingIndex >= 0) {
       const updated = [...lines];
+      updated[existingIndex].expected_qty += inputExpectedQty;
       updated[existingIndex].received_qty += inputQty;
-      updated[existingIndex].damaged_qty += inputDamagedQty;
+      updated[existingIndex].damaged_qty += (diff > 0 ? diff : 0);
       setLines(updated);
     } else {
       setLines([
@@ -109,19 +112,20 @@ export default function DirectReceiptPage() {
           variant_id: selectedVariant.value,
           sku: selectedVariant.sku,
           product_name: selectedVariant.product_name,
+          expected_qty: inputExpectedQty,
           received_qty: inputQty,
           unit_cost: inputCost,
-          damaged_qty: inputDamagedQty,
-          rejection_reason: rejectionReason
+          damaged_qty: diff > 0 ? diff : 0,
+          rejection_reason: diff > 0 ? (rejectionReason || 'Faltante de origen respecto a factura') : ''
         }
       ]);
     }
 
     // Reset line fields
     setSelectedVariant(null);
+    setInputExpectedQty(1);
     setInputQty(1);
     setInputCost(0);
-    setInputDamagedQty(0);
     setRejectionReason('');
   };
 
@@ -154,6 +158,7 @@ export default function DirectReceiptPage() {
         notes: notes,
         lines: lines.map(l => ({
           variant_id: l.variant_id,
+          expected_qty: l.expected_qty,
           received_qty: l.received_qty,
           unit_cost: l.unit_cost,
           damaged_qty: l.damaged_qty,
@@ -207,7 +212,7 @@ export default function DirectReceiptPage() {
 
       {/* FORMULARIO PRINCIPAL */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-2">
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-2 relative">
            <label className="text-xs font-bold text-slate-500 uppercase">1. Proveedor Origen (*)</label>
            <Dropdown 
               value={selectedSupplierId} 
@@ -215,11 +220,13 @@ export default function DirectReceiptPage() {
               options={suppliers} 
               placeholder="Seleccione Proveedor" 
               filter
+              appendTo="self"
+              panelClassName="!w-full !min-w-[320px] shadow-2xl rounded-xl border border-slate-200"
               className="w-full text-sm font-bold border-slate-200" 
            />
         </div>
 
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-2">
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-2 relative">
            <label className="text-xs font-bold text-slate-500 uppercase">2. Sucursal / Almacén Destino (*)</label>
            <Dropdown 
               value={selectedFacilityId} 
@@ -227,6 +234,8 @@ export default function DirectReceiptPage() {
               options={facilities} 
               placeholder="Seleccione Sucursal" 
               filter
+              appendTo="self"
+              panelClassName="!w-full !min-w-[280px] shadow-2xl rounded-xl border border-slate-200"
               className="w-full text-sm font-bold border-slate-200" 
            />
         </div>
@@ -242,32 +251,48 @@ export default function DirectReceiptPage() {
         </div>
       </div>
 
-      {/* AGREGAR PRODUCTOS */}
+      {/* AGREGAR PRODUCTOS CON COMPARACIÓN FACTURA VS FÍSICO */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6">
         <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center">
             <i className="pi pi-box text-emerald-600 mr-2"></i>Ingreso de Productos al Conteo
         </h2>
 
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-           <div className="md:col-span-6 flex flex-col gap-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase">Buscar Producto por SKU o Nombre</label>
+           <div className="md:col-span-4 flex flex-col gap-1 relative">
+              <label className="text-[10px] font-bold text-slate-500 uppercase">Buscar Producto (SKU o Nombre)</label>
               <Dropdown 
                  value={selectedVariant?.value} 
                  onChange={e => handleSelectVariant(e.value)} 
                  options={products} 
                  placeholder="Escriba o seleccione un producto..." 
                  filter
+                 appendTo="self"
+                 panelClassName="!w-full !min-w-[350px] shadow-2xl rounded-xl border border-slate-200"
                  className="w-full text-sm font-bold border-slate-200" 
               />
            </div>
 
            <div className="md:col-span-2 flex flex-col gap-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase">Cant. Recibida</label>
+              <label className="text-[10px] font-bold text-slate-600 uppercase bg-slate-100 px-2 py-0.5 rounded w-fit">Cant. según Factura</label>
               <InputNumber 
-                 value={inputQty} 
-                 onValueChange={e => setInputQty(e.value || 1)} 
+                 value={inputExpectedQty} 
+                 onValueChange={e => {
+                   const val = e.value || 1;
+                   setInputExpectedQty(val);
+                   if (inputQty > val) setInputQty(val);
+                 }} 
                  min={1} 
                  className="w-full font-bold" 
+              />
+           </div>
+
+           <div className="md:col-span-2 flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-emerald-700 uppercase bg-emerald-50 px-2 py-0.5 rounded w-fit">Cant. Física Recibida</label>
+              <InputNumber 
+                 value={inputQty} 
+                 onValueChange={e => setInputQty(e.value ?? 0)} 
+                 min={0} 
+                 className="w-full font-bold text-emerald-700" 
               />
            </div>
 
@@ -284,25 +309,57 @@ export default function DirectReceiptPage() {
 
            <div className="md:col-span-2">
               <Button 
-                 label="Agregar" 
+                 label="Agregar Renglón" 
                  icon="pi pi-plus" 
                  onClick={addLine} 
                  className="w-full bg-slate-800 hover:bg-slate-900 border-none font-bold shadow" 
               />
            </div>
         </div>
+
+        {/* ALERTA DE DISCREPANCIA AL DIGITAR */}
+        {inputExpectedQty > inputQty && (
+           <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-3 text-xs text-amber-900 font-bold">
+              <i className="pi pi-exclamation-triangle text-amber-600 text-lg"></i>
+              <div className="flex-1">
+                 <span>Faltante detectado: La factura indica {inputExpectedQty} unids. pero se están recibiendo {inputQty} unids. (Diferencia de {inputExpectedQty - inputQty} faltantes).</span>
+              </div>
+              <InputText 
+                 value={rejectionReason} 
+                 onChange={e => setRejectionReason(e.target.value)} 
+                 placeholder="Motivo de la diferencia / observación..." 
+                 className="text-xs p-1.5 w-64 border-amber-300" 
+              />
+           </div>
+        )}
       </div>
 
-      {/* TABLA DE RENGLONES DRAFT */}
+      {/* TABLA DE RENGLONES DRAFT CON COMPARACIÓN FACTURA VS FÍSICO */}
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-slate-200 mb-6">
         <h3 className="text-md font-bold text-slate-700 mb-3">Detalle de Renglones Entrantes ({lines.length})</h3>
 
         <DataTable value={lines} emptyMessage="No ha agregado productos a esta recepción directa." stripedRows size="small">
           <Column header="SKU" field="sku" body={r => <span className="font-mono font-bold bg-slate-100 px-2 py-1 rounded text-xs">{r.sku}</span>} style={{ width: '10rem' }} />
           <Column header="PRODUCTO" field="product_name" body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
-          <Column header="CANTIDAD" field="received_qty" align="center" body={r => <span className="font-extrabold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full">{r.received_qty}</span>} style={{ width: '8rem' }} />
-          <Column header="COSTO UNIT ($)" field="unit_cost" align="right" body={r => <span>${parseFloat(r.unit_cost).toFixed(2)}</span>} style={{ width: '10rem' }} />
-          <Column header="SUBTOTAL ($)" align="right" body={r => <span className="font-black text-slate-800">${(r.received_qty * r.unit_cost).toFixed(2)}</span>} style={{ width: '10rem' }} />
+          
+          <Column header="CANT. FACTURA" field="expected_qty" align="center" body={r => <span className="font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full text-xs">{r.expected_qty}</span>} style={{ width: '9rem' }} />
+          <Column header="CANT. RECIBIDA" field="received_qty" align="center" body={r => <span className="font-extrabold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full text-xs">{r.received_qty}</span>} style={{ width: '9rem' }} />
+          
+          <Column header="DIFERENCIA / FALTANTE" align="center" body={r => {
+             const diff = (r.expected_qty || r.received_qty) - r.received_qty;
+             if (diff > 0) {
+                return (
+                   <span className="font-bold text-red-700 bg-red-50 border border-red-200 px-2.5 py-1 rounded-full text-xs" title={r.rejection_reason}>
+                      -{diff} Faltantes
+                   </span>
+                );
+             }
+             return <span className="text-slate-400 text-xs font-semibold">Completo (0)</span>;
+          }} style={{ width: '11rem' }} />
+
+          <Column header="COSTO UNIT ($)" field="unit_cost" align="right" body={r => <span>${parseFloat(r.unit_cost).toFixed(2)}</span>} style={{ width: '9rem' }} />
+          <Column header="SUBTOTAL ($)" align="right" body={r => <span className="font-black text-slate-800">${(r.received_qty * r.unit_cost).toFixed(2)}</span>} style={{ width: '9rem' }} />
+          
           <Column header="ACCIÓN" align="center" body={(r, options) => (
              <Button icon="pi pi-trash" rounded severity="danger" text onClick={() => removeLine(options.rowIndex)} tooltip="Quitar" />
           )} style={{ width: '5rem' }} />
@@ -310,7 +367,7 @@ export default function DirectReceiptPage() {
 
         <div className="mt-6 flex justify-between items-center border-t border-slate-200 pt-4">
            <div>
-              <span className="text-xs font-bold text-slate-400 uppercase">Monto Total Estimado</span>
+              <span className="text-xs font-bold text-slate-400 uppercase">Monto Total Recibido ($)</span>
               <h2 className="text-3xl font-black text-emerald-600">${totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2})}</h2>
            </div>
 
@@ -324,19 +381,19 @@ export default function DirectReceiptPage() {
         </div>
       </div>
 
-      {/* DIÁLOGO VOUCHER ACTA DEFINITIVA */}
+      {/* DIÁLOGO VOUCHER ACTA DEFINITIVA CON CUADRO DE DISCREPANCIAS */}
       <Dialog 
          visible={!!receiptVoucher} 
          onHide={() => { setReceiptVoucher(null); router.push('/receipts'); }} 
          header="ACTA DEFINITIVA DE RECEPCIÓN DIRECTA" 
          modal 
-         className="w-full max-w-3xl"
+         className="w-full max-w-4xl"
       >
         {receiptVoucher && (
            <div className="p-4 bg-white font-sans text-slate-800">
               <div className="border-b-2 border-slate-800 pb-4 mb-4 flex justify-between items-center">
                  <div>
-                    <h2 className="text-xl font-black tracking-tight text-slate-900">ACTA DE RECEPCIÓN DIRECTA (SIN ODC)</h2>
+                    <h2 className="text-xl font-black tracking-tight text-slate-900">ACTA DE RECEPCIÓN DIRECTA Y DISCREPANCIAS</h2>
                     <p className="text-xs font-bold text-slate-500">CORRELATIVO: {receiptVoucher.reference}</p>
                  </div>
                  <Button label="Imprimir 🖨️" icon="pi pi-print" onClick={() => window.print()} className="bg-slate-900 font-bold" />
@@ -351,24 +408,33 @@ export default function DirectReceiptPage() {
 
               <table className="w-full text-xs text-left border-collapse border border-slate-300 mb-6">
                  <thead>
-                    <tr className="bg-slate-100 font-bold">
+                    <tr className="bg-slate-100 font-bold text-slate-700">
                        <th className="border p-2">SKU</th>
                        <th className="border p-2">PRODUCTO</th>
-                       <th className="border p-2 text-center">CANT. RECIBIDA</th>
+                       <th className="border p-2 text-center">CANT. FACTURA</th>
+                       <th className="border p-2 text-center">RECIBIDO REAL</th>
+                       <th className="border p-2 text-center">FALTANTE</th>
                        <th className="border p-2 text-right">COSTO UNIT ($)</th>
                        <th className="border p-2 text-right">SUBTOTAL ($)</th>
                     </tr>
                  </thead>
                  <tbody>
-                    {receiptVoucher.lines.map((l: any, i: number) => (
-                       <tr key={i}>
-                          <td className="border p-2 font-mono">{l.sku}</td>
-                          <td className="border p-2 font-bold">{l.product_name}</td>
-                          <td className="border p-2 text-center font-bold">{l.received_qty}</td>
-                          <td className="border p-2 text-right">${parseFloat(l.unit_cost).toFixed(2)}</td>
-                          <td className="border p-2 text-right font-black">${(l.received_qty * l.unit_cost).toFixed(2)}</td>
-                       </tr>
-                    ))}
+                    {receiptVoucher.lines.map((l: any, i: number) => {
+                       const diff = (l.expected_qty || l.received_qty) - l.received_qty;
+                       return (
+                          <tr key={i} className={diff > 0 ? "bg-red-50/50" : ""}>
+                             <td className="border p-2 font-mono">{l.sku}</td>
+                             <td className="border p-2 font-bold">{l.product_name}</td>
+                             <td className="border p-2 text-center font-bold">{l.expected_qty || l.received_qty}</td>
+                             <td className="border p-2 text-center font-bold text-emerald-700">{l.received_qty}</td>
+                             <td className="border p-2 text-center font-bold text-red-600">
+                                {diff > 0 ? `-${diff}` : '0'}
+                             </td>
+                             <td className="border p-2 text-right">${parseFloat(l.unit_cost).toFixed(2)}</td>
+                             <td className="border p-2 text-right font-black">${(l.received_qty * l.unit_cost).toFixed(2)}</td>
+                          </tr>
+                       );
+                    })}
                  </tbody>
               </table>
 
