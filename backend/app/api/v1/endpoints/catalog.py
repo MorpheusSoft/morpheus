@@ -157,10 +157,14 @@ def delete_category(
 @router.get("/warehouses/", response_model=List[schemas.Warehouse])
 def read_warehouses(
     db: Session = Depends(deps.get_db),
+    facility_id: Optional[int] = Query(None),
     skip: int = 0,
     limit: int = 100,
 ) -> Any:
-    return db.query(Warehouse).offset(skip).limit(limit).all()
+    query = db.query(Warehouse)
+    if facility_id and isinstance(facility_id, int):
+        query = query.filter(Warehouse.facility_id == facility_id)
+    return query.offset(skip).limit(limit).all()
 
 @router.post("/warehouses/", response_model=schemas.Warehouse)
 def create_warehouse(

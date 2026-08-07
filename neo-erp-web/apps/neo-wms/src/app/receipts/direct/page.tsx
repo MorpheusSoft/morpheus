@@ -97,27 +97,39 @@ export default function DirectReceiptPage() {
     loadFormData();
   }, []);
 
-  // Filter warehouses whenever facility changes strictly by facility_id
+  // Dynamically load warehouses whenever selected facility changes
   useEffect(() => {
-    if (selectedFacilityId) {
-      const availableWhs = allWarehouses.filter(w => Number(w.facility_id) === Number(selectedFacilityId));
-      let whOptions = availableWhs.map(w => ({
-        label: `${w.name} ${w.code ? `(${w.code})` : ''}`,
-        value: w.id
-      }));
-
-      if (whOptions.length === 0) {
-        const facName = facilities.find(f => Number(f.value) === Number(selectedFacilityId))?.label || '';
-        whOptions = [{ label: `Almacén Principal ${facName} (Predeterminado)`, value: null }];
+    const fetchWarehouses = async () => {
+      if (!selectedFacilityId) {
+        setFilteredWarehouses([]);
+        setSelectedWarehouseId(null);
+        return;
       }
 
-      setFilteredWarehouses(whOptions);
-      setSelectedWarehouseId(whOptions[0].value);
-    } else {
-      setFilteredWarehouses([]);
-      setSelectedWarehouseId(null);
-    }
-  }, [selectedFacilityId, allWarehouses, facilities]);
+      try {
+        const res = await api.get(`/warehouses/?facility_id=${selectedFacilityId}`);
+        const whList = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+        let whOptions = whList.map((w: any) => ({
+          label: `${w.name} ${w.code ? `(${w.code})` : ''}`,
+          value: w.id
+        }));
+
+        if (whOptions.length === 0) {
+          const facName = facilities.find(f => Number(f.value) === Number(selectedFacilityId))?.label || '';
+          whOptions = [{ label: `Almacén Principal ${facName} (Predeterminado)`, value: null }];
+        }
+
+        setFilteredWarehouses(whOptions);
+        setSelectedWarehouseId(whOptions[0].value);
+      } catch (e) {
+        console.error("Error fetching facility warehouses:", e);
+        setFilteredWarehouses([]);
+        setSelectedWarehouseId(null);
+      }
+    };
+
+    fetchWarehouses();
+  }, [selectedFacilityId, facilities]);
 
   const handleSelectVariant = (variantId: number) => {
     const item = products.find(p => p.value === variantId);
