@@ -97,25 +97,27 @@ export default function DirectReceiptPage() {
     loadFormData();
   }, []);
 
-  // Filter warehouses whenever facility changes
+  // Filter warehouses whenever facility changes strictly by facility_id
   useEffect(() => {
     if (selectedFacilityId) {
-      const availableWhs = allWarehouses.filter(w => w.facility_id === selectedFacilityId);
-      const whOptions = availableWhs.map(w => ({
-        label: `${w.name} (${w.code || 'MAIN'})`,
+      const availableWhs = allWarehouses.filter(w => Number(w.facility_id) === Number(selectedFacilityId));
+      let whOptions = availableWhs.map(w => ({
+        label: `${w.name} ${w.code ? `(${w.code})` : ''}`,
         value: w.id
       }));
-      setFilteredWarehouses(whOptions);
-      if (whOptions.length > 0) {
-        setSelectedWarehouseId(whOptions[0].value);
-      } else {
-        setSelectedWarehouseId(null);
+
+      if (whOptions.length === 0) {
+        const facName = facilities.find(f => Number(f.value) === Number(selectedFacilityId))?.label || '';
+        whOptions = [{ label: `Almacén Principal ${facName} (Predeterminado)`, value: null }];
       }
+
+      setFilteredWarehouses(whOptions);
+      setSelectedWarehouseId(whOptions[0].value);
     } else {
       setFilteredWarehouses([]);
       setSelectedWarehouseId(null);
     }
-  }, [selectedFacilityId, allWarehouses]);
+  }, [selectedFacilityId, allWarehouses, facilities]);
 
   const handleSelectVariant = (variantId: number) => {
     const item = products.find(p => p.value === variantId);
