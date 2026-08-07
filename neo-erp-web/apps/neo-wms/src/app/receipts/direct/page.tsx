@@ -16,10 +16,13 @@ import { format } from 'date-fns';
 export default function DirectReceiptPage() {
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [facilities, setFacilities] = useState<any[]>([]);
+  const [allWarehouses, setAllWarehouses] = useState<any[]>([]);
+  const [filteredWarehouses, setFilteredWarehouses] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   
   const [selectedSupplierId, setSelectedSupplierId] = useState<number | null>(null);
   const [selectedFacilityId, setSelectedFacilityId] = useState<number | null>(null);
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<number | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [notes, setNotes] = useState('');
 
@@ -27,6 +30,7 @@ export default function DirectReceiptPage() {
   const [selectedVariant, setSelectedVariant] = useState<any | null>(null);
   const [inputExpectedQty, setInputExpectedQty] = useState<number>(1);
   const [inputQty, setInputQty] = useState<number>(1);
+  const [inputDamagedQty, setInputDamagedQty] = useState<number>(0);
   const [inputCost, setInputCost] = useState<number>(0);
   const [rejectionReason, setRejectionReason] = useState('');
 
@@ -56,7 +60,16 @@ export default function DirectReceiptPage() {
       console.error("Error loading facilities:", e);
     }
 
-    // 3. Fetch Products
+    // 3. Fetch Warehouses (Almacenes / Depósitos)
+    try {
+      const whRes = await api.get('/warehouses/');
+      const whList = Array.isArray(whRes.data) ? whRes.data : (whRes.data?.data || whRes.data?.items || []);
+      setAllWarehouses(whList);
+    } catch(e) {
+      console.error("Error loading warehouses:", e);
+    }
+
+    // 4. Fetch Products
     try {
       const prodRes = await api.get('/products/?limit=1000');
       const productsList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.data || prodRes.data?.items || []);
@@ -84,6 +97,26 @@ export default function DirectReceiptPage() {
     loadFormData();
   }, []);
 
+  // Filter warehouses whenever facility changes
+  useEffect(() => {
+    if (selectedFacilityId) {
+      const availableWhs = allWarehouses.filter(w => w.facility_id === selectedFacilityId);
+      const whOptions = availableWhs.map(w => ({
+        label: `${w.name} (${w.code || 'MAIN'})`,
+        value: w.id
+      }));
+      setFilteredWarehouses(whOptions);
+      if (whOptions.length > 0) {
+        setSelectedWarehouseId(whOptions[0].value);
+      } else {
+        setSelectedWarehouseId(null);
+      }
+    } else {
+      setFilteredWarehouses([]);
+      setSelectedWarehouseId(null);
+    }
+  }, [selectedFacilityId, allWarehouses]);
+
   const handleSelectVariant = (variantId: number) => {
     const item = products.find(p => p.value === variantId);
     if (item) {
@@ -102,14 +135,17 @@ export default function DirectReceiptPage() {
       return;
     }
 
-    const diff = inputExpectedQty - inputQty;
+    const missingQty = Math.max(0, inputExpectedQty - inputQty - inputDamagedQty);
 
     const existingIndex = lines.findIndex(l => l.variant_id === selectedVariant.value);
     if (existingIndex >= 0) {
       const updated = [...lines];
       updated[existingIndex].expected_qty += inputExpectedQty;
       updated[existingIndex].received_qty += inputQty;
-      updated[existingIndex].damaged_qty += (diff > 0 ? diff : 0);
+      updated[existingIndex].damaged_qty += inputDamagedQty;
+      if (rejectionReason) {
+        updated[existingIndex].rejection_reason = rejectionReason;
+      }
       setLines(updated);
     } else {
       setLines([
@@ -120,9 +156,10 @@ export default function DirectReceiptPage() {
           product_name: selectedVariant.product_name,
           expected_qty: inputExpectedQty,
           received_qty: inputQty,
+          damaged_qty: inputDamagedQty,
+          missing_qty: missingQty,
           unit_cost: inputCost,
-          damaged_qty: diff > 0 ? diff : 0,
-          rejection_reason: diff > 0 ? (rejectionReason || 'Faltante de origen respecto a factura') : ''
+          rejection_reason: rejectionReason || (inputDamagedQty > 0 ? 'Devolución por no conformidad / avería' : (missingQty > 0 ? 'Faltante de origen respecto a factura' : ''))
         }
       ]);
     }
@@ -131,6 +168,7 @@ export default function DirectReceiptPage() {
     setSelectedVariant(null);
     setInputExpectedQty(1);
     setInputQty(1);
+    setInputDamagedQty(0);
     setInputCost(0);
     setRejectionReason('');
   };
@@ -160,6 +198,7 @@ export default function DirectReceiptPage() {
       const payload = {
         supplier_id: selectedSupplierId,
         facility_id: selectedFacilityId,
+        warehouse_id: selectedWarehouseId,
         invoice_number: invoiceNumber,
         notes: notes,
         lines: lines.map(l => ({
@@ -178,11 +217,13 @@ export default function DirectReceiptPage() {
       // Armar voucher para impresión
       const supplierName = suppliers.find(s => s.value === selectedSupplierId)?.label || 'S/N';
       const facilityName = facilities.find(f => f.value === selectedFacilityId)?.label || 'S/N';
-      
+      const warehouseName = filteredWarehouses.find(w => w.value === selectedWarehouseId)?.label || 'Almacén Principal';
+
       setReceiptVoucher({
         reference: res.data.reference,
         supplierName,
         facilityName,
+        warehouseName,
         invoiceNumber,
         notes,
         date: new Date(),
@@ -217,7 +258,7 @@ export default function DirectReceiptPage() {
       </div>
 
       {/* FORMULARIO PRINCIPAL */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-2 relative">
            <label className="text-xs font-bold text-slate-500 uppercase">1. Proveedor Origen (*)</label>
            <Dropdown 
@@ -233,7 +274,7 @@ export default function DirectReceiptPage() {
         </div>
 
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-2 relative">
-           <label className="text-xs font-bold text-slate-500 uppercase">2. Sucursal / Almacén Destino (*)</label>
+           <label className="text-xs font-bold text-slate-500 uppercase">2. Sucursal Destino (*)</label>
            <Dropdown 
               value={selectedFacilityId} 
               onChange={e => setSelectedFacilityId(e.value)} 
@@ -246,8 +287,23 @@ export default function DirectReceiptPage() {
            />
         </div>
 
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-2 relative">
+           <label className="text-xs font-bold text-slate-500 uppercase">3. Depósito / Almacén Destino (*)</label>
+           <Dropdown 
+              value={selectedWarehouseId} 
+              onChange={e => setSelectedWarehouseId(e.value)} 
+              options={filteredWarehouses} 
+              placeholder={selectedFacilityId ? "Seleccione Almacén" : "Primero seleccione Sucursal"} 
+              disabled={!selectedFacilityId}
+              filter
+              appendTo="self"
+              panelClassName="!w-full !min-w-[280px] shadow-2xl rounded-xl border border-slate-200"
+              className="w-full text-sm font-bold border-slate-200" 
+           />
+        </div>
+
         <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-2">
-           <label className="text-xs font-bold text-slate-500 uppercase">3. N° Factura / Guía de Despacho</label>
+           <label className="text-xs font-bold text-slate-500 uppercase">4. N° Factura / Guía de Despacho</label>
            <InputText 
               value={invoiceNumber} 
               onChange={e => setInvoiceNumber(e.target.value)} 
@@ -257,20 +313,20 @@ export default function DirectReceiptPage() {
         </div>
       </div>
 
-      {/* AGREGAR PRODUCTOS CON COMPARACIÓN FACTURA VS FÍSICO */}
+      {/* AGREGAR PRODUCTOS CON COMPARACIÓN FACTURA VS RECIBIDO VS DEVOLUCIÓN POR CALIDAD */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6">
         <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center">
-            <i className="pi pi-box text-emerald-600 mr-2"></i>Ingreso de Productos al Conteo
+            <i className="pi pi-box text-emerald-600 mr-2"></i>Ingreso de Productos al Conteo y Control de Calidad
         </h2>
 
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-           <div className="md:col-span-4 flex flex-col gap-1 relative">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+           <div className="md:col-span-3 flex flex-col gap-1 relative">
               <label className="text-[10px] font-bold text-slate-500 uppercase">Buscar Producto (SKU o Nombre)</label>
               <Dropdown 
                  value={selectedVariant?.value} 
                  onChange={e => handleSelectVariant(e.value)} 
                  options={products} 
-                 placeholder="Escriba o seleccione un producto..." 
+                 placeholder="Escriba o seleccione..." 
                  filter
                  appendTo="self"
                  panelClassName="!w-full !min-w-[350px] shadow-2xl rounded-xl border border-slate-200"
@@ -285,7 +341,6 @@ export default function DirectReceiptPage() {
                  onValueChange={e => {
                    const val = e.value || 1;
                    setInputExpectedQty(val);
-                   if (inputQty > val) setInputQty(val);
                  }} 
                  min={1} 
                  className="w-full font-bold" 
@@ -293,7 +348,7 @@ export default function DirectReceiptPage() {
            </div>
 
            <div className="md:col-span-2 flex flex-col gap-1">
-              <label className="text-[10px] font-bold text-emerald-700 uppercase bg-emerald-50 px-2 py-0.5 rounded w-fit">Cant. Física Recibida</label>
+              <label className="text-[10px] font-bold text-emerald-700 uppercase bg-emerald-50 px-2 py-0.5 rounded w-fit">Cant. Recibida Buena</label>
               <InputNumber 
                  value={inputQty} 
                  onValueChange={e => setInputQty(e.value ?? 0)} 
@@ -303,7 +358,17 @@ export default function DirectReceiptPage() {
            </div>
 
            <div className="md:col-span-2 flex flex-col gap-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase">Costo Unit. ($)</label>
+              <label className="text-[10px] font-bold text-red-700 uppercase bg-red-50 px-2 py-0.5 rounded w-fit">Devuelto por Calidad / Daño</label>
+              <InputNumber 
+                 value={inputDamagedQty} 
+                 onValueChange={e => setInputDamagedQty(e.value ?? 0)} 
+                 min={0} 
+                 className="w-full font-bold text-red-700" 
+              />
+           </div>
+
+           <div className="md:col-span-1 flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-slate-500 uppercase">Costo ($)</label>
               <InputNumber 
                  value={inputCost} 
                  onValueChange={e => setInputCost(e.value || 0)} 
@@ -318,62 +383,66 @@ export default function DirectReceiptPage() {
                  label="Agregar Renglón" 
                  icon="pi pi-plus" 
                  onClick={addLine} 
-                 className="w-full bg-slate-800 hover:bg-slate-900 border-none font-bold shadow" 
+                 className="w-full bg-slate-800 hover:bg-slate-900 border-none font-bold shadow text-xs py-2.5" 
               />
            </div>
         </div>
 
-        {/* ALERTA DE DISCREPANCIA AL DIGITAR */}
-        {inputExpectedQty > inputQty && (
-           <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-3 text-xs text-amber-900 font-bold">
+        {/* ALERTA DE DEVOLUCIÓN POR CALIDAD / DISCREPANCIA */}
+        {(inputDamagedQty > 0 || (inputExpectedQty > (inputQty + inputDamagedQty))) && (
+           <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex flex-wrap items-center gap-3 text-xs text-amber-900 font-bold">
               <i className="pi pi-exclamation-triangle text-amber-600 text-lg"></i>
-              <div className="flex-1">
-                 <span>Faltante detectado: La factura indica {inputExpectedQty} unids. pero se están recibiendo {inputQty} unids. (Diferencia de {inputExpectedQty - inputQty} faltantes).</span>
+              <div className="flex-1 min-w-[280px]">
+                 {inputDamagedQty > 0 && <span>⚠️ Se está registrando una Devolución por Calidad / Avería de {inputDamagedQty} unids. </span>}
+                 {inputExpectedQty > (inputQty + inputDamagedQty) && <span>⚠️ Faltante de origen detectado: {inputExpectedQty - (inputQty + inputDamagedQty)} unids. no entregadas.</span>}
               </div>
               <InputText 
                  value={rejectionReason} 
                  onChange={e => setRejectionReason(e.target.value)} 
-                 placeholder="Motivo de la diferencia / observación..." 
-                 className="text-xs p-1.5 w-64 border-amber-300" 
+                 placeholder="Motivo de devolución / observación de calidad..." 
+                 className="text-xs p-2 flex-1 min-w-[250px] border-amber-300 bg-white" 
               />
            </div>
         )}
       </div>
 
-      {/* TABLA DE RENGLONES DRAFT CON COMPARACIÓN FACTURA VS FÍSICO */}
+      {/* TABLA DE RENGLONES DRAFT CON DETALLE DE RECIBIDO Y DEVUELTO */}
       <div className="bg-white p-6 rounded-2xl shadow-xl border border-slate-200 mb-6">
         <h3 className="text-md font-bold text-slate-700 mb-3">Detalle de Renglones Entrantes ({lines.length})</h3>
 
         <DataTable value={lines} emptyMessage="No ha agregado productos a esta recepción directa." stripedRows size="small">
-          <Column header="SKU" field="sku" body={r => <span className="font-mono font-bold bg-slate-100 px-2 py-1 rounded text-xs">{r.sku}</span>} style={{ width: '10rem' }} />
+          <Column header="SKU" field="sku" body={r => <span className="font-mono font-bold bg-slate-100 px-2 py-1 rounded text-xs">{r.sku}</span>} style={{ width: '9rem' }} />
           <Column header="PRODUCTO" field="product_name" body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
           
-          <Column header="CANT. FACTURA" field="expected_qty" align="center" body={r => <span className="font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full text-xs">{r.expected_qty}</span>} style={{ width: '9rem' }} />
-          <Column header="CANT. RECIBIDA" field="received_qty" align="center" body={r => <span className="font-extrabold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full text-xs">{r.received_qty}</span>} style={{ width: '9rem' }} />
+          <Column header="CANT. FACTURA" field="expected_qty" align="center" body={r => <span className="font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full text-xs">{r.expected_qty}</span>} style={{ width: '8rem' }} />
+          <Column header="RECIBIDO BUENO" field="received_qty" align="center" body={r => <span className="font-extrabold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full text-xs">{r.received_qty}</span>} style={{ width: '8rem' }} />
           
-          <Column header="DIFERENCIA / FALTANTE" align="center" body={r => {
-             const diff = (r.expected_qty || r.received_qty) - r.received_qty;
-             if (diff > 0) {
+          <Column header="DEVUELTO / DAÑADO" align="center" body={r => {
+             if (r.damaged_qty > 0) {
                 return (
                    <span className="font-bold text-red-700 bg-red-50 border border-red-200 px-2.5 py-1 rounded-full text-xs" title={r.rejection_reason}>
-                      -{diff} Faltantes
+                      -{r.damaged_qty} Devueltos
                    </span>
                 );
              }
-             return <span className="text-slate-400 text-xs font-semibold">Completo (0)</span>;
-          }} style={{ width: '11rem' }} />
+             return <span className="text-slate-400 text-xs font-semibold">0</span>;
+          }} style={{ width: '9rem' }} />
 
-          <Column header="COSTO UNIT ($)" field="unit_cost" align="right" body={r => <span>${parseFloat(r.unit_cost).toFixed(2)}</span>} style={{ width: '9rem' }} />
-          <Column header="SUBTOTAL ($)" align="right" body={r => <span className="font-black text-slate-800">${(r.received_qty * r.unit_cost).toFixed(2)}</span>} style={{ width: '9rem' }} />
+          <Column header="MOTIVO / OBSERVACIÓN" field="rejection_reason" body={r => (
+             <span className="text-xs text-slate-600 italic">{r.rejection_reason || '-'}</span>
+          )} />
+
+          <Column header="COSTO UNIT ($)" field="unit_cost" align="right" body={r => <span>${parseFloat(r.unit_cost).toFixed(2)}</span>} style={{ width: '8rem' }} />
+          <Column header="SUBTOTAL ($)" align="right" body={r => <span className="font-black text-slate-800">${(r.received_qty * r.unit_cost).toFixed(2)}</span>} style={{ width: '8rem' }} />
           
           <Column header="ACCIÓN" align="center" body={(r, options) => (
-             <Button icon="pi pi-trash" rounded severity="danger" text onClick={() => removeLine(options.rowIndex)} tooltip="Quitar" />
-          )} style={{ width: '5rem' }} />
+             <Button icon="pi pi-trash" rounded severity="danger" text onClick={() => removeLine(options.rowIndex)} title="Quitar" />
+          )} style={{ width: '4rem' }} />
         </DataTable>
 
         <div className="mt-6 flex justify-between items-center border-t border-slate-200 pt-4">
            <div>
-              <span className="text-xs font-bold text-slate-400 uppercase">Monto Total Recibido ($)</span>
+              <span className="text-xs font-bold text-slate-400 uppercase">Monto Total Ingresado ($)</span>
               <h2 className="text-3xl font-black text-emerald-600">${totalAmount.toLocaleString('en-US', {minimumFractionDigits: 2})}</h2>
            </div>
 
@@ -387,11 +456,11 @@ export default function DirectReceiptPage() {
         </div>
       </div>
 
-      {/* DIÁLOGO VOUCHER ACTA DEFINITIVA CON CUADRO DE DISCREPANCIAS */}
+      {/* DIÁLOGO VOUCHER ACTA DEFINITIVA CON DEVOLUCIONES Y ALMACÉN DE DESTINO */}
       <Dialog 
          visible={!!receiptVoucher} 
          onHide={() => { setReceiptVoucher(null); router.push('/receipts'); }} 
-         header="ACTA DEFINITIVA DE RECEPCIÓN DIRECTA" 
+         header="ACTA DEFINITIVA DE RECEPCIÓN DIRECTA Y CONTROL DE CALIDAD" 
          modal 
          className="w-full max-w-4xl"
       >
@@ -399,7 +468,7 @@ export default function DirectReceiptPage() {
            <div className="p-4 bg-white font-sans text-slate-800">
               <div className="border-b-2 border-slate-800 pb-4 mb-4 flex justify-between items-center">
                  <div>
-                    <h2 className="text-xl font-black tracking-tight text-slate-900">ACTA DE RECEPCIÓN DIRECTA Y DISCREPANCIAS</h2>
+                    <h2 className="text-xl font-black tracking-tight text-slate-900">ACTA DE RECEPCIÓN DIRECTA, ALMACÉN Y DEVOLUCIONES</h2>
                     <p className="text-xs font-bold text-slate-500">CORRELATIVO: {receiptVoucher.reference}</p>
                  </div>
                  <Button label="Imprimir 🖨️" icon="pi pi-print" onClick={() => window.print()} className="bg-slate-900 font-bold" />
@@ -408,6 +477,7 @@ export default function DirectReceiptPage() {
               <div className="grid grid-cols-2 gap-4 text-xs font-bold mb-4 bg-slate-50 p-3 rounded border border-slate-200">
                  <div>PROVEEDOR: <span className="font-normal">{receiptVoucher.supplierName}</span></div>
                  <div>SUCURSAL DESTINO: <span className="font-normal">{receiptVoucher.facilityName}</span></div>
+                 <div>ALMACÉN / DEPÓSITO: <span className="font-normal text-emerald-700 font-bold">{receiptVoucher.warehouseName}</span></div>
                  <div>FACTURA / GUÍA: <span className="font-normal">{receiptVoucher.invoiceNumber || 'S/N'}</span></div>
                  <div>FECHA ENTRADA: <span className="font-normal">{format(receiptVoucher.date, 'dd/MM/yyyy HH:mm')}</span></div>
               </div>
@@ -418,24 +488,25 @@ export default function DirectReceiptPage() {
                        <th className="border p-2">SKU</th>
                        <th className="border p-2">PRODUCTO</th>
                        <th className="border p-2 text-center">CANT. FACTURA</th>
-                       <th className="border p-2 text-center">RECIBIDO REAL</th>
-                       <th className="border p-2 text-center">FALTANTE</th>
+                       <th className="border p-2 text-center">RECIBIDO BUENO</th>
+                       <th className="border p-2 text-center">DEVUELTO / DAÑADO</th>
+                       <th className="border p-2">MOTIVO DEVOLUCIÓN</th>
                        <th className="border p-2 text-right">COSTO UNIT ($)</th>
                        <th className="border p-2 text-right">SUBTOTAL ($)</th>
                     </tr>
                  </thead>
                  <tbody>
                     {receiptVoucher.lines.map((l: any, i: number) => {
-                       const diff = (l.expected_qty || l.received_qty) - l.received_qty;
                        return (
-                          <tr key={i} className={diff > 0 ? "bg-red-50/50" : ""}>
+                          <tr key={i} className={l.damaged_qty > 0 ? "bg-red-50/50" : ""}>
                              <td className="border p-2 font-mono">{l.sku}</td>
                              <td className="border p-2 font-bold">{l.product_name}</td>
-                             <td className="border p-2 text-center font-bold">{l.expected_qty || l.received_qty}</td>
+                             <td className="border p-2 text-center font-bold">{l.expected_qty}</td>
                              <td className="border p-2 text-center font-bold text-emerald-700">{l.received_qty}</td>
                              <td className="border p-2 text-center font-bold text-red-600">
-                                {diff > 0 ? `-${diff}` : '0'}
+                                {l.damaged_qty > 0 ? `-${l.damaged_qty}` : '0'}
                              </td>
+                             <td className="border p-2 italic text-slate-600">{l.rejection_reason || '-'}</td>
                              <td className="border p-2 text-right">${parseFloat(l.unit_cost).toFixed(2)}</td>
                              <td className="border p-2 text-right font-black">${(l.received_qty * l.unit_cost).toFixed(2)}</td>
                           </tr>
