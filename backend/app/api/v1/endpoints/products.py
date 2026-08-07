@@ -116,13 +116,13 @@ def read_products(
         query = db.query(Product)
         
         # Supplier filtering
-        if supplier_ids:
+        if supplier_ids and isinstance(supplier_ids, (list, tuple)):
             query = query.join(ProductVariant, ProductVariant.product_id == Product.id) \
                          .join(SupplierProduct, SupplierProduct.variant_id == ProductVariant.id) \
                          .filter(SupplierProduct.supplier_id.in_(supplier_ids))
             
         # Category filtering
-        if category_ids:
+        if category_ids and isinstance(category_ids, (list, tuple)):
             query = query.join(Category, Category.id == Product.category_id)
             cats = db.query(Category).filter(Category.id.in_(category_ids)).all()
             cat_conditions = []
@@ -134,7 +134,7 @@ def read_products(
                 query = query.filter(or_(*cat_conditions))
 
         if q:
-            if not supplier_ids:
+            if not (supplier_ids and isinstance(supplier_ids, (list, tuple))):
                 query = query.outerjoin(ProductVariant)
             query = query.filter(
                 or_(
@@ -143,7 +143,7 @@ def read_products(
                 )
             )
 
-        if supplier_ids or q:
+        if (supplier_ids and isinstance(supplier_ids, (list, tuple))) or q:
             query = query.distinct()
             
         total = query.count()

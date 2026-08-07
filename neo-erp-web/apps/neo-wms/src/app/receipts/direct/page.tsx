@@ -38,21 +38,28 @@ export default function DirectReceiptPage() {
   const router = useRouter();
 
   const loadFormData = async () => {
+    // 1. Fetch Suppliers
     try {
-      const [supRes, facRes, prodRes] = await Promise.all([
-        api.get('/suppliers/'),
-        api.get('/facilities/'),
-        api.get('/products/?limit=1000')
-      ]);
-      
+      const supRes = await api.get('/suppliers/?limit=5000');
       const suppliersList = Array.isArray(supRes.data) ? supRes.data : (supRes.data?.data || supRes.data?.items || []);
+      setSuppliers(suppliersList.map((s: any) => ({ label: `${s.name} ${s.tax_id ? `(${s.tax_id})` : ''}`, value: s.id })));
+    } catch(e) {
+      console.error("Error loading suppliers:", e);
+    }
+
+    // 2. Fetch Facilities
+    try {
+      const facRes = await api.get('/facilities/');
       const facilitiesList = Array.isArray(facRes.data) ? facRes.data : (facRes.data?.data || facRes.data?.items || []);
-      const productsList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.data || prodRes.data?.items || []);
-
-      setSuppliers(suppliersList.map((s: any) => ({ label: s.name, value: s.id })));
       setFacilities(facilitiesList.map((f: any) => ({ label: f.name, value: f.id })));
+    } catch(e) {
+      console.error("Error loading facilities:", e);
+    }
 
-      // Flatten product variants for easy selection
+    // 3. Fetch Products
+    try {
+      const prodRes = await api.get('/products/?limit=1000');
+      const productsList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.data || prodRes.data?.items || []);
       const variantList: any[] = [];
       productsList.forEach((p: any) => {
         if (p.variants && p.variants.length > 0) {
@@ -68,9 +75,8 @@ export default function DirectReceiptPage() {
         }
       });
       setProducts(variantList);
-    } catch (e: any) {
-      console.error("Error loading direct receipt catalogs:", e);
-      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Fallo al obtener catálogos para recepción directa.' });
+    } catch(e) {
+      console.error("Error loading products:", e);
     }
   };
 
