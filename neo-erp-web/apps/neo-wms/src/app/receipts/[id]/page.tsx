@@ -26,9 +26,11 @@ export default function ReceiptExecutionPage() {
   const [saving, setSaving] = useState(false);
   const toast = useRef<Toast>(null);
 
-  // Warehouse selection
+  // Warehouse, Invoice & Date selection
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<number | null>(null);
+  const [invoiceNumber, setInvoiceNumber] = useState<string>('');
+  const [receiptDate, setReceiptDate] = useState<Date | null>(new Date());
 
   // Dialogs
   const [ticketDialogVisible, setTicketDialogVisible] = useState(false);
@@ -49,6 +51,8 @@ export default function ReceiptExecutionPage() {
     try {
       const res = await api.get(`/purchase-orders/${orderId}/details`);
       setOrder(res.data);
+      if (res.data.invoice_number) setInvoiceNumber(res.data.invoice_number);
+      if (res.data.invoice_date) setReceiptDate(new Date(res.data.invoice_date + 'T00:00:00'));
       
       const initialLines = res.data.lines.map((l: any) => ({
           ...l,
@@ -192,6 +196,8 @@ export default function ReceiptExecutionPage() {
       try {
           const payload = {
               warehouse_id: selectedWarehouseId,
+              invoice_number: invoiceNumber,
+              receipt_date: receiptDate ? format(receiptDate, 'yyyy-MM-dd') : null,
               lines: lines.map(l => ({
                   po_line_id: l.id > 0 ? l.id : null,
                   variant_id: l.variant_id,
@@ -242,19 +248,8 @@ export default function ReceiptExecutionPage() {
               </p>
           </div>
           
-          {/* Opciones de Almacén e Impresión */}
+          {/* Opciones de Impresión */}
           <div className="flex flex-col sm:flex-row items-end gap-3">
-              <div className="flex flex-col gap-1 bg-slate-50 p-3 rounded-xl border border-slate-200 min-w-[220px]">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Depósito de Ingreso:</span>
-                  <Dropdown 
-                      value={selectedWarehouseId} 
-                      options={warehouses.map(w => ({ label: w.name + (w.requires_dock_staging ? ' (CD - Bahía)' : ' (Directo)'), value: w.id }))} 
-                      onChange={(e) => setSelectedWarehouseId(e.value)} 
-                      placeholder="Seleccionar Depósito"
-                      className="w-full text-xs font-bold"
-                  />
-              </div>
-
               <Button 
                   icon="pi pi-print" 
                   rounded 
@@ -267,6 +262,44 @@ export default function ReceiptExecutionPage() {
                   className="font-bold border-slate-300 text-slate-700 hover:bg-slate-100 shadow-sm disabled:opacity-40 cursor-not-allowed"
               />
           </div>
+      </div>
+
+      {/* CONTROL DE DATOS DE RECEPCIÓN (DEPÓSITO, FACTURA / GUÍA Y FECHA DE RECEPCIÓN) */}
+      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="flex flex-col gap-1 relative">
+           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">1. Depósito / Almacén Destino (*)</label>
+           <Dropdown 
+               value={selectedWarehouseId} 
+               options={warehouses.map(w => ({ label: w.name + (w.requires_dock_staging ? ' (CD - Bahía)' : ' (Directo)'), value: w.id }))} 
+               onChange={(e) => setSelectedWarehouseId(e.value)} 
+               placeholder="Seleccionar Depósito"
+               disabled={isReadOnly}
+               className="w-full text-xs font-bold border-slate-200"
+           />
+        </div>
+
+        <div className="flex flex-col gap-1">
+           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">2. N° Factura / Guía de Despacho</label>
+           <InputText 
+               value={invoiceNumber} 
+               onChange={(e) => setInvoiceNumber(e.target.value)} 
+               placeholder="Ej: FACT-99012" 
+               disabled={isReadOnly}
+               className="w-full text-xs font-bold border-slate-200"
+           />
+        </div>
+
+        <div className="flex flex-col gap-1">
+           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">3. Fecha de Recepción (*)</label>
+           <Calendar 
+               value={receiptDate} 
+               onChange={(e) => setReceiptDate(e.value as Date)} 
+               dateFormat="dd/mm/yy" 
+               placeholder="Seleccionar Fecha"
+               disabled={isReadOnly}
+               className="w-full p-inputtext-sm text-xs font-bold"
+           />
+        </div>
       </div>
 
       {/* BANNER DE RECEPCIÓN CERRADA Y CONFIRMADA */}

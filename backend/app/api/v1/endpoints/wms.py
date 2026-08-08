@@ -26,6 +26,8 @@ class ReceiptLineInput(BaseModel):
 
 class ReceiptPayload(BaseModel):
     warehouse_id: Optional[int] = None
+    invoice_number: Optional[str] = None
+    receipt_date: Optional[date] = None
     lines: List[ReceiptLineInput]
 
 class DiscrepancyPayload(BaseModel):
@@ -141,14 +143,23 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
         db.add(scrap_loc)
         db.flush()
 
-    # 4. Crear el Documento de Picking WMS
+    # 4. Actualizar Número de Factura y Fecha de Recepción en la ODC
+    if payload.invoice_number:
+        order.invoice_number = payload.invoice_number
+    if payload.receipt_date:
+        order.invoice_date = payload.receipt_date
+
+    receipt_dt = payload.receipt_date or date.today()
+    date_done_val = datetime.combine(receipt_dt, datetime.now().time()) if isinstance(receipt_dt, date) else datetime.now()
+
+    # 5. Crear el Documento de Picking WMS
     picking = StockPicking(
         picking_type_id=picking_type.id,
         name=f"IN-{order.reference}",
-        origin_document=order.reference,
+        origin_document=payload.invoice_number or order.reference,
         facility_id=order.dest_facility_id,
         status='DONE',
-        date_done=func.now()
+        date_done=date_done_val
     )
     db.add(picking)
     db.flush()
@@ -559,6 +570,7 @@ class DirectReceiptPayload(BaseModel):
     facility_id: int
     warehouse_id: Optional[int] = None
     invoice_number: Optional[str] = None
+    receipt_date: Optional[date] = None
     notes: Optional[str] = None
     lines: List[DirectReceiptLineInput]
 
@@ -598,6 +610,8 @@ def create_direct_receipt(
     ref_code = f"REC-DIR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     
     total_amount = sum(float(l.received_qty * (l.unit_cost or 0)) for l in payload.lines)
+    receipt_dt = payload.receipt_date or date.today()
+    date_done_val = datetime.combine(receipt_dt, datetime.now().time()) if isinstance(receipt_dt, date) else datetime.now()
     
     order = PurchaseOrder(
         supplier_id=payload.supplier_id,
@@ -605,6 +619,8 @@ def create_direct_receipt(
         reference=ref_code,
         status='received',
         total_amount=total_amount,
+        invoice_number=payload.invoice_number,
+        invoice_date=receipt_dt,
         notes=f"Recepción Directa sin ODC. Factura/Guía: {payload.invoice_number or 'S/N'}. {payload.notes or ''}".strip(),
         currency_id=supplier.currency_id
     )
@@ -665,10 +681,10 @@ def create_direct_receipt(
     picking = StockPicking(
         picking_type_id=picking_type.id,
         name=f"IN-{ref_code}",
-        origin_document=ref_code,
+        origin_document=payload.invoice_number or ref_code,
         facility_id=payload.facility_id,
         status='DONE',
-        date_done=func.now()
+        date_done=date_done_val
     )
     db.add(picking)
     db.flush()

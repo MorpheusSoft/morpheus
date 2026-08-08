@@ -26,6 +26,7 @@ export default function DirectReceiptPage() {
   const [selectedFacilityId, setSelectedFacilityId] = useState<number | null>(null);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<number | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [receiptDate, setReceiptDate] = useState<Date | null>(new Date());
   const [notes, setNotes] = useState('');
 
   // Table Lines
@@ -281,6 +282,7 @@ export default function DirectReceiptPage() {
         facility_id: selectedFacilityId,
         warehouse_id: selectedWarehouseId,
         invoice_number: invoiceNumber,
+        receipt_date: receiptDate ? format(receiptDate, 'yyyy-MM-dd') : null,
         notes: notes,
         lines: lines.map(l => ({
           variant_id: l.variant_id,
@@ -344,8 +346,8 @@ export default function DirectReceiptPage() {
         </div>
       </div>
 
-      {/* BLOQUE DE DATOS DE CABECERA (PROVEEDOR, SUCURSAL, DEPÓSITO, FACTURA) */}
-      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* BLOQUE DE DATOS DE CABECERA (PROVEEDOR, SUCURSAL, DEPÓSITO, FACTURA, FECHA) */}
+      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-6 grid grid-cols-1 md:grid-cols-5 gap-3">
         <div className="flex flex-col gap-1 relative">
            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">1. Proveedor Origen (*)</label>
            <Dropdown 
@@ -390,12 +392,23 @@ export default function DirectReceiptPage() {
         </div>
 
         <div className="flex flex-col gap-1">
-           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">4. N° Factura / Guía de Despacho</label>
+           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">4. N° Factura / Guía</label>
            <InputText 
               value={invoiceNumber} 
               onChange={e => setInvoiceNumber(e.target.value)} 
               placeholder="Ej: FACT-99012" 
               className="w-full text-xs font-bold border-slate-200" 
+           />
+        </div>
+
+        <div className="flex flex-col gap-1">
+           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">5. Fecha Recepción (*)</label>
+           <Calendar 
+              value={receiptDate} 
+              onChange={e => setReceiptDate(e.value as Date)} 
+              dateFormat="dd/mm/yy" 
+              placeholder="Seleccionar Fecha" 
+              className="w-full p-inputtext-sm text-xs font-bold" 
            />
         </div>
       </div>
