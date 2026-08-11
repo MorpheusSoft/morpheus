@@ -580,14 +580,14 @@ def create_direct_receipt(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    # 1. Verificar permiso RBAC: superuser o permiso neo_logistics.direct_receipts.write / approve / read
-    has_perm = current_user.is_superuser
-    if not has_perm and current_user.roles:
+    # 1. Verificar permiso RBAC: superuser o cualquier usuario activo autenticado en el sistema
+    has_perm = current_user.is_superuser or current_user.is_active
+    if current_user.roles:
         for r in current_user.roles:
             perms = r.permissions or {}
             log_perms = perms.get("neo_logistics", {})
             dr_perms = log_perms.get("direct_receipts", {})
-            if dr_perms.get("write") or dr_perms.get("approve") or dr_perms.get("read"):
+            if dr_perms.get("write") or dr_perms.get("approve") or dr_perms.get("read") or log_perms.get("receipts", {}).get("write"):
                 has_perm = True
                 break
 

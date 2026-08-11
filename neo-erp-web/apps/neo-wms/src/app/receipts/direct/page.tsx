@@ -43,7 +43,7 @@ export default function DirectReceiptPage() {
   const [inputLotNumber, setInputLotNumber] = useState<string>('');
   const [inputExpirationDate, setInputExpirationDate] = useState<Date | null>(null);
 
-  // Modal: Reportar Avería / Devolución por Calidad (Idéntico a ODC)
+  // Modal: Reportar Avería / Devolución por Calidad
   const [discrepancyDialogVisible, setDiscrepancyDialogVisible] = useState(false);
   const [discrepancyIndex, setDiscrepancyIndex] = useState<number | null>(null);
   const [discrepancyDamagedQty, setDiscrepancyDamagedQty] = useState<number>(0);
@@ -238,7 +238,7 @@ export default function DirectReceiptPage() {
     setLines(copy);
   };
 
-  // Discrepancy Dialog (Idéntico a Recepción ODC)
+  // Discrepancy Dialog
   const openDiscrepancyDialog = (line: any, index: number) => {
     setDiscrepancyIndex(index);
     setDiscrepancyDamagedQty(line.damaged_qty || 0);
@@ -261,6 +261,21 @@ export default function DirectReceiptPage() {
     toast.current?.show({ severity: 'info', summary: 'Avería / Devolución Guardada', detail: 'Registro actualizado en el manifiesto.' });
   };
 
+  const formatDateSafe = (d: any): string | null => {
+    if (!d) return null;
+    try {
+      if (d instanceof Date && !isNaN(d.getTime())) {
+        return format(d, 'yyyy-MM-dd');
+      }
+      if (typeof d === 'string' && d.trim().length >= 10) {
+        return d.substring(0, 10);
+      }
+    } catch (e) {
+      console.error("Error formatting date:", e);
+    }
+    return null;
+  };
+
   const handleSubmitDirectReceipt = async () => {
     if (!selectedSupplierId) {
       toast.current?.show({ severity: 'warn', summary: 'Requerido', detail: 'Seleccione el proveedor de origen.' });
@@ -278,56 +293,66 @@ export default function DirectReceiptPage() {
     setSubmitting(true);
     try {
       const payload = {
-        supplier_id: selectedSupplierId,
-        facility_id: selectedFacilityId,
-        warehouse_id: selectedWarehouseId,
-        invoice_number: invoiceNumber,
-        receipt_date: receiptDate ? format(receiptDate, 'yyyy-MM-dd') : null,
-        notes: notes,
+        supplier_id: Number(selectedSupplierId),
+        facility_id: Number(selectedFacilityId),
+        warehouse_id: selectedWarehouseId ? Number(selectedWarehouseId) : null,
+        invoice_number: invoiceNumber || '',
+        receipt_date: formatDateSafe(receiptDate),
+        notes: notes || '',
         lines: lines.map(l => ({
-          variant_id: l.variant_id,
-          expected_qty: l.expected_qty,
-          received_qty: l.received_qty,
-          unit_cost: l.unit_cost,
-          damaged_qty: l.damaged_qty,
-          rejection_reason: l.rejection_reason,
+          variant_id: Number(l.variant_id),
+          expected_qty: Number(l.expected_qty || l.received_qty || 1),
+          received_qty: Number(l.received_qty || 0),
+          unit_cost: Number(l.unit_cost || 0),
+          damaged_qty: Number(l.damaged_qty || 0),
+          rejection_reason: l.rejection_reason || null,
           lot_number: l.lot_number || null,
-          expiration_date: l.expiration_date ? format(l.expiration_date, 'yyyy-MM-dd') : null
+          expiration_date: formatDateSafe(l.expiration_date)
         }))
       };
 
       const res = await api.post('/wms/receipts/direct', payload);
-      toast.current?.show({ severity: 'success', summary: 'Procesado', detail: res.data.message });
+      toast.current?.show({ severity: 'success', summary: 'Procesado', detail: res.data?.message || 'Recepción efectuada con éxito.' });
       
-      const supplierName = suppliers.find(s => s.value === selectedSupplierId)?.label || 'S/N';
-      const facilityName = facilities.find(f => f.value === selectedFacilityId)?.label || 'S/N';
-      const warehouseName = filteredWarehouses.find(w => w.value === selectedWarehouseId)?.label || 'Almacén Principal';
+      const supplierObj = suppliers.find(s => Number(s.value) === Number(selectedSupplierId));
+      const facilityObj = facilities.find(f => Number(f.value) === Number(selectedFacilityId));
+      const warehouseObj = filteredWarehouses.find(w => Number(w.value) === Number(selectedWarehouseId));
 
       setReceiptVoucher({
-        reference: res.data.reference,
-        supplierName,
-        facilityName,
-        warehouseName,
-        invoiceNumber,
-        notes,
+        reference: res.data?.reference || `REC-DIR-${Date.now()}`,
+        supplierName: supplierObj?.label || 'Proveedor N/A',
+        facilityName: facilityObj?.label || 'Sucursal N/A',
+        warehouseName: warehouseObj?.label || 'Almacén Principal',
+        invoiceNumber: invoiceNumber || 'S/N',
+        notes: notes || '',
         date: new Date(),
         lines: [...lines]
       });
 
     } catch (e: any) {
-      const msg = e.response?.data?.detail || 'Fallo al registrar recepción directa.';
-      toast.current?.show({ severity: 'error', summary: 'Error de Autorización', detail: msg });
+      let detailMsg = 'Fallo al registrar recepción directa.';
+      if (e.response?.data?.detail) {
+        if (typeof e.response.data.detail === 'string') {
+          detailMsg = e.response.data.detail;
+        } else if (Array.isArray(e.response.data.detail)) {
+          detailMsg = e.response.data.detail.map((err: any) => `${err.loc?.join('.') || ''}: ${err.msg}`).join(', ');
+        } else if (typeof e.response.data.detail === 'object') {
+          detailMsg = JSON.stringify(e.response.data.detail);
+        }
+      }
+      toast.current?.show({ severity: 'error', summary: 'Error al Registrar', detail: detailMsg });
+    } finally {
+      setSubmitting(false);
     }
-    setSubmitting(false);
   };
 
-  const totalAmount = lines.reduce((acc, l) => acc + (l.received_qty * l.unit_cost), 0);
+  const totalAmount = lines.reduce((acc, l) => acc + ((Number(l.received_qty) || 0) * (Number(l.unit_cost) || 0)), 0);
 
   return (
     <div className="p-4 sm:p-8 w-full max-w-[1400px] mx-auto fade-in">
       <Toast ref={toast} position="bottom-right" />
 
-      {/* ENCABEZADO IDÉNTICO A RECEPCIÓN ODC CON SELECCIÓN DE DEPÓSITO Y DATOS DE CABECERA */}
+      {/* ENCABEZADO */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-2 h-full bg-emerald-600"></div>
         
@@ -346,7 +371,7 @@ export default function DirectReceiptPage() {
         </div>
       </div>
 
-      {/* BLOQUE DE DATOS DE CABECERA (PROVEEDOR, SUCURSAL, DEPÓSITO, FACTURA, FECHA) */}
+      {/* BLOQUE DE DATOS DE CABECERA */}
       <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-6 grid grid-cols-1 md:grid-cols-5 gap-3">
         <div className="flex flex-col gap-1 relative">
            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">1. Proveedor Origen (*)</label>
@@ -413,7 +438,7 @@ export default function DirectReceiptPage() {
         </div>
       </div>
 
-      {/* MANIFIESTO DE CONTEO FÍSICO (TABLA IDÉNTICA A RECEPCIÓN ODC) */}
+      {/* MANIFIESTO DE CONTEO FÍSICO */}
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden mb-6">
         <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
             <h3 className="font-bold text-slate-700 tracking-tight flex items-center text-sm">
@@ -449,7 +474,7 @@ export default function DirectReceiptPage() {
              />
           )} align="center" style={{ width: '7rem' }} />
 
-          {/* FÍSICO RECIBIDO BUENO (ESTILO IDÉNTICO A ODC) */}
+          {/* FÍSICO RECIBIDO BUENO */}
           <Column header="Físico Recibido" body={(r, options) => (
              <div className="flex justify-end">
                  <InputNumber 
@@ -493,7 +518,7 @@ export default function DirectReceiptPage() {
              />
           )} align="center" style={{ width: '9rem' }} />
 
-          {/* AVERÍA Y DEVOLUCIÓN POR CALIDAD (BOTÓN TRIÁNGULO IDÉNTICO A ODC) */}
+          {/* AVERÍA Y DEVOLUCIÓN POR CALIDAD */}
           <Column header="Avería / Calidad" body={(r, options) => (
              <Button 
                  icon="pi pi-exclamation-triangle" 
@@ -516,7 +541,7 @@ export default function DirectReceiptPage() {
           )} align="right" style={{ width: '8rem' }} />
 
           <Column header="Subtotal ($)" align="right" body={r => (
-             <span className="font-black text-slate-800 text-xs">${(r.received_qty * r.unit_cost).toFixed(2)}</span>
+             <span className="font-black text-slate-800 text-xs">${((Number(r.received_qty) || 0) * (Number(r.unit_cost) || 0)).toFixed(2)}</span>
           )} style={{ width: '7rem' }} />
 
           <Column header="" align="center" body={(r, options) => (
@@ -628,7 +653,7 @@ export default function DirectReceiptPage() {
          </div>
       </Dialog>
 
-      {/* MODAL: REGISTRO DE AVERÍA / DEVOLUCIÓN POR CALIDAD (IDÉNTICO A RECEPCIÓN ODC) */}
+      {/* MODAL: REGISTRO DE AVERÍA / DEVOLUCIÓN POR CALIDAD */}
       <Dialog 
          header="Registro de Avería o Devolución por Calidad" 
          visible={discrepancyDialogVisible} 
@@ -669,7 +694,7 @@ export default function DirectReceiptPage() {
          </div>
       </Dialog>
 
-      {/* DIÁLOGO VOUCHER ACTA DEFINITIVA CON DEVOLUCIONES Y ALMACÉN DE DESTINO */}
+      {/* DIÁLOGO VOUCHER ACTA DEFINITIVA */}
       <Dialog 
          visible={!!receiptVoucher} 
          onHide={() => { setReceiptVoucher(null); router.push('/receipts'); }} 
@@ -684,7 +709,7 @@ export default function DirectReceiptPage() {
                     <h2 className="text-xl font-black tracking-tight text-slate-900">ACTA DE RECEPCIÓN DIRECTA, ALMACÉN Y DEVOLUCIONES</h2>
                     <p className="text-xs font-bold text-slate-500">CORRELATIVO: {receiptVoucher.reference}</p>
                  </div>
-                 <Button label="Imprimir 🖨️" icon="pi pi-print" onClick={() => window.print()} className="bg-slate-900 font-bold" />
+                 <Button label="Imprimir 🖨️" icon="pi pi-print" onClick={() => window.print()} className="bg-slate-900 font-bold text-white" />
               </div>
 
               <div className="grid grid-cols-2 gap-4 text-xs font-bold mb-4 bg-slate-50 p-3 rounded border border-slate-200">
@@ -692,7 +717,7 @@ export default function DirectReceiptPage() {
                  <div>SUCURSAL DESTINO: <span className="font-normal">{receiptVoucher.facilityName}</span></div>
                  <div>ALMACÉN / DEPÓSITO: <span className="font-normal text-emerald-700 font-bold">{receiptVoucher.warehouseName}</span></div>
                  <div>FACTURA / GUÍA: <span className="font-normal">{receiptVoucher.invoiceNumber || 'S/N'}</span></div>
-                 <div>FECHA ENTRADA: <span className="font-normal">{format(receiptVoucher.date, 'dd/MM/yyyy HH:mm')}</span></div>
+                 <div>FECHA ENTRADA: <span className="font-normal">{formatDateSafe(receiptVoucher.date) || 'Hoy'}</span></div>
               </div>
 
               <table className="w-full text-xs text-left border-collapse border border-slate-300 mb-6">
@@ -709,19 +734,21 @@ export default function DirectReceiptPage() {
                     </tr>
                  </thead>
                  <tbody>
-                    {receiptVoucher.lines.map((l: any, i: number) => {
+                    {receiptVoucher.lines?.map((l: any, i: number) => {
+                       const uCost = Number(l.unit_cost) || 0;
+                       const rQty = Number(l.received_qty) || 0;
                        return (
                           <tr key={i} className={l.damaged_qty > 0 ? "bg-red-50/50" : ""}>
                              <td className="border p-2 font-mono">{l.sku}</td>
                              <td className="border p-2 font-bold">{l.product_name}</td>
                              <td className="border p-2 text-center font-bold">{l.expected_qty}</td>
-                             <td className="border p-2 text-center font-bold text-emerald-700">{l.received_qty}</td>
+                             <td className="border p-2 text-center font-bold text-emerald-700">{rQty}</td>
                              <td className="border p-2 text-center font-bold text-red-600">
                                 {l.damaged_qty > 0 ? `-${l.damaged_qty}` : '0'}
                              </td>
                              <td className="border p-2 italic text-slate-600">{l.rejection_reason || '-'}</td>
-                             <td className="border p-2 text-right">${parseFloat(l.unit_cost).toFixed(2)}</td>
-                             <td className="border p-2 text-right font-black">${(l.received_qty * l.unit_cost).toFixed(2)}</td>
+                             <td className="border p-2 text-right">${uCost.toFixed(2)}</td>
+                             <td className="border p-2 text-right font-black">${(rQty * uCost).toFixed(2)}</td>
                           </tr>
                        );
                     })}
