@@ -41,8 +41,8 @@ Este documento define la **Matriz de Casos de Prueba Funcionales, Integrados (E2
 | `TC-INB-02` | Recepción con Lote | Ingresar a una O/C, colocar Lote y Fecha de Vencimiento | Registra la entrada y genera el registro en `batches`. | PASS |
 | `TC-INB-03` | Recepción Parcial | Recibir solo el 50% de la cantidad pedida | La orden cambia a estado `partial` (Backorder activo). | PASS |
 | `TC-INB-04` | Recepción Directa | Hacer clic en "Recepción Directa (Sin ODC)", llenar renglones y guardar | Crea la recepción `REC-DIR-...` y suma al stock. | PASS |
-| `TC-INB-05` | **Flujo de Cuarentena** | Marcar `damaged_qty > 0` o `is_quarantined = true` en recepción | El producto se traslada a la ubicación de `CUARENTENA`. | PASS |
-| `TC-INB-06` | **Liberación Cuarentena** | En la pestaña de Cuarentena, ejecutar `RELEASE` o `SCRAP` | Si es `RELEASE`, pasa a stock disponible; si es `SCRAP`, a merma. | PASS |
+| `TC-INB-05` | **Rechazo en Puerta (Devolución)** | Marcar devolución al chofer por daño/avería en muelle | Registra el rechazo, refleja la devolución en el Acta 80mm y NO suma al stock. | PASS |
+| `TC-INB-06` | **Retención / Bloqueo de Lote** | Bloquear lote en `/lots` para inspección técnica | Cambia el estado a retenido impidiendo su picking/despacho. | PASS |
 
 ---
 
