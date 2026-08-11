@@ -105,15 +105,14 @@ Para certificar el módulo al **100% en Producción/Staging**, el usuario evalua
 
 ```mermaid
 graph TD
-    A[1. Recepción en Muelle] --> B[2. Inspección Cuarentena]
-    B --> C[3. Putaway a Estante]
-    C --> D[4. Control FEFO Lotes]
-    D --> E[5. Picking & Despacho]
-    E --> F[6. Verificación Kardex]
+    A[1. Recepción en Muelle / Rechazo] --> B[2. Putaway a Estante]
+    B --> C[3. Control FEFO & Bloqueo de Lotes]
+    C --> D[4. Picking & Despacho]
+    D --> E[5. Verificación Kardex]
 ```
 
 1. **Entrada:** Recibir 100 unidades del producto en `Recepción (Inbound)` registrando lote `LOT-TEST-01` con vencimiento a 6 meses.
-2. **Inspección:** Simular 5 unidades dañadas, verificando que pasen a `Cuarentena` y liberando las 95 restantes.
+2. **Rechazo en Puerta:** Registrar 5 unidades devueltas al chofer por empaque roto, verificando que sólo ingresen 95 unidades al sistema.
 3. **Ubicación:** Ejecutar `Putaway` moviendo las 95 unidades del muelle al estante `STOCK-A1`.
 4. **Validación Volumétrica:** Verificar en `Mapa de Almacén` que la barra térmica del estante `STOCK-A1` incremente su % de ocupación.
 5. **Salida:** En `Despachos & Picking`, crear una orden por 20 unidades, verificar la sugerencia FEFO y confirmar el despacho.
