@@ -30,8 +30,19 @@ export default function WmsLotsPage() {
     fetchLots();
   }, []);
 
+  const toggleQuarantine = async (batchId: number) => {
+    try {
+      const res = await api.post(`/wms/lots/${batchId}/toggle-quarantine`);
+      toast.current?.show({ severity: 'info', summary: 'Estado de Lote', detail: res.data.message });
+      fetchLots(search);
+    } catch(e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo cambiar el estado del lote.' });
+    }
+  };
+
   const getStatusSeverity = (status: string) => {
     switch (status) {
+      case 'BLOCKED': return 'danger';
       case 'EXPIRED': return 'danger';
       case 'WARNING': return 'warning';
       case 'OK': return 'success';
@@ -41,6 +52,7 @@ export default function WmsLotsPage() {
 
   const getStatusText = (status: string) => {
     switch (status) {
+      case 'BLOCKED': return 'RETENIDO (CUARENTENA)';
       case 'EXPIRED': return 'VENCIDO';
       case 'WARNING': return 'POR VENCER (< 30 DÍAS)';
       case 'OK': return 'VIGENTE (FEFO OK)';
@@ -139,6 +151,17 @@ export default function WmsLotsPage() {
               {l.total_stock?.toLocaleString('en-US') || 0} Unds
             </span>
           )} align="right" sortable />
+
+          <Column header="ACCIONES / CONTROL" body={l => (
+            <Button
+              label={l.is_quarantined ? "Liberar Stock" : "Retener (Cuarentena)"}
+              icon={l.is_quarantined ? "pi pi-unlock" : "pi pi-lock"}
+              severity={l.is_quarantined ? "success" : "danger"}
+              size="small"
+              onClick={() => toggleQuarantine(l.id)}
+              className="font-bold text-xs shadow-sm"
+            />
+          )} align="center" style={{ width: '13rem' }} />
         </DataTable>
       </div>
     </div>

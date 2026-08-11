@@ -651,13 +651,16 @@ def get_wms_lots(
         total_stock = sum([float(s.stock_qty or 0) for s in snapshot_q.all()])
 
         status = "OK"
+        if batch.is_quarantined:
+            status = "BLOCKED"
         days_to_expire = None
         if batch.expiry_date:
             days_to_expire = (batch.expiry_date - today).days
-            if days_to_expire < 0:
-                status = "EXPIRED"
-            elif days_to_expire <= 30:
-                status = "WARNING"
+            if status != "BLOCKED":
+                if days_to_expire < 0:
+                    status = "EXPIRED"
+                elif days_to_expire <= 30:
+                    status = "WARNING"
 
         results.append({
             "id": batch.id,
@@ -665,6 +668,7 @@ def get_wms_lots(
             "expiry_date": batch.expiry_date.strftime("%Y-%m-%d") if batch.expiry_date else None,
             "days_to_expire": days_to_expire,
             "status": status,
+            "is_quarantined": bool(batch.is_quarantined),
             "variant_id": variant.id,
             "sku": variant.sku,
             "product_name": product.name,
@@ -672,6 +676,26 @@ def get_wms_lots(
         })
 
     return results
+
+@router.post("/lots/{batch_id}/toggle-quarantine")
+def toggle_batch_quarantine(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    batch = db.query(Batch).filter(Batch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Lote no encontrado.")
+    
+    batch.is_quarantined = not (batch.is_quarantined or False)
+    db.commit()
+    db.refresh(batch)
+    state_str = "RETENIDO EN CUARENTENA (BLOQUEADO PARA PICKING)" if batch.is_quarantined else "LIBERADO A STOCK DISPONIBLE"
+    return {
+        "status": "success",
+        "is_quarantined": batch.is_quarantined,
+        "message": f"Lote {batch.batch_number} {state_str}."
+    }
 
 @router.get("/locations/tree")
 def get_locations_tree(facility_id: Optional[int] = None, db: Session = Depends(get_db)):
