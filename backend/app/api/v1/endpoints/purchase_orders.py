@@ -559,3 +559,164 @@ def delete_purchase_order(
     db.delete(order)
     db.commit()
     return {"status": "deleted"}
+
+@router.post("/{id}/submit-approval")
+def submit_purchase_order_for_approval(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden de compra no encontrada.")
+    if order.status not in ['draft', 'rejected']:
+        raise HTTPException(status_code=400, detail="Solo las órdenes en borrador o rechazadas pueden enviarse a aprobación.")
+    
+    order.status = 'pending_approval'
+    db.commit()
+    db.refresh(order)
+    return {"status": "success", "order_status": order.status, "message": "Orden enviada a revisión y aprobación por Gerencia."}
+
+@router.post("/{id}/approve")
+def approve_purchase_order(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden de compra no encontrada.")
+    
+    from app.models.core import Buyer
+    buyer = db.query(Buyer).filter(Buyer.user_id == current_user.id).first()
+    if not buyer and current_user.is_superuser:
+        buyer = Buyer(user_id=current_user.id, approval_limit=Decimal('50000.00'))
+        db.add(buyer)
+        db.flush()
+        
+    limit = buyer.approval_limit if buyer and buyer.approval_limit else Decimal('1000.00')
+    
+    if not current_user.is_superuser and order.total_amount > limit:
+        order.status = 'pending_approval'
+        db.commit()
+        raise HTTPException(
+            status_code=403,
+            detail=f"Monto de la orden (${order.total_amount:,.2f}) excede el límite de aprobación del comprador (${limit:,.2f}). Requiere aprobación por Gerencia de Compras."
+        )
+
+    # Actualizar auto-catálogo de productos del proveedor
+    from app.models.purchasing import SupplierProduct
+    from app.models.core import Supplier
+    supp = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
+    
+    for line in order.lines:
+        sp = db.query(SupplierProduct).filter(
+            SupplierProduct.supplier_id == order.supplier_id,
+            SupplierProduct.variant_id == line.variant_id
+        ).first()
+        if not sp:
+            new_sp = SupplierProduct(
+                supplier_id=order.supplier_id,
+                variant_id=line.variant_id,
+                pack_id=line.pack_id,
+                currency_id=supp.currency_id if supp else 1,
+                replacement_cost=line.unit_cost,
+                min_order_qty=1,
+                is_active=True
+            )
+            db.add(new_sp)
+
+    order.status = 'approved'
+    if buyer:
+        order.buyer_id = buyer.id
+    db.commit()
+    db.refresh(order)
+    return {"status": "success", "order_status": order.status, "message": f"Orden {order.reference} aprobada exitosamente."}
+
+@router.post("/{id}/reject")
+def reject_purchase_order(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    reason: str = "Rechazada en revisión de aprobación",
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden de compra no encontrada.")
+    
+    order.status = 'rejected'
+    order.notes = f"{order.notes or ''}\n[RECHAZADA por {current_user.full_name}]: {reason}".strip()
+    db.commit()
+    db.refresh(order)
+    return {"status": "success", "order_status": order.status, "message": "Orden de compra rechazada."}
+
+@router.get("/{id}/pdf-data")
+def get_purchase_order_pdf_data(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+) -> Any:
+    from app.models.inventory import ProductVariant, Product
+    from app.models.core import Supplier, Facility, Buyer, User
+    
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden de compra no encontrada.")
+        
+    supp = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
+    facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first() if order.dest_facility_id else None
+    
+    buyer_name = "Gerencia de Compras"
+    if order.buyer_id:
+        buyer = db.query(Buyer).filter(Buyer.id == order.buyer_id).first()
+        if buyer:
+            buyer_user = db.query(User).filter(User.id == buyer.user_id).first()
+            if buyer_user:
+                buyer_name = buyer_user.full_name
+
+    line_items = []
+    subtotal = Decimal(0)
+    for line in order.lines:
+        variant = db.query(ProductVariant).filter(ProductVariant.id == line.variant_id).first()
+        prod = db.query(Product).filter(Product.id == variant.product_id).first() if variant else None
+        item_subtotal = Decimal(str(line.expected_base_qty)) * Decimal(str(line.unit_cost))
+        subtotal += item_subtotal
+        
+        line_items.append({
+            "sku": variant.sku if variant else "N/A",
+            "description": prod.name if prod else "N/A",
+            "quantity": float(line.expected_base_qty),
+            "unit_cost": float(line.unit_cost),
+            "subtotal": float(item_subtotal)
+        })
+
+    return {
+        "title": "ORDEN DE COMPRA OFICIAL",
+        "reference": order.reference,
+        "status": order.status,
+        "date": order.created_at.strftime("%d/%m/%Y") if order.created_at else "",
+        "expiration_date": order.expiration_date.strftime("%d/%m/%Y") if order.expiration_date else "N/A",
+        "supplier": {
+            "name": supp.name if supp else "N/A",
+            "tax_id": supp.tax_id if supp else "N/A",
+            "phone": supp.phone if supp else "N/A",
+            "email": supp.email if supp else "N/A",
+            "address": supp.address if supp else "N/A"
+        },
+        "dest_facility": {
+            "name": facility.name if facility else "N/A",
+            "code": facility.code if facility else "N/A"
+        },
+        "buyer_name": buyer_name,
+        "notes": order.notes or "",
+        "lines": line_items,
+        "totals": {
+            "subtotal": float(subtotal),
+            "tax_amount": float(subtotal * Decimal('0.16')),
+            "total_amount": float(order.total_amount or (subtotal * Decimal('1.16')))
+        }
+    }
+

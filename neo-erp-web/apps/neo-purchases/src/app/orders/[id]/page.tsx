@@ -517,6 +517,142 @@ export default function OrderDetailsPage() {
       setSaving(false);
   };
   
+  const submitForApproval = async () => {
+      setSaving(true);
+      try {
+          await api.post(`/purchase-orders/${orderId}/submit-approval`);
+          toast.current?.show({ severity: 'success', summary: 'Enviada a Revisión', detail: 'La orden fue enviada a Aprobación por Gerencia.', life: 4000 });
+          fetchOrder();
+      } catch(e: any) {
+          toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Error al enviar a aprobación.' });
+      }
+      setSaving(false);
+  };
+
+  const rejectOrder = async () => {
+      const reason = window.prompt("Ingrese el motivo del rechazo de la Orden de Compra:");
+      if (reason === null) return;
+      setSaving(true);
+      try {
+          await api.post(`/purchase-orders/${orderId}/reject?reason=${encodeURIComponent(reason)}`);
+          toast.current?.show({ severity: 'info', summary: 'Orden Rechazada', detail: 'La orden fue marcada como Rechazada.', life: 4000 });
+          fetchOrder();
+      } catch(e: any) {
+          toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Error al rechazar orden.' });
+      }
+      setSaving(false);
+  };
+
+  const printOfficialPdfDocument = async () => {
+      try {
+          const res = await api.get(`/purchase-orders/${orderId}/pdf-data`);
+          const data = res.data;
+          const printWindow = window.open('', '_blank');
+          if (!printWindow) {
+              toast.current?.show({ severity: 'warn', summary: 'Navegador', detail: 'Permita ventanas emergentes para ver el documento.' });
+              return;
+          }
+          
+          const linesHtml = (data.lines || []).map((l: any, i: number) => `
+              <tr style="border-bottom: 1px solid #e2e8f0;">
+                  <td style="padding: 10px; text-align: center;">${i + 1}</td>
+                  <td style="padding: 10px; font-weight: bold;">${l.sku}</td>
+                  <td style="padding: 10px;">${l.description}</td>
+                  <td style="padding: 10px; text-align: right; font-weight: bold;">${l.quantity.toLocaleString()}</td>
+                  <td style="padding: 10px; text-align: right;">$${l.unit_cost.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                  <td style="padding: 10px; text-align: right; font-weight: bold; color: #047857;">$${l.subtotal.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+              </tr>
+          `).join('');
+
+          printWindow.document.write(`
+              <!DOCTYPE html>
+              <html>
+              <head>
+                  <title>${data.reference} - Orden de Compra Oficial</title>
+                  <style>
+                      body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; color: #1e293b; background: #ffffff; }
+                      .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #4f46e5; padding-bottom: 20px; margin-bottom: 30px; }
+                      .title { font-size: 24px; font-weight: 900; color: #4f46e5; margin: 0; }
+                      .ref { font-size: 18px; font-weight: 800; color: #0f172a; margin-top: 5px; }
+                      .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
+                      .card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; }
+                      .card h4 { margin: 0 0 10px 0; color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+                      table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+                      th { background: #1e293b; color: white; padding: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+                      .totals { margin-left: auto; width: 320px; background: #f8fafc; border: 1px solid #cbd5e1; padding: 15px; border-radius: 8px; }
+                      .totals div { display: flex; justify-content: space-between; padding: 5px 0; font-size: 14px; }
+                      .totals .grand { font-size: 18px; font-weight: 900; color: #047857; border-top: 2px solid #047857; padding-top: 8px; margin-top: 5px; }
+                      .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 50px; margin-top: 60px; padding-top: 20px; }
+                      .sig-box { border-top: 2px solid #94a3b8; text-align: center; padding-top: 10px; font-weight: bold; font-size: 12px; color: #475569; }
+                  </style>
+              </head>
+              <body>
+                  <div class="header">
+                      <div>
+                          <div class="title">MORPHEUS ERP — SISTEMA DE COMPRAS</div>
+                          <div class="ref">${data.reference} — ${data.title}</div>
+                      </div>
+                      <div style="text-align: right;">
+                          <div><strong>Fecha Emisión:</strong> ${data.date}</div>
+                          <div><strong>Vencimiento:</strong> ${data.expiration_date}</div>
+                          <div><strong>Estatus:</strong> ${data.status.toUpperCase()}</div>
+                      </div>
+                  </div>
+
+                  <div class="info-grid">
+                      <div class="card">
+                          <h4>PROVEEDOR RECEPTOR</h4>
+                          <div style="font-size: 16px; font-weight: bold; color: #0f172a;">${data.supplier.name}</div>
+                          <div>RIF / ID Fiscal: ${data.supplier.tax_id}</div>
+                          <div>Teléfono: ${data.supplier.phone} | Email: ${data.supplier.email}</div>
+                          <div>Dirección: ${data.supplier.address}</div>
+                      </div>
+                      <div class="card">
+                          <h4>SUCURSAL DE DESTINO / COMPRADOR</h4>
+                          <div style="font-size: 16px; font-weight: bold; color: #0f172a;">${data.dest_facility.name} (${data.dest_facility.code})</div>
+                          <div>Comprador Responsable: ${data.buyer_name}</div>
+                          <div>Condición: Recepciones sujetas a auditoría en muelle WMS</div>
+                      </div>
+                  </div>
+
+                  <table>
+                      <thead>
+                          <tr>
+                              <th style="width: 40px;">#</th>
+                              <th style="width: 120px;">SKU</th>
+                              <th>DESCRIPCIÓN DEL PRODUCTO</th>
+                              <th style="width: 100px; text-align: right;">CANTIDAD</th>
+                              <th style="width: 120px; text-align: right;">COSTO UNIT ($)</th>
+                              <th style="width: 120px; text-align: right;">SUBTOTAL ($)</th>
+                          </tr>
+                      </thead>
+                      <tbody>
+                          ${linesHtml}
+                      </tbody>
+                  </table>
+
+                  <div class="totals">
+                      <div><span>Subtotal Neto:</span> <strong>$${data.totals.subtotal.toLocaleString('en-US', {minimumFractionDigits: 2})}</strong></div>
+                      <div><span>IVA Estimado (16%):</span> <strong>$${data.totals.tax_amount.toLocaleString('en-US', {minimumFractionDigits: 2})}</strong></div>
+                      <div class="grand"><span>TOTAL A PAGAR:</span> <span>$${data.totals.total_amount.toLocaleString('en-US', {minimumFractionDigits: 2})}</span></div>
+                  </div>
+
+                  <div class="signatures">
+                      <div class="sig-box">FIRMA AUTORIZADA COMPRADOR / GERENCIA</div>
+                      <div class="sig-box">ACEPTACIÓN Y SELLO DEL PROVEEDOR</div>
+                  </div>
+                  <script>
+                      window.onload = function() { window.print(); }
+                  </script>
+              </body>
+              </html>
+          `);
+          printWindow.document.close();
+      } catch(e) {
+          toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo generar la versión imprimible de la orden.' });
+      }
+  };
+
   const triggerMailer = async () => {
       setSaving(true);
       try {
@@ -953,23 +1089,35 @@ export default function OrderDetailsPage() {
 
       {/* CONSOLA DE ACCIONES */}
       {isDraft && (
-          <div className="flex justify-end gap-4 p-6 bg-white rounded-2xl shadow-sm border border-slate-200 mt-6">
+          <div className="flex flex-wrap justify-end gap-3 p-6 bg-white rounded-2xl shadow-sm border border-slate-200 mt-6">
              <Button label="Guardar Progreso" icon="pi pi-save" outlined severity="secondary" onClick={saveChanges} disabled={saving} className="font-bold border-2" />
-             <Button label="Aprobar Oficialmente" icon="pi pi-check-circle" severity="success" onClick={approveOrder} disabled={saving} className="font-bold px-8 shadow-lg hover:shadow-xl transition-all shadow-emerald-500/30 text-lg" />
+             <Button label="Imprimir PDF" icon="pi pi-file-pdf" severity="help" outlined onClick={printOfficialPdfDocument} className="font-bold border-2" />
+             <Button label="Enviar a Aprobación" icon="pi pi-send" severity="info" onClick={submitForApproval} disabled={saving} className="font-bold" />
+             <Button label="Aprobar Orden" icon="pi pi-check-circle" severity="success" onClick={approveOrder} disabled={saving} className="font-bold px-6 shadow-lg hover:shadow-xl transition-all shadow-emerald-500/30" />
           </div>
       )}
       {order.status === 'pending_approval' && (
-          <div className="flex justify-end gap-4 p-6 bg-white rounded-2xl shadow-sm border border-orange-200 bg-orange-50 mt-6">
-             <span className="flex items-center text-orange-600 font-bold mr-4"><i className="pi pi-lock mr-2"></i> Límite de Compra Excedido. Esperando liberación de Gerencia.</span>
-             <Button label="Liberar Orden (Gerencia)" icon="pi pi-key" severity="warning" onClick={() => {
-                 api.put(`/purchase-orders/${orderId}/status`, { status: 'approved' })
-                     .then(() => fetchOrder())
-                     .catch(() => toast.current?.show({severity:'error', summary:'Aviso', detail:'Acceso Denegado'}));
-             }} className="font-bold px-8 shadow-lg text-lg bg-orange-600 border-none" />
+          <div className="flex flex-wrap justify-between items-center gap-4 p-6 bg-white rounded-2xl shadow-sm border border-orange-200 bg-orange-50 mt-6">
+             <span className="flex items-center text-orange-700 font-bold"><i className="pi pi-lock mr-2 text-xl"></i> Límite de Compra Excedido. Esperando revisión de Gerencia de Compras.</span>
+             <div className="flex gap-3">
+                 <Button label="Imprimir PDF" icon="pi pi-file-pdf" severity="help" outlined onClick={printOfficialPdfDocument} className="font-bold bg-white" />
+                 <Button label="Rechazar" icon="pi pi-times-circle" severity="danger" onClick={rejectOrder} disabled={saving} className="font-bold" />
+                 <Button label="Aprobar (Gerencia)" icon="pi pi-key" severity="warning" onClick={approveOrder} disabled={saving} className="font-bold px-6 shadow-lg bg-orange-600 border-none" />
+             </div>
           </div>
       )}
-      {!isDraft && order.status !== 'pending_approval' && (
+      {order.status === 'rejected' && (
+          <div className="flex justify-between items-center p-6 bg-red-50 rounded-2xl border border-red-200 mt-6">
+             <span className="text-red-700 font-bold"><i className="pi pi-exclamation-triangle mr-2"></i> Orden Rechazada por Gerencia. Puede editarla y volver a enviarla.</span>
+             <div className="flex gap-3">
+                 <Button label="Imprimir PDF" icon="pi pi-file-pdf" severity="help" outlined onClick={printOfficialPdfDocument} className="font-bold bg-white" />
+                 <Button label="Re-Enviar a Aprobación" icon="pi pi-refresh" severity="info" onClick={submitForApproval} disabled={saving} className="font-bold" />
+             </div>
+          </div>
+      )}
+      {!isDraft && order.status !== 'pending_approval' && order.status !== 'rejected' && (
           <div className="flex justify-end gap-4 p-6 bg-slate-50 rounded-2xl shadow-inner border border-slate-200 mt-6">
+              <Button label="Imprimir O/C (PDF)" icon="pi pi-print" severity="help" onClick={printOfficialPdfDocument} className="font-bold shadow-sm" />
               <Button label="Visor PDF Corporativo" icon="pi pi-file-pdf" severity="danger" outlined onClick={() => setShowPdfCodeTypeModal(true)} className="font-bold bg-white" />
              {(order.status === 'approved' || order.status === 'sent' || order.status === 'viewed') && (
                  <Button label="Disparar a Proveedor" icon="pi pi-whatsapp" severity="success" onClick={triggerMailer} disabled={saving} className="font-bold px-8 shadow-md" />
