@@ -755,3 +755,395 @@ def create_direct_receipt(
         "reference": order.reference,
         "message": f"Recepción directa {ref_code} procesada exitosamente."
     }
+
+# ==============================================================================
+# OUTBOUND SHIPMENTS & PICKING WAVES (SALIDAS Y DESPACHOS WMS)
+# ==============================================================================
+
+class ShipmentLineInput(BaseModel):
+    variant_id: int
+    quantity: float
+    location_src_id: Optional[int] = None
+    batch_id: Optional[int] = None
+
+class CreateShipmentPayload(BaseModel):
+    facility_id: int
+    destination_name: Optional[str] = "Cliente / Despacho"
+    origin_document: Optional[str] = None
+    scheduled_date: Optional[datetime] = None
+    lines: List[ShipmentLineInput]
+
+@router.get("/shipments")
+def get_wms_shipments(
+    facility_id: Optional[int] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Obtener el listado de despachos / órdenes de picking de salida (DELIVERY / OUT).
+    """
+    picking_types = db.query(StockPickingType).filter(
+        StockPickingType.code.in_(["DELIVERY", "OUT", "PICKING"])
+    ).all()
+    type_ids = [pt.id for pt in picking_types]
+    
+    query = db.query(StockPicking)
+    if type_ids:
+        query = query.filter(StockPicking.picking_type_id.in_(type_ids))
+    if facility_id:
+        query = query.filter(StockPicking.facility_id == facility_id)
+    if status:
+        query = query.filter(StockPicking.status == status)
+        
+    pickings = query.order_by(StockPicking.created_at.desc()).limit(100).all()
+    
+    results = []
+    for p in pickings:
+        moves_data = []
+        for m in p.moves:
+            variant = db.query(ProductVariant).filter(ProductVariant.id == m.product_id).first()
+            product_name = variant.product.name if variant and variant.product else "Producto Desconocido"
+            sku = variant.sku if variant else "N/A"
+            loc_src = db.query(Location).filter(Location.id == m.location_src_id).first()
+            loc_dest = db.query(Location).filter(Location.id == m.location_dest_id).first()
+            
+            moves_data.append({
+                "id": m.id,
+                "variant_id": m.product_id,
+                "product_name": product_name,
+                "sku": sku,
+                "quantity_demand": float(m.quantity_demand or 0),
+                "quantity_done": float(m.quantity_done or 0),
+                "location_src_name": loc_src.name if loc_src else "N/A",
+                "location_dest_name": loc_dest.name if loc_dest else "N/A",
+                "unit_cost": float(m.unit_cost or 0)
+            })
+            
+        results.append({
+            "id": p.id,
+            "name": p.name,
+            "origin_document": p.origin_document or "N/A",
+            "facility_id": p.facility_id,
+            "status": p.status,
+            "scheduled_date": p.scheduled_date.isoformat() if p.scheduled_date else None,
+            "date_done": p.date_done.isoformat() if p.date_done else None,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+            "total_items": len(moves_data),
+            "moves": moves_data
+        })
+        
+    return results
+
+@router.post("/shipments")
+def create_wms_shipment(
+    payload: CreateShipmentPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Crear una nueva Orden de Despacho / Picking de Salida.
+    """
+    facility = db.query(Facility).filter(Facility.id == payload.facility_id).first()
+    if not facility:
+        raise HTTPException(status_code=404, detail="Sucursal no encontrada.")
+        
+    picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'DELIVERY').first()
+    if not picking_type:
+        picking_type = StockPickingType(name="Despachos a Clientes", code="DELIVERY", sequence_prefix="OUT")
+        db.add(picking_type)
+        db.flush()
+        
+    ref_code = f"OUT-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    
+    picking = StockPicking(
+        picking_type_id=picking_type.id,
+        name=ref_code,
+        origin_document=payload.origin_document or "Despacho Manual",
+        facility_id=payload.facility_id,
+        status='READY',
+        scheduled_date=payload.scheduled_date or datetime.now()
+    )
+    db.add(picking)
+    db.flush()
+    
+    customer_loc = db.query(Location).filter(Location.usage == 'CUSTOMER').first()
+    if not customer_loc:
+        customer_loc = Location(name="Clientes / Salidas", code="OUT", location_type="SHELF", usage="CUSTOMER")
+        db.add(customer_loc)
+        db.flush()
+        
+    for l in payload.lines:
+        variant = db.query(ProductVariant).filter(ProductVariant.id == l.variant_id).first()
+        if not variant:
+            continue
+            
+        src_loc_id = l.location_src_id
+        if not src_loc_id:
+            internal_loc = db.query(Location).filter(Location.usage == 'INTERNAL').first()
+            src_loc_id = internal_loc.id if internal_loc else customer_loc.id
+            
+        move = StockMove(
+            picking_id=picking.id,
+            product_id=l.variant_id,
+            location_src_id=src_loc_id,
+            location_dest_id=customer_loc.id,
+            quantity_demand=l.quantity,
+            quantity_done=0.0,
+            state='READY',
+            batch_id=l.batch_id,
+            unit_cost=float(variant.average_cost or variant.standard_cost or 0),
+            reference=ref_code
+        )
+        db.add(move)
+        
+    db.commit()
+    db.refresh(picking)
+    
+    return {
+        "status": "success",
+        "id": picking.id,
+        "name": picking.name,
+        "message": f"Orden de Despacho {ref_code} creada exitosamente en estado READY."
+    }
+
+@router.post("/shipments/{picking_id}/execute")
+def execute_wms_shipment(
+    picking_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Confirmar y procesar la salida física del picking.
+    """
+    picking = db.query(StockPicking).filter(StockPicking.id == picking_id).first()
+    if not picking:
+        raise HTTPException(status_code=404, detail="Orden de despacho no encontrada.")
+        
+    if picking.status == 'DONE':
+        raise HTTPException(status_code=400, detail="Esta orden de despacho ya fue procesada anteriormente.")
+        
+    for m in picking.moves:
+        qty_to_dispatch = float(m.quantity_demand or 0)
+        m.quantity_done = qty_to_dispatch
+        m.state = 'DONE'
+        
+        snapshot = db.query(InventorySnapshot).filter(
+            InventorySnapshot.variant_id == m.product_id,
+            InventorySnapshot.facility_id == picking.facility_id
+        ).first()
+        
+        if snapshot:
+            snapshot.stock_qty = max(0.0, float(snapshot.stock_qty or 0) - qty_to_dispatch)
+            
+    picking.status = 'DONE'
+    picking.date_done = datetime.now()
+    
+    db.commit()
+    
+    return {
+        "status": "success",
+        "id": picking.id,
+        "name": picking.name,
+        "message": f"Despacho {picking.name} completado y procesado exitosamente."
+    }
+
+@router.get("/picking-waves")
+def get_picking_waves(
+    facility_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Obtener las olas de picking agrupadas por pasillo / ubicación para optimizar las rutas de salida del almacenista.
+    """
+    query = db.query(StockMove).join(StockPicking).filter(
+        StockPicking.status.in_(["READY", "WAITING", "DRAFT"])
+    )
+    if facility_id:
+        query = query.filter(StockPicking.facility_id == facility_id)
+        
+    moves = query.all()
+    
+    location_groups = {}
+    for m in moves:
+        loc = db.query(Location).filter(Location.id == m.location_src_id).first()
+        loc_name = loc.name if loc else "Ubicación General"
+        loc_code = loc.code if loc else "STOCK"
+        
+        variant = db.query(ProductVariant).filter(ProductVariant.id == m.product_id).first()
+        product_name = variant.product.name if variant and variant.product else "Producto Desconocido"
+        sku = variant.sku if variant else "N/A"
+        
+        if loc_code not in location_groups:
+            location_groups[loc_code] = {
+                "location_code": loc_code,
+                "location_name": loc_name,
+                "total_items": 0,
+                "items": []
+            }
+            
+        location_groups[loc_code]["items"].append({
+            "move_id": m.id,
+            "picking_id": m.picking_id,
+            "picking_name": m.picking.name if m.picking else "N/A",
+            "variant_id": m.product_id,
+            "product_name": product_name,
+            "sku": sku,
+            "quantity_demand": float(m.quantity_demand or 0),
+            "quantity_done": float(m.quantity_done or 0)
+        })
+        location_groups[loc_code]["total_items"] += 1
+        
+    return list(location_groups.values())
+
+# ==============================================================================
+# ALGORITMO Y SUGERENCIA FEFO (FIRST EXPIRED, FIRST OUT)
+# ==============================================================================
+
+@router.get("/fefo-suggestions")
+def get_fefo_suggestions(
+    variant_id: int,
+    facility_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Obtener la lista de lotes disponibles para una variante ordenados estrictamente por estrategia FEFO
+    (First Expired, First Out - los lotes que vencen primero van primero). Excluye lotes en cuarentena.
+    """
+    query = db.query(Batch).filter(
+        Batch.product_variant_id == variant_id,
+        Batch.is_quarantined == False
+    )
+    
+    batches = query.order_by(Batch.expiry_date.asc().nulls_last()).all()
+    
+    results = []
+    today = date.today()
+    for idx, b in enumerate(batches):
+        days_to_expire = (b.expiry_date - today).days if b.expiry_date else None
+        results.append({
+            "id": b.id,
+            "batch_number": b.batch_number,
+            "expiry_date": b.expiry_date.isoformat() if b.expiry_date else None,
+            "manufacturing_date": b.manufacturing_date.isoformat() if b.manufacturing_date else None,
+            "days_to_expire": days_to_expire,
+            "is_quarantined": b.is_quarantined,
+            "is_fefo_recommended": (idx == 0)
+        })
+        
+    return results
+
+# ==============================================================================
+# DÍA 3: FLUJO DE CUARENTENA E INSPECCIÓN TÉCNICA
+# ==============================================================================
+
+class QuarantineReleasePayload(BaseModel):
+    batch_id: int
+    action: str # 'RELEASE' o 'SCRAP'
+    notes: Optional[str] = None
+
+@router.get("/quarantine")
+def get_quarantined_items(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Obtener el listado de lotes e ítems actualmente en estado de Cuarentena.
+    """
+    batches = db.query(Batch).filter(Batch.is_quarantined == True).all()
+    results = []
+    for b in batches:
+        variant = db.query(ProductVariant).filter(ProductVariant.id == b.product_variant_id).first()
+        product_name = variant.product.name if variant and variant.product else "Producto Desconocido"
+        sku = variant.sku if variant else "N/A"
+        
+        results.append({
+            "id": b.id,
+            "batch_number": b.batch_number,
+            "product_name": product_name,
+            "sku": sku,
+            "expiry_date": b.expiry_date.isoformat() if b.expiry_date else None,
+            "manufacturing_date": b.manufacturing_date.isoformat() if b.manufacturing_date else None,
+            "is_quarantined": True
+        })
+    return results
+
+@router.post("/quarantine/release")
+def process_quarantine_release(
+    payload: QuarantineReleasePayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Procesar inspección técnica: Aprobar lote (quitar cuarentena) o enviar a merma/scrap.
+    """
+    batch = db.query(Batch).filter(Batch.id == payload.batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Lote no encontrado.")
+        
+    if payload.action == 'RELEASE':
+        batch.is_quarantined = False
+        msg = f"Lote {batch.batch_number} liberado de cuarentena y marcado como disponible."
+    elif payload.action == 'SCRAP':
+        batch.is_quarantined = True
+        msg = f"Lote {batch.batch_number} marcado como rechazado/merma."
+    else:
+        raise HTTPException(status_code=400, detail="Acción no válida. Use RELEASE o SCRAP.")
+        
+    db.commit()
+    return {"status": "success", "message": msg}
+
+# ==============================================================================
+# DÍA 4: MAPA TÉRMICO Y OCUPACIÓN VOLUMÉTRICA POR UBICACIÓN
+# ==============================================================================
+
+@router.get("/locations/occupancy")
+def get_locations_occupancy(
+    facility_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Obtener el mapa térmico de ocupación volumétrica y porcentaje de llenado por ubicación/estante.
+    """
+    query = db.query(Location)
+    if facility_id:
+        query = query.join(Warehouse).filter(Warehouse.facility_id == facility_id)
+        
+    locations = query.all()
+    results = []
+    
+    for loc in locations:
+        cap_vol = float(loc.capacity_volume or 100.0)
+        moves_count = db.query(func.count(StockMove.id)).filter(
+            StockMove.location_dest_id == loc.id,
+            StockMove.state == 'DONE'
+        ).scalar() or 0
+        
+        estimated_used = min(cap_vol, float(moves_count * 5.0))
+        pct_used = round((estimated_used / cap_vol) * 100.0, 1) if cap_vol > 0 else 0.0
+        
+        thermal_status = "LOW"
+        if pct_used >= 90.0:
+            thermal_status = "CRITICAL"
+        elif pct_used >= 70.0:
+            thermal_status = "MEDIUM"
+            
+        results.append({
+            "id": loc.id,
+            "name": loc.name,
+            "code": loc.code,
+            "barcode": loc.barcode,
+            "capacity_volume": cap_vol,
+            "used_volume": estimated_used,
+            "percentage_used": pct_used,
+            "thermal_status": thermal_status,
+            "is_blocked": loc.is_blocked
+        })
+        
+    return results
+
+
+

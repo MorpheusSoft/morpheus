@@ -49,16 +49,21 @@ export default function WmsLotsPage() {
   };
 
   return (
-    <div className="p-8 w-full max-w-[1400px] mx-auto fade-in">
+    <div className="p-6 bg-[#0f172a] min-h-screen text-slate-200">
       <Toast ref={toast} position="bottom-right" />
 
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-2 h-full bg-teal-500"></div>
-        <div className="pl-4">
-          <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center">
-            <i className="pi pi-calendar-plus text-teal-500 mr-3"></i>Control de Lotes y FEFO
-          </h1>
-          <p className="text-slate-500 text-sm mt-1">Trazabilidad por número de lote, semáforos de expiración y stock disponible.</p>
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 pb-4 border-b border-slate-800 gap-4">
+        <div>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-teal-500/20 border border-teal-500/30 flex items-center justify-center text-teal-400">
+              <i className="pi pi-calendar-plus text-xl"></i>
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-white tracking-tight">Control de Lotes & Estrategia FEFO</h1>
+              <p className="text-slate-400 text-sm">Trazabilidad por número de lote, priorización por vencimiento (First Expired, First Out) y estado de stock.</p>
+            </div>
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -67,46 +72,74 @@ export default function WmsLotsPage() {
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && fetchLots(search)}
             placeholder="Buscar Lote, SKU o Producto..."
-            className="text-xs p-inputtext-sm font-bold w-64"
+            className="text-sm p-inputtext-sm bg-slate-900 border-slate-700 text-white w-64"
           />
-          <Button icon="pi pi-search" size="small" onClick={() => fetchLots(search)} />
-          <Button icon="pi pi-refresh" rounded outlined onClick={() => fetchLots('')} />
+          <Button
+            icon="pi pi-search"
+            className="p-button-success bg-teal-500 hover:bg-teal-600 border-none px-3"
+            onClick={() => fetchLots(search)}
+          />
+          <Button
+            icon="pi pi-refresh"
+            className="p-button-outlined p-button-secondary border-slate-700 text-slate-300 hover:bg-slate-800"
+            onClick={() => fetchLots('')}
+          />
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden">
-        <DataTable value={lots} loading={loading} emptyMessage="No hay lotes registrados o coincidentes." size="small" stripedRows rowHover className="text-sm">
-          <Column header="NÚMERO DE LOTE" field="batch_number" body={l => (
-            <span className="font-mono font-black text-xs bg-slate-100 px-3 py-1.5 rounded text-slate-800 border border-slate-200">
-              {l.batch_number}
+      {/* Data Table */}
+      <div className="bg-[#1e293b]/60 border border-slate-800 rounded-xl overflow-hidden backdrop-blur-md p-4">
+        <DataTable
+          value={lots}
+          loading={loading}
+          paginator
+          rows={12}
+          emptyMessage="No hay lotes registrados o coincidentes."
+          className="p-datatable-sm text-slate-300"
+          stripedRows
+          responsiveLayout="scroll"
+        >
+          <Column
+            header="NÚMERO DE LOTE"
+            field="batch_number"
+            body={l => (
+              <div className="flex items-center gap-2">
+                <span className="font-mono font-bold text-xs bg-slate-900 px-3 py-1 rounded text-teal-400 border border-teal-500/30">
+                  {l.batch_number}
+                </span>
+                {l.is_fefo_recommended && (
+                  <Tag value="FEFO RECOMENDADO" severity="success" className="text-[10px] px-2 py-0.5" />
+                )}
+              </div>
+            )}
+            sortable
+          />
+
+          <Column field="sku" header="SKU" body={l => <span className="font-mono text-xs text-slate-400 font-semibold">{l.sku}</span>} sortable />
+
+          <Column field="product_name" header="PRODUCTO" body={l => <span className="font-medium text-slate-100">{l.product_name}</span>} sortable />
+
+          <Column header="FECHA EXPIRACIÓN" body={l => (
+            <span className="font-semibold text-slate-200">
+              {l.expiry_date || 'Sin Vencimiento'}
             </span>
-          )} style={{ width: '12rem' }} />
-
-          <Column header="SKU" field="sku" body={l => <span className="font-mono text-xs text-slate-500 font-bold">{l.sku}</span>} />
-
-          <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800">{l.product_name}</span>} />
-
-          <Column header="FECHA EXPIRACIÓN (FEFO)" body={l => (
-            <span className="font-bold text-slate-700">
-              {l.expiry_date || 'Sin Fecha de Caducidad'}
-            </span>
-          )} />
+          )} sortable />
 
           <Column header="DÍAS RESTANTES" body={l => (
-            <span className={`font-black ${l.days_to_expire !== null && l.days_to_expire < 0 ? 'text-red-600' : 'text-slate-700'}`}>
-              {l.days_to_expire !== null ? `${l.days_to_expire} días` : 'N/A'}
+            <span className={`font-bold text-xs ${l.days_to_expire !== null && l.days_to_expire < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+              {l.days_to_expire !== null ? (l.days_to_expire < 0 ? `Vencido hace ${Math.abs(l.days_to_expire)} días` : `${l.days_to_expire} días`) : 'N/A'}
             </span>
-          )} align="center" />
+          )} align="center" sortable />
 
           <Column header="ESTADO FEFO" body={l => (
-            <Tag severity={getStatusSeverity(l.status)} value={getStatusText(l.status)} className="font-extrabold text-[9px] px-2 py-1" />
+            <Tag severity={getStatusSeverity(l.status)} value={getStatusText(l.status)} className="font-bold text-[10px] px-2 py-1" />
           )} align="center" />
 
           <Column header="STOCK DISPONIBLE" body={l => (
-            <span className="font-black text-emerald-600 text-sm bg-emerald-50 px-2 py-1 rounded border border-emerald-200">
-              {l.total_stock?.toLocaleString('en-US')} Unds
+            <span className="font-bold text-emerald-400 text-sm bg-emerald-950/40 px-3 py-1 rounded border border-emerald-800/40">
+              {l.total_stock?.toLocaleString('en-US') || 0} Unds
             </span>
-          )} align="right" />
+          )} align="right" sortable />
         </DataTable>
       </div>
     </div>
