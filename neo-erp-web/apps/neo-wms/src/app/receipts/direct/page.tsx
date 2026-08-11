@@ -33,6 +33,8 @@ export default function DirectReceiptPage() {
   const [lines, setLines] = useState<any[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [receiptVoucher, setReceiptVoucher] = useState<any | null>(null);
+  const [ticketData, setTicketData] = useState<any | null>(null);
+  const [ticketDialogVisible, setTicketDialogVisible] = useState<boolean>(false);
 
   // Modal: Agregar Producto
   const [addProductModalVisible, setAddProductModalVisible] = useState(false);
@@ -314,20 +316,19 @@ export default function DirectReceiptPage() {
       const res = await api.post('/wms/receipts/direct', payload);
       toast.current?.show({ severity: 'success', summary: 'Procesado', detail: res.data?.message || 'Recepción efectuada con éxito.' });
       
-      const supplierObj = suppliers.find(s => Number(s.value) === Number(selectedSupplierId));
-      const facilityObj = facilities.find(f => Number(f.value) === Number(selectedFacilityId));
-      const warehouseObj = filteredWarehouses.find(w => Number(w.value) === Number(selectedWarehouseId));
-
-      setReceiptVoucher({
-        reference: res.data?.reference || `REC-DIR-${Date.now()}`,
-        supplierName: supplierObj?.label || 'Proveedor N/A',
-        facilityName: facilityObj?.label || 'Sucursal N/A',
-        warehouseName: warehouseObj?.label || 'Almacén Principal',
-        invoiceNumber: invoiceNumber || 'S/N',
-        notes: notes || '',
-        date: new Date(),
-        lines: [...lines]
-      });
+      const createdOrderId = res.data?.id || res.data?.order_id;
+      if (createdOrderId) {
+        try {
+          const ticketRes = await api.get(`/wms/receipts/${createdOrderId}/ticket-80mm`);
+          setTicketData(ticketRes.data);
+          setTicketDialogVisible(true);
+        } catch(err) {
+          console.error("Error fetching 80mm ticket:", err);
+          router.push('/receipts');
+        }
+      } else {
+        router.push('/receipts');
+      }
 
     } catch (e: any) {
       let detailMsg = 'Fallo al registrar recepción directa.';
@@ -694,79 +695,111 @@ export default function DirectReceiptPage() {
          </div>
       </Dialog>
 
-      {/* DIÁLOGO VOUCHER ACTA DEFINITIVA */}
-      <Dialog 
-         visible={!!receiptVoucher} 
-         onHide={() => { setReceiptVoucher(null); router.push('/receipts'); }} 
-         header="ACTA DEFINITIVA DE RECEPCIÓN DIRECTA Y CONTROL DE CALIDAD" 
-         modal 
-         className="w-full max-w-4xl"
-      >
-        {receiptVoucher && (
-           <div className="p-4 bg-white font-sans text-slate-800">
-              <div className="border-b-2 border-slate-800 pb-4 mb-4 flex justify-between items-center">
-                 <div>
-                    <h2 className="text-xl font-black tracking-tight text-slate-900">ACTA DE RECEPCIÓN DIRECTA, ALMACÉN Y DEVOLUCIONES</h2>
-                    <p className="text-xs font-bold text-slate-500">CORRELATIVO: {receiptVoucher.reference}</p>
-                 </div>
-                 <Button label="Imprimir 🖨️" icon="pi pi-print" onClick={() => window.print()} className="bg-slate-900 font-bold text-white" />
-              </div>
+      {/* DIÁLOGO TICKET Y ACTA DE RECEPCIÓN 80MM (ESTÁNDAR) */}
+      <Dialog header={ticketData?.is_confirmed ? "Vista Previa Acta Definitiva 80mm" : "Vista Previa Guía de Descarga en Muelle"} visible={ticketDialogVisible} onHide={() => { setTicketDialogVisible(false); router.push('/receipts'); }} style={{ width: '420px' }}>
+          {ticketData && (
+              <div className="font-mono text-xs p-4 bg-white border border-slate-300 rounded shadow-inner text-slate-900 leading-tight">
+                  <div className="text-center font-black text-sm mb-1">NEO WMS LOGÍSTICA</div>
+                  <div className="text-center font-bold text-[11px] mb-2 border-b pb-2 border-dashed border-slate-400 uppercase">
+                      {ticketData.is_confirmed ? "ACTA DE RECEPCIÓN Y DISCREPANCIAS" : "GUÍA DE CONTEO Y DESCARGA EN MUELLE"}
+                  </div>
+                  <p><strong>ODC:</strong> {ticketData.order_reference}</p>
+                  <p><strong>FECHA:</strong> {ticketData.created_at}</p>
+                  <p><strong>PROVEEDOR:</strong> {ticketData.supplier_name}</p>
+                  <p><strong>SUCURSAL:</strong> {ticketData.facility_name}</p>
 
-              <div className="grid grid-cols-2 gap-4 text-xs font-bold mb-4 bg-slate-50 p-3 rounded border border-slate-200">
-                 <div>PROVEEDOR: <span className="font-normal">{receiptVoucher.supplierName}</span></div>
-                 <div>SUCURSAL DESTINO: <span className="font-normal">{receiptVoucher.facilityName}</span></div>
-                 <div>ALMACÉN / DEPÓSITO: <span className="font-normal text-emerald-700 font-bold">{receiptVoucher.warehouseName}</span></div>
-                 <div>FACTURA / GUÍA: <span className="font-normal">{receiptVoucher.invoiceNumber || 'S/N'}</span></div>
-                 <div>FECHA ENTRADA: <span className="font-normal">{formatDateSafe(receiptVoucher.date) || 'Hoy'}</span></div>
-              </div>
+                  {ticketData.is_confirmed ? (
+                      <>
+                          {ticketData.has_discrepancies && (
+                              <div className="my-2 p-1.5 bg-slate-100 font-bold text-center border border-slate-400 text-[10px]">
+                                  ⚠️ CONTIENE DISCREPANCIAS / RECHAZOS EN MUELLE
+                              </div>
+                          )}
+                          <div className="my-2 border-b border-dashed border-slate-400"></div>
+                          <table className="w-full text-left">
+                              <thead>
+                                  <tr className="border-b border-slate-400 text-[10px]">
+                                      <th className="py-1">CÓD/PRODUCTO</th>
+                                      <th className="py-1 text-center">PED</th>
+                                      <th className="py-1 text-center">REC</th>
+                                      <th className="py-1 text-right">DEV</th>
+                                  </tr>
+                              </thead>
+                              <tbody>
+                                  {ticketData.items.map((it: any, idx: number) => (
+                                      <tr key={idx} className="border-b border-slate-200">
+                                          <td className="py-1 max-w-[150px]">
+                                              <div className="font-bold text-[11px]">{it.sku}</div>
+                                              <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
+                                          </td>
+                                          <td className="py-1 text-center font-bold">{it.expected_qty}</td>
+                                          <td className="py-1 text-center font-bold text-emerald-700">{it.received_qty}</td>
+                                          <td className="py-1 text-right font-black text-red-600">{it.rejected_qty > 0 ? `-${it.rejected_qty}` : '0'}</td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+                          <div className="my-4 border-b border-dashed border-slate-400"></div>
+                          
+                          {/* BLOQUE DE FIRMAS LEGALES */}
+                          <div className="mt-6 flex flex-col gap-6 text-[10px]">
+                              <div>
+                                  <p className="border-b border-slate-400 w-full mb-1"></p>
+                                  <p className="font-bold text-center">Firma y Cédula Chofer / Transportista</p>
+                              </div>
+                              <div>
+                                  <p className="border-b border-slate-400 w-full mb-1"></p>
+                                  <p className="font-bold text-center">Firma y Cédula Recibidor WMS / Muelle</p>
+                              </div>
+                          </div>
+                      </>
+                  ) : (
+                      <>
+                          <div className="my-2 p-1.5 bg-blue-50 font-bold text-center border border-blue-300 text-[10px] text-blue-800">
+                              📋 CONTROL FÍSICO DE CONTEO EN MUELLE
+                          </div>
+                          <div className="my-2 border-b border-dashed border-slate-400"></div>
+                          <table className="w-full text-left">
+                              <thead>
+                                  <tr className="border-b border-slate-400 text-[10px]">
+                                      <th className="py-1">CÓD/PRODUCTO</th>
+                                      <th className="py-1 text-center">ESPERADO</th>
+                                      <th className="py-1 text-right">CONTEO FÍSICO</th>
+                                  </tr>
+                              </thead>
+                              <tbody>
+                                  {ticketData.items.map((it: any, idx: number) => (
+                                      <tr key={idx} className="border-b border-slate-200">
+                                          <td className="py-1 max-w-[160px]">
+                                              <div className="font-bold text-[11px]">{it.sku}</div>
+                                              <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
+                                          </td>
+                                          <td className="py-1 text-center font-bold text-slate-800">{it.expected_qty}</td>
+                                          <td className="py-1 text-right font-bold text-slate-400">[ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ]</td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+                          <div className="my-4 border-b border-dashed border-slate-400"></div>
+                          <div className="mt-4 text-[10px] text-center text-slate-600">
+                              <p className="border-b border-slate-400 w-full mb-1 mt-6"></p>
+                              <p className="font-bold">Firma Fiscal / Revisor Muelle</p>
+                          </div>
+                      </>
+                  )}
 
-              <table className="w-full text-xs text-left border-collapse border border-slate-300 mb-6">
-                 <thead>
-                    <tr className="bg-slate-100 font-bold text-slate-700">
-                       <th className="border p-2">SKU</th>
-                       <th className="border p-2">PRODUCTO</th>
-                       <th className="border p-2 text-center">CANT. FACTURA</th>
-                       <th className="border p-2 text-center">RECIBIDO BUENO</th>
-                       <th className="border p-2 text-center">DEVUELTO / DAÑADO</th>
-                       <th className="border p-2">MOTIVO DEVOLUCIÓN</th>
-                       <th className="border p-2 text-right">COSTO UNIT ($)</th>
-                       <th className="border p-2 text-right">SUBTOTAL ($)</th>
-                    </tr>
-                 </thead>
-                 <tbody>
-                    {receiptVoucher.lines?.map((l: any, i: number) => {
-                       const uCost = Number(l.unit_cost) || 0;
-                       const rQty = Number(l.received_qty) || 0;
-                       return (
-                          <tr key={i} className={l.damaged_qty > 0 ? "bg-red-50/50" : ""}>
-                             <td className="border p-2 font-mono">{l.sku}</td>
-                             <td className="border p-2 font-bold">{l.product_name}</td>
-                             <td className="border p-2 text-center font-bold">{l.expected_qty}</td>
-                             <td className="border p-2 text-center font-bold text-emerald-700">{rQty}</td>
-                             <td className="border p-2 text-center font-bold text-red-600">
-                                {l.damaged_qty > 0 ? `-${l.damaged_qty}` : '0'}
-                             </td>
-                             <td className="border p-2 italic text-slate-600">{l.rejection_reason || '-'}</td>
-                             <td className="border p-2 text-right">${uCost.toFixed(2)}</td>
-                             <td className="border p-2 text-right font-black">${(rQty * uCost).toFixed(2)}</td>
-                          </tr>
-                       );
-                    })}
-                 </tbody>
-              </table>
-
-              <div className="grid grid-cols-2 gap-8 mt-12 pt-8 border-t border-slate-300 text-center text-xs font-bold">
-                 <div>
-                    <div className="border-b border-slate-400 mb-1 pb-8"></div>
-                    ENTREGADO POR (CHOFER / PROVEEDOR)
-                 </div>
-                 <div>
-                    <div className="border-b border-slate-400 mb-1 pb-8"></div>
-                    RECIBIDO WMS (FISCAL DE ALMACÉN)
-                 </div>
+                  <div className="mt-5 flex justify-center">
+                      <Button 
+                          label="Imprimir Acta Definitiva" 
+                          icon="pi pi-print" 
+                          severity="success" 
+                          size="small" 
+                          onClick={() => window.print()} 
+                          className="font-bold bg-emerald-600 border-none" 
+                      />
+                  </div>
               </div>
-           </div>
-        )}
+          )}
       </Dialog>
     </div>
   );
