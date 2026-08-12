@@ -390,60 +390,61 @@ export default function WmsTransfersPage() {
           </div>
 
           {/* AGREGAR RENGLONES DE PRODUCTO */}
-          <div className="border border-slate-200 rounded-xl p-3 bg-white flex flex-col gap-3">
+          <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 flex flex-col gap-3">
             <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center">
               <i className="pi pi-box text-blue-600 mr-1.5"></i>Agregar Producto a la Solicitud
             </h3>
 
-            <div className="flex flex-col sm:flex-row gap-2 items-end min-w-0 max-w-full">
-              <div className="flex-1 min-w-0 max-w-full">
-                <label className="block text-xs font-bold text-slate-600 mb-1">Producto / SKU:</label>
-                <Dropdown 
-                  value={selectedVariantId}
-                  options={productsList || []}
-                  optionLabel="label"
-                  optionValue="value"
-                  filter
-                  filterBy="label,sku,product_name"
-                  showClear
-                  onChange={(e) => setSelectedVariantId(e.value)}
-                  placeholder="Buscar por nombre o SKU..."
-                  className="w-full text-xs font-bold min-w-0 max-w-full"
-                  style={{ width: '100%' }}
-                  valueTemplate={(option, props) => {
-                    if (option) {
-                      return (
-                        <div className="truncate font-bold text-xs max-w-[340px] text-slate-800" title={option.label}>
-                          {option.label}
-                        </div>
-                      );
-                    }
-                    return <span className="text-slate-400 text-xs">{props.placeholder}</span>;
-                  }}
-                  itemTemplate={(option) => (
-                    <div className="truncate text-xs font-bold py-1 max-w-[420px]" title={option.label}>
-                      {option.label}
-                    </div>
-                  )}
-                />
-              </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Producto / SKU:</label>
+              <Dropdown 
+                value={selectedVariantId}
+                options={productsList || []}
+                optionLabel="label"
+                optionValue="value"
+                filter
+                filterBy="label,sku,product_name"
+                showClear
+                onChange={(e) => setSelectedVariantId(e.value)}
+                placeholder="Buscar por nombre o SKU de producto..."
+                className="w-full text-xs font-bold bg-white"
+                style={{ width: '100%' }}
+                valueTemplate={(option, props) => {
+                  if (option) {
+                    return (
+                      <div className="truncate font-bold text-xs text-slate-800" title={option.label}>
+                        {option.label}
+                      </div>
+                    );
+                  }
+                  return <span className="text-slate-400 text-xs">{props.placeholder}</span>;
+                }}
+                itemTemplate={(option) => (
+                  <div className="truncate text-xs font-bold py-1" title={option.label}>
+                    {option.label}
+                  </div>
+                )}
+              />
+            </div>
 
-              <div className="w-full sm:w-28">
+            <div className="flex items-end gap-3 pt-1">
+              <div className="w-36">
                 <label className="block text-xs font-bold text-slate-600 mb-1">Cantidad:</label>
                 <InputNumber 
                   value={transferQty} 
                   onValueChange={(e) => setTransferQty(e.value || 1)}
                   min={1}
                   className="w-full text-xs font-bold"
+                  inputClassName="w-full text-xs font-bold"
                 />
               </div>
 
               <Button 
-                label="Agregar" 
+                label="Agregar a la Lista" 
                 icon="pi pi-plus" 
                 severity="info" 
                 onClick={handleAddRequestLine} 
-                className="w-full sm:w-auto font-bold text-xs shadow-sm" 
+                className="font-bold text-xs shadow-sm h-[38px] px-4" 
               />
             </div>
           </div>
