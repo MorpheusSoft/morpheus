@@ -5,8 +5,9 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_current_active_user
 from app.models.inventory import StockPicking, StockMove, StockPickingType, Location, InventorySnapshot, Warehouse
+from app.models.core import User
 
 router = APIRouter()
 
