@@ -395,8 +395,8 @@ export default function WmsTransfersPage() {
               <i className="pi pi-box text-blue-600 mr-1.5"></i>Agregar Producto a la Solicitud
             </h3>
 
-            <div className="flex gap-2 items-end">
-              <div className="flex-1">
+            <div className="flex flex-col sm:flex-row gap-2 items-end min-w-0 max-w-full">
+              <div className="flex-1 min-w-0 max-w-full">
                 <label className="block text-xs font-bold text-slate-600 mb-1">Producto / SKU:</label>
                 <Dropdown 
                   value={selectedVariantId}
@@ -408,11 +408,27 @@ export default function WmsTransfersPage() {
                   showClear
                   onChange={(e) => setSelectedVariantId(e.value)}
                   placeholder="Buscar por nombre o SKU..."
-                  className="w-full text-xs font-bold"
+                  className="w-full text-xs font-bold min-w-0 max-w-full"
+                  style={{ width: '100%' }}
+                  valueTemplate={(option, props) => {
+                    if (option) {
+                      return (
+                        <div className="truncate font-bold text-xs max-w-[340px] text-slate-800" title={option.label}>
+                          {option.label}
+                        </div>
+                      );
+                    }
+                    return <span className="text-slate-400 text-xs">{props.placeholder}</span>;
+                  }}
+                  itemTemplate={(option) => (
+                    <div className="truncate text-xs font-bold py-1 max-w-[420px]" title={option.label}>
+                      {option.label}
+                    </div>
+                  )}
                 />
               </div>
 
-              <div className="w-28">
+              <div className="w-full sm:w-28">
                 <label className="block text-xs font-bold text-slate-600 mb-1">Cantidad:</label>
                 <InputNumber 
                   value={transferQty} 
@@ -427,7 +443,7 @@ export default function WmsTransfersPage() {
                 icon="pi pi-plus" 
                 severity="info" 
                 onClick={handleAddRequestLine} 
-                className="font-bold text-xs shadow-sm" 
+                className="w-full sm:w-auto font-bold text-xs shadow-sm" 
               />
             </div>
           </div>
@@ -442,7 +458,7 @@ export default function WmsTransfersPage() {
               className="text-xs"
             >
               <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
-              <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800">{l.product_name}</span>} />
+              <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800 line-clamp-2">{l.product_name}</span>} />
               <Column header="CANTIDAD SOLICITADA" field="qty" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{l.qty}</span>} />
               <Column 
                 header="ACCIONES" 
@@ -486,7 +502,7 @@ export default function WmsTransfersPage() {
         header={`Detalle de Solicitud #${selectedRequest?.name || ''}`} 
         visible={detailDialogVisible} 
         onHide={() => { setDetailDialogVisible(false); setSelectedRequest(null); }} 
-        style={{ width: '600px' }}
+        style={{ width: '600px', maxWidth: '95vw' }}
       >
         {selectedRequest && (
           <div className="flex flex-col gap-4 py-2">
@@ -548,7 +564,7 @@ export default function WmsTransfersPage() {
         header="Crear Transferencia Directa Inter-Sucursales" 
         visible={transferDialogVisible} 
         onHide={() => setTransferDialogVisible(false)} 
-        style={{ width: '480px' }}
+        style={{ width: '500px', maxWidth: '95vw' }}
       >
         <div className="flex flex-col gap-4 py-2">
           <div className="grid grid-cols-2 gap-3">
@@ -584,7 +600,23 @@ export default function WmsTransfersPage() {
               showClear
               onChange={(e) => setSelectedVariantId(e.value)}
               placeholder="Buscar por nombre o SKU..."
-              className="w-full text-xs font-bold"
+              className="w-full text-xs font-bold min-w-0 max-w-full"
+              style={{ width: '100%' }}
+              valueTemplate={(option, props) => {
+                if (option) {
+                  return (
+                    <div className="truncate font-bold text-xs max-w-[340px] text-slate-800" title={option.label}>
+                      {option.label}
+                    </div>
+                  );
+                }
+                return <span className="text-slate-400 text-xs">{props.placeholder}</span>;
+              }}
+              itemTemplate={(option) => (
+                <div className="truncate text-xs font-bold py-1 max-w-[420px]" title={option.label}>
+                  {option.label}
+                </div>
+              )}
             />
           </div>
 
