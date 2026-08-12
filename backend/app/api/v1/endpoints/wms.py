@@ -708,8 +708,11 @@ def toggle_batch_quarantine(
     snap = db.query(InventorySnapshot).filter(InventorySnapshot.variant_id == batch.product_variant_id).first()
     qty_move = float(snap.stock_qty) if snap and snap.stock_qty else 1.0
 
-    # 3. Asentar Movimiento de Kardex (stock_moves)
-    ref_label = f"BLOQUEO-CUARENTENA-{batch.batch_number}" if batch.is_quarantined else f"LIBERACION-CUARENTENA-{batch.batch_number}"
+    # 3. Asentar Movimiento de Kardex con Auditoría de Usuario (stock_moves)
+    user_ident = getattr(current_user, 'full_name', None) or getattr(current_user, 'email', 'Usuario WMS')
+    action_prefix = "BLOQUEO-CUARENTENA" if batch.is_quarantined else "LIBERACION-CUARENTENA"
+    ref_label = f"{action_prefix}-{batch.batch_number} | Resp: {user_ident}"
+
     move = StockMove(
         product_id=batch.product_variant_id,
         location_src_id=src_loc_id,
