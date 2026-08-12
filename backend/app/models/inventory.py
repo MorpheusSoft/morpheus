@@ -209,6 +209,7 @@ class StockPicking(Base):
     name = Column(String, unique=True, nullable=False)
     origin_document = Column(String)
     facility_id = Column(Integer, ForeignKey("core.facilities.id"))
+    dest_facility_id = Column(Integer, ForeignKey("core.facilities.id"), nullable=True)
     status = Column(String, default='DRAFT')
     scheduled_date = Column(DateTime)
     date_done = Column(DateTime)
