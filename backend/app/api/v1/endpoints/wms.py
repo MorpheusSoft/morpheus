@@ -694,6 +694,25 @@ def toggle_batch_quarantine(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
+    # Validar Permisos RBAC
+    has_perm = False
+    if current_user.is_superuser:
+        has_perm = True
+    elif current_user.roles:
+        for r in current_user.roles:
+            perms = r.permissions or {}
+            log_perms = perms.get("neo_logistics", {})
+            lot_perms = log_perms.get("lots", {})
+            if lot_perms.get("write") or lot_perms.get("approve") or lot_perms.get("quarantine"):
+                has_perm = True
+                break
+
+    if not has_perm:
+        raise HTTPException(
+            status_code=403,
+            detail="Su perfil de usuario no posee el permiso de Calidad/Control de Lotes ('quarantine') para ejecutar esta operación."
+        )
+
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
     if not batch:
         raise HTTPException(status_code=404, detail="Lote no encontrado.")
