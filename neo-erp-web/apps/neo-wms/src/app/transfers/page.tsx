@@ -288,8 +288,8 @@ export default function WmsTransfersPage() {
                 header="ESTADO" 
                 body={r => (
                   <Tag 
-                    severity={r.status === 'DONE' ? 'success' : (r.status === 'PENDING' ? 'warning' : 'info')} 
-                    value={r.status === 'PENDING' ? 'PENDIENTE PREPARACIÓN' : r.status} 
+                    severity={r.status === 'DONE' ? 'success' : 'warning'} 
+                    value={r.status === 'DONE' ? 'COMPLETADO' : 'PENDIENTE PREPARACIÓN'} 
                     className="font-black text-[10px]" 
                   />
                 )} 
@@ -311,7 +311,7 @@ export default function WmsTransfersPage() {
                         setDetailDialogVisible(true);
                       }} 
                     />
-                    {r.status === 'PENDING' ? (
+                    {r.status !== 'DONE' ? (
                       <Button 
                         label="Despachar / Transferir" 
                         icon="pi pi-check-circle" 
@@ -524,7 +524,7 @@ export default function WmsTransfersPage() {
                 <span className="text-slate-500 font-medium block">Estado:</span>
                 <Tag 
                   severity={selectedRequest.status === 'DONE' ? 'success' : 'warning'} 
-                  value={selectedRequest.status === 'PENDING' ? 'PENDIENTE PREPARACIÓN' : selectedRequest.status} 
+                  value={selectedRequest.status === 'DONE' ? 'COMPLETADO' : 'PENDIENTE PREPARACIÓN'} 
                   className="font-black text-[9px]" 
                 />
               </div>
@@ -542,7 +542,7 @@ export default function WmsTransfersPage() {
 
             <div className="flex justify-end gap-2 mt-2">
               <Button label="Cerrar" text severity="secondary" onClick={() => { setDetailDialogVisible(false); setSelectedRequest(null); }} />
-              {selectedRequest.status === 'PENDING' && (
+              {selectedRequest.status !== 'DONE' && (
                 <Button 
                   label="Despachar / Transferir" 
                   icon="pi pi-check-circle" 

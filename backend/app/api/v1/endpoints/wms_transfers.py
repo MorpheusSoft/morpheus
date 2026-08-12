@@ -253,7 +253,7 @@ def create_replenishment_request(
         origin_document=f"Solicitud Reabastecimiento {src_fac.name} -> {dest_fac.name}",
         facility_id=payload.src_facility_id,
         dest_facility_id=payload.dest_facility_id,
-        status='PENDING',
+        status='DRAFT',
         created_by_id=user_id_val
     )
     db.add(picking)
@@ -279,7 +279,7 @@ def create_replenishment_request(
             location_dest_id=dest_loc_id,
             quantity_demand=qty,
             quantity_done=0.0,
-            state='PENDING',
+            state='draft',
             batch_id=line.batch_id,
             reference=ref,
             created_by_id=user_id_val
@@ -291,7 +291,7 @@ def create_replenishment_request(
         "message": "Solicitud de reabastecimiento creada exitosamente",
         "request_id": picking.id,
         "reference": ref,
-        "status": "PENDING"
+        "status": "DRAFT"
     }
 
 @router.post("/requests/{request_id}/fulfill")
