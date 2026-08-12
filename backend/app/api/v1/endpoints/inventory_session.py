@@ -184,6 +184,7 @@ def bulk_upload_lines(
 def validate_session(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     id: int,
 ) -> Any:
     session = db.query(InventorySession).filter(InventorySession.id == id).first()
@@ -197,6 +198,8 @@ def validate_session(
     if not virtual_loss_loc:
         raise HTTPException(status_code=500, detail="Ubicación virtual de mermas INV_ADJ no existe en base de datos.")
         
+    user_id_val = getattr(current_user, 'id', None)
+
     # Consolidar líneas (Delta Dinámico)
     for line in session.lines:
         # En SQLAlchemy Computed columns (difference_qty) solo existen luego del commit final
@@ -222,7 +225,8 @@ def validate_session(
             quantity_done=abs(diff),
             state="DONE",
             reference=f"TOMA-FISICA-{session.id}",
-            unit_cost=current_cost
+            unit_cost=current_cost,
+            created_by_id=user_id_val
         )
         db.add(move)
         

@@ -46,7 +46,11 @@ def list_transfers(facility_id: Optional[int] = None, db: Session = Depends(get_
     return results
 
 @router.post("/")
-def create_inter_facility_transfer(payload: TransferCreatePayload, db: Session = Depends(get_db)):
+def create_inter_facility_transfer(
+    payload: TransferCreatePayload, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
     if payload.src_facility_id == payload.dest_facility_id:
         raise HTTPException(status_code=400, detail="La sucursal de origen y destino no pueden ser la misma.")
 
@@ -78,13 +82,16 @@ def create_inter_facility_transfer(payload: TransferCreatePayload, db: Session =
         db.flush()
 
     ref = f"TRF-{payload.src_facility_id}->{payload.dest_facility_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    user_id_val = getattr(current_user, 'id', None)
+
     picking = StockPicking(
         picking_type_id=picking_type.id,
         name=ref,
         origin_document=f"Transferencia Sucursal {payload.src_facility_id} a {payload.dest_facility_id}",
         facility_id=payload.src_facility_id,
         status='DONE',
-        date_done=func.now()
+        date_done=func.now(),
+        created_by_id=user_id_val
     )
     db.add(picking)
     db.flush()
@@ -103,7 +110,8 @@ def create_inter_facility_transfer(payload: TransferCreatePayload, db: Session =
             quantity_done=qty,
             state='DONE',
             batch_id=line.batch_id,
-            reference=ref
+            reference=ref,
+            created_by_id=user_id_val
         )
         db.add(move)
 

@@ -168,13 +168,16 @@ def create_direct_receipt(
         db.add(picking_type)
         db.flush()
 
+    user_id_val = getattr(current_user, 'id', None)
+
     picking = StockPicking(
         picking_type_id=picking_type.id,
         name=f"IN-{ref_code}",
         origin_document=payload.invoice_number or ref_code,
         facility_id=payload.facility_id,
         status='DONE',
-        date_done=date_done_val
+        date_done=date_done_val,
+        created_by_id=user_id_val
     )
     db.add(picking)
     db.flush()
@@ -210,7 +213,8 @@ def create_direct_receipt(
                 state='DONE',
                 supplier_id=payload.supplier_id,
                 unit_cost=cost,
-                reference=ref_code
+                reference=ref_code,
+                created_by_id=user_id_val
             )
             db.add(move)
 
@@ -354,13 +358,16 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
     date_done_val = datetime.combine(receipt_dt, datetime.now().time()) if isinstance(receipt_dt, date) else datetime.now()
 
     # 5. Crear el Documento de Picking WMS
+    user_id_val = getattr(current_user, 'id', None)
+
     picking = StockPicking(
         picking_type_id=picking_type.id,
         name=f"IN-{order.reference}",
         origin_document=payload.invoice_number or order.reference,
         facility_id=order.dest_facility_id,
         status='DONE',
-        date_done=date_done_val
+        date_done=date_done_val,
+        created_by_id=user_id_val
     )
     db.add(picking)
     db.flush()
@@ -442,7 +449,8 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
                 batch_id=batch_id,
                 supplier_id=order.supplier_id,
                 unit_cost=unit_cost,
-                reference=order.reference
+                reference=order.reference,
+                created_by_id=user_id_val
             )
             db.add(move_good)
 
@@ -491,7 +499,8 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
                     batch_id=batch_id,
                     supplier_id=order.supplier_id,
                     unit_cost=unit_cost,
-                    reference=f"SCRAP-{order.reference}"
+                    reference=f"SCRAP-{order.reference}",
+                    created_by_id=user_id_val
                 )
                 db.add(move_scrap)
 
@@ -559,6 +568,7 @@ def report_receipt_discrepancy(order_id: int, payload: DiscrepancyPayload, db: S
     variant = db.query(ProductVariant).filter(ProductVariant.id == payload.variant_id).first()
     unit_cost = float(variant.average_cost or variant.standard_cost or 0) if variant else 0.0
 
+    user_id_val = getattr(current_user, 'id', None)
     move = StockMove(
         product_id=payload.variant_id,
         location_src_id=supplier_loc.id if supplier_loc else 1,
@@ -568,7 +578,8 @@ def report_receipt_discrepancy(order_id: int, payload: DiscrepancyPayload, db: S
         state='DONE',
         batch_id=batch_id,
         unit_cost=unit_cost,
-        reference=f"DISCREPANCY-{order.reference}: {payload.reason}"
+        reference=f"DISCREPANCY-{order.reference}: {payload.reason}",
+        created_by_id=user_id_val
     )
     db.add(move)
     db.commit()
@@ -713,6 +724,7 @@ def toggle_batch_quarantine(
     action_prefix = "BLOQUEO-CUARENTENA" if batch.is_quarantined else "LIBERACION-CUARENTENA"
     ref_label = f"{action_prefix}-{batch.batch_number} | Resp: {user_ident}"
 
+    user_id_val = getattr(current_user, 'id', None)
     move = StockMove(
         product_id=batch.product_variant_id,
         location_src_id=src_loc_id,
@@ -721,7 +733,8 @@ def toggle_batch_quarantine(
         quantity_done=qty_move,
         state='DONE',
         batch_id=batch.id,
-        reference=ref_label
+        reference=ref_label,
+        created_by_id=user_id_val
     )
     db.add(move)
     db.commit()
@@ -791,12 +804,15 @@ def execute_putaway(payload: PutawayPayload, db: Session = Depends(get_db)):
         db.add(picking_type)
         db.flush()
 
+    user_id_val = getattr(current_user, 'id', None)
+
     picking = StockPicking(
         picking_type_id=picking_type.id,
         name=f"PUTAWAY-{warehouse.code}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
         facility_id=warehouse.facility_id,
         status='DONE',
-        date_done=func.now()
+        date_done=func.now(),
+        created_by_id=user_id_val
     )
     db.add(picking)
     db.flush()
@@ -810,7 +826,8 @@ def execute_putaway(payload: PutawayPayload, db: Session = Depends(get_db)):
         quantity_done=payload.qty,
         state='DONE',
         batch_id=payload.batch_id,
-        reference=f"PUTAWAY-{warehouse.code}"
+        reference=f"PUTAWAY-{warehouse.code}",
+        created_by_id=user_id_val
     )
     db.add(move)
     db.commit()
@@ -919,6 +936,7 @@ def create_wms_shipment(
         db.flush()
         
     ref_code = f"OUT-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    user_id_val = getattr(current_user, 'id', None)
     
     picking = StockPicking(
         picking_type_id=picking_type.id,
@@ -926,7 +944,8 @@ def create_wms_shipment(
         origin_document=payload.origin_document or "Despacho Manual",
         facility_id=payload.facility_id,
         status='READY',
-        scheduled_date=payload.scheduled_date or datetime.now()
+        scheduled_date=payload.scheduled_date or datetime.now(),
+        created_by_id=user_id_val
     )
     db.add(picking)
     db.flush()
@@ -957,7 +976,8 @@ def create_wms_shipment(
             state='READY',
             batch_id=l.batch_id,
             unit_cost=float(variant.average_cost or variant.standard_cost or 0),
-            reference=ref_code
+            reference=ref_code,
+            created_by_id=user_id_val
         )
         db.add(move)
         

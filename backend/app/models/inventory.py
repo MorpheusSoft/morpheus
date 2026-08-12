@@ -213,6 +213,7 @@ class StockPicking(Base):
     scheduled_date = Column(DateTime)
     date_done = Column(DateTime)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
     
     moves = relationship("StockMove", back_populates="picking")
     picking_type = relationship("StockPickingType")
@@ -238,6 +239,7 @@ class StockMove(Base):
     historic_avg_cost = Column(Numeric(19, 4), default=0)
     reference = Column(String)
     date = Column(DateTime(timezone=True), server_default=func.now())
+    created_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
     
     picking = relationship("StockPicking", back_populates="moves")
 
