@@ -24,6 +24,11 @@ export default function WmsTransfersPage() {
   
   // New Replenishment Request Dialog
   const [requestDialogVisible, setRequestDialogVisible] = useState(false);
+  const [requestLines, setRequestLines] = useState<any[]>([]);
+
+  // View Request Detail Dialog
+  const [detailDialogVisible, setDetailDialogVisible] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState<any>(null);
 
   const [facilities, setFacilities] = useState<any[]>([]);
   const [srcFacilityId, setSrcFacilityId] = useState<number | null>(null);
@@ -66,26 +71,31 @@ export default function WmsTransfersPage() {
         setDestFacilityId(facRes.data[1].id);
       }
 
-      const prodRes = await api.get('/products/?limit=100');
+      const prodRes = await api.get('/products/?limit=5000');
+      const prodList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.data || prodRes.data?.items || []);
       const variants: any[] = [];
-      (prodRes.data || []).forEach((p: any) => {
+      prodList.forEach((p: any) => {
         if (p && p.variants && p.variants.length > 0) {
           p.variants.forEach((v: any) => {
             variants.push({
-              label: `${p.name || 'Producto'} - SKU: ${v.sku || 'N/A'} (ID: ${v.id})`,
-              value: v.id
+              label: `${p.name || 'Producto'} ${v.sku ? `(SKU: ${v.sku})` : ''}`,
+              value: v.id,
+              sku: v.sku || 'N/A',
+              product_name: p.name || 'Producto'
             });
           });
         } else if (p) {
           variants.push({
             label: `${p.name || 'Producto'} (ID: ${p.id})`,
-            value: p.id
+            value: p.id,
+            sku: p.sku || 'N/A',
+            product_name: p.name || 'Producto'
           });
         }
       });
       setProductsList(variants);
     } catch (e) {
-      console.error(e);
+      console.error("Error al cargar productos:", e);
     }
   };
 
@@ -95,10 +105,44 @@ export default function WmsTransfersPage() {
     fetchFacilitiesAndProducts();
   }, []);
 
-  // Crear Solicitud de Reabastecimiento Interno
+  // Agregar Renglón a la Solicitud
+  const handleAddRequestLine = () => {
+    if (!selectedVariantId || transferQty <= 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Atención', detail: 'Seleccione un producto y una cantidad válida.' });
+      return;
+    }
+
+    const item = productsList.find(p => p.value === selectedVariantId);
+    if (!item) return;
+
+    const existingIndex = requestLines.findIndex(l => l.variant_id === selectedVariantId);
+    if (existingIndex >= 0) {
+      const updated = [...requestLines];
+      updated[existingIndex].qty += transferQty;
+      setRequestLines(updated);
+    } else {
+      setRequestLines([...requestLines, {
+        variant_id: selectedVariantId,
+        label: item.label,
+        sku: item.sku,
+        product_name: item.product_name,
+        qty: transferQty
+      }]);
+    }
+
+    setSelectedVariantId(null);
+    setTransferQty(1);
+  };
+
+  // Eliminar Renglón de la Solicitud
+  const handleRemoveRequestLine = (index: number) => {
+    setRequestLines(requestLines.filter((_, i) => i !== index));
+  };
+
+  // Crear Solicitud de Reabastecimiento Interno Multirrenglón
   const handleCreateRequest = async () => {
-    if (!srcFacilityId || !destFacilityId || !selectedVariantId || transferQty <= 0) {
-      toast.current?.show({ severity: 'warn', summary: 'Campos incompletos', detail: 'Complete sucursal origen, destino, producto y cantidad.' });
+    if (!srcFacilityId || !destFacilityId) {
+      toast.current?.show({ severity: 'warn', summary: 'Campos incompletos', detail: 'Complete sucursal origen y destino.' });
       return;
     }
 
@@ -107,20 +151,24 @@ export default function WmsTransfersPage() {
       return;
     }
 
+    if (requestLines.length === 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Sin Ítems', detail: 'Debe agregar al menos un producto a la solicitud.' });
+      return;
+    }
+
     setSaving(true);
     try {
       await api.post('/wms-transfers/requests', {
         src_facility_id: srcFacilityId,
         dest_facility_id: destFacilityId,
-        lines: [
-          {
-            variant_id: selectedVariantId,
-            qty: transferQty
-          }
-        ]
+        lines: requestLines.map(l => ({
+          variant_id: l.variant_id,
+          qty: l.qty
+        }))
       });
-      toast.current?.show({ severity: 'success', summary: 'Solicitud Creada', detail: 'Solicitud de reabastecimiento registrada exitosamente.' });
+      toast.current?.show({ severity: 'success', summary: 'Solicitud Creada', detail: `Solicitud con ${requestLines.length} artículo(s) registrada exitosamente.` });
       setRequestDialogVisible(false);
+      setRequestLines([]);
       fetchRequests();
     } catch (e: any) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al crear la solicitud.' });
@@ -251,19 +299,32 @@ export default function WmsTransfersPage() {
                 header="ACCIONES" 
                 align="center"
                 body={r => (
-                  r.status === 'PENDING' ? (
+                  <div className="flex gap-2 justify-center">
                     <Button 
-                      label="Despachar / Transferir" 
-                      icon="pi pi-check-circle" 
-                      severity="success" 
+                      icon="pi pi-eye" 
+                      severity="info" 
+                      outlined
                       size="small"
-                      loading={fulfillingId === r.id}
-                      onClick={() => handleFulfillRequest(r.id)} 
-                      className="font-bold text-xs shadow-sm" 
+                      tooltip="Ver Renglones de la Solicitud"
+                      onClick={() => {
+                        setSelectedRequest(r);
+                        setDetailDialogVisible(true);
+                      }} 
                     />
-                  ) : (
-                    <span className="text-xs text-slate-400 font-bold">Completado</span>
-                  )
+                    {r.status === 'PENDING' ? (
+                      <Button 
+                        label="Despachar / Transferir" 
+                        icon="pi pi-check-circle" 
+                        severity="success" 
+                        size="small"
+                        loading={fulfillingId === r.id}
+                        onClick={() => handleFulfillRequest(r.id)} 
+                        className="font-bold text-xs shadow-sm" 
+                      />
+                    ) : (
+                      <span className="text-xs text-slate-400 font-bold self-center">Completado</span>
+                    )}
+                  </div>
                 )} 
               />
             </DataTable>
@@ -294,19 +355,20 @@ export default function WmsTransfersPage() {
         </TabView>
       </div>
 
-      {/* DIÁLOGO NUEVA SOLICITUD DE REABASTECIMIENTO */}
+      {/* DIÁLOGO NUEVA SOLICITUD DE REABASTECIMIENTO MULTIRRENGLÓN */}
       <Dialog 
         header="Nueva Solicitud de Reabastecimiento Interno" 
         visible={requestDialogVisible} 
-        onHide={() => setRequestDialogVisible(false)} 
-        style={{ width: '480px' }}
+        onHide={() => { setRequestDialogVisible(false); setRequestLines([]); }} 
+        style={{ width: '700px' }}
       >
         <div className="flex flex-col gap-4 py-2">
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 font-medium">
-            <i className="pi pi-info-circle mr-1"></i> Permite a cualquier tienda o sucursal solicitar stock al CENDI o a otra sucursal.
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 font-medium flex items-center">
+            <i className="pi pi-info-circle text-amber-600 text-lg mr-2"></i>
+            <span>Permite a cualquier tienda o sucursal solicitar stock al CENDI o a otra sucursal agregando múltiples productos en un solo pedido.</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Sucursal Origen (Despacha):</label>
               <Dropdown 
@@ -327,33 +389,158 @@ export default function WmsTransfersPage() {
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Producto Requerido:</label>
-            <Dropdown 
-              value={selectedVariantId}
-              options={productsList || []}
-              onChange={(e) => setSelectedVariantId(e.value)}
-              placeholder="Seleccionar producto..."
-              filter
-              className="w-full text-xs font-bold"
-            />
+          {/* AGREGAR RENGLONES DE PRODUCTO */}
+          <div className="border border-slate-200 rounded-xl p-3 bg-white flex flex-col gap-3">
+            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center">
+              <i className="pi pi-box text-blue-600 mr-1.5"></i>Agregar Producto a la Solicitud
+            </h3>
+
+            <div className="flex gap-2 items-end">
+              <div className="flex-1">
+                <label className="block text-xs font-bold text-slate-600 mb-1">Producto / SKU:</label>
+                <Dropdown 
+                  value={selectedVariantId}
+                  options={productsList || []}
+                  optionLabel="label"
+                  optionValue="value"
+                  filter
+                  filterBy="label,sku,product_name"
+                  showClear
+                  onChange={(e) => setSelectedVariantId(e.value)}
+                  placeholder="Buscar por nombre o SKU..."
+                  className="w-full text-xs font-bold"
+                />
+              </div>
+
+              <div className="w-28">
+                <label className="block text-xs font-bold text-slate-600 mb-1">Cantidad:</label>
+                <InputNumber 
+                  value={transferQty} 
+                  onValueChange={(e) => setTransferQty(e.value || 1)}
+                  min={1}
+                  className="w-full text-xs font-bold"
+                />
+              </div>
+
+              <Button 
+                label="Agregar" 
+                icon="pi pi-plus" 
+                severity="info" 
+                onClick={handleAddRequestLine} 
+                className="font-bold text-xs shadow-sm" 
+              />
+            </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad Solicitada:</label>
-            <InputNumber 
-              value={transferQty} 
-              onValueChange={(e) => setTransferQty(e.value || 1)}
-              min={1}
-              className="w-full"
-            />
+          {/* TABLA DE RENGLONES AGREGADOS */}
+          <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+            <DataTable 
+              value={requestLines} 
+              emptyMessage="No se han agregado productos a la solicitud. Use el selector de arriba." 
+              size="small" 
+              stripedRows 
+              className="text-xs"
+            >
+              <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
+              <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800">{l.product_name}</span>} />
+              <Column header="CANTIDAD SOLICITADA" field="qty" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{l.qty}</span>} />
+              <Column 
+                header="ACCIONES" 
+                align="center"
+                body={(_, options) => (
+                  <Button 
+                    icon="pi pi-trash" 
+                    severity="danger" 
+                    text 
+                    rounded 
+                    size="small" 
+                    onClick={() => handleRemoveRequestLine(options.rowIndex)} 
+                  />
+                )} 
+              />
+            </DataTable>
           </div>
 
-          <div className="flex justify-end gap-2 mt-3">
-            <Button label="Cancelar" text severity="secondary" onClick={() => setRequestDialogVisible(false)} />
-            <Button label="Enviar Solicitud" severity="success" loading={saving} onClick={handleCreateRequest} className="font-bold" />
+          <div className="flex justify-between items-center mt-2">
+            <span className="text-xs font-bold text-slate-500">
+              Total Renglones: <strong className="text-slate-800">{requestLines.length}</strong>
+            </span>
+            <div className="flex gap-2">
+              <Button label="Cancelar" text severity="secondary" onClick={() => { setRequestDialogVisible(false); setRequestLines([]); }} />
+              <Button 
+                label="Enviar Solicitud Multirrenglón" 
+                icon="pi pi-check" 
+                severity="success" 
+                disabled={requestLines.length === 0}
+                loading={saving} 
+                onClick={handleCreateRequest} 
+                className="font-bold text-xs shadow-md" 
+              />
+            </div>
           </div>
         </div>
+      </Dialog>
+
+      {/* DIÁLOGO DETALLE DE SOLICITUD */}
+      <Dialog 
+        header={`Detalle de Solicitud #${selectedRequest?.name || ''}`} 
+        visible={detailDialogVisible} 
+        onHide={() => { setDetailDialogVisible(false); setSelectedRequest(null); }} 
+        style={{ width: '600px' }}
+      >
+        {selectedRequest && (
+          <div className="flex flex-col gap-4 py-2">
+            <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+              <div>
+                <span className="text-slate-500 font-medium block">Origen (Despachante):</span>
+                <strong className="text-slate-800">{selectedRequest.src_facility_name}</strong>
+              </div>
+              <div>
+                <span className="text-slate-500 font-medium block">Destino (Solicitante):</span>
+                <strong className="text-blue-700">{selectedRequest.dest_facility_name}</strong>
+              </div>
+              <div>
+                <span className="text-slate-500 font-medium block">Fecha:</span>
+                <strong className="text-slate-800">{selectedRequest.created_at}</strong>
+              </div>
+              <div>
+                <span className="text-slate-500 font-medium block">Estado:</span>
+                <Tag 
+                  severity={selectedRequest.status === 'DONE' ? 'success' : 'warning'} 
+                  value={selectedRequest.status === 'PENDING' ? 'PENDIENTE PREPARACIÓN' : selectedRequest.status} 
+                  className="font-black text-[9px]" 
+                />
+              </div>
+            </div>
+
+            <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider">Productos Solicitados:</h4>
+
+            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+              <DataTable value={selectedRequest.lines || []} size="small" stripedRows className="text-xs">
+                <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
+                <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800">{l.product_name}</span>} />
+                <Column header="CANTIDAD SOLICITADA" field="quantity_demand" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{l.quantity_demand}</span>} />
+              </DataTable>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-2">
+              <Button label="Cerrar" text severity="secondary" onClick={() => { setDetailDialogVisible(false); setSelectedRequest(null); }} />
+              {selectedRequest.status === 'PENDING' && (
+                <Button 
+                  label="Despachar / Transferir" 
+                  icon="pi pi-check-circle" 
+                  severity="success" 
+                  loading={fulfillingId === selectedRequest.id}
+                  onClick={() => {
+                    handleFulfillRequest(selectedRequest.id);
+                    setDetailDialogVisible(false);
+                  }} 
+                  className="font-bold text-xs" 
+                />
+              )}
+            </div>
+          </div>
+        )}
       </Dialog>
 
       {/* DIÁLOGO NUEVA TRANSFERENCIA DIRECTA */}
@@ -390,9 +577,13 @@ export default function WmsTransfersPage() {
             <Dropdown 
               value={selectedVariantId}
               options={productsList || []}
-              onChange={(e) => setSelectedVariantId(e.value)}
-              placeholder="Seleccionar producto..."
+              optionLabel="label"
+              optionValue="value"
               filter
+              filterBy="label,sku,product_name"
+              showClear
+              onChange={(e) => setSelectedVariantId(e.value)}
+              placeholder="Buscar por nombre o SKU..."
               className="w-full text-xs font-bold"
             />
           </div>

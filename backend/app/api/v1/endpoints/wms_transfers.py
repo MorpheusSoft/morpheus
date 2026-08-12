@@ -196,9 +196,14 @@ def list_replenishment_requests(
 
         lines_detail = []
         for m in p.moves:
+            variant = db.query(ProductVariant).filter(ProductVariant.id == m.product_id).first()
+            p_name = variant.product.name if (variant and hasattr(variant, 'product') and variant.product) else "Producto"
+            sku_code = variant.sku if variant else "N/A"
             lines_detail.append({
                 "id": m.id,
                 "variant_id": m.product_id,
+                "product_name": p_name,
+                "sku": sku_code,
                 "quantity_demand": float(m.quantity_demand or 0),
                 "quantity_done": float(m.quantity_done or 0),
                 "state": m.state
