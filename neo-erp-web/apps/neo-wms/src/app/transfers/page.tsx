@@ -65,14 +65,27 @@ export default function WmsTransfersPage() {
   const fetchFacilitiesAndProducts = async () => {
     try {
       const facRes = await api.get('/facilities/');
-      setFacilities(facRes.data || []);
-      if (facRes.data && facRes.data.length >= 2) {
-        setSrcFacilityId(facRes.data[0].id);
-        setDestFacilityId(facRes.data[1].id);
+      const facData = Array.isArray(facRes.data) ? facRes.data : (facRes.data?.items || facRes.data?.data || []);
+      setFacilities(facData);
+      if (facData && facData.length >= 2) {
+        setSrcFacilityId(facData[0].id);
+        setDestFacilityId(facData[1].id);
+      }
+    } catch (e) {
+      console.error("Error al cargar sucursales:", e);
+    }
+
+    try {
+      const prodRes = await api.get('/products/?limit=2000');
+      let prodList: any[] = [];
+      if (Array.isArray(prodRes.data)) {
+        prodList = prodRes.data;
+      } else if (prodRes.data?.items && Array.isArray(prodRes.data.items)) {
+        prodList = prodRes.data.items;
+      } else if (prodRes.data?.data && Array.isArray(prodRes.data.data)) {
+        prodList = prodRes.data.data;
       }
 
-      const prodRes = await api.get('/products/?limit=5000');
-      const prodList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.data || prodRes.data?.items || []);
       const variants: any[] = [];
       prodList.forEach((p: any) => {
         if (p && p.variants && p.variants.length > 0) {
@@ -84,7 +97,7 @@ export default function WmsTransfersPage() {
               product_name: p.name || 'Producto'
             });
           });
-        } else if (p) {
+        } else if (p && p.id) {
           variants.push({
             label: `${p.name || 'Producto'} (ID: ${p.id})`,
             value: p.id,
