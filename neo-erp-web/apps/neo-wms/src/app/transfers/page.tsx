@@ -48,7 +48,23 @@ export default function WmsTransfersPage() {
       }
 
       const prodRes = await api.get('/products/?limit=100');
-      setProductsList(prodRes.data || []);
+      const variants: any[] = [];
+      (prodRes.data || []).forEach((p: any) => {
+        if (p && p.variants && p.variants.length > 0) {
+          p.variants.forEach((v: any) => {
+            variants.push({
+              label: `${p.name || 'Producto'} - SKU: ${v.sku || 'N/A'} (ID: ${v.id})`,
+              value: v.id
+            });
+          });
+        } else if (p) {
+          variants.push({
+            label: `${p.name || 'Producto'} (ID: ${p.id})`,
+            value: p.id
+          });
+        }
+      });
+      setProductsList(variants);
     } catch (e) {
       console.error(e);
     }
@@ -128,7 +144,7 @@ export default function WmsTransfersPage() {
               <label className="block text-xs font-bold text-slate-700 mb-1">Sucursal Origen:</label>
               <Dropdown 
                 value={srcFacilityId} 
-                options={facilities.map(f => ({ label: f.name, value: f.id }))} 
+                options={(facilities || []).map(f => ({ label: f.name, value: f.id }))} 
                 onChange={(e) => setSrcFacilityId(e.value)} 
                 className="w-full text-xs font-bold"
               />
@@ -137,7 +153,7 @@ export default function WmsTransfersPage() {
               <label className="block text-xs font-bold text-slate-700 mb-1">Sucursal Destino:</label>
               <Dropdown 
                 value={destFacilityId} 
-                options={facilities.map(f => ({ label: f.name, value: f.id }))} 
+                options={(facilities || []).map(f => ({ label: f.name, value: f.id }))} 
                 onChange={(e) => setDestFacilityId(e.value)} 
                 className="w-full text-xs font-bold"
               />
@@ -148,7 +164,7 @@ export default function WmsTransfersPage() {
             <label className="block text-xs font-bold text-slate-700 mb-1">Producto a Despachar:</label>
             <Dropdown 
               value={selectedVariantId}
-              options={productsList.map(p => ({ label: `${p.name} (SKU: ${p.sku || p.id})`, value: p.id }))}
+              options={productsList || []}
               onChange={(e) => setSelectedVariantId(e.value)}
               placeholder="Seleccionar producto..."
               filter
