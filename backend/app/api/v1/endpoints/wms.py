@@ -688,13 +688,48 @@ def toggle_batch_quarantine(
         raise HTTPException(status_code=404, detail="Lote no encontrado.")
     
     batch.is_quarantined = not (batch.is_quarantined or False)
+    
+    # 1. Ubicación de Cuarentena y Ubicación de Stock Interno
+    quarantine_loc = db.query(Location).filter(Location.usage == 'INVENTORY', Location.code == 'QUARANTINE').first()
+    if not quarantine_loc:
+        quarantine_loc = Location(name="Zona de Cuarentena / Calidad", code="QUARANTINE", location_type="SHELF", usage="INVENTORY")
+        db.add(quarantine_loc)
+        db.flush()
+
+    stock_loc = db.query(Location).filter(Location.usage == 'INTERNAL').first()
+    src_loc_id = stock_loc.id if stock_loc else 1
+    dest_loc_id = quarantine_loc.id
+
+    if not batch.is_quarantined:
+        # Liberación de Cuarentena -> Stock Disponible
+        src_loc_id, dest_loc_id = dest_loc_id, src_loc_id
+
+    # 2. Obtener saldo actual para el asiento del Kardex
+    snap = db.query(InventorySnapshot).filter(InventorySnapshot.variant_id == batch.product_variant_id).first()
+    qty_move = float(snap.stock_qty) if snap and snap.stock_qty else 1.0
+
+    # 3. Asentar Movimiento de Kardex (stock_moves)
+    ref_label = f"BLOQUEO-CUARENTENA-{batch.batch_number}" if batch.is_quarantined else f"LIBERACION-CUARENTENA-{batch.batch_number}"
+    move = StockMove(
+        product_id=batch.product_variant_id,
+        location_src_id=src_loc_id,
+        location_dest_id=dest_loc_id,
+        quantity_demand=qty_move,
+        quantity_done=qty_move,
+        state='DONE',
+        batch_id=batch.id,
+        reference=ref_label
+    )
+    db.add(move)
     db.commit()
     db.refresh(batch)
+
     state_str = "RETENIDO EN CUARENTENA (BLOQUEADO PARA PICKING)" if batch.is_quarantined else "LIBERADO A STOCK DISPONIBLE"
     return {
         "status": "success",
         "is_quarantined": batch.is_quarantined,
-        "message": f"Lote {batch.batch_number} {state_str}."
+        "move_id": move.id,
+        "message": f"Lote {batch.batch_number} {state_str}. Asiento registrado en Kardex ({ref_label})."
     }
 
 @router.get("/locations/tree")
