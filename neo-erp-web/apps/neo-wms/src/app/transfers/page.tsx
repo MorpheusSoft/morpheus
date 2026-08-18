@@ -498,7 +498,7 @@ export default function WmsTransfersPage() {
             <div className="flex gap-2">
               <Button label="Cancelar" text severity="secondary" onClick={() => { setRequestDialogVisible(false); setRequestLines([]); }} />
               <Button 
-                label="Enviar Solicitud Multirrenglón" 
+                label="Enviar Solicitud" 
                 icon="pi pi-check" 
                 severity="success" 
                 disabled={requestLines.length === 0}

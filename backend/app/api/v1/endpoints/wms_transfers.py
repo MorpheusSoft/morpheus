@@ -279,7 +279,7 @@ def create_replenishment_request(
             location_dest_id=dest_loc_id,
             quantity_demand=qty,
             quantity_done=0.0,
-            state='draft',
+            state='DRAFT',
             batch_id=line.batch_id,
             reference=ref,
             created_by_id=user_id_val
