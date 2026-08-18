@@ -169,9 +169,9 @@ export default function WmsLocationsPage() {
         <div className="absolute top-0 left-0 w-2 h-full bg-emerald-500"></div>
         <div className="pl-4">
           <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center">
-            <i className="pi pi-sitemap text-emerald-500 mr-3"></i>Mapa Térmico de Almacenes y Ubicaciones
+            <i className="pi pi-sitemap text-emerald-500 mr-3"></i>Mapa Térmico de Almacenes y Reubicación
           </h1>
-          <p className="text-slate-500 text-sm mt-1">Estructura jerárquica de depósitos, bahías y estantes con control Putaway.</p>
+          <p className="text-slate-500 text-sm mt-1">Estructura jerárquica de depósitos, bahías y estantes con control de Reubicación de Mercancía.</p>
         </div>
         
         <Button

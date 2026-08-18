@@ -803,7 +803,11 @@ def get_locations_tree(facility_id: Optional[int] = None, db: Session = Depends(
     return tree
 
 @router.post("/putaway")
-def execute_putaway(payload: PutawayPayload, db: Session = Depends(get_db)):
+def execute_putaway(
+    payload: PutawayPayload, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
     warehouse = db.query(Warehouse).filter(Warehouse.id == payload.warehouse_id).first()
     if not warehouse:
         raise HTTPException(status_code=404, detail="Almacén no encontrado.")
@@ -827,11 +831,14 @@ def execute_putaway(payload: PutawayPayload, db: Session = Depends(get_db)):
 
     picking = StockPicking(
         picking_type_id=picking_type.id,
-        name=f"PUTAWAY-{warehouse.code}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        name=f"REUBICACION-{warehouse.code}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        origin_document=f"Reubicación Interna {warehouse.name}",
         facility_id=warehouse.facility_id,
         status='DONE',
         date_done=func.now(),
-        created_by_id=user_id_val
+        created_by_id=user_id_val,
+        shipped_by_id=user_id_val,
+        received_by_id=user_id_val
     )
     db.add(picking)
     db.flush()
@@ -845,13 +852,13 @@ def execute_putaway(payload: PutawayPayload, db: Session = Depends(get_db)):
         quantity_done=payload.qty,
         state='DONE',
         batch_id=payload.batch_id,
-        reference=f"PUTAWAY-{warehouse.code}",
+        reference=f"REUBICACION-{warehouse.code}",
         created_by_id=user_id_val
     )
     db.add(move)
     db.commit()
 
-    return {"message": "Ubicación Putaway completada con éxito", "move_id": move.id}
+    return {"message": "Reubicación de mercancía realizada con éxito", "move_id": move.id}
 
 
 
