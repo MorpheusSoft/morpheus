@@ -20,7 +20,7 @@ export default function WmsTransfersPage() {
   const [loadingRequests, setLoadingRequests] = useState(true);
   const toast = useRef<Toast>(null);
 
-  // Diálogo Despacho Directo Multirrenglón
+  // Diálogo Transferencia Directa Multirrenglón
   const [transferDialogVisible, setTransferDialogVisible] = useState(false);
   const [directTransferLines, setDirectTransferLines] = useState<any[]>([]);
   
@@ -64,7 +64,7 @@ export default function WmsTransfersPage() {
       const res = await api.get('/wms-transfers/requests');
       setRequests(res.data || []);
     } catch (e) {
-      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar las solicitudes de reabastecimiento.' });
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudieron cargar las solicitudes y transferencias.' });
     }
     setLoadingRequests(false);
   };
@@ -159,7 +159,7 @@ export default function WmsTransfersPage() {
     setRequestLines(requestLines.filter((_, i) => i !== index));
   };
 
-  // Agregar Renglón al Despacho Directo
+  // Agregar Renglón a la Transferencia Directa
   const handleAddDirectTransferLine = () => {
     if (!selectedVariantId || transferQty <= 0) {
       toast.current?.show({ severity: 'warn', summary: 'Atención', detail: 'Seleccione un producto y una cantidad válida.' });
@@ -188,7 +188,7 @@ export default function WmsTransfersPage() {
     setTransferQty(1);
   };
 
-  // Eliminar Renglón del Despacho Directo
+  // Eliminar Renglón de la Transferencia Directa
   const handleRemoveDirectTransferLine = (index: number) => {
     setDirectTransferLines(directTransferLines.filter((_, i) => i !== index));
   };
@@ -307,7 +307,7 @@ export default function WmsTransfersPage() {
     setSaving(false);
   };
 
-  // Crear Despacho Directo Multirrenglón (Sin Solicitud Previa) -> Nace en IN_TRANSIT
+  // Crear Transferencia Directa Multirrenglón (Sin Solicitud Previa) -> Nace en IN_TRANSIT
   const createDirectTransfer = async () => {
     if (!srcFacilityId || !destFacilityId) {
       toast.current?.show({ severity: 'warn', summary: 'Campos incompletos', detail: 'Complete sucursal origen y destino.' });
@@ -320,7 +320,7 @@ export default function WmsTransfersPage() {
     }
 
     if (directTransferLines.length === 0) {
-      toast.current?.show({ severity: 'warn', summary: 'Sin Ítems', detail: 'Debe agregar al menos un producto al despacho.' });
+      toast.current?.show({ severity: 'warn', summary: 'Sin Ítems', detail: 'Debe agregar al menos un producto a la transferencia.' });
       return;
     }
 
@@ -334,13 +334,13 @@ export default function WmsTransfersPage() {
           qty: l.qty
         }))
       });
-      toast.current?.show({ severity: 'success', summary: 'Despacho Directo Creado', detail: `Despacho con ${directTransferLines.length} artículo(s) registrado en estado EN TRÁNSITO.` });
+      toast.current?.show({ severity: 'success', summary: 'Transferencia Directa Creada', detail: `Transferencia con ${directTransferLines.length} artículo(s) registrada en estado EN TRÁNSITO.` });
       setTransferDialogVisible(false);
       setDirectTransferLines([]);
       fetchRequests();
       fetchTransfers();
     } catch (e: any) {
-      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al procesar el despacho directo.' });
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al procesar la transferencia directa.' });
     }
     setSaving(false);
   };
@@ -388,7 +388,7 @@ export default function WmsTransfersPage() {
             className="font-bold shadow-md" 
           />
           <Button 
-            label="Despacho Directo (Sin Solicitud)" 
+            label="Transferencia Directa (Sin Solicitud)" 
             icon="pi pi-send" 
             severity="info" 
             onClick={() => setTransferDialogVisible(true)} 
@@ -406,12 +406,12 @@ export default function WmsTransfersPage() {
       {/* PESTAÑAS PRINCIPALES */}
       <div className="bg-white rounded-2xl shadow-xl border border-slate-100 p-4">
         <TabView>
-          {/* PESTAÑA 1: SOLICITUDES Y DESPACHOS EN CURSO */}
+          {/* PESTAÑA 1: SOLICITUDES Y MOVIMIENTOS EN CURSO */}
           <TabPanel header="Solicitudes y Movimientos en Curso" leftIcon="pi pi-list mr-2">
             <DataTable 
               value={requests} 
               loading={loadingRequests} 
-              emptyMessage="No hay solicitudes o movimientos de inventario." 
+              emptyMessage="No hay solicitudes o movimientos de inventario en curso." 
               size="small" 
               stripedRows 
               rowHover 
@@ -431,7 +431,7 @@ export default function WmsTransfersPage() {
                 header="ACCIONES" 
                 align="center"
                 body={r => (
-                  <div className="flex gap-1.5 justify-center flex-wrap">
+                  <div className="flex gap-1.5 justify-center items-center">
                     <Button 
                       icon="pi pi-eye" 
                       severity="secondary" 
@@ -444,12 +444,12 @@ export default function WmsTransfersPage() {
                       }} 
                     />
 
-                    {/* ESTADO SOLICITADA -> Únicamente Aceptar o Rechazar (NO despachar directamente) */}
+                    {/* ESTADO SOLICITADA -> Únicamente 'Aceptar' o 'Rechazar' */}
                     {(r.status === 'REQUESTED' || r.status === 'DRAFT') && (
                       <>
                         <Button 
-                          label="Aceptar Solicitud" 
-                          icon="pi pi-check-circle" 
+                          label="Aceptar" 
+                          icon="pi pi-check" 
                           severity="warning" 
                           size="small"
                           loading={actionLoadingId === r.id}
@@ -461,17 +461,17 @@ export default function WmsTransfersPage() {
                           severity="danger" 
                           text
                           size="small"
-                          tooltip="Rechazar Solicitud"
+                          tooltip="Rechazar"
                           loading={actionLoadingId === r.id}
                           onClick={() => handleRejectRequest(r.id)} 
                         />
                       </>
                     )}
 
-                    {/* ESTADO EN PREPARACIÓN -> Origen Despacha */}
+                    {/* ESTADO EN PREPARACIÓN -> Únicamente 'Despachar' */}
                     {(r.status === 'IN_PREPARATION' || r.status === 'CONFIRMED') && (
                       <Button 
-                        label="Emitir Guía y Despachar" 
+                        label="Despachar" 
                         icon="pi pi-send" 
                         severity="info" 
                         size="small"
@@ -481,10 +481,10 @@ export default function WmsTransfersPage() {
                       />
                     )}
 
-                    {/* ESTADO EN TRÁNSITO -> Destino Recibe Conforme */}
+                    {/* ESTADO EN TRÁNSITO -> Únicamente 'Recibir' */}
                     {r.status === 'IN_TRANSIT' && (
                       <Button 
-                        label="Confirmar Recepción" 
+                        label="Recibir" 
                         icon="pi pi-box" 
                         severity="success" 
                         size="small"
@@ -666,9 +666,9 @@ export default function WmsTransfersPage() {
         </div>
       </Dialog>
 
-      {/* DIÁLOGO NUEVO DESPACHO DIRECTO MULTIRRENGLÓN (SIN SOLICITUD PREVIA) */}
+      {/* DIÁLOGO NUEVA TRANSFERENCIA DIRECTA MULTIRRENGLÓN (SIN SOLICITUD PREVIA) */}
       <Dialog 
-        header="Crear Despacho Directo Inter-Sucursales (Sin Solicitud)" 
+        header="Crear Transferencia Directa Inter-Sucursales (Sin Solicitud)" 
         visible={transferDialogVisible} 
         onHide={() => { setTransferDialogVisible(false); setDirectTransferLines([]); }} 
         style={{ width: '720px' }}
@@ -676,7 +676,7 @@ export default function WmsTransfersPage() {
         <div className="flex flex-col gap-4 py-2">
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800 font-medium flex items-center">
             <i className="pi pi-send text-blue-600 text-lg mr-2"></i>
-            <span>Genera un despacho directo por iniciativa de la sucursal origen agregando múltiples productos. Pasará inmediatamente a <strong>EN TRÁNSITO 🚚</strong> para ser recibido en la tienda destino.</span>
+            <span>Genera una transferencia directa por iniciativa de la sucursal origen agregando múltiples productos. Pasará inmediatamente a <strong>EN TRÁNSITO 🚚</strong> para ser recibida en la tienda destino.</span>
           </div>
 
           <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
@@ -700,10 +700,10 @@ export default function WmsTransfersPage() {
             </div>
           </div>
 
-          {/* AGREGAR RENGLONES AL DESPACHO DIRECTO */}
+          {/* AGREGAR RENGLONES A LA TRANSFERENCIA DIRECTA */}
           <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 flex flex-col gap-3">
             <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center">
-              <i className="pi pi-box text-blue-600 mr-1.5"></i>Agregar Producto al Despacho Directo
+              <i className="pi pi-box text-blue-600 mr-1.5"></i>Agregar Producto a la Transferencia Directa
             </h3>
 
             <div>
@@ -751,7 +751,7 @@ export default function WmsTransfersPage() {
               </div>
 
               <Button 
-                label="Agregar al Despacho" 
+                label="Agregar a la Lista" 
                 icon="pi pi-plus" 
                 severity="info" 
                 onClick={handleAddDirectTransferLine} 
@@ -760,11 +760,11 @@ export default function WmsTransfersPage() {
             </div>
           </div>
 
-          {/* TABLA DE RENGLONES DEL DESPACHO DIRECTO */}
+          {/* TABLA DE RENGLONES DE LA TRANSFERENCIA DIRECTA */}
           <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
             <DataTable 
               value={directTransferLines} 
-              emptyMessage="No se han agregado productos al despacho. Use el selector de arriba." 
+              emptyMessage="No se han agregado productos a la transferencia. Use el selector de arriba." 
               size="small" 
               stripedRows 
               className="text-xs"
@@ -796,7 +796,7 @@ export default function WmsTransfersPage() {
             <div className="flex gap-2">
               <Button label="Cancelar" text severity="secondary" onClick={() => { setTransferDialogVisible(false); setDirectTransferLines([]); }} />
               <Button 
-                label="Emitir Despacho en Tránsito" 
+                label="Emitir Transferencia en Tránsito" 
                 icon="pi pi-send" 
                 severity="info" 
                 disabled={directTransferLines.length === 0}
@@ -879,7 +879,7 @@ export default function WmsTransfersPage() {
 
       {/* DIÁLOGO DETALLE DE SOLICITUD Y TRAZABILIDAD COMPLETA */}
       <Dialog 
-        header={`Detalle y Auditoría de Solicitud #${selectedRequest?.name || ''}`} 
+        header={`Detalle y Auditoría de Movimiento #${selectedRequest?.name || ''}`} 
         visible={detailDialogVisible} 
         onHide={() => { setDetailDialogVisible(false); setSelectedRequest(null); }} 
         style={{ width: '750px', maxWidth: '95vw' }}
@@ -896,7 +896,7 @@ export default function WmsTransfersPage() {
                 <strong className="text-blue-700">{selectedRequest.dest_facility_name}</strong>
               </div>
               <div>
-                <span className="text-slate-500 font-medium block">Solicitado por:</span>
+                <span className="text-slate-500 font-medium block">Solicitado / Creado por:</span>
                 <strong className="text-slate-800">{selectedRequest.created_by_name} ({selectedRequest.created_at})</strong>
               </div>
               <div>

@@ -130,10 +130,15 @@ def create_inter_facility_transfer(
     ref = f"INT-{payload.src_facility_id}->{payload.dest_facility_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     user_id_val = getattr(current_user, 'id', None)
 
+    src_fac = db.query(Facility).filter(Facility.id == payload.src_facility_id).first()
+    dest_fac = db.query(Facility).filter(Facility.id == payload.dest_facility_id).first()
+    src_name = src_fac.name if src_fac else f"Sucursal #{payload.src_facility_id}"
+    dest_name = dest_fac.name if dest_fac else f"Sucursal #{payload.dest_facility_id}"
+
     picking = StockPicking(
         picking_type_id=picking_type.id,
         name=ref,
-        origin_document=f"Despacho Directo Sucursal #{payload.src_facility_id} a #{payload.dest_facility_id}",
+        origin_document=f"Transferencia Directa {src_name} -> {dest_name}",
         facility_id=payload.src_facility_id,
         dest_facility_id=payload.dest_facility_id,
         status='IN_TRANSIT',
@@ -172,7 +177,7 @@ def create_inter_facility_transfer(
             src_snap.stock_qty = max(0.0, float(src_snap.stock_qty or 0) - qty)
 
     db.commit()
-    return {"message": "Despacho directo en tránsito creado con éxito", "picking_id": picking.id, "reference": ref, "status": "IN_TRANSIT"}
+    return {"message": "Transferencia directa en tránsito creada con éxito", "picking_id": picking.id, "reference": ref, "status": "IN_TRANSIT"}
 
 # ==========================================
 # SOLICITUDES DE REABASTECIMIENTO INTERNO
@@ -204,15 +209,10 @@ def list_replenishment_requests(
     status_filter: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'INTERNAL_REQ').first()
-    if not picking_type:
-        picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'INTERNAL').first()
-        if not picking_type:
-            return []
-
     q = db.query(StockPicking).filter(
-        StockPicking.picking_type_id == picking_type.id,
-        StockPicking.origin_document.like("Solicitud Reabastecimiento%")
+        (StockPicking.origin_document.like("Solicitud Reabastecimiento%")) |
+        (StockPicking.origin_document.like("Transferencia Directa%")) |
+        (StockPicking.origin_document.like("Despacho Directo%"))
     )
 
     if src_facility_id:
