@@ -225,7 +225,7 @@ def list_replenishment_requests(
     pickings = q.order_by(StockPicking.id.desc()).limit(100).all()
 
     facilities_map = {f.id: f.name for f in db.query(Facility).all()}
-    users_map = {u.id: f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email for u in db.query(User).all()}
+    users_map = {u.id: (u.full_name or u.email) for u in db.query(User).all()}
 
     results = []
     for p in pickings:
