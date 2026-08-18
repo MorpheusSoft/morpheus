@@ -314,7 +314,7 @@ export default function WmsTransfersPage() {
         return <Tag severity="warning" value="SOLICITADA (POR ACEPTAR)" className="font-black text-[9px]" />;
       case 'IN_PREPARATION':
       case 'CONFIRMED':
-        return <Tag severity="warn" value="EN PREPARACIÓN" className="font-black text-[9px] bg-amber-500 text-white" />;
+        return <Tag severity="warning" value="EN PREPARACIÓN" className="font-black text-[9px] bg-amber-500 text-white" />;
       case 'IN_TRANSIT':
         return <Tag severity="info" value="EN TRÁNSITO 🚚" className="font-black text-[9px]" />;
       case 'DONE':
