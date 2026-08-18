@@ -528,7 +528,7 @@ export default function WmsTransfersPage() {
             <DataTable 
               value={transfers} 
               loading={loadingTransfers} 
-              emptyMessage="No hay transferencias registradas." 
+              emptyMessage="No hay guías de traslado históricas o completadas." 
               size="small" 
               stripedRows 
               rowHover 
@@ -539,10 +539,28 @@ export default function WmsTransfersPage() {
                 field="name" 
                 body={t => <span className="font-mono font-bold text-xs bg-slate-100 px-3 py-1.5 rounded text-slate-700 border border-slate-200">{t.name}</span>} 
               />
-              <Column header="FECHA" field="created_at" />
-              <Column header="SUCURSAL ORIGEN" body={t => <span className="font-bold text-slate-700">Sucursal #{t.facility_id}</span>} />
+              <Column header="FECHA RECEPCIÓN / CIERRE" body={t => t.date_done || t.created_at} />
+              <Column header="SUCURSAL ORIGEN" body={t => <span className="font-bold text-slate-700">{t.src_facility_name}</span>} />
+              <Column header="SUCURSAL DESTINO" body={t => <span className="font-bold text-blue-700">{t.dest_facility_name}</span>} />
               <Column header="LÍNEAS DESPACHADAS" field="lines_count" align="center" body={t => <span className="font-extrabold">{t.lines_count} ítems</span>} />
               <Column header="ESTADO LOGÍSTICO" body={t => renderStatusTag(t.status)} align="center" />
+              <Column 
+                header="ACCIONES" 
+                align="center"
+                body={t => (
+                  <Button 
+                    icon="pi pi-eye" 
+                    severity="secondary" 
+                    outlined
+                    size="small"
+                    tooltip="Ver Detalle y Auditoría Completa"
+                    onClick={() => {
+                      setSelectedRequest(t);
+                      setDetailDialogVisible(true);
+                    }} 
+                  />
+                )} 
+              />
             </DataTable>
           </TabPanel>
         </TabView>

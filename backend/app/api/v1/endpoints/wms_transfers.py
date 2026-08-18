@@ -87,24 +87,62 @@ def get_or_create_transit_warehouse_and_location(db: Session):
 
 @router.get("/")
 def list_transfers(facility_id: Optional[int] = None, db: Session = Depends(get_db)):
-    picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'INTERNAL').first()
-    if not picking_type:
-        return []
-    
-    q = db.query(StockPicking).filter(StockPicking.picking_type_id == picking_type.id)
+    q = db.query(StockPicking).filter(
+        (StockPicking.origin_document.like("Solicitud Reabastecimiento%")) |
+        (StockPicking.origin_document.like("Transferencia Directa%")) |
+        (StockPicking.origin_document.like("Despacho Directo%"))
+    )
     if facility_id:
-        q = q.filter(StockPicking.facility_id == facility_id)
+        q = q.filter((StockPicking.facility_id == facility_id) | (StockPicking.dest_facility_id == facility_id))
     
+    # El histórico se enfoca en órdenes finalizadas (DONE / CANCELLED) o todas las transferencias
+    q = q.filter(StockPicking.status.in_(['DONE', 'CANCELLED']))
     pickings = q.order_by(StockPicking.id.desc()).limit(100).all()
+
+    facilities_map = {f.id: f.name for f in db.query(Facility).all()}
+    users_map = {u.id: (u.full_name or u.email) for u in db.query(User).all()}
+
     results = []
     for p in pickings:
+        src_name = facilities_map.get(p.facility_id, f"Sucursal #{p.facility_id}")
+        dest_name = facilities_map.get(p.dest_facility_id, f"Sucursal #{p.dest_facility_id}") if p.dest_facility_id else "N/A"
+        shipped_by_name = users_map.get(p.shipped_by_id, "N/A") if p.shipped_by_id else "N/A"
+        received_by_name = users_map.get(p.received_by_id, "N/A") if p.received_by_id else "N/A"
+        created_by_name = users_map.get(p.created_by_id, "N/A") if p.created_by_id else "N/A"
+
+        lines_detail = []
+        for m in p.moves:
+            variant = db.query(ProductVariant).filter(ProductVariant.id == m.product_id).first()
+            p_name = variant.product.name if (variant and hasattr(variant, 'product') and variant.product) else "Producto"
+            sku_code = variant.sku if variant else "N/A"
+            lines_detail.append({
+                "id": m.id,
+                "variant_id": m.product_id,
+                "product_name": p_name,
+                "sku": sku_code,
+                "quantity_demand": m.quantity_demand,
+                "quantity_done": m.quantity_done,
+                "state": m.state,
+                "notes": m.notes
+            })
+
         results.append({
             "id": p.id,
             "name": p.name,
+            "origin_document": p.origin_document,
             "facility_id": p.facility_id,
+            "src_facility_name": src_name,
+            "dest_facility_id": p.dest_facility_id,
+            "dest_facility_name": dest_name,
             "status": p.status,
             "created_at": p.created_at.strftime("%Y-%m-%d %H:%M") if p.created_at else None,
-            "lines_count": len(p.moves)
+            "shipped_at": p.shipped_at.strftime("%Y-%m-%d %H:%M") if p.shipped_at else None,
+            "date_done": p.date_done.strftime("%Y-%m-%d %H:%M") if p.date_done else None,
+            "created_by_name": created_by_name,
+            "shipped_by_name": shipped_by_name,
+            "received_by_name": received_by_name,
+            "lines_count": len(p.moves),
+            "lines": lines_detail
         })
     return results
 
@@ -220,8 +258,12 @@ def list_replenishment_requests(
         q = q.filter(StockPicking.facility_id == src_facility_id)
     if dest_facility_id:
         q = q.filter(StockPicking.dest_facility_id == dest_facility_id)
+
+    # Si NO se especificó un filtro de estado explicito, solo mostramos las activas/en curso en la Pestaña 1
     if status_filter:
         q = q.filter(StockPicking.status == status_filter.upper())
+    else:
+        q = q.filter(StockPicking.status.in_(['REQUESTED', 'DRAFT', 'IN_PREPARATION', 'CONFIRMED', 'IN_TRANSIT']))
 
     pickings = q.order_by(StockPicking.id.desc()).limit(100).all()
 
