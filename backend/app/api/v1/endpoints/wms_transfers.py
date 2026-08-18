@@ -47,6 +47,7 @@ def get_or_create_facility_warehouse_and_location(db: Session, facility_id: int)
         fac_name = fac.name if fac else f"Sucursal #{facility_id}"
         loc = Location(
             name=f"Ubicación Principal {fac_name}",
+            code=f"LOC-{facility_id}-01",
             barcode=f"LOC-FAC-{facility_id}-01",
             warehouse_id=wh.id,
             usage="INTERNAL"
