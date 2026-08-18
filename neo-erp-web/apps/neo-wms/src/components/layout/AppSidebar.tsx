@@ -35,7 +35,7 @@ export function AppSidebar() {
   const menuItems = [
     { label: 'Dashboard Muelle', icon: 'pi pi-home', href: '/' },
     { label: 'Recepción (Inbound)', icon: 'pi pi-truck', href: '/receipts' },
-    { label: 'Despachos & Picking', icon: 'pi pi-send', href: '/shipments' },
+    // { label: 'Despachos & Picking', icon: 'pi pi-send', href: '/shipments' },
     { label: 'Transferencias e Reubicación', icon: 'pi pi-arrow-right-arrow-left', href: '/transfers' },
     { label: 'Mapa de Almacén', icon: 'pi pi-sitemap', href: '/locations' },
     { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },

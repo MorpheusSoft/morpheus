@@ -114,17 +114,7 @@ export default function WmsDashboard() {
               </div>
           </Link>
 
-          <Link href="/shipments" className="block">
-              <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm hover:shadow-md hover:scale-[1.01] transition-all cursor-pointer relative overflow-hidden group">
-                  <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center mb-4 text-slate-700 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
-                    <i className="pi pi-send text-2xl"></i>
-                  </div>
-                  <h2 className="text-xl font-black tracking-tight text-slate-800">Despachos & Picking</h2>
-                  <p className="text-slate-500 mt-2 text-sm leading-relaxed">
-                      Preparación de carga por pasillos y despacho de pedidos.
-                  </p>
-              </div>
-          </Link>
+          {/* Despachos & Picking Deshabilitado temporalmente */}
 
           <Link href="/locations" className="block">
               <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm hover:shadow-md hover:scale-[1.01] transition-all cursor-pointer relative overflow-hidden group">
