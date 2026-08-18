@@ -20,10 +20,11 @@ export default function WmsTransfersPage() {
   const [loadingRequests, setLoadingRequests] = useState(true);
   const toast = useRef<Toast>(null);
 
-  // Diálogo Transferencia Directa
+  // Diálogo Despacho Directo Multirrenglón
   const [transferDialogVisible, setTransferDialogVisible] = useState(false);
+  const [directTransferLines, setDirectTransferLines] = useState<any[]>([]);
   
-  // Diálogo Nueva Solicitud
+  // Diálogo Nueva Solicitud Multirrenglón
   const [requestDialogVisible, setRequestDialogVisible] = useState(false);
   const [requestLines, setRequestLines] = useState<any[]>([]);
 
@@ -158,6 +159,40 @@ export default function WmsTransfersPage() {
     setRequestLines(requestLines.filter((_, i) => i !== index));
   };
 
+  // Agregar Renglón al Despacho Directo
+  const handleAddDirectTransferLine = () => {
+    if (!selectedVariantId || transferQty <= 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Atención', detail: 'Seleccione un producto y una cantidad válida.' });
+      return;
+    }
+
+    const item = productsList.find(p => p.value === selectedVariantId);
+    if (!item) return;
+
+    const existingIndex = directTransferLines.findIndex(l => l.variant_id === selectedVariantId);
+    if (existingIndex >= 0) {
+      const updated = [...directTransferLines];
+      updated[existingIndex].qty += transferQty;
+      setDirectTransferLines(updated);
+    } else {
+      setDirectTransferLines([...directTransferLines, {
+        variant_id: selectedVariantId,
+        label: item.label,
+        sku: item.sku,
+        product_name: item.product_name,
+        qty: transferQty
+      }]);
+    }
+
+    setSelectedVariantId(null);
+    setTransferQty(1);
+  };
+
+  // Eliminar Renglón del Despacho Directo
+  const handleRemoveDirectTransferLine = (index: number) => {
+    setDirectTransferLines(directTransferLines.filter((_, i) => i !== index));
+  };
+
   // Crear Solicitud (Estado Inicial: REQUESTED)
   const handleCreateRequest = async () => {
     if (!srcFacilityId || !destFacilityId) {
@@ -243,8 +278,8 @@ export default function WmsTransfersPage() {
       sku: l.sku,
       product_name: l.product_name,
       quantity_demand: l.quantity_demand,
-      quantity_received: l.quantity_demand, // Por defecto la cantidad pedida
-      notes: '' // Observación opcional vacía por defecto
+      quantity_received: l.quantity_demand,
+      notes: ''
     })));
     setReceiveDialogVisible(true);
   };
@@ -272,10 +307,10 @@ export default function WmsTransfersPage() {
     setSaving(false);
   };
 
-  // Crear Despacho Directo (Sin Solicitud Previa) -> Nace en IN_TRANSIT
+  // Crear Despacho Directo Multirrenglón (Sin Solicitud Previa) -> Nace en IN_TRANSIT
   const createDirectTransfer = async () => {
-    if (!srcFacilityId || !destFacilityId || !selectedVariantId || transferQty <= 0) {
-      toast.current?.show({ severity: 'warn', summary: 'Campos incompletos', detail: 'Complete origen, destino, producto y cantidad.' });
+    if (!srcFacilityId || !destFacilityId) {
+      toast.current?.show({ severity: 'warn', summary: 'Campos incompletos', detail: 'Complete sucursal origen y destino.' });
       return;
     }
 
@@ -284,20 +319,24 @@ export default function WmsTransfersPage() {
       return;
     }
 
+    if (directTransferLines.length === 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Sin Ítems', detail: 'Debe agregar al menos un producto al despacho.' });
+      return;
+    }
+
     setSaving(true);
     try {
       await api.post('/wms-transfers/', {
         src_facility_id: srcFacilityId,
         dest_facility_id: destFacilityId,
-        lines: [
-          {
-            variant_id: selectedVariantId,
-            qty: transferQty
-          }
-        ]
+        lines: directTransferLines.map(l => ({
+          variant_id: l.variant_id,
+          qty: l.qty
+        }))
       });
-      toast.current?.show({ severity: 'success', summary: 'Despacho Directo Creado', detail: 'Mercancía despachada en tránsito.' });
+      toast.current?.show({ severity: 'success', summary: 'Despacho Directo Creado', detail: `Despacho con ${directTransferLines.length} artículo(s) registrado en estado EN TRÁNSITO.` });
       setTransferDialogVisible(false);
+      setDirectTransferLines([]);
       fetchRequests();
       fetchTransfers();
     } catch (e: any) {
@@ -405,25 +444,16 @@ export default function WmsTransfersPage() {
                       }} 
                     />
 
-                    {/* ESTADO SOLICITADA -> Origen Acepta, Despacha o Rechaza */}
+                    {/* ESTADO SOLICITADA -> Únicamente Aceptar o Rechazar (NO despachar directamente) */}
                     {(r.status === 'REQUESTED' || r.status === 'DRAFT') && (
                       <>
                         <Button 
-                          label="Aceptar" 
-                          icon="pi pi-cog" 
+                          label="Aceptar Solicitud" 
+                          icon="pi pi-check-circle" 
                           severity="warning" 
                           size="small"
                           loading={actionLoadingId === r.id}
                           onClick={() => handleAcceptRequest(r.id)} 
-                          className="font-bold text-xs" 
-                        />
-                        <Button 
-                          label="Despachar" 
-                          icon="pi pi-send" 
-                          severity="info" 
-                          size="small"
-                          loading={actionLoadingId === r.id}
-                          onClick={() => handleDispatchRequest(r.id)} 
                           className="font-bold text-xs" 
                         />
                         <Button 
@@ -636,6 +666,149 @@ export default function WmsTransfersPage() {
         </div>
       </Dialog>
 
+      {/* DIÁLOGO NUEVO DESPACHO DIRECTO MULTIRRENGLÓN (SIN SOLICITUD PREVIA) */}
+      <Dialog 
+        header="Crear Despacho Directo Inter-Sucursales (Sin Solicitud)" 
+        visible={transferDialogVisible} 
+        onHide={() => { setTransferDialogVisible(false); setDirectTransferLines([]); }} 
+        style={{ width: '720px' }}
+      >
+        <div className="flex flex-col gap-4 py-2">
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800 font-medium flex items-center">
+            <i className="pi pi-send text-blue-600 text-lg mr-2"></i>
+            <span>Genera un despacho directo por iniciativa de la sucursal origen agregando múltiples productos. Pasará inmediatamente a <strong>EN TRÁNSITO 🚚</strong> para ser recibido en la tienda destino.</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Sucursal Origen (Despacha):</label>
+              <Dropdown 
+                value={srcFacilityId} 
+                options={(facilities || []).map(f => ({ label: f.name, value: f.id }))} 
+                onChange={(e) => setSrcFacilityId(e.value)} 
+                className="w-full text-xs font-bold"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Sucursal Destino (Recibe):</label>
+              <Dropdown 
+                value={destFacilityId} 
+                options={(facilities || []).map(f => ({ label: f.name, value: f.id }))} 
+                onChange={(e) => setDestFacilityId(e.value)} 
+                className="w-full text-xs font-bold"
+              />
+            </div>
+          </div>
+
+          {/* AGREGAR RENGLONES AL DESPACHO DIRECTO */}
+          <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 flex flex-col gap-3">
+            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center">
+              <i className="pi pi-box text-blue-600 mr-1.5"></i>Agregar Producto al Despacho Directo
+            </h3>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Producto / SKU:</label>
+              <Dropdown 
+                value={selectedVariantId}
+                options={productsList || []}
+                optionLabel="label"
+                optionValue="value"
+                filter
+                filterBy="label,sku,product_name"
+                showClear
+                onChange={(e) => setSelectedVariantId(e.value)}
+                placeholder="Buscar por nombre o SKU de producto..."
+                className="w-full text-xs font-bold bg-white"
+                style={{ width: '100%' }}
+                valueTemplate={(option, props) => {
+                  if (option) {
+                    return (
+                      <div className="truncate font-bold text-xs text-slate-800" title={option.label}>
+                        {option.label}
+                      </div>
+                    );
+                  }
+                  return <span className="text-slate-400 text-xs">{props.placeholder}</span>;
+                }}
+                itemTemplate={(option) => (
+                  <div className="truncate text-xs font-bold py-1" title={option.label}>
+                    {option.label}
+                  </div>
+                )}
+              />
+            </div>
+
+            <div className="flex items-end gap-3 pt-1">
+              <div className="w-36">
+                <label className="block text-xs font-bold text-slate-600 mb-1">Cantidad:</label>
+                <InputNumber 
+                  value={transferQty} 
+                  onValueChange={(e) => setTransferQty(e.value || 1)}
+                  min={1}
+                  className="w-full text-xs font-bold"
+                  inputClassName="w-full text-xs font-bold"
+                />
+              </div>
+
+              <Button 
+                label="Agregar al Despacho" 
+                icon="pi pi-plus" 
+                severity="info" 
+                onClick={handleAddDirectTransferLine} 
+                className="font-bold text-xs shadow-sm h-[38px] px-4" 
+              />
+            </div>
+          </div>
+
+          {/* TABLA DE RENGLONES DEL DESPACHO DIRECTO */}
+          <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+            <DataTable 
+              value={directTransferLines} 
+              emptyMessage="No se han agregado productos al despacho. Use el selector de arriba." 
+              size="small" 
+              stripedRows 
+              className="text-xs"
+            >
+              <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
+              <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800 line-clamp-2">{l.product_name}</span>} />
+              <Column header="CANTIDAD A DESPACHAR" field="qty" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{l.qty}</span>} />
+              <Column 
+                header="ACCIONES" 
+                align="center"
+                body={(_, options) => (
+                  <Button 
+                    icon="pi pi-trash" 
+                    severity="danger" 
+                    text 
+                    rounded 
+                    size="small" 
+                    onClick={() => handleRemoveDirectTransferLine(options.rowIndex)} 
+                  />
+                )} 
+              />
+            </DataTable>
+          </div>
+
+          <div className="flex justify-between items-center mt-2">
+            <span className="text-xs font-bold text-slate-500">
+              Total Renglones: <strong className="text-slate-800">{directTransferLines.length}</strong>
+            </span>
+            <div className="flex gap-2">
+              <Button label="Cancelar" text severity="secondary" onClick={() => { setTransferDialogVisible(false); setDirectTransferLines([]); }} />
+              <Button 
+                label="Emitir Despacho en Tránsito" 
+                icon="pi pi-send" 
+                severity="info" 
+                disabled={directTransferLines.length === 0}
+                loading={saving} 
+                onClick={createDirectTransfer} 
+                className="font-bold text-xs shadow-md" 
+              />
+            </div>
+          </div>
+        </div>
+      </Dialog>
+
       {/* DIÁLOGO CONFIRMAR RECEPCIÓN EN DESTINO CON OBSERVACIÓN POR PRODUCTO */}
       <Dialog 
         header={`Confirmar Recepción en Destino #${receivingRequest?.name || ''}`} 
@@ -763,89 +936,6 @@ export default function WmsTransfersPage() {
             </div>
           </div>
         )}
-      </Dialog>
-
-      {/* DIÁLOGO NUEVO DESPACHO DIRECTO (SIN SOLICITUD PREVIA) */}
-      <Dialog 
-        header="Crear Despacho Directo Inter-Sucursales (Sin Solicitud)" 
-        visible={transferDialogVisible} 
-        onHide={() => setTransferDialogVisible(false)} 
-        style={{ width: '500px', maxWidth: '95vw' }}
-      >
-        <div className="flex flex-col gap-4 py-2">
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800 font-medium flex items-center">
-            <i className="pi pi-send text-blue-600 text-lg mr-2"></i>
-            <span>Genera un despacho directo por iniciativa de la sucursal origen. Pasará directamente a estado <strong>EN TRÁNSITO 🚚</strong> para ser recibido en la tienda destino.</span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Sucursal Origen:</label>
-              <Dropdown 
-                value={srcFacilityId} 
-                options={(facilities || []).map(f => ({ label: f.name, value: f.id }))} 
-                onChange={(e) => setSrcFacilityId(e.value)} 
-                className="w-full text-xs font-bold"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Sucursal Destino:</label>
-              <Dropdown 
-                value={destFacilityId} 
-                options={(facilities || []).map(f => ({ label: f.name, value: f.id }))} 
-                onChange={(e) => setDestFacilityId(e.value)} 
-                className="w-full text-xs font-bold"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Producto a Despachar:</label>
-            <Dropdown 
-              value={selectedVariantId}
-              options={productsList || []}
-              optionLabel="label"
-              optionValue="value"
-              filter
-              filterBy="label,sku,product_name"
-              showClear
-              onChange={(e) => setSelectedVariantId(e.value)}
-              placeholder="Buscar por nombre o SKU..."
-              className="w-full text-xs font-bold min-w-0 max-w-full"
-              style={{ width: '100%' }}
-              valueTemplate={(option, props) => {
-                if (option) {
-                  return (
-                    <div className="truncate font-bold text-xs max-w-[340px] text-slate-800" title={option.label}>
-                      {option.label}
-                    </div>
-                  );
-                }
-                return <span className="text-slate-400 text-xs">{props.placeholder}</span>;
-              }}
-              itemTemplate={(option) => (
-                <div className="truncate text-xs font-bold py-1 max-w-[420px]" title={option.label}>
-                  {option.label}
-                </div>
-              )}
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad a Despachar:</label>
-            <InputNumber 
-              value={transferQty} 
-              onValueChange={(e) => setTransferQty(e.value || 1)}
-              min={1}
-              className="w-full"
-            />
-          </div>
-
-          <div className="flex justify-end gap-2 mt-3">
-            <Button label="Cancelar" text severity="secondary" onClick={() => setTransferDialogVisible(false)} />
-            <Button label="Emitir Despacho en Tránsito" severity="info" loading={saving} onClick={createDirectTransfer} className="font-bold" />
-          </div>
-        </div>
       </Dialog>
     </div>
   );
