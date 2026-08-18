@@ -9,6 +9,7 @@ import { Tag } from 'primereact/tag';
 import { Dialog } from 'primereact/dialog';
 import { Dropdown } from 'primereact/dropdown';
 import { InputNumber } from 'primereact/inputnumber';
+import { InputText } from 'primereact/inputtext';
 import api from '@/lib/api';
 
 export default function WmsLocationsPage() {
@@ -17,7 +18,7 @@ export default function WmsLocationsPage() {
   const [loading, setLoading] = useState(true);
   const toast = useRef<Toast>(null);
 
-  // Putaway state
+  // Reubicación (Putaway) state
   const [putawayDialogVisible, setPutawayDialogVisible] = useState(false);
   const [selectedWarehouse, setSelectedWarehouse] = useState<any>(null);
   const [targetLocationId, setTargetLocationId] = useState<number | null>(null);
@@ -25,6 +26,14 @@ export default function WmsLocationsPage() {
   const [productsList, setProductsList] = useState<any[]>([]);
   const [putawayQty, setPutawayQty] = useState<number>(1);
   const [executingPutaway, setExecutingPutaway] = useState(false);
+
+  // Nueva Ubicación state
+  const [newLocDialogVisible, setNewLocDialogVisible] = useState(false);
+  const [newLocWarehouseId, setNewLocWarehouseId] = useState<number | null>(null);
+  const [newLocName, setNewLocName] = useState<string>('');
+  const [newLocCode, setNewLocCode] = useState<string>('');
+  const [newLocType, setNewLocType] = useState<string>('SHELF');
+  const [creatingLocation, setCreatingLocation] = useState(false);
 
   const fetchTreeAndOccupancy = async () => {
     setLoading(true);
@@ -34,13 +43,18 @@ export default function WmsLocationsPage() {
         api.get('/wms/locations/occupancy').catch(() => ({ data: [] }))
       ]);
 
-      setTreeData(treeRes.data || []);
+      const tree = treeRes.data || [];
+      setTreeData(tree);
       
       const occMap: any = {};
       (occRes.data || []).forEach((item: any) => {
         occMap[item.id] = item;
       });
       setOccupancyData(occMap);
+
+      if (tree && tree.length > 0) {
+        setNewLocWarehouseId(tree[0].id);
+      }
     } catch (e) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo cargar el mapa de almacenes.' });
     }
@@ -49,20 +63,28 @@ export default function WmsLocationsPage() {
 
   const fetchProducts = async () => {
     try {
-      const res = await api.get('/products/?limit=100');
+      const res = await api.get('/products/?limit=2000');
       const formattedOptions: any[] = [];
-      
-      (res.data || []).forEach((p: any) => {
-        if (p.variants && Array.isArray(p.variants) && p.variants.length > 0) {
+      let prodList: any[] = [];
+      if (Array.isArray(res.data)) {
+        prodList = res.data;
+      } else if (res.data?.items && Array.isArray(res.data.items)) {
+        prodList = res.data.items;
+      } else if (res.data?.data && Array.isArray(res.data.data)) {
+        prodList = res.data.data;
+      }
+
+      prodList.forEach((p: any) => {
+        if (p && p.variants && Array.isArray(p.variants) && p.variants.length > 0) {
           p.variants.forEach((v: any) => {
             formattedOptions.push({
-              label: `${p.name} (SKU: ${v.sku || 'N/A'})`,
+              label: `${p.name || 'Producto'} ${v.sku ? `(SKU: ${v.sku})` : ''}`,
               value: v.id
             });
           });
-        } else {
+        } else if (p && p.id) {
           formattedOptions.push({
-            label: `${p.name} (ID: ${p.id})`,
+            label: `${p.name || 'Producto'} (ID: ${p.id})`,
             value: p.id
           });
         }
@@ -102,13 +124,39 @@ export default function WmsLocationsPage() {
         qty: putawayQty,
         dest_location_id: targetLocationId
       });
-      toast.current?.show({ severity: 'success', summary: 'Putaway Exitoso', detail: 'Mercancía movida a la ubicación destino.' });
+      toast.current?.show({ severity: 'success', summary: 'Reubicación Exitosa', detail: 'Mercancía movida a la ubicación destino.' });
       setPutawayDialogVisible(false);
       fetchTreeAndOccupancy();
     } catch (e: any) {
-      toast.current?.show({ severity: 'error', summary: 'Error Putaway', detail: e.response?.data?.detail || 'No se pudo realizar el movimiento.' });
+      toast.current?.show({ severity: 'error', summary: 'Error de Reubicación', detail: e.response?.data?.detail || 'No se pudo realizar el movimiento.' });
     }
     setExecutingPutaway(false);
+  };
+
+  const handleCreateLocation = async () => {
+    if (!newLocWarehouseId || !newLocName.trim() || !newLocCode.trim()) {
+      toast.current?.show({ severity: 'warn', summary: 'Campos Incompletos', detail: 'Por favor complete almacén, nombre y código de ubicación.' });
+      return;
+    }
+
+    setCreatingLocation(true);
+    try {
+      await api.post('/locations/', {
+        warehouse_id: newLocWarehouseId,
+        name: newLocName.trim(),
+        code: newLocCode.trim().toUpperCase(),
+        location_type: newLocType,
+        usage: 'INTERNAL'
+      });
+      toast.current?.show({ severity: 'success', summary: 'Ubicación Creada', detail: `Ubicación ${newLocName} registrada con éxito.` });
+      setNewLocDialogVisible(false);
+      setNewLocName('');
+      setNewLocCode('');
+      fetchTreeAndOccupancy();
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error al Crear', detail: e.response?.data?.detail || 'No se pudo registrar la ubicación.' });
+    }
+    setCreatingLocation(false);
   };
 
   const getLocationTypeSeverity = (type: string) => {
@@ -160,6 +208,13 @@ export default function WmsLocationsPage() {
     }));
   }, [selectedWarehouse]);
 
+  const locationTypeOptions = [
+    { label: 'Estante / Rack (SHELF)', value: 'SHELF' },
+    { label: 'Muelle Descarga (DOCK)', value: 'DOCK' },
+    { label: 'Merma / Dañados (LOSS)', value: 'LOSS' },
+    { label: 'Ubicación Interna (INTERNAL)', value: 'INTERNAL' }
+  ];
+
   return (
     <div className="p-4 sm:p-8 w-full max-w-[1400px] mx-auto fade-in">
       <Toast ref={toast} position="bottom-right" />
@@ -174,13 +229,22 @@ export default function WmsLocationsPage() {
           <p className="text-slate-500 text-sm mt-1">Estructura jerárquica de depósitos, bahías y estantes con control de Reubicación de Mercancía.</p>
         </div>
         
-        <Button
-          icon="pi pi-refresh"
-          rounded
-          outlined
-          className="font-bold text-slate-600 border-slate-300 hover:bg-slate-50"
-          onClick={fetchTreeAndOccupancy}
-        />
+        <div className="flex items-center gap-3">
+          <Button 
+            label="Nueva Ubicación / Estante" 
+            icon="pi pi-plus" 
+            severity="success" 
+            className="font-bold shadow-md"
+            onClick={() => setNewLocDialogVisible(true)} 
+          />
+          <Button
+            icon="pi pi-refresh"
+            rounded
+            outlined
+            className="font-bold text-slate-600 border-slate-300 hover:bg-slate-50"
+            onClick={fetchTreeAndOccupancy}
+          />
+        </div>
       </div>
 
       {loading ? (
@@ -202,7 +266,7 @@ export default function WmsLocationsPage() {
                     <Tag value="CD (DOCK)" severity="warning" className="text-[10px] font-bold" />
                   )}
                   <Button 
-                    label="Putaway" 
+                    label="Reubicar Mercancía" 
                     icon="pi pi-arrow-right-arrow-left" 
                     size="small" 
                     severity="success"
@@ -214,11 +278,11 @@ export default function WmsLocationsPage() {
 
               <div className="p-4 flex-1">
                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Ubicaciones y Pasillos ({wh.locations?.length || 0})</h4>
-                <DataTable value={wh.locations || []} size="small" className="p-datatable-sm text-slate-700" stripedRows emptyMessage="No hay ubicaciones en este almacén.">
+                <DataTable value={wh.locations || []} size="small" className="p-datatable-sm text-slate-700" stripedRows emptyMessage="No hay ubicaciones en este almacén. Use el botón superior para crear la primera.">
                   <Column header="CÓDIGO" field="code" body={l => <span className="font-mono text-xs font-bold bg-slate-100 px-2 py-1 rounded text-slate-700">{l.code}</span>} sortable />
                   <Column header="NOMBRE UBICACIÓN" field="name" body={l => <span className="font-bold text-slate-800">{l.name}</span>} sortable />
                   <Column header="TIPO" body={l => <Tag severity={getLocationTypeSeverity(l.location_type)} value={l.location_type} className="text-[10px] font-bold" />} sortable />
-                  <Column header="SATURACIÓN VOLUMÉTRICA (MAPA TÉRMICO)" body={occupancyTemplate} align="right" />
+                  <Column header="SATURACIÓN VOLUMÉTRICA" body={occupancyTemplate} />
                 </DataTable>
               </div>
             </div>
@@ -226,60 +290,132 @@ export default function WmsLocationsPage() {
         </div>
       )}
 
-      {/* DIÁLOGO PUTAWAY */}
-      <Dialog
-        header="Ejecutar Movimiento Putaway (Acomodo en Estante)"
-        visible={putawayDialogVisible}
-        onHide={() => setPutawayDialogVisible(false)}
-        style={{ width: '480px' }}
+      {/* DIÁLOGO NUEVA UBICACIÓN / ESTANTE */}
+      <Dialog 
+        header="Crear Nueva Ubicación en Almacén" 
+        visible={newLocDialogVisible} 
+        onHide={() => setNewLocDialogVisible(false)} 
+        style={{ width: '500px' }}
       >
-        {selectedWarehouse && (
-          <div className="flex flex-col gap-4 py-2">
-            <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-              <p className="text-xs text-slate-500">Almacén Seleccionado:</p>
-              <p className="font-bold text-slate-800">{selectedWarehouse.name} ({selectedWarehouse.code})</p>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Producto a Reubicar:</label>
-              <Dropdown 
-                value={variantId}
-                options={productsList}
-                onChange={(e) => setVariantId(e.value)}
-                placeholder="Seleccionar producto..."
-                filter
-                className="w-full text-xs font-bold"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Ubicación Destino (Pasillo / Estante):</label>
-              <Dropdown 
-                value={targetLocationId}
-                options={locationOptions}
-                onChange={(e) => setTargetLocationId(e.value)}
-                placeholder="Seleccionar estante destino..."
-                filter
-                className="w-full text-xs font-bold"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Cantidad a Mover:</label>
-              <InputNumber 
-                value={putawayQty} 
-                onValueChange={(e) => setPutawayQty(e.value || 1)}
-                min={1}
-                className="w-full"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 mt-3 pt-3 border-t border-slate-200">
-              <Button label="Cancelar" text severity="secondary" onClick={() => setPutawayDialogVisible(false)} />
-              <Button label="Confirmar Putaway" icon="pi pi-check" severity="success" loading={executingPutaway} onClick={submitPutaway} className="font-bold" />
-            </div>
+        <div className="flex flex-col gap-4 py-2">
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800 font-medium flex items-center">
+            <i className="pi pi-plus-circle text-emerald-600 text-lg mr-2"></i>
+            <span>Agregue un nuevo pasillo, estante o posición dentro del almacén seleccionado.</span>
           </div>
-        )}
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Almacén / Depósito:</label>
+            <Dropdown 
+              value={newLocWarehouseId}
+              options={treeData.map(wh => ({ label: wh.name, value: wh.id }))}
+              onChange={(e) => setNewLocWarehouseId(e.value)}
+              className="w-full text-xs font-bold"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Nombre de la Ubicación:</label>
+            <InputText 
+              value={newLocName}
+              onChange={(e) => setNewLocName(e.target.value)}
+              placeholder="Ej. Pasillo A - Estante 01 - Nivel 2"
+              className="w-full text-xs"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Código de la Ubicación:</label>
+            <InputText 
+              value={newLocCode}
+              onChange={(e) => setNewLocCode(e.target.value)}
+              placeholder="Ej. PAS-A-EST01"
+              className="w-full text-xs font-mono font-bold"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Tipo de Ubicación:</label>
+            <Dropdown 
+              value={newLocType}
+              options={locationTypeOptions}
+              onChange={(e) => setNewLocType(e.value)}
+              className="w-full text-xs font-bold"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 mt-3">
+            <Button label="Cancelar" text severity="secondary" onClick={() => setNewLocDialogVisible(false)} />
+            <Button 
+              label="Guardar Ubicación" 
+              icon="pi pi-check" 
+              severity="success" 
+              loading={creatingLocation}
+              onClick={handleCreateLocation} 
+              className="font-bold text-xs shadow-md" 
+            />
+          </div>
+        </div>
+      </Dialog>
+
+      {/* DIÁLOGO REUBICACIÓN (PUTAWAY) */}
+      <Dialog 
+        header={`Reubicación de Mercancía (${selectedWarehouse?.name || ''})`} 
+        visible={putawayDialogVisible} 
+        onHide={() => setPutawayDialogVisible(false)} 
+        style={{ width: '500px' }}
+      >
+        <div className="flex flex-col gap-4 py-2">
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800 font-medium flex items-center">
+            <i className="pi pi-arrow-right-arrow-left text-blue-600 text-lg mr-2"></i>
+            <span>Mueva mercancía de recepción a su posición o estante definitivo. El movimiento quedará <strong>auditado con su usuario</strong>.</span>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Producto a Reubicar:</label>
+            <Dropdown 
+              value={variantId}
+              options={productsList}
+              onChange={(e) => setVariantId(e.value)}
+              placeholder="Seleccionar variante o SKU..."
+              filter
+              showClear
+              className="w-full text-xs font-bold"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Ubicación Destino en Almacén:</label>
+            <Dropdown 
+              value={targetLocationId}
+              options={locationOptions}
+              onChange={(e) => setTargetLocationId(e.value)}
+              placeholder="Seleccionar estante/posicion..."
+              className="w-full text-xs font-bold"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad a Mover:</label>
+            <InputNumber 
+              value={putawayQty}
+              onValueChange={(e) => setPutawayQty(e.value || 1)}
+              min={1}
+              className="w-full"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 mt-3">
+            <Button label="Cancelar" text severity="secondary" onClick={() => setPutawayDialogVisible(false)} />
+            <Button 
+              label="Confirmar Reubicación" 
+              icon="pi pi-check" 
+              severity="success" 
+              loading={executingPutaway}
+              onClick={submitPutaway} 
+              className="font-bold text-xs shadow-md" 
+            />
+          </div>
+        </div>
       </Dialog>
     </div>
   );
