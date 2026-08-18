@@ -18,6 +18,10 @@ export default function WmsLocationsPage() {
   const [loading, setLoading] = useState(true);
   const toast = useRef<Toast>(null);
 
+  // Sucursales y Filtro Activo
+  const [facilities, setFacilities] = useState<any[]>([]);
+  const [selectedFacilityFilter, setSelectedFacilityFilter] = useState<number | null>(null);
+
   // Reubicación (Putaway) state
   const [putawayDialogVisible, setPutawayDialogVisible] = useState(false);
   const [selectedWarehouse, setSelectedWarehouse] = useState<any>(null);
@@ -27,19 +31,42 @@ export default function WmsLocationsPage() {
   const [putawayQty, setPutawayQty] = useState<number>(1);
   const [executingPutaway, setExecutingPutaway] = useState(false);
 
+  // Nuevo Almacén / Depósito state
+  const [newWhDialogVisible, setNewWhDialogVisible] = useState(false);
+  const [newWhFacilityId, setNewWhFacilityId] = useState<number | null>(null);
+  const [newWhName, setNewWhName] = useState<string>('');
+  const [newWhCode, setNewWhCode] = useState<string>('');
+  const [creatingWarehouse, setCreatingWarehouse] = useState(false);
+
   // Nueva Ubicación state
   const [newLocDialogVisible, setNewLocDialogVisible] = useState(false);
+  const [newLocFacilityId, setNewLocFacilityId] = useState<number | null>(null);
   const [newLocWarehouseId, setNewLocWarehouseId] = useState<number | null>(null);
   const [newLocName, setNewLocName] = useState<string>('');
   const [newLocCode, setNewLocCode] = useState<string>('');
   const [newLocType, setNewLocType] = useState<string>('SHELF');
   const [creatingLocation, setCreatingLocation] = useState(false);
 
-  const fetchTreeAndOccupancy = async () => {
+  const fetchFacilities = async () => {
+    try {
+      const res = await api.get('/facilities/');
+      const facData = Array.isArray(res.data) ? res.data : (res.data?.items || res.data?.data || []);
+      setFacilities(facData);
+      if (facData && facData.length > 0) {
+        setNewWhFacilityId(facData[0].id);
+        setNewLocFacilityId(facData[0].id);
+      }
+    } catch (e) {
+      console.error("Error cargando sucursales:", e);
+    }
+  };
+
+  const fetchTreeAndOccupancy = async (facilityId?: number | null) => {
     setLoading(true);
     try {
+      const url = facilityId ? `/wms/locations/tree?facility_id=${facilityId}` : '/wms/locations/tree';
       const [treeRes, occRes] = await Promise.all([
-        api.get('/wms/locations/tree').catch(() => ({ data: [] })),
+        api.get(url).catch(() => ({ data: [] })),
         api.get('/wms/locations/occupancy').catch(() => ({ data: [] }))
       ]);
 
@@ -52,7 +79,7 @@ export default function WmsLocationsPage() {
       });
       setOccupancyData(occMap);
 
-      if (tree && tree.length > 0) {
+      if (tree && tree.length > 0 && !newLocWarehouseId) {
         setNewLocWarehouseId(tree[0].id);
       }
     } catch (e) {
@@ -97,9 +124,15 @@ export default function WmsLocationsPage() {
   };
 
   useEffect(() => {
-    fetchTreeAndOccupancy();
+    fetchFacilities();
+    fetchTreeAndOccupancy(selectedFacilityFilter);
     fetchProducts();
   }, []);
+
+  const handleFacilityFilterChange = (facId: number | null) => {
+    setSelectedFacilityFilter(facId);
+    fetchTreeAndOccupancy(facId);
+  };
 
   const openPutaway = (wh: any) => {
     if (!wh) return;
@@ -126,11 +159,35 @@ export default function WmsLocationsPage() {
       });
       toast.current?.show({ severity: 'success', summary: 'Reubicación Exitosa', detail: 'Mercancía movida a la ubicación destino.' });
       setPutawayDialogVisible(false);
-      fetchTreeAndOccupancy();
+      fetchTreeAndOccupancy(selectedFacilityFilter);
     } catch (e: any) {
       toast.current?.show({ severity: 'error', summary: 'Error de Reubicación', detail: e.response?.data?.detail || 'No se pudo realizar el movimiento.' });
     }
     setExecutingPutaway(false);
+  };
+
+  const handleCreateWarehouse = async () => {
+    if (!newWhFacilityId || !newWhName.trim() || !newWhCode.trim()) {
+      toast.current?.show({ severity: 'warn', summary: 'Campos Incompletos', detail: 'Por favor complete sucursal, nombre y código de almacén.' });
+      return;
+    }
+
+    setCreatingWarehouse(true);
+    try {
+      await api.post('/warehouses/', {
+        facility_id: newWhFacilityId,
+        name: newWhName.trim(),
+        code: newWhCode.trim().toUpperCase()
+      });
+      toast.current?.show({ severity: 'success', summary: 'Almacén Creado', detail: `Almacén ${newWhName} registrado con éxito.` });
+      setNewWhDialogVisible(false);
+      setNewWhName('');
+      setNewWhCode('');
+      fetchTreeAndOccupancy(selectedFacilityFilter);
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error al Crear', detail: e.response?.data?.detail || 'No se pudo registrar el almacén.' });
+    }
+    setCreatingWarehouse(false);
   };
 
   const handleCreateLocation = async () => {
@@ -152,7 +209,7 @@ export default function WmsLocationsPage() {
       setNewLocDialogVisible(false);
       setNewLocName('');
       setNewLocCode('');
-      fetchTreeAndOccupancy();
+      fetchTreeAndOccupancy(selectedFacilityFilter);
     } catch (e: any) {
       toast.current?.show({ severity: 'error', summary: 'Error al Crear', detail: e.response?.data?.detail || 'No se pudo registrar la ubicación.' });
     }
@@ -208,6 +265,12 @@ export default function WmsLocationsPage() {
     }));
   }, [selectedWarehouse]);
 
+  // Almacenes filtrados para el modal de Nueva Ubicación
+  const filteredWarehousesForNewLoc = React.useMemo(() => {
+    if (!newLocFacilityId) return treeData;
+    return treeData.filter(wh => wh.facility_id === newLocFacilityId);
+  }, [treeData, newLocFacilityId]);
+
   const locationTypeOptions = [
     { label: 'Estante / Rack (SHELF)', value: 'SHELF' },
     { label: 'Muelle Descarga (DOCK)', value: 'DOCK' },
@@ -220,45 +283,80 @@ export default function WmsLocationsPage() {
       <Toast ref={toast} position="bottom-right" />
       
       {/* Header */}
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden">
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-2 h-full bg-emerald-500"></div>
         <div className="pl-4">
           <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center">
             <i className="pi pi-sitemap text-emerald-500 mr-3"></i>Mapa Térmico de Almacenes y Reubicación
           </h1>
-          <p className="text-slate-500 text-sm mt-1">Estructura jerárquica de depósitos, bahías y estantes con control de Reubicación de Mercancía.</p>
+          <p className="text-slate-500 text-sm mt-1">Estructura jerárquica por sucursales, depósitos y estantes con control volumétrico.</p>
         </div>
         
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Selector de Sucursal Filtro */}
+          <div className="w-56">
+            <Dropdown
+              value={selectedFacilityFilter}
+              options={[
+                { label: '🌐 Todas las Sucursales', value: null },
+                ...facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }))
+              ]}
+              onChange={(e) => handleFacilityFilterChange(e.value)}
+              placeholder="Filtrar por Sucursal..."
+              className="w-full text-xs font-bold"
+            />
+          </div>
+
+          <Button 
+            label="Nuevo Almacén" 
+            icon="pi pi-building" 
+            severity="info" 
+            className="font-bold text-xs shadow-md"
+            onClick={() => setNewWhDialogVisible(true)} 
+          />
+
           <Button 
             label="Nueva Ubicación / Estante" 
             icon="pi pi-plus" 
             severity="success" 
-            className="font-bold shadow-md"
-            onClick={() => setNewLocDialogVisible(true)} 
+            className="font-bold text-xs shadow-md"
+            onClick={() => {
+              if (filteredWarehousesForNewLoc.length > 0) {
+                setNewLocWarehouseId(filteredWarehousesForNewLoc[0].id);
+              }
+              setNewLocDialogVisible(true);
+            }} 
           />
+
           <Button
             icon="pi pi-refresh"
             rounded
             outlined
             className="font-bold text-slate-600 border-slate-300 hover:bg-slate-50"
-            onClick={fetchTreeAndOccupancy}
+            onClick={() => fetchTreeAndOccupancy(selectedFacilityFilter)}
           />
         </div>
       </div>
 
       {loading ? (
-        <div className="p-8 text-slate-500 font-bold flex items-center"><i className="pi pi-spin pi-spinner text-2xl mr-3 text-emerald-500"></i> Cargando mapa térmico...</div>
+        <div className="p-8 text-slate-500 font-bold flex items-center"><i className="pi pi-spin pi-spinner text-2xl mr-3 text-emerald-500"></i> Cargando mapa térmico de almacenes...</div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {treeData.map((wh) => (
             <div key={wh.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-              <div className="p-5 border-b border-slate-100 bg-slate-800 text-white flex justify-between items-center">
+              <div className="p-5 border-b border-slate-100 bg-slate-800 text-white flex justify-between items-center flex-wrap gap-2">
                 <div>
-                  <h3 className="font-black text-lg flex items-center gap-2 text-white">
-                    <i className="pi pi-building text-emerald-400"></i> {wh.name}
-                  </h3>
-                  <p className="text-xs text-slate-400 font-mono mt-0.5">CÓD: {wh.code}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-black text-lg flex items-center gap-2 text-white">
+                      <i className="pi pi-building text-emerald-400"></i> {wh.name}
+                    </h3>
+                    <Tag 
+                      value={`🏢 SUCURSAL: ${wh.facility_name || 'General'}`} 
+                      severity="info" 
+                      className="text-[10px] font-black uppercase bg-blue-600 text-white px-2 py-0.5" 
+                    />
+                  </div>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5">CÓDIGO ALMACÉN: {wh.code}</p>
                 </div>
                 
                 <div className="flex items-center gap-2">
@@ -290,27 +388,101 @@ export default function WmsLocationsPage() {
         </div>
       )}
 
+      {/* DIÁLOGO NUEVO ALMACÉN / DEPÓSITO */}
+      <Dialog 
+        header="Crear Nuevo Almacén / Depósito" 
+        visible={newWhDialogVisible} 
+        onHide={() => setNewWhDialogVisible(false)} 
+        style={{ width: '500px' }}
+      >
+        <div className="flex flex-col gap-4 py-2">
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800 font-medium flex items-center">
+            <i className="pi pi-building text-blue-600 text-lg mr-2"></i>
+            <span>Registre un nuevo almacén asignándolo explícitamente a su <strong>Sucursal / Sede</strong>.</span>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Sucursal / Sede Propietaria:</label>
+            <Dropdown 
+              value={newWhFacilityId}
+              options={facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }))}
+              onChange={(e) => setNewWhFacilityId(e.value)}
+              className="w-full text-xs font-bold"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Nombre del Almacén:</label>
+            <InputText 
+              value={newWhName}
+              onChange={(e) => setNewWhName(e.target.value)}
+              placeholder="Ej. Depósito Principal, Cámara Fría, Almacén B..."
+              className="w-full text-xs"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Código del Almacén:</label>
+            <InputText 
+              value={newWhCode}
+              onChange={(e) => setNewWhCode(e.target.value)}
+              placeholder="Ej. ALM-PRINCIPAL, CAM-FRIA"
+              className="w-full text-xs font-mono font-bold"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 mt-3">
+            <Button label="Cancelar" text severity="secondary" onClick={() => setNewWhDialogVisible(false)} />
+            <Button 
+              label="Guardar Almacén" 
+              icon="pi pi-check" 
+              severity="info" 
+              loading={creatingWarehouse}
+              onClick={handleCreateWarehouse} 
+              className="font-bold text-xs shadow-md" 
+            />
+          </div>
+        </div>
+      </Dialog>
+
       {/* DIÁLOGO NUEVA UBICACIÓN / ESTANTE */}
       <Dialog 
         header="Crear Nueva Ubicación en Almacén" 
         visible={newLocDialogVisible} 
         onHide={() => setNewLocDialogVisible(false)} 
-        style={{ width: '500px' }}
+        style={{ width: '520px' }}
       >
         <div className="flex flex-col gap-4 py-2">
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800 font-medium flex items-center">
             <i className="pi pi-plus-circle text-emerald-600 text-lg mr-2"></i>
-            <span>Agregue un nuevo pasillo, estante o posición dentro del almacén seleccionado.</span>
+            <span>Agregue un nuevo pasillo, estante o posición dentro del almacén y sucursal correspondientes.</span>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Almacén / Depósito:</label>
-            <Dropdown 
-              value={newLocWarehouseId}
-              options={treeData.map(wh => ({ label: wh.name, value: wh.id }))}
-              onChange={(e) => setNewLocWarehouseId(e.value)}
-              className="w-full text-xs font-bold"
-            />
+          <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Sucursal / Sede:</label>
+              <Dropdown 
+                value={newLocFacilityId}
+                options={facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }))}
+                onChange={(e) => {
+                  setNewLocFacilityId(e.value);
+                  const firstWh = treeData.find(wh => wh.facility_id === e.value);
+                  if (firstWh) setNewLocWarehouseId(firstWh.id);
+                }}
+                className="w-full text-xs font-bold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Almacén / Depósito:</label>
+              <Dropdown 
+                value={newLocWarehouseId}
+                options={filteredWarehousesForNewLoc.map(wh => ({ label: `${wh.name} (${wh.code})`, value: wh.id }))}
+                onChange={(e) => setNewLocWarehouseId(e.value)}
+                placeholder="Seleccionar Almacén..."
+                className="w-full text-xs font-bold"
+              />
+            </div>
           </div>
 
           <div>

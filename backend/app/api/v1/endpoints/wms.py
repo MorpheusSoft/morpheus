@@ -776,6 +776,8 @@ def get_locations_tree(facility_id: Optional[int] = None, db: Session = Depends(
     warehouses = warehouses_q.all()
     tree = []
 
+    facilities_map = {f.id: f.name for f in db.query(Facility).all()}
+
     for wh in warehouses:
         locs = db.query(Location).filter(Location.warehouse_id == wh.id).all()
         loc_data = []
@@ -791,11 +793,13 @@ def get_locations_tree(facility_id: Optional[int] = None, db: Session = Depends(
                 "parent_id": l.parent_id
             })
         
+        fac_name = facilities_map.get(wh.facility_id, f"Sucursal #{wh.facility_id}") if wh.facility_id else "General / Global"
         tree.append({
             "id": wh.id,
             "name": wh.name,
             "code": wh.code,
             "facility_id": wh.facility_id,
+            "facility_name": fac_name,
             "requires_dock_staging": wh.requires_dock_staging,
             "locations": loc_data
         })
