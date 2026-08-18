@@ -13,6 +13,28 @@ import { InputText } from 'primereact/inputtext';
 import { TabView, TabPanel } from 'primereact/tabview';
 import api from '@/lib/api';
 
+// Componente para input de observaciones por línea con estado propio (evita pérdida de foco en re-renderizado)
+const LineNotesInput = ({ initialValue, onChange }: { initialValue: string, onChange: (val: string) => void }) => {
+  const [value, setValue] = useState(initialValue || '');
+
+  useEffect(() => {
+    setValue(initialValue || '');
+  }, [initialValue]);
+
+  return (
+    <InputText 
+      value={value} 
+      onChange={(e) => {
+        const text = e.target.value;
+        setValue(text);
+        onChange(text);
+      }}
+      placeholder="Ej. Caja abollada, merma, OK..."
+      className="w-full text-xs font-medium"
+    />
+  );
+};
+
 export default function WmsTransfersPage() {
   const [transfers, setTransfers] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
@@ -36,6 +58,7 @@ export default function WmsTransfersPage() {
   const [receiveDialogVisible, setReceiveDialogVisible] = useState(false);
   const [receivingRequest, setReceivingRequest] = useState<any>(null);
   const [receiveLines, setReceiveLines] = useState<any[]>([]);
+  const [generalNotes, setGeneralNotes] = useState<string>('');
 
   const [facilities, setFacilities] = useState<any[]>([]);
   const [srcFacilityId, setSrcFacilityId] = useState<number | null>(null);
@@ -273,6 +296,7 @@ export default function WmsTransfersPage() {
   // Abrir Modal de Recepción en Destino
   const handleOpenReceiveModal = (request: any) => {
     setReceivingRequest(request);
+    setGeneralNotes('');
     setReceiveLines((request.lines || []).map((l: any) => ({
       move_id: l.id,
       sku: l.sku,
@@ -290,10 +314,11 @@ export default function WmsTransfersPage() {
     setSaving(true);
     try {
       await api.post(`/wms-transfers/requests/${receivingRequest.id}/receive`, {
+        general_notes: generalNotes,
         lines: receiveLines.map(l => ({
           move_id: l.move_id,
           quantity_received: l.quantity_received,
-          notes: l.notes
+          notes: l.notes || ''
         }))
       });
       toast.current?.show({ severity: 'success', summary: 'Recepción Conforme', detail: 'Mercancía ingresada al inventario de la tienda destino.' });
@@ -814,15 +839,27 @@ export default function WmsTransfersPage() {
         header={`Confirmar Recepción en Destino #${receivingRequest?.name || ''}`} 
         visible={receiveDialogVisible} 
         onHide={() => { setReceiveDialogVisible(false); setReceivingRequest(null); }} 
-        style={{ width: '800px', maxWidth: '95vw' }}
+        style={{ width: '850px', maxWidth: '95vw' }}
       >
         {receivingRequest && (
           <div className="flex flex-col gap-4 py-2">
             <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800 font-medium flex items-center">
               <i className="pi pi-box text-emerald-600 text-lg mr-2"></i>
-              <span>Verifique las cantidades recibidas físicamente. Puede añadir una <strong>observación opcional</strong> en cada producto en caso de mermas, daños o novedades.</span>
+              <span>Verifique las cantidades recibidas físicamente. Puede escribir una <strong>observación opcional</strong> por cada producto o para toda la recepción.</span>
             </div>
 
+            {/* NOTA GENERAL DE LA RECEPCIÓN */}
+            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+              <label className="block text-xs font-bold text-slate-700 mb-1">Observación General de la Recepción (Opcional):</label>
+              <InputText 
+                value={generalNotes}
+                onChange={(e) => setGeneralNotes(e.target.value)}
+                placeholder="Ej. Chofer entregó precinto roto, factura Nro 1234, recepcionado conforme por turno mañana..."
+                className="w-full text-xs font-medium bg-white"
+              />
+            </div>
+
+            {/* TABLA DE RENGLONES CON CAMPOS DE CANTIDAD Y OBSERVACIÓN POR PRODUCTO */}
             <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <DataTable value={receiveLines} size="small" stripedRows className="text-xs">
                 <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
@@ -836,7 +873,7 @@ export default function WmsTransfersPage() {
                       value={l.quantity_received} 
                       onValueChange={(e) => {
                         const updated = [...receiveLines];
-                        updated[options.rowIndex].quantity_received = e.value || 0;
+                        updated[options.rowIndex].quantity_received = e.value !== null && e.value !== undefined ? e.value : 0;
                         setReceiveLines(updated);
                       }}
                       min={0}
@@ -846,16 +883,13 @@ export default function WmsTransfersPage() {
                 />
                 <Column 
                   header="OBSERVACIÓN POR PRODUCTO (OPCIONAL)" 
+                  style={{ width: '300px' }}
                   body={(l, options) => (
-                    <InputText 
-                      value={l.notes} 
-                      onChange={(e) => {
-                        const updated = [...receiveLines];
-                        updated[options.rowIndex].notes = e.target.value;
-                        setReceiveLines(updated);
-                      }}
-                      placeholder="Ej. Caja abollada, merma, OK..."
-                      className="w-full text-xs"
+                    <LineNotesInput 
+                      initialValue={l.notes} 
+                      onChange={(newNote) => {
+                        receiveLines[options.rowIndex].notes = newNote;
+                      }} 
                     />
                   )} 
                 />

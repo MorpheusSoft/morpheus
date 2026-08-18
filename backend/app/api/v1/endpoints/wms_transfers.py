@@ -200,6 +200,7 @@ class ReceptionLineInput(BaseModel):
     notes: Optional[str] = None
 
 class ReceiveReplenishmentPayload(BaseModel):
+    general_notes: Optional[str] = None
     lines: List[ReceptionLineInput]
 
 @router.get("/requests")
@@ -446,6 +447,8 @@ def receive_replenishment_request(
     picking.date_done = func.now()
     if user_id_val:
         picking.received_by_id = user_id_val
+    if payload.general_notes:
+        picking.origin_document = f"{picking.origin_document or ''} | Obs: {payload.general_notes}".strip()
 
     db.commit()
     return {"message": "Mercancía recibida conforme y stock cargado en destino", "request_id": picking.id, "status": "DONE"}
