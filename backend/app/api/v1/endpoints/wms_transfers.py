@@ -57,6 +57,34 @@ def get_or_create_facility_warehouse_and_location(db: Session, facility_id: int)
 
     return wh, loc
 
+def get_or_create_transit_warehouse_and_location(db: Session):
+    wh = db.query(Warehouse).filter(Warehouse.is_transit == True).first()
+    if not wh:
+        wh = db.query(Warehouse).filter(Warehouse.code == 'WH-TRANSIT').first()
+    if not wh:
+        wh = Warehouse(
+            name="Almacén de Tránsito Virtual",
+            code="WH-TRANSIT",
+            facility_id=1,
+            is_transit=True
+        )
+        db.add(wh)
+        db.flush()
+
+    loc = db.query(Location).filter(Location.warehouse_id == wh.id).first()
+    if not loc:
+        loc = Location(
+            name="Ubicación de Tránsito Virtual",
+            code="LOC-TRANSIT-01",
+            barcode="LOC-TRANSIT-01",
+            warehouse_id=wh.id,
+            usage="TRANSIT"
+        )
+        db.add(loc)
+        db.flush()
+
+    return wh, loc
+
 @router.get("/")
 def list_transfers(facility_id: Optional[int] = None, db: Session = Depends(get_db)):
     picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'INTERNAL').first()
@@ -91,6 +119,7 @@ def create_inter_facility_transfer(
 
     src_wh, src_loc = get_or_create_facility_warehouse_and_location(db, payload.src_facility_id)
     dest_wh, dest_loc = get_or_create_facility_warehouse_and_location(db, payload.dest_facility_id)
+    transit_wh, transit_loc = get_or_create_transit_warehouse_and_location(db)
 
     picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'INTERNAL').first()
     if not picking_type:
@@ -107,8 +136,9 @@ def create_inter_facility_transfer(
         origin_document=f"Despacho Directo Sucursal #{payload.src_facility_id} a #{payload.dest_facility_id}",
         facility_id=payload.src_facility_id,
         dest_facility_id=payload.dest_facility_id,
-        status='DONE',
-        date_done=func.now(),
+        status='IN_TRANSIT',
+        shipped_at=func.now(),
+        shipped_by_id=user_id_val,
         created_by_id=user_id_val
     )
     db.add(picking)
@@ -123,17 +153,17 @@ def create_inter_facility_transfer(
             picking_id=picking.id,
             product_id=line.variant_id,
             location_src_id=src_loc.id,
-            location_dest_id=dest_loc.id,
+            location_dest_id=transit_loc.id,
             quantity_demand=qty,
-            quantity_done=qty,
-            state='DONE',
+            quantity_done=0.0,
+            state='IN_TRANSIT',
             batch_id=line.batch_id,
             reference=ref,
             created_by_id=user_id_val
         )
         db.add(move)
 
-        # Descontar del origen
+        # Descontar del inventario disponible de Origen
         src_snap = db.query(InventorySnapshot).filter(
             InventorySnapshot.variant_id == line.variant_id,
             InventorySnapshot.facility_id == payload.src_facility_id
@@ -141,26 +171,8 @@ def create_inter_facility_transfer(
         if src_snap:
             src_snap.stock_qty = max(0.0, float(src_snap.stock_qty or 0) - qty)
 
-        # Sumar al destino
-        dest_snap = db.query(InventorySnapshot).filter(
-            InventorySnapshot.variant_id == line.variant_id,
-            InventorySnapshot.facility_id == payload.dest_facility_id
-        ).first()
-        if dest_snap:
-            dest_snap.stock_qty = float(dest_snap.stock_qty or 0) + qty
-        else:
-            dest_snap = InventorySnapshot(
-                variant_id=line.variant_id,
-                facility_id=payload.dest_facility_id,
-                batch_id=line.batch_id,
-                stock_qty=qty,
-                avg_cost=src_snap.avg_cost if src_snap else 0.0,
-                current_cost=src_snap.current_cost if src_snap else 0.0
-            )
-            db.add(dest_snap)
-
     db.commit()
-    return {"message": "Transferencia ejecutada con éxito", "picking_id": picking.id, "reference": ref}
+    return {"message": "Despacho directo en tránsito creado con éxito", "picking_id": picking.id, "reference": ref, "status": "IN_TRANSIT"}
 
 # ==========================================
 # SOLICITUDES DE REABASTECIMIENTO INTERNO
@@ -176,6 +188,14 @@ class ReplenishmentRequestPayload(BaseModel):
     dest_facility_id: int
     notes: Optional[str] = None
     lines: List[ReplenishmentRequestLineInput]
+
+class ReceptionLineInput(BaseModel):
+    move_id: int
+    quantity_received: float
+    notes: Optional[str] = None
+
+class ReceiveReplenishmentPayload(BaseModel):
+    lines: List[ReceptionLineInput]
 
 @router.get("/requests")
 def list_replenishment_requests(
@@ -205,11 +225,15 @@ def list_replenishment_requests(
     pickings = q.order_by(StockPicking.id.desc()).limit(100).all()
 
     facilities_map = {f.id: f.name for f in db.query(Facility).all()}
+    users_map = {u.id: f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email for u in db.query(User).all()}
 
     results = []
     for p in pickings:
         src_name = facilities_map.get(p.facility_id, f"Sucursal #{p.facility_id}")
         dest_name = facilities_map.get(p.dest_facility_id, f"Sucursal #{p.dest_facility_id}") if p.dest_facility_id else "N/A"
+        shipped_by_name = users_map.get(p.shipped_by_id, "N/A") if p.shipped_by_id else "N/A"
+        received_by_name = users_map.get(p.received_by_id, "N/A") if p.received_by_id else "N/A"
+        created_by_name = users_map.get(p.created_by_id, "N/A") if p.created_by_id else "N/A"
 
         lines_detail = []
         for m in p.moves:
@@ -223,7 +247,8 @@ def list_replenishment_requests(
                 "sku": sku_code,
                 "quantity_demand": float(m.quantity_demand or 0),
                 "quantity_done": float(m.quantity_done or 0),
-                "state": m.state
+                "state": m.state,
+                "notes": m.notes or ""
             })
 
         results.append({
@@ -235,7 +260,13 @@ def list_replenishment_requests(
             "dest_facility_name": dest_name,
             "origin_document": p.origin_document,
             "status": p.status,
+            "notes": p.notes or "",
             "created_at": p.created_at.strftime("%Y-%m-%d %H:%M") if p.created_at else None,
+            "created_by_name": created_by_name,
+            "shipped_at": p.shipped_at.strftime("%Y-%m-%d %H:%M") if p.shipped_at else None,
+            "shipped_by_name": shipped_by_name,
+            "date_done": p.date_done.strftime("%Y-%m-%d %H:%M") if p.date_done else None,
+            "received_by_name": received_by_name,
             "lines_count": len(p.moves),
             "lines": lines_detail
         })
@@ -270,7 +301,8 @@ def create_replenishment_request(
         origin_document=f"Solicitud Reabastecimiento {src_fac.name} -> {dest_fac.name}",
         facility_id=payload.src_facility_id,
         dest_facility_id=payload.dest_facility_id,
-        status='DRAFT',
+        status='REQUESTED',
+        notes=payload.notes,
         created_by_id=user_id_val
     )
     db.add(picking)
@@ -290,7 +322,7 @@ def create_replenishment_request(
             location_dest_id=dest_loc.id,
             quantity_demand=qty,
             quantity_done=0.0,
-            state='DRAFT',
+            state='REQUESTED',
             batch_id=line.batch_id,
             reference=ref,
             created_by_id=user_id_val
@@ -302,33 +334,49 @@ def create_replenishment_request(
         "message": "Solicitud de reabastecimiento creada exitosamente",
         "request_id": picking.id,
         "reference": ref,
-        "status": "DRAFT"
+        "status": "REQUESTED"
     }
 
-@router.post("/requests/{request_id}/fulfill")
-def fulfill_replenishment_request(
+@router.post("/requests/{request_id}/accept")
+def accept_replenishment_request(
     request_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
     picking = db.query(StockPicking).filter(StockPicking.id == request_id).first()
     if not picking:
-        raise HTTPException(status_code=404, detail="Solicitud de reabastecimiento no encontrada.")
+        raise HTTPException(status_code=404, detail="Solicitud no encontrada.")
 
-    if picking.status == 'DONE':
-        raise HTTPException(status_code=400, detail="Esta solicitud ya fue completada previamente.")
+    if picking.status not in ['REQUESTED', 'DRAFT']:
+        raise HTTPException(status_code=400, detail=f"No se puede aceptar una solicitud en estado {picking.status}.")
 
-    src_wh, src_loc = get_or_create_facility_warehouse_and_location(db, picking.facility_id)
-    dest_wh, dest_loc = get_or_create_facility_warehouse_and_location(db, picking.dest_facility_id)
+    picking.status = 'IN_PREPARATION'
+    for m in picking.moves:
+        m.state = 'IN_PREPARATION'
+
+    db.commit()
+    return {"message": "Solicitud aceptada y puesta en preparación", "request_id": picking.id, "status": "IN_PREPARATION"}
+
+@router.post("/requests/{request_id}/dispatch")
+def dispatch_replenishment_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    picking = db.query(StockPicking).filter(StockPicking.id == request_id).first()
+    if not picking:
+        raise HTTPException(status_code=404, detail="Solicitud no encontrada.")
+
+    if picking.status in ['IN_TRANSIT', 'DONE', 'CANCELLED']:
+        raise HTTPException(status_code=400, detail=f"No se puede despachar una orden en estado {picking.status}.")
 
     user_id_val = getattr(current_user, 'id', None)
 
     for move in picking.moves:
         qty = float(move.quantity_demand or 0)
-        move.quantity_done = qty
-        move.state = 'DONE'
+        move.state = 'IN_TRANSIT'
 
-        # Descontar de sucursal origen
+        # Descontar de sucursal origen (pasa a Tránsito)
         src_snap = db.query(InventorySnapshot).filter(
             InventorySnapshot.variant_id == move.product_id,
             InventorySnapshot.facility_id == picking.facility_id
@@ -336,19 +384,59 @@ def fulfill_replenishment_request(
         if src_snap:
             src_snap.stock_qty = max(0.0, float(src_snap.stock_qty or 0) - qty)
 
+    picking.status = 'IN_TRANSIT'
+    picking.shipped_at = func.now()
+    if user_id_val:
+        picking.shipped_by_id = user_id_val
+
+    db.commit()
+    return {"message": "Guía de despacho emitida. Mercancía ahora en tránsito", "request_id": picking.id, "status": "IN_TRANSIT"}
+
+@router.post("/requests/{request_id}/receive")
+def receive_replenishment_request(
+    request_id: int,
+    payload: ReceiveReplenishmentPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    picking = db.query(StockPicking).filter(StockPicking.id == request_id).first()
+    if not picking:
+        raise HTTPException(status_code=404, detail="Solicitud no encontrada.")
+
+    if picking.status == 'DONE':
+        raise HTTPException(status_code=400, detail="Esta orden ya fue completada previamente.")
+
+    user_id_val = getattr(current_user, 'id', None)
+    lines_dict = {l.move_id: l for l in payload.lines}
+
+    for move in picking.moves:
+        reception_input = lines_dict.get(move.id)
+        qty_received = float(reception_input.quantity_received) if reception_input else float(move.quantity_demand or 0)
+        
+        move.quantity_done = qty_received
+        move.state = 'DONE'
+        if reception_input and reception_input.notes:
+            move.notes = reception_input.notes
+
         # Sumar a sucursal destino
         dest_snap = db.query(InventorySnapshot).filter(
             InventorySnapshot.variant_id == move.product_id,
             InventorySnapshot.facility_id == picking.dest_facility_id
         ).first()
+        
+        src_snap = db.query(InventorySnapshot).filter(
+            InventorySnapshot.variant_id == move.product_id,
+            InventorySnapshot.facility_id == picking.facility_id
+        ).first()
+
         if dest_snap:
-            dest_snap.stock_qty = float(dest_snap.stock_qty or 0) + qty
+            dest_snap.stock_qty = float(dest_snap.stock_qty or 0) + qty_received
         else:
             dest_snap = InventorySnapshot(
                 variant_id=move.product_id,
                 facility_id=picking.dest_facility_id,
                 batch_id=move.batch_id,
-                stock_qty=qty,
+                stock_qty=qty_received,
                 avg_cost=src_snap.avg_cost if src_snap else 0.0,
                 current_cost=src_snap.current_cost if src_snap else 0.0
             )
@@ -357,7 +445,38 @@ def fulfill_replenishment_request(
     picking.status = 'DONE'
     picking.date_done = func.now()
     if user_id_val:
-        picking.created_by_id = user_id_val
+        picking.received_by_id = user_id_val
 
     db.commit()
-    return {"message": "Solicitud despachada y transferida con éxito", "request_id": picking.id, "status": "DONE"}
+    return {"message": "Mercancía recibida conforme y stock cargado en destino", "request_id": picking.id, "status": "DONE"}
+
+@router.post("/requests/{request_id}/reject")
+def reject_replenishment_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    picking = db.query(StockPicking).filter(StockPicking.id == request_id).first()
+    if not picking:
+        raise HTTPException(status_code=404, detail="Solicitud no encontrada.")
+
+    if picking.status in ['DONE', 'CANCELLED']:
+        raise HTTPException(status_code=400, detail=f"No se puede rechazar una orden en estado {picking.status}.")
+
+    # Si ya estaba en tránsito, devolver stock al origen
+    if picking.status == 'IN_TRANSIT':
+        for m in picking.moves:
+            qty = float(m.quantity_demand or 0)
+            src_snap = db.query(InventorySnapshot).filter(
+                InventorySnapshot.variant_id == m.product_id,
+                InventorySnapshot.facility_id == picking.facility_id
+            ).first()
+            if src_snap:
+                src_snap.stock_qty = float(src_snap.stock_qty or 0) + qty
+
+    picking.status = 'CANCELLED'
+    for m in picking.moves:
+        m.state = 'CANCELLED'
+
+    db.commit()
+    return {"message": "Solicitud rechazada/cancelada exitosamente", "request_id": picking.id, "status": "CANCELLED"}

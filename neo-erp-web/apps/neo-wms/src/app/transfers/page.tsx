@@ -9,6 +9,7 @@ import { Tag } from 'primereact/tag';
 import { Dialog } from 'primereact/dialog';
 import { Dropdown } from 'primereact/dropdown';
 import { InputNumber } from 'primereact/inputnumber';
+import { InputText } from 'primereact/inputtext';
 import { TabView, TabPanel } from 'primereact/tabview';
 import api from '@/lib/api';
 
@@ -19,16 +20,21 @@ export default function WmsTransfersPage() {
   const [loadingRequests, setLoadingRequests] = useState(true);
   const toast = useRef<Toast>(null);
 
-  // New Direct Transfer Dialog
+  // Diálogo Transferencia Directa
   const [transferDialogVisible, setTransferDialogVisible] = useState(false);
   
-  // New Replenishment Request Dialog
+  // Diálogo Nueva Solicitud
   const [requestDialogVisible, setRequestDialogVisible] = useState(false);
   const [requestLines, setRequestLines] = useState<any[]>([]);
 
-  // View Request Detail Dialog
+  // Diálogo Ver Detalle
   const [detailDialogVisible, setDetailDialogVisible] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<any>(null);
+
+  // Diálogo Confirmar Recepción en Destino
+  const [receiveDialogVisible, setReceiveDialogVisible] = useState(false);
+  const [receivingRequest, setReceivingRequest] = useState<any>(null);
+  const [receiveLines, setReceiveLines] = useState<any[]>([]);
 
   const [facilities, setFacilities] = useState<any[]>([]);
   const [srcFacilityId, setSrcFacilityId] = useState<number | null>(null);
@@ -38,7 +44,7 @@ export default function WmsTransfersPage() {
   const [selectedVariantId, setSelectedVariantId] = useState<number | null>(null);
   const [transferQty, setTransferQty] = useState<number>(1);
   const [saving, setSaving] = useState(false);
-  const [fulfillingId, setFulfillingId] = useState<number | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
 
   const fetchTransfers = async () => {
     setLoadingTransfers(true);
@@ -152,7 +158,7 @@ export default function WmsTransfersPage() {
     setRequestLines(requestLines.filter((_, i) => i !== index));
   };
 
-  // Crear Solicitud de Reabastecimiento Interno Multirrenglón
+  // Crear Solicitud (Estado Inicial: REQUESTED)
   const handleCreateRequest = async () => {
     if (!srcFacilityId || !destFacilityId) {
       toast.current?.show({ severity: 'warn', summary: 'Campos incompletos', detail: 'Complete sucursal origen y destino.' });
@@ -179,7 +185,7 @@ export default function WmsTransfersPage() {
           qty: l.qty
         }))
       });
-      toast.current?.show({ severity: 'success', summary: 'Solicitud Creada', detail: `Solicitud con ${requestLines.length} artículo(s) registrada exitosamente.` });
+      toast.current?.show({ severity: 'success', summary: 'Solicitud Creada', detail: `Solicitud registrada en estado SOLICITADA.` });
       setRequestDialogVisible(false);
       setRequestLines([]);
       fetchRequests();
@@ -189,21 +195,84 @@ export default function WmsTransfersPage() {
     setSaving(false);
   };
 
-  // Despachar / Fulfill Solicitud
-  const handleFulfillRequest = async (requestId: number) => {
-    setFulfillingId(requestId);
+  // Aceptar Solicitud (Origen) -> IN_PREPARATION
+  const handleAcceptRequest = async (requestId: number) => {
+    setActionLoadingId(requestId);
     try {
-      await api.post(`/wms-transfers/requests/${requestId}/fulfill`);
-      toast.current?.show({ severity: 'success', summary: 'Solicitud Despachada', detail: 'Mercancía transferida con éxito entre sucursales.' });
+      await api.post(`/wms-transfers/requests/${requestId}/accept`);
+      toast.current?.show({ severity: 'success', summary: 'Solicitud Aceptada', detail: 'La orden pasó a estado EN PREPARACIÓN.' });
+      fetchRequests();
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al aceptar la solicitud.' });
+    }
+    setActionLoadingId(null);
+  };
+
+  // Despachar Solicitud (Origen) -> IN_TRANSIT
+  const handleDispatchRequest = async (requestId: number) => {
+    setActionLoadingId(requestId);
+    try {
+      await api.post(`/wms-transfers/requests/${requestId}/dispatch`);
+      toast.current?.show({ severity: 'success', summary: 'Guía Despachada', detail: 'Mercancía enviada. Ahora en Tránsito.' });
       fetchRequests();
       fetchTransfers();
     } catch (e: any) {
-      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al despachar la solicitud.' });
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al despachar la orden.' });
     }
-    setFulfillingId(null);
+    setActionLoadingId(null);
   };
 
-  // Crear Transferencia Directa
+  // Rechazar Solicitud -> CANCELLED
+  const handleRejectRequest = async (requestId: number) => {
+    setActionLoadingId(requestId);
+    try {
+      await api.post(`/wms-transfers/requests/${requestId}/reject`);
+      toast.current?.show({ severity: 'warn', summary: 'Solicitud Rechazada', detail: 'La orden ha sido cancelada.' });
+      fetchRequests();
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al rechazar la solicitud.' });
+    }
+    setActionLoadingId(null);
+  };
+
+  // Abrir Modal de Recepción en Destino
+  const handleOpenReceiveModal = (request: any) => {
+    setReceivingRequest(request);
+    setReceiveLines((request.lines || []).map((l: any) => ({
+      move_id: l.id,
+      sku: l.sku,
+      product_name: l.product_name,
+      quantity_demand: l.quantity_demand,
+      quantity_received: l.quantity_demand, // Por defecto la cantidad pedida
+      notes: '' // Observación opcional vacía por defecto
+    })));
+    setReceiveDialogVisible(true);
+  };
+
+  // Confirmar Recepción Conforme en Destino -> DONE
+  const handleConfirmReceive = async () => {
+    if (!receivingRequest) return;
+    setSaving(true);
+    try {
+      await api.post(`/wms-transfers/requests/${receivingRequest.id}/receive`, {
+        lines: receiveLines.map(l => ({
+          move_id: l.move_id,
+          quantity_received: l.quantity_received,
+          notes: l.notes
+        }))
+      });
+      toast.current?.show({ severity: 'success', summary: 'Recepción Conforme', detail: 'Mercancía ingresada al inventario de la tienda destino.' });
+      setReceiveDialogVisible(false);
+      setReceivingRequest(null);
+      fetchRequests();
+      fetchTransfers();
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al confirmar la recepción.' });
+    }
+    setSaving(false);
+  };
+
+  // Crear Despacho Directo (Sin Solicitud Previa) -> Nace en IN_TRANSIT
   const createDirectTransfer = async () => {
     if (!srcFacilityId || !destFacilityId || !selectedVariantId || transferQty <= 0) {
       toast.current?.show({ severity: 'warn', summary: 'Campos incompletos', detail: 'Complete origen, destino, producto y cantidad.' });
@@ -227,13 +296,34 @@ export default function WmsTransfersPage() {
           }
         ]
       });
-      toast.current?.show({ severity: 'success', summary: 'Transferencia Exitosa', detail: 'Despacho registrado entre sucursales.' });
+      toast.current?.show({ severity: 'success', summary: 'Despacho Directo Creado', detail: 'Mercancía despachada en tránsito.' });
       setTransferDialogVisible(false);
+      fetchRequests();
       fetchTransfers();
     } catch (e: any) {
-      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al procesar la transferencia.' });
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al procesar el despacho directo.' });
     }
     setSaving(false);
+  };
+
+  // Formateador de Estados con Badges WMS Profesionales
+  const renderStatusTag = (status: string) => {
+    switch (status) {
+      case 'REQUESTED':
+      case 'DRAFT':
+        return <Tag severity="warning" value="SOLICITADA (POR ACEPTAR)" className="font-black text-[9px]" />;
+      case 'IN_PREPARATION':
+      case 'CONFIRMED':
+        return <Tag severity="warn" value="EN PREPARACIÓN" className="font-black text-[9px] bg-amber-500 text-white" />;
+      case 'IN_TRANSIT':
+        return <Tag severity="info" value="EN TRÁNSITO 🚚" className="font-black text-[9px]" />;
+      case 'DONE':
+        return <Tag severity="success" value="COMPLETADO 🟢" className="font-black text-[9px]" />;
+      case 'CANCELLED':
+        return <Tag severity="danger" value="RECHAZADO / CANCELADO" className="font-black text-[9px]" />;
+      default:
+        return <Tag value={status} className="font-black text-[9px]" />;
+    }
   };
 
   return (
@@ -247,7 +337,7 @@ export default function WmsTransfersPage() {
           <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center">
             <i className="pi pi-arrow-right-arrow-left text-blue-600 mr-3"></i>Reabastecimiento y Transferencias Inter-Sucursales
           </h1>
-          <p className="text-slate-500 text-sm mt-1">Gestión de solicitudes de stock entre tiendas y CENDI, despacho e historial de guías de movimiento.</p>
+          <p className="text-slate-500 text-sm mt-1">Gestión completa de solicitudes, preparación en origen, guías en tránsito y recepción conforme en destino.</p>
         </div>
 
         <div className="flex gap-3">
@@ -259,7 +349,7 @@ export default function WmsTransfersPage() {
             className="font-bold shadow-md" 
           />
           <Button 
-            label="Transferencia Directa" 
+            label="Despacho Directo (Sin Solicitud)" 
             icon="pi pi-send" 
             severity="info" 
             onClick={() => setTransferDialogVisible(true)} 
@@ -277,19 +367,19 @@ export default function WmsTransfersPage() {
       {/* PESTAÑAS PRINCIPALES */}
       <div className="bg-white rounded-2xl shadow-xl border border-slate-100 p-4">
         <TabView>
-          {/* PESTAÑA 1: SOLICITUDES DE REABASTECIMIENTO */}
-          <TabPanel header="Solicitudes de Reabastecimiento Interno" leftIcon="pi pi-list mr-2">
+          {/* PESTAÑA 1: SOLICITUDES Y DESPACHOS EN CURSO */}
+          <TabPanel header="Solicitudes y Movimientos en Curso" leftIcon="pi pi-list mr-2">
             <DataTable 
               value={requests} 
               loading={loadingRequests} 
-              emptyMessage="No hay solicitudes de reabastecimiento pendientes." 
+              emptyMessage="No hay solicitudes o movimientos de inventario." 
               size="small" 
               stripedRows 
               rowHover 
               className="text-sm"
             >
               <Column 
-                header="CÓDIGO SOLICITUD" 
+                header="CÓDIGO SOLICITUD / GUÍA" 
                 field="name" 
                 body={r => <span className="font-mono font-bold text-xs bg-amber-50 px-3 py-1.5 rounded text-amber-800 border border-amber-200">{r.name}</span>} 
               />
@@ -297,45 +387,80 @@ export default function WmsTransfersPage() {
               <Column header="ORIGEN (DESPACHANTE)" field="src_facility_name" body={r => <span className="font-bold text-slate-700">{r.src_facility_name}</span>} />
               <Column header="DESTINO (SOLICITANTE)" field="dest_facility_name" body={r => <span className="font-bold text-blue-700">{r.dest_facility_name}</span>} />
               <Column header="ITEMS" field="lines_count" align="center" body={r => <span className="font-extrabold">{r.lines_count} ítems</span>} />
-              <Column 
-                header="ESTADO" 
-                body={r => (
-                  <Tag 
-                    severity={r.status === 'DONE' ? 'success' : 'warning'} 
-                    value={r.status === 'DONE' ? 'COMPLETADO' : 'PENDIENTE PREPARACIÓN'} 
-                    className="font-black text-[10px]" 
-                  />
-                )} 
-                align="center" 
-              />
+              <Column header="ESTADO LOGÍSTICO" body={r => renderStatusTag(r.status)} align="center" />
               <Column 
                 header="ACCIONES" 
                 align="center"
                 body={r => (
-                  <div className="flex gap-2 justify-center">
+                  <div className="flex gap-1.5 justify-center flex-wrap">
                     <Button 
                       icon="pi pi-eye" 
-                      severity="info" 
+                      severity="secondary" 
                       outlined
                       size="small"
-                      tooltip="Ver Renglones de la Solicitud"
+                      tooltip="Ver Detalle y Auditoría"
                       onClick={() => {
                         setSelectedRequest(r);
                         setDetailDialogVisible(true);
                       }} 
                     />
-                    {r.status !== 'DONE' ? (
+
+                    {/* ESTADO SOLICITADA -> Origen Acepta, Despacha o Rechaza */}
+                    {(r.status === 'REQUESTED' || r.status === 'DRAFT') && (
+                      <>
+                        <Button 
+                          label="Aceptar" 
+                          icon="pi pi-cog" 
+                          severity="warn" 
+                          size="small"
+                          loading={actionLoadingId === r.id}
+                          onClick={() => handleAcceptRequest(r.id)} 
+                          className="font-bold text-xs" 
+                        />
+                        <Button 
+                          label="Despachar" 
+                          icon="pi pi-send" 
+                          severity="info" 
+                          size="small"
+                          loading={actionLoadingId === r.id}
+                          onClick={() => handleDispatchRequest(r.id)} 
+                          className="font-bold text-xs" 
+                        />
+                        <Button 
+                          icon="pi pi-times" 
+                          severity="danger" 
+                          text
+                          size="small"
+                          tooltip="Rechazar Solicitud"
+                          loading={actionLoadingId === r.id}
+                          onClick={() => handleRejectRequest(r.id)} 
+                        />
+                      </>
+                    )}
+
+                    {/* ESTADO EN PREPARACIÓN -> Origen Despacha */}
+                    {(r.status === 'IN_PREPARATION' || r.status === 'CONFIRMED') && (
                       <Button 
-                        label="Despachar / Transferir" 
-                        icon="pi pi-check-circle" 
-                        severity="success" 
+                        label="Emitir Guía y Despachar" 
+                        icon="pi pi-send" 
+                        severity="info" 
                         size="small"
-                        loading={fulfillingId === r.id}
-                        onClick={() => handleFulfillRequest(r.id)} 
+                        loading={actionLoadingId === r.id}
+                        onClick={() => handleDispatchRequest(r.id)} 
                         className="font-bold text-xs shadow-sm" 
                       />
-                    ) : (
-                      <span className="text-xs text-slate-400 font-bold self-center">Completado</span>
+                    )}
+
+                    {/* ESTADO EN TRÁNSITO -> Destino Recibe Conforme */}
+                    {r.status === 'IN_TRANSIT' && (
+                      <Button 
+                        label="Confirmar Recepción" 
+                        icon="pi pi-box" 
+                        severity="success" 
+                        size="small"
+                        onClick={() => handleOpenReceiveModal(r)} 
+                        className="font-bold text-xs shadow-sm bg-emerald-600 hover:bg-emerald-700" 
+                      />
                     )}
                   </div>
                 )} 
@@ -362,7 +487,7 @@ export default function WmsTransfersPage() {
               <Column header="FECHA" field="created_at" />
               <Column header="SUCURSAL ORIGEN" body={t => <span className="font-bold text-slate-700">Sucursal #{t.facility_id}</span>} />
               <Column header="LÍNEAS DESPACHADAS" field="lines_count" align="center" body={t => <span className="font-extrabold">{t.lines_count} ítems</span>} />
-              <Column header="ESTADO LOGÍSTICO" body={t => <Tag severity="success" value={t.status} className="font-black text-[9px]" />} align="center" />
+              <Column header="ESTADO LOGÍSTICO" body={t => renderStatusTag(t.status)} align="center" />
             </DataTable>
           </TabPanel>
         </TabView>
@@ -373,12 +498,12 @@ export default function WmsTransfersPage() {
         header="Nueva Solicitud de Reabastecimiento Interno" 
         visible={requestDialogVisible} 
         onHide={() => { setRequestDialogVisible(false); setRequestLines([]); }} 
-        style={{ width: '700px' }}
+        style={{ width: '720px' }}
       >
         <div className="flex flex-col gap-4 py-2">
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 font-medium flex items-center">
             <i className="pi pi-info-circle text-amber-600 text-lg mr-2"></i>
-            <span>Permite a cualquier tienda o sucursal solicitar stock al CENDI o a otra sucursal agregando múltiples productos en un solo pedido.</span>
+            <span>La solicitud quedará en estado <strong>SOLICITADA</strong> hasta que la sucursal o CENDI de origen la acepte y prepare.</span>
           </div>
 
           <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
@@ -511,16 +636,84 @@ export default function WmsTransfersPage() {
         </div>
       </Dialog>
 
-      {/* DIÁLOGO DETALLE DE SOLICITUD */}
+      {/* DIÁLOGO CONFIRMAR RECEPCIÓN EN DESTINO CON OBSERVACIÓN POR PRODUCTO */}
       <Dialog 
-        header={`Detalle de Solicitud #${selectedRequest?.name || ''}`} 
+        header={`Confirmar Recepción en Destino #${receivingRequest?.name || ''}`} 
+        visible={receiveDialogVisible} 
+        onHide={() => { setReceiveDialogVisible(false); setReceivingRequest(null); }} 
+        style={{ width: '800px', maxWidth: '95vw' }}
+      >
+        {receivingRequest && (
+          <div className="flex flex-col gap-4 py-2">
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800 font-medium flex items-center">
+              <i className="pi pi-box text-emerald-600 text-lg mr-2"></i>
+              <span>Verifique las cantidades recibidas físicamente. Puede añadir una <strong>observación opcional</strong> en cada producto en caso de mermas, daños o novedades.</span>
+            </div>
+
+            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+              <DataTable value={receiveLines} size="small" stripedRows className="text-xs">
+                <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
+                <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800">{l.product_name}</span>} />
+                <Column header="CANT. DESPACHADA" field="quantity_demand" align="center" body={l => <span className="font-bold text-slate-600">{l.quantity_demand}</span>} />
+                <Column 
+                  header="CANT. RECIBIDA" 
+                  align="center"
+                  body={(l, options) => (
+                    <InputNumber 
+                      value={l.quantity_received} 
+                      onValueChange={(e) => {
+                        const updated = [...receiveLines];
+                        updated[options.rowIndex].quantity_received = e.value || 0;
+                        setReceiveLines(updated);
+                      }}
+                      min={0}
+                      inputClassName="w-24 text-center font-extrabold text-emerald-700 text-xs py-1"
+                    />
+                  )} 
+                />
+                <Column 
+                  header="OBSERVACIÓN POR PRODUCTO (OPCIONAL)" 
+                  body={(l, options) => (
+                    <InputText 
+                      value={l.notes} 
+                      onChange={(e) => {
+                        const updated = [...receiveLines];
+                        updated[options.rowIndex].notes = e.target.value;
+                        setReceiveLines(updated);
+                      }}
+                      placeholder="Ej. Caja abollada, merma, OK..."
+                      className="w-full text-xs"
+                    />
+                  )} 
+                />
+              </DataTable>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-2">
+              <Button label="Cancelar" text severity="secondary" onClick={() => { setReceiveDialogVisible(false); setReceivingRequest(null); }} />
+              <Button 
+                label="Confirmar Recepción y Cargar Inventario" 
+                icon="pi pi-check-circle" 
+                severity="success" 
+                loading={saving}
+                onClick={handleConfirmReceive} 
+                className="font-bold text-xs shadow-md bg-emerald-600 hover:bg-emerald-700" 
+              />
+            </div>
+          </div>
+        )}
+      </Dialog>
+
+      {/* DIÁLOGO DETALLE DE SOLICITUD Y TRAZABILIDAD COMPLETA */}
+      <Dialog 
+        header={`Detalle y Auditoría de Solicitud #${selectedRequest?.name || ''}`} 
         visible={detailDialogVisible} 
         onHide={() => { setDetailDialogVisible(false); setSelectedRequest(null); }} 
-        style={{ width: '600px', maxWidth: '95vw' }}
+        style={{ width: '750px', maxWidth: '95vw' }}
       >
         {selectedRequest && (
           <div className="flex flex-col gap-4 py-2">
-            <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+            <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs">
               <div>
                 <span className="text-slate-500 font-medium block">Origen (Despachante):</span>
                 <strong className="text-slate-800">{selectedRequest.src_facility_name}</strong>
@@ -530,57 +723,61 @@ export default function WmsTransfersPage() {
                 <strong className="text-blue-700">{selectedRequest.dest_facility_name}</strong>
               </div>
               <div>
-                <span className="text-slate-500 font-medium block">Fecha:</span>
-                <strong className="text-slate-800">{selectedRequest.created_at}</strong>
+                <span className="text-slate-500 font-medium block">Solicitado por:</span>
+                <strong className="text-slate-800">{selectedRequest.created_by_name} ({selectedRequest.created_at})</strong>
               </div>
               <div>
-                <span className="text-slate-500 font-medium block">Estado:</span>
-                <Tag 
-                  severity={selectedRequest.status === 'DONE' ? 'success' : 'warning'} 
-                  value={selectedRequest.status === 'DONE' ? 'COMPLETADO' : 'PENDIENTE PREPARACIÓN'} 
-                  className="font-black text-[9px]" 
-                />
+                <span className="text-slate-500 font-medium block">Estado Logístico:</span>
+                {renderStatusTag(selectedRequest.status)}
               </div>
+
+              {selectedRequest.shipped_at && (
+                <div>
+                  <span className="text-slate-500 font-medium block">Despachado en Origen por:</span>
+                  <strong className="text-amber-800">{selectedRequest.shipped_by_name} ({selectedRequest.shipped_at})</strong>
+                </div>
+              )}
+
+              {selectedRequest.date_done && (
+                <div>
+                  <span className="text-slate-500 font-medium block">Recibido en Destino por:</span>
+                  <strong className="text-emerald-800">{selectedRequest.received_by_name} ({selectedRequest.date_done})</strong>
+                </div>
+              )}
             </div>
 
-            <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider">Productos Solicitados:</h4>
+            <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider">Productos de la Orden:</h4>
 
             <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <DataTable value={selectedRequest.lines || []} size="small" stripedRows className="text-xs">
                 <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
                 <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800">{l.product_name}</span>} />
-                <Column header="CANTIDAD SOLICITADA" field="quantity_demand" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{l.quantity_demand}</span>} />
+                <Column header="CANT. DEMANDADA" field="quantity_demand" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{l.quantity_demand}</span>} />
+                <Column header="CANT. RECIBIDA" field="quantity_done" align="center" body={l => <span className="font-extrabold text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">{l.quantity_done}</span>} />
+                <Column header="OBSERVACIONES / NOVEDADES" field="notes" body={l => <span className="italic text-slate-600">{l.notes || 'Sin novedades'}</span>} />
               </DataTable>
             </div>
 
             <div className="flex justify-end gap-2 mt-2">
               <Button label="Cerrar" text severity="secondary" onClick={() => { setDetailDialogVisible(false); setSelectedRequest(null); }} />
-              {selectedRequest.status !== 'DONE' && (
-                <Button 
-                  label="Despachar / Transferir" 
-                  icon="pi pi-check-circle" 
-                  severity="success" 
-                  loading={fulfillingId === selectedRequest.id}
-                  onClick={() => {
-                    handleFulfillRequest(selectedRequest.id);
-                    setDetailDialogVisible(false);
-                  }} 
-                  className="font-bold text-xs" 
-                />
-              )}
             </div>
           </div>
         )}
       </Dialog>
 
-      {/* DIÁLOGO NUEVA TRANSFERENCIA DIRECTA */}
+      {/* DIÁLOGO NUEVO DESPACHO DIRECTO (SIN SOLICITUD PREVIA) */}
       <Dialog 
-        header="Crear Transferencia Directa Inter-Sucursales" 
+        header="Crear Despacho Directo Inter-Sucursales (Sin Solicitud)" 
         visible={transferDialogVisible} 
         onHide={() => setTransferDialogVisible(false)} 
         style={{ width: '500px', maxWidth: '95vw' }}
       >
         <div className="flex flex-col gap-4 py-2">
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800 font-medium flex items-center">
+            <i className="pi pi-send text-blue-600 text-lg mr-2"></i>
+            <span>Genera un despacho directo por iniciativa de la sucursal origen. Pasará directamente a estado <strong>EN TRÁNSITO 🚚</strong> para ser recibido en la tienda destino.</span>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Sucursal Origen:</label>
@@ -635,7 +832,7 @@ export default function WmsTransfersPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad a Transferir:</label>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad a Despachar:</label>
             <InputNumber 
               value={transferQty} 
               onValueChange={(e) => setTransferQty(e.value || 1)}
@@ -646,7 +843,7 @@ export default function WmsTransfersPage() {
 
           <div className="flex justify-end gap-2 mt-3">
             <Button label="Cancelar" text severity="secondary" onClick={() => setTransferDialogVisible(false)} />
-            <Button label="Ejecutar Despacho" severity="info" loading={saving} onClick={createDirectTransfer} className="font-bold" />
+            <Button label="Emitir Despacho en Tránsito" severity="info" loading={saving} onClick={createDirectTransfer} className="font-bold" />
           </div>
         </div>
       </Dialog>
