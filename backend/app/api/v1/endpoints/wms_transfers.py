@@ -23,6 +23,39 @@ class TransferCreatePayload(BaseModel):
     dest_warehouse_id: Optional[int] = None
     lines: List[TransferLineInput]
 
+def get_or_create_facility_warehouse_and_location(db: Session, facility_id: int):
+    wh = db.query(Warehouse).filter(Warehouse.facility_id == facility_id, Warehouse.is_scrap == False).first()
+    if not wh:
+        wh = db.query(Warehouse).filter(Warehouse.facility_id == facility_id).first()
+    if not wh:
+        fac = db.query(Facility).filter(Facility.id == facility_id).first()
+        fac_name = fac.name if fac else f"Sucursal #{facility_id}"
+        wh = Warehouse(
+            name=f"Almacén Principal {fac_name}",
+            code=f"WH-{facility_id}",
+            facility_id=facility_id,
+            is_scrap=False
+        )
+        db.add(wh)
+        db.flush()
+
+    loc = db.query(Location).filter(Location.warehouse_id == wh.id, Location.usage == 'INTERNAL').first()
+    if not loc:
+        loc = db.query(Location).filter(Location.warehouse_id == wh.id).first()
+    if not loc:
+        fac = db.query(Facility).filter(Facility.id == facility_id).first()
+        fac_name = fac.name if fac else f"Sucursal #{facility_id}"
+        loc = Location(
+            name=f"Ubicación Principal {fac_name}",
+            barcode=f"LOC-FAC-{facility_id}-01",
+            warehouse_id=wh.id,
+            usage="INTERNAL"
+        )
+        db.add(loc)
+        db.flush()
+
+    return wh, loc
+
 @router.get("/")
 def list_transfers(facility_id: Optional[int] = None, db: Session = Depends(get_db)):
     picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'INTERNAL').first()
@@ -55,26 +88,8 @@ def create_inter_facility_transfer(
     if payload.src_facility_id == payload.dest_facility_id:
         raise HTTPException(status_code=400, detail="La sucursal de origen y destino no pueden ser la misma.")
 
-    src_wh = None
-    if payload.src_warehouse_id:
-        src_wh = db.query(Warehouse).filter(Warehouse.id == payload.src_warehouse_id).first()
-    if not src_wh:
-        src_wh = db.query(Warehouse).filter(Warehouse.facility_id == payload.src_facility_id, Warehouse.is_scrap == False).first()
-
-    dest_wh = None
-    if payload.dest_warehouse_id:
-        dest_wh = db.query(Warehouse).filter(Warehouse.id == payload.dest_warehouse_id).first()
-    if not dest_wh:
-        dest_wh = db.query(Warehouse).filter(Warehouse.facility_id == payload.dest_facility_id, Warehouse.is_scrap == False).first()
-
-    if not src_wh or not dest_wh:
-        raise HTTPException(status_code=400, detail="Depósito de origen o destino no encontrado.")
-
-    src_loc = db.query(Location).filter(Location.warehouse_id == src_wh.id, Location.usage == 'INTERNAL').first()
-    dest_loc = db.query(Location).filter(Location.warehouse_id == dest_wh.id, Location.usage == 'INTERNAL').first()
-
-    if not src_loc or not dest_loc:
-        raise HTTPException(status_code=400, detail="Ubicación interna de origen o destino no encontrada.")
+    src_wh, src_loc = get_or_create_facility_warehouse_and_location(db, payload.src_facility_id)
+    dest_wh, dest_loc = get_or_create_facility_warehouse_and_location(db, payload.dest_facility_id)
 
     picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'INTERNAL').first()
     if not picking_type:
@@ -82,14 +97,15 @@ def create_inter_facility_transfer(
         db.add(picking_type)
         db.flush()
 
-    ref = f"TRF-{payload.src_facility_id}->{payload.dest_facility_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    ref = f"INT-{payload.src_facility_id}->{payload.dest_facility_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     user_id_val = getattr(current_user, 'id', None)
 
     picking = StockPicking(
         picking_type_id=picking_type.id,
         name=ref,
-        origin_document=f"Transferencia Sucursal {payload.src_facility_id} a {payload.dest_facility_id}",
+        origin_document=f"Despacho Directo Sucursal #{payload.src_facility_id} a #{payload.dest_facility_id}",
         facility_id=payload.src_facility_id,
+        dest_facility_id=payload.dest_facility_id,
         status='DONE',
         date_done=func.now(),
         created_by_id=user_id_val
@@ -259,14 +275,8 @@ def create_replenishment_request(
     db.add(picking)
     db.flush()
 
-    src_wh = db.query(Warehouse).filter(Warehouse.facility_id == payload.src_facility_id, Warehouse.is_scrap == False).first()
-    dest_wh = db.query(Warehouse).filter(Warehouse.facility_id == payload.dest_facility_id, Warehouse.is_scrap == False).first()
-    src_loc = db.query(Location).filter(Location.warehouse_id == src_wh.id).first() if src_wh else None
-    dest_loc = db.query(Location).filter(Location.warehouse_id == dest_wh.id).first() if dest_wh else None
-
-    dummy_loc = db.query(Location).first()
-    src_loc_id = src_loc.id if src_loc else (dummy_loc.id if dummy_loc else 1)
-    dest_loc_id = dest_loc.id if dest_loc else (dummy_loc.id if dummy_loc else 1)
+    src_wh, src_loc = get_or_create_facility_warehouse_and_location(db, payload.src_facility_id)
+    dest_wh, dest_loc = get_or_create_facility_warehouse_and_location(db, payload.dest_facility_id)
 
     for line in payload.lines:
         qty = float(line.qty)
@@ -275,8 +285,8 @@ def create_replenishment_request(
         move = StockMove(
             picking_id=picking.id,
             product_id=line.variant_id,
-            location_src_id=src_loc_id,
-            location_dest_id=dest_loc_id,
+            location_src_id=src_loc.id,
+            location_dest_id=dest_loc.id,
             quantity_demand=qty,
             quantity_done=0.0,
             state='DRAFT',
@@ -307,11 +317,8 @@ def fulfill_replenishment_request(
     if picking.status == 'DONE':
         raise HTTPException(status_code=400, detail="Esta solicitud ya fue completada previamente.")
 
-    src_wh = db.query(Warehouse).filter(Warehouse.facility_id == picking.facility_id, Warehouse.is_scrap == False).first()
-    dest_wh = db.query(Warehouse).filter(Warehouse.facility_id == picking.dest_facility_id, Warehouse.is_scrap == False).first()
-
-    if not src_wh or not dest_wh:
-        raise HTTPException(status_code=400, detail="Almacén de origen o destino no disponible.")
+    src_wh, src_loc = get_or_create_facility_warehouse_and_location(db, picking.facility_id)
+    dest_wh, dest_loc = get_or_create_facility_warehouse_and_location(db, picking.dest_facility_id)
 
     user_id_val = getattr(current_user, 'id', None)
 
