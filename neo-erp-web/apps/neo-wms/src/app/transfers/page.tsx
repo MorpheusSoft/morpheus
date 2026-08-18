@@ -411,7 +411,7 @@ export default function WmsTransfersPage() {
                         <Button 
                           label="Aceptar" 
                           icon="pi pi-cog" 
-                          severity="warn" 
+                          severity="warning" 
                           size="small"
                           loading={actionLoadingId === r.id}
                           onClick={() => handleAcceptRequest(r.id)} 
