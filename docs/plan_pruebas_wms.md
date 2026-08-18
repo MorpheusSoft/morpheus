@@ -1,6 +1,6 @@
 # Plan de Pruebas y Certificación: Módulo Logística & WMS (`NEO Warehouse`)
 
-Este documento define la **Matriz de Casos de Prueba Funcionales, Integrados (E2E) y Criterios de Aceptación (UAT)** para certificar al **100%** el módulo logístico **NEO Warehouse**, estructurado formalmente según las opciones del menú de navegación del sistema.
+Este documento define la **Matriz de Casos de Prueba Funcionales, Integrados (E2E) y Criterios de Aceptación (UAT)** para certificar al **100%** el módulo logístico **NEO Warehouse**, estructurado formalmente según las opciones del menú de navegación activo del sistema.
 
 ---
 
@@ -12,10 +12,10 @@ Este documento define la **Matriz de Casos de Prueba Funcionales, Integrados (E2
 ├───────────────────────────────────┬─────────────────────────────────────┤
 │ Operaciones Logísticas            │ Configuración & Auditoría           │
 │ ├─ 1. Dashboard Muelle            │ ├─ 5. Control de Lotes (FEFO)       │
-│ ├─ 2. Recepción (Inbound)         │ └─ 6. Ajustes Físicos               │
-│ ├─ 3. Despachos & Picking         │                                     │
-│ ├─ 4. Mapa de Almacén             │                                     │
-│ └─ 5. Asistente IA                │                                     │
+│ ├─ 2. Recepción (Inbound)         │ ├─ 6. Ajustes Físicos               │
+│ ├─ 3. Transferencias & Reabast.   │ └─ 7. Asistente IA                  │
+│ └─ 4. Mapa de Almacén             │                                     │
+│ *(Despachos & Picking desactivado)*│                                     │
 └───────────────────────────────────┴─────────────────────────────────────┘
 ```
 
@@ -26,7 +26,7 @@ Este documento define la **Matriz de Casos de Prueba Funcionales, Integrados (E2
 
 | ID Caso | Descripción del Caso | Pasos de Ejecución | Resultado Esperado | Criterio de Éxito |
 | :--- | :--- | :--- | :--- | :---: |
-| `TC-DASH-01` | Carga de Tarjetas de Acceso | Acceder a la ruta `/` | Se despliegan las tarjetas principales (Muelle, Mapa, Lotes, Ajustes). | PASS |
+| `TC-DASH-01` | Carga de Tarjetas de Acceso | Acceder a la ruta `/` | Se despliegan las tarjetas principales (Muelle, Transferencias, Mapa, Lotes, Ajustes). | PASS |
 | `TC-DASH-02` | Navegación por Clic | Hacer clic en la tarjeta "Muelle de Recepción" | Redirección inmediata a `/receipts`. | PASS |
 | `TC-DASH-03` | Resumen de Ocupación | Revisar los indicadores de métricas | Muestra el total de camiones pendientes por recibir. | PASS |
 
@@ -46,15 +46,19 @@ Este documento define la **Matriz de Casos de Prueba Funcionales, Integrados (E2
 
 ---
 
-### 📦 3. Despachos & Transferencias Outbound (`/shipments` / `/transfers`)
-**Objetivo:** Verificar la preparación de pedidos de venta B2B, olas de picking y reubicación interna (Putaway).
+### 🔄 3. Reabastecimiento y Transferencias Inter-Sucursales (`/transfers`)
+**Objetivo:** Validar la gestión de solicitudes, preparación en origen, guías en tránsito con almacén virtual, transferencias directas y recepción en destino con observaciones por producto.
 
 | ID Caso | Descripción del Caso | Pasos de Ejecución | Resultado Esperado | Criterio de Éxito |
 | :--- | :--- | :--- | :--- | :---: |
-| `TC-OUT-01` | Crear Orden de Salida | Hacer clic en "Nueva Orden de Salida", seleccionar cliente y variante | Se crea la orden `OUT-YYYYMMDD...` en estado `READY`. | PASS |
-| `TC-OUT-02` | **Olas de Picking** | Cambiar a pestaña "Olas de Picking por Ubicación" | Muestra las tarjetas agrupadas por código de estante/pasillo. | PASS |
-| `TC-OUT-03` | Confirmar Salida Física| Hacer clic en "Confirmar Salida" en la orden de despacho | Pasa a estado `DONE` y descuenta del `InventorySnapshot`. | PASS |
-| `TC-OUT-04` | Movimiento Putaway | En `/locations` o `/transfers`, reubicar mercancía de muelle a estante | Mueve el stock de la ubicación origen a la ubicación destino. | PASS |
+| `TC-TRF-01` | **Solicitud Multirrenglón** | Clic en "Solicitar Reabastecimiento", agregar múltiples productos por SKU/Nombre y enviar | Se crea la solicitud en estado `SOLICITADA (POR ACEPTAR)`. | PASS |
+| `TC-TRF-02` | **Aprobación en Origen** | En la sucursal de origen, presionar el botón `Aceptar` | Pasa la orden a estado `EN PREPARACIÓN`. | PASS |
+| `TC-TRF-03` | **Despacho y Tránsito Virtual** | Presionar el botón `Despachar` en origen | Descuenta del stock disponible de Origen, entra al Almacén Virtual de Tránsito (`TRANSIT_WH`) y pasa a `EN TRÁNSITO 🚚`. | PASS |
+| `TC-TRF-04` | **Recepción con Novedades** | En la sucursal de destino, presionar `Recibir`, validar conteo físico e ingresar observaciones por producto y general | Carga el stock al disponible de Destino, sale de Tránsito y la orden pasa a `COMPLETADO 🟢`. | PASS |
+| `TC-TRF-05` | **Transferencia Directa Multirrenglón** | Clic en "Transferencia Directa (Sin Solicitud)", seleccionar múltiples ítems y emitir | Nace inmediatamente en `EN TRÁNSITO 🚚`, aparece en movimientos en curso y permite ser recibida en destino. | PASS |
+| `TC-TRF-06` | **Rechazo de Solicitud** | Presionar el botón `❌` (Rechazar) en estado `SOLICITADA` | Pasa a estado `RECHAZADO / CANCELADO` y se libera la solicitud. | PASS |
+| `TC-TRF-07` | **Separación de Pestañas** | Verificar las pestañas "Solicitudes y Movimientos en Curso" e "Histórico de Guías" | La Pestaña 1 muestra solo órdenes activas (`SOLICITADA`, `EN PREPARACIÓN`, `EN TRÁNSITO`). La Pestaña 2 muestra exclusivamente `COMPLETADO` y `CANCELADO`. | PASS |
+| `TC-TRF-08` | **Auditoría & Trazabilidad** | Hacer clic en el botón `👁️` (Ver Detalle) en cualquier orden | Muestra creador, despachador en origen (con fecha/hora), receptor en destino (con fecha/hora) y observaciones por renglón. | PASS |
 
 ---
 
@@ -99,21 +103,22 @@ Este documento define la **Matriz de Casos de Prueba Funcionales, Integrados (E2
 
 ---
 
-## 2. Protocolo de Ejecución del Escenario Integrado (Prueba E2E)
+## 2. Protocolo de Ejecución del Escenario Integrado (Prueba E2E WMS)
 
 Para certificar el módulo al **100% en Producción/Staging**, el usuario evaluador debe seguir esta secuencia continua:
 
 ```mermaid
 graph TD
-    A[1. Recepción en Muelle / Rechazo] --> B[2. Putaway a Estante]
-    B --> C[3. Control FEFO & Bloqueo de Lotes]
-    C --> D[4. Picking & Despacho]
-    D --> E[5. Verificación Kardex]
+    A[1. Recepción Inbound en Muelle] --> B[2. Putaway a Estante & FEFO]
+    B --> C[3. Solicitud de Reabastecimiento]
+    C --> D[4. Aceptación & Despacho a Tránsito]
+    D --> E[5. Recepción Conforme en Destino con Notas]
+    E --> F[6. Histórico & Auditoría]
 ```
 
-1. **Entrada:** Recibir 100 unidades del producto en `Recepción (Inbound)` registrando lote `LOT-TEST-01` con vencimiento a 6 meses.
-2. **Rechazo en Puerta:** Registrar 5 unidades devueltas al chofer por empaque roto, verificando que sólo ingresen 95 unidades al sistema.
-3. **Ubicación:** Ejecutar `Putaway` moviendo las 95 unidades del muelle al estante `STOCK-A1`.
-4. **Validación Volumétrica:** Verificar en `Mapa de Almacén` que la barra térmica del estante `STOCK-A1` incremente su % de ocupación.
-5. **Salida:** En `Despachos & Picking`, crear una orden por 20 unidades, verificar la sugerencia FEFO y confirmar el despacho.
-6. **Cierre:** Verificar que el saldo final en `Control de Lotes` refleje exactamente 75 unidades disponibles.
+1. **Recepción Inbound:** Recibir 100 unidades del producto en `Recepción (Inbound)` registrando lote `LOT-TEST-01` con fecha de vencimiento.
+2. **Ubicación & FEFO:** Ubicar las unidades en el estante `STOCK-A1` y verificar la sugerencia FEFO en `/lots`.
+3. **Solicitud Inter-Sucursales:** En `/transfers`, crear una Solicitud de Reabastecimiento desde la tienda `CUMBOTO` hacia `PATIO TRIGAL` por 50 unidades (`SOLICITADA`).
+4. **Preparación & Despacho:** La tienda `PATIO TRIGAL` presiona `Aceptar` (`EN PREPARACIÓN`) y luego `Despachar`. El stock sale de `PATIO TRIGAL` e ingresa al **Almacén Virtual de Tránsito** (`EN TRÁNSITO 🚚`).
+5. **Recepción con Novedades:** La tienda `CUMBOTO` presiona `Recibir`, confirma 49 unidades recibidas con la nota *"1 unidad dañada en ruta"*, finalizando la orden (`COMPLETADO 🟢`).
+6. **Auditoría & Histórico:** La orden se traslada a la pestaña **Histórico de Guías de Traslado**. Al presionar `👁️`, se verifica el registro completo de usuarios, fechas/horas y observaciones por renglón.
