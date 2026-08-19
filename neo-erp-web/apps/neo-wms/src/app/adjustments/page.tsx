@@ -569,7 +569,7 @@ export default function WmsAdjustmentsPage() {
               <Column header="ACCIONES / CONTROL" body={a => (
                 <div className="flex items-center justify-center gap-2">
                   <Button
-                    label="Ver Detalle"
+                    label="Ver"
                     icon="pi pi-eye"
                     severity="secondary"
                     size="small"
