@@ -90,14 +90,83 @@ def create_inventory_session(
         name=session_in.name,
         facility_id=session_in.facility_id,
         warehouse_id=session_in.warehouse_id,
-        scope_type=session_in.scope_type,
+        scope_type=session_in.scope_type or "GENERAL",
         scope_value=session_in.scope_value,
-        state="DRAFT"
+        state="IN_PROGRESS"
     )
     db.add(db_obj)
+    db.flush()
+
+    # Capturar Fotografía Teórica (Snapshot) para la Toma Física
+    snapshots_query = db.query(InventorySnapshot)
+    if session_in.facility_id:
+        snapshots_query = snapshots_query.filter(InventorySnapshot.facility_id == session_in.facility_id)
+    
+    snapshots = snapshots_query.all()
+    default_loc = db.query(Location).filter(Location.facility_id == session_in.facility_id).first() if session_in.facility_id else None
+
+    for snap in snapshots:
+        line = InventoryLine(
+            session_id=db_obj.id,
+            product_variant_id=snap.variant_id,
+            location_id=default_loc.id if default_loc else None,
+            theoretical_qty=float(snap.stock_qty or 0),
+            counted_qty=0.0,
+            notes=None
+        )
+        db.add(line)
+
     db.commit()
     db.refresh(db_obj)
     return db_obj
+
+
+@router.post("/{id}/count", response_model=schemas.InventorySession)
+def record_line_count(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    line_in: schemas.InventoryLineCreate,
+) -> Any:
+    session = db.query(InventorySession).filter(InventorySession.id == id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    if session.state == "DONE":
+        raise HTTPException(status_code=400, detail="La sesión ya fue validada y consolidada.")
+
+    # Buscar línea existente o crear nueva
+    existing_line = db.query(InventoryLine).filter(
+        InventoryLine.session_id == id,
+        InventoryLine.product_variant_id == line_in.product_variant_id
+    ).first()
+
+    if existing_line:
+        existing_line.counted_qty = line_in.counted_qty
+        if line_in.location_id:
+            existing_line.location_id = line_in.location_id
+        if line_in.notes:
+            existing_line.notes = line_in.notes
+    else:
+        # Consultar stock teórico snapshot
+        snap = db.query(InventorySnapshot).filter(
+            InventorySnapshot.variant_id == line_in.product_variant_id,
+            InventorySnapshot.facility_id == session.facility_id
+        ).first()
+        theo = float(snap.stock_qty) if snap else 0.0
+
+        new_line = InventoryLine(
+            session_id=session.id,
+            product_variant_id=line_in.product_variant_id,
+            location_id=line_in.location_id,
+            theoretical_qty=theo,
+            counted_qty=line_in.counted_qty,
+            notes=line_in.notes
+        )
+        db.add(new_line)
+
+    db.commit()
+    db.refresh(session)
+    return session
 
 @router.post("/{id}/lines/bulk", response_model=schemas.InventorySession)
 def bulk_upload_lines(
@@ -197,7 +266,14 @@ def validate_session(
         
     virtual_loss_loc = db.query(Location).filter(Location.code == "INV_ADJ").first()
     if not virtual_loss_loc:
-        raise HTTPException(status_code=500, detail="Ubicación virtual de mermas INV_ADJ no existe en base de datos.")
+        virtual_loss_loc = Location(
+            name="Ubicación Virtual de Ajustes",
+            code="INV_ADJ",
+            location_type="LOSS",
+            facility_id=session.facility_id
+        )
+        db.add(virtual_loss_loc)
+        db.flush()
         
     user_id_val = getattr(current_user, 'id', None)
 

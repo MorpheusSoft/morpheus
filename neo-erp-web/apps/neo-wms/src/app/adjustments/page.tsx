@@ -55,7 +55,17 @@ export default function WmsAdjustmentsPage() {
   const [newSessionDialogVisible, setNewSessionDialogVisible] = useState(false);
   const [sessionName, setSessionName] = useState('');
   const [sessionFacilityId, setSessionFacilityId] = useState<number | null>(null);
+  const [sessionScopeType, setSessionScopeType] = useState('GENERAL');
   const [creatingSession, setCreatingSession] = useState(false);
+
+  // MANAGE SESSION MODAL STATE
+  const [manageSessionDialogVisible, setManageSessionDialogVisible] = useState(false);
+  const [selectedSession, setSelectedSession] = useState<any>(null);
+  const [countingProdId, setCountingProdId] = useState<number | null>(null);
+  const [countingQty, setCountingQty] = useState<number>(0);
+  const [countingNotes, setCountingNotes] = useState('');
+  const [savingCount, setSavingCount] = useState(false);
+  const [validatingSession, setValidatingSession] = useState(false);
 
   // LOAD DATA
   const fetchAdjustments = async () => {
@@ -388,9 +398,9 @@ export default function WmsAdjustmentsPage() {
       await api.post('/inventory-session/', {
         name: sessionName,
         facility_id: sessionFacilityId,
-        scope_type: 'GENERAL'
+        scope_type: sessionScopeType || 'GENERAL'
       });
-      toast.current?.show({ severity: 'success', summary: 'Toma Física Creada', detail: 'Sesión de recuento lista.' });
+      toast.current?.show({ severity: 'success', summary: 'Toma Física Creada', detail: 'Sesión de recuento e inventario teórico generados con éxito.' });
       setNewSessionDialogVisible(false);
       setSessionName('');
       fetchSessions();
@@ -398,6 +408,60 @@ export default function WmsAdjustmentsPage() {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al crear sesión.' });
     }
     setCreatingSession(false);
+  };
+
+  // OPEN SESSION DETAIL & CONCILIATION
+  const handleOpenSessionDetail = async (sessionId: number) => {
+    try {
+      const res = await api.get(`/inventory-session/${sessionId}`);
+      setSelectedSession(res.data);
+      setCountingProdId(null);
+      setCountingQty(0);
+      setCountingNotes('');
+      setManageSessionDialogVisible(true);
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo cargar el detalle de la toma física.' });
+    }
+  };
+
+  // RECORD BLIND COUNT FOR A LINE
+  const handleRecordCount = async () => {
+    if (!selectedSession || !countingProdId) {
+      toast.current?.show({ severity: 'warn', summary: 'Selección Requerida', detail: 'Seleccione un producto para registrar el conteo.' });
+      return;
+    }
+    setSavingCount(true);
+    try {
+      const res = await api.post(`/inventory-session/${selectedSession.id}/count`, {
+        product_variant_id: countingProdId,
+        counted_qty: countingQty,
+        notes: countingNotes
+      });
+      setSelectedSession(res.data);
+      toast.current?.show({ severity: 'success', summary: 'Conteo Registrado', detail: 'Conteo ciego actualizado correctamente.' });
+      setCountingProdId(null);
+      setCountingQty(0);
+      setCountingNotes('');
+      fetchSessions();
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al registrar conteo.' });
+    }
+    setSavingCount(false);
+  };
+
+  // CONSOLIDATE & CLOSE PHYSICAL INVENTORY SESSION
+  const handleValidateSession = async (sessionId: number) => {
+    setValidatingSession(true);
+    try {
+      const res = await api.post(`/inventory-session/${sessionId}/validate`);
+      toast.current?.show({ severity: 'success', summary: 'Toma Física Consolidada', detail: res.data?.message || 'Inventario y stock físico actualizados correctamente.' });
+      setManageSessionDialogVisible(false);
+      fetchSessions();
+      fetchAdjustments();
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error de Consolidación', detail: e.response?.data?.detail || 'No se pudo finalizar la toma física.' });
+    }
+    setValidatingSession(false);
   };
 
   const getAdjStateSeverity = (state: string) => {
@@ -635,10 +699,26 @@ export default function WmsAdjustmentsPage() {
               stripedRows
             >
               <Column field="id" header="ID SESIÓN" body={s => <span className="font-mono font-bold text-slate-700">SES-{s.id}</span>} sortable />
-              <Column field="name" header="NOMBRE DE LA TOMA" body={s => <span className="font-bold text-slate-800">{s.name}</span>} sortable />
+              <Column field="name" header="NOMBRE DE LA TOMA FÍSICA" body={s => <span className="font-bold text-slate-800">{s.name}</span>} sortable />
               <Column field="facility_id" header="SUCURSAL" body={s => <span>Sucursal #{s.facility_id}</span>} sortable />
-              <Column field="state" header="ESTADO" body={s => <Tag severity={s.state === 'DONE' ? 'success' : 'warning'} value={s.state} className="font-bold text-[9px]" />} align="center" sortable />
-              <Column header="LÍNEAS CONTADAS" body={s => <span className="font-semibold text-slate-700">{s.lines?.length || 0} productos</span>} align="right" />
+              <Column field="state" header="ESTADO" body={s => (
+                <Tag
+                  severity={s.state === 'DONE' ? 'success' : s.state === 'IN_PROGRESS' ? 'warning' : 'info'}
+                  value={s.state === 'DONE' ? 'CONCILIADO & CERRADO' : s.state === 'IN_PROGRESS' ? 'EN PROCESO DE CONTEO' : s.state}
+                  className="font-bold text-[9px] px-2 py-1"
+                />
+              )} align="center" sortable />
+              <Column header="RENGLONES" body={s => <span className="font-semibold text-slate-700">{s.lines?.length || 0} ítems</span>} align="right" />
+              <Column header="ACCIONES / CONTROL" body={s => (
+                <Button
+                  label="Gestionar Conteo & Conciliación"
+                  icon="pi pi-sliders-h"
+                  severity="info"
+                  size="small"
+                  className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white"
+                  onClick={() => handleOpenSessionDetail(s.id)}
+                />
+              )} align="center" style={{ width: '16rem' }} />
             </DataTable>
           </div>
         </div>
@@ -1208,6 +1288,175 @@ export default function WmsAdjustmentsPage() {
             <Button label="Guardar y Seleccionar" icon="pi pi-check" loading={savingQuickReason} className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white" onClick={handleCreateQuickReason} />
           </div>
         </div>
+      </Dialog>
+
+      {/* DIÁLOGO PRINCIPAL: GESTIÓN DE CONTEO CIEGO & CONCILIACIÓN DE TOMA FÍSICA */}
+      <Dialog
+        header={selectedSession ? `📋 Gestión & Conciliación de Toma Física: ${selectedSession.name}` : 'Toma Física'}
+        visible={manageSessionDialogVisible}
+        onHide={() => setManageSessionDialogVisible(false)}
+        style={{ width: '1100px' }}
+        className="rounded-2xl"
+      >
+        {selectedSession && (
+          <div className="flex flex-col gap-6 py-2">
+            {/* Header info bar */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-wrap justify-between items-center gap-4">
+              <div className="flex items-center gap-4">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">CÓDIGO SESIÓN</span>
+                  <span className="text-sm font-mono font-bold text-slate-800">SES-{selectedSession.id}</span>
+                </div>
+                <div className="h-8 w-[1px] bg-slate-200"></div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">FECHA INICIO</span>
+                  <span className="text-xs font-medium text-slate-700">{selectedSession.date_start ? new Date(selectedSession.date_start).toLocaleString('es-ES') : ''}</span>
+                </div>
+                <div className="h-8 w-[1px] bg-slate-200"></div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">ESTADO</span>
+                  <Tag
+                    severity={selectedSession.state === 'DONE' ? 'success' : 'warning'}
+                    value={selectedSession.state === 'DONE' ? 'CONCILIADO & CERRADO' : 'EN PROCESO DE CONTEO'}
+                    className="font-bold text-[9px] px-2 py-1 mt-0.5"
+                  />
+                </div>
+              </div>
+
+              {selectedSession.state !== 'DONE' && (
+                <Button
+                  label="Finalizar & Consolidar Toma Física (Generar Ajustes)"
+                  icon="pi pi-check-circle"
+                  severity="success"
+                  loading={validatingSession}
+                  className="font-bold text-xs bg-emerald-600 border-emerald-600 text-white shadow-md hover:bg-emerald-700"
+                  onClick={() => handleValidateSession(selectedSession.id)}
+                />
+              )}
+            </div>
+
+            {/* SECCIÓN 1: INGRESO RÁPIDO DE CONTEO CIEGO (Solo si no está cerrada) */}
+            {selectedSession.state !== 'DONE' && (
+              <div className="bg-indigo-50/60 border border-indigo-200/80 p-5 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-extrabold text-indigo-950 uppercase tracking-wider flex items-center">
+                    <i className="pi pi-plus-circle text-indigo-600 mr-2"></i>Registrar / Actualizar Conteo Ciego (Blind Count)
+                  </h4>
+                  <span className="text-[10px] text-indigo-600 font-medium">💡 El operador ingresa la cantidad física contada sin ver la existencia teórica.</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                  <div className="md:col-span-2 flex flex-col gap-1">
+                    <label className="text-[11px] font-bold text-slate-700">Producto / SKU *</label>
+                    <Dropdown
+                      value={countingProdId}
+                      options={products.map(p => ({ label: `[${p.sku}] ${p.name}`, value: p.id }))}
+                      onChange={e => setCountingProdId(e.value)}
+                      placeholder="Buscar producto por SKU o Nombre..."
+                      filter
+                      className="text-xs w-full"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-bold text-slate-700">Cantidad Contada Real *</label>
+                    <InputNumber
+                      value={countingQty}
+                      onValueChange={e => setCountingQty(e.value || 0)}
+                      min={0}
+                      minFractionDigits={0}
+                      maxFractionDigits={4}
+                      className="text-xs w-full p-inputtext-sm"
+                    />
+                  </div>
+
+                  <Button
+                    label="Guardar Conteo"
+                    icon="pi pi-save"
+                    loading={savingCount}
+                    className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md h-[38px]"
+                    onClick={handleRecordCount}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* SECCIÓN 2: CUADRO DE CONCILIACIÓN & MATRIZ DE DIFERENCIAS */}
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center">
+                  <i className="pi pi-table text-slate-500 mr-2"></i>Matriz de Conciliación & Auditoría de Inventario
+                </h4>
+                <span className="text-xs text-slate-500 font-medium">Total Renglones: <b>{selectedSession.lines?.length || 0}</b></span>
+              </div>
+
+              <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                <table className="w-full text-xs text-left text-slate-700">
+                  <thead className="bg-slate-100 uppercase text-[10px] font-bold text-slate-600 border-b border-slate-200">
+                    <tr>
+                      <th className="p-3">PRODUCTO / SKU</th>
+                      <th className="p-3 text-right">CONTEO FÍSICO REAL</th>
+                      <th className="p-3 text-right">ESTOCK TEÓRICO (Audit)</th>
+                      <th className="p-3 text-right">DIFERENCIA (UNID)</th>
+                      <th className="p-3 text-center">SEMÁFORO DISCREPANCIA</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {(!selectedSession.lines || selectedSession.lines.length === 0) ? (
+                      <tr>
+                        <td colSpan={5} className="p-6 text-center text-slate-400 font-medium">
+                          No hay renglones en esta toma física. Registre el primer conteo arriba.
+                        </td>
+                      </tr>
+                    ) : (
+                      selectedSession.lines.map((line: any, idx: number) => {
+                        const prod = products.find(p => p.id === line.product_variant_id);
+                        const counted = line.counted_qty ?? 0;
+                        const theo = line.theoretical_qty ?? 0;
+                        const diff = counted - theo;
+
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="p-3">
+                              <div className="flex flex-col">
+                                <span className="font-bold text-slate-800">{prod ? prod.name : `Variante #${line.product_variant_id}`}</span>
+                                <span className="font-mono text-[10px] text-slate-400">{prod?.sku || ''}</span>
+                              </div>
+                            </td>
+                            <td className="p-3 text-right font-bold text-slate-900 text-sm">
+                              {counted}
+                            </td>
+                            <td className="p-3 text-right font-medium text-slate-500">
+                              {theo !== null && theo !== undefined ? theo : <span className="italic text-slate-400">🙈 Ciego</span>}
+                            </td>
+                            <td className="p-3 text-right font-bold">
+                              {diff === 0 ? (
+                                <span className="text-slate-500">0</span>
+                              ) : diff > 0 ? (
+                                <span className="text-emerald-600">+{diff} (Sobrante)</span>
+                              ) : (
+                                <span className="text-rose-600">{diff} (Faltante)</span>
+                              )}
+                            </td>
+                            <td className="p-3 text-center">
+                              {diff === 0 ? (
+                                <Tag severity="success" value="🟢 Coincidencia Exacta" className="text-[9px] font-bold" />
+                              ) : Math.abs(diff) <= 2 ? (
+                                <Tag severity="warning" value="🟡 Tolerancia Menor" className="text-[9px] font-bold" />
+                              ) : (
+                                <Tag severity="danger" value="🔴 Descuadre Crítico" className="text-[9px] font-bold" />
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
       </Dialog>
     </div>
   );
