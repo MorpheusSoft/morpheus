@@ -51,19 +51,26 @@ def init_bot_log_db():
     from app.api.deps import engine
     from app.db.base_class import Base
     from app.models.purchasing import MRPBotLog
+    from app.models.inventory import AdjustmentReason, InventoryAdjustment, InventoryAdjustmentLine
     from sqlalchemy import text
     try:
         with engine.connect() as conn:
             conn.execute(text("CREATE SCHEMA IF NOT EXISTS pur;"))
+            conn.execute(text("CREATE SCHEMA IF NOT EXISTS inv;"))
             conn.commit()
-        Base.metadata.create_all(bind=engine, tables=[MRPBotLog.__table__])
-        print("[DATABASE] Table pur.mrp_bot_logs verified/created successfully.")
+        Base.metadata.create_all(bind=engine, tables=[
+            MRPBotLog.__table__,
+            AdjustmentReason.__table__,
+            InventoryAdjustment.__table__,
+            InventoryAdjustmentLine.__table__
+        ])
+        print("[DATABASE] Tables for MRP bot logs and Direct Adjustments verified/created successfully.")
     except Exception as e:
-        print(f"[DATABASE ERROR] Failed to initialize bot log table: {e}")
+        print(f"[DATABASE ERROR] Failed to initialize tables: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Auto-initialize database tables for bot log
+    # Auto-initialize database tables for bot log and direct adjustments
     init_bot_log_db()
     # Initiate the polling daemon and bot scheduler
     daemon_task = asyncio.create_task(run_background_poller())
