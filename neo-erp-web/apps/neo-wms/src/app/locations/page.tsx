@@ -282,19 +282,36 @@ export default function WmsLocationsPage() {
     <div className="p-4 sm:p-8 w-full max-w-[1400px] mx-auto fade-in">
       <Toast ref={toast} position="bottom-right" />
       
-      {/* Header */}
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 relative overflow-hidden">
+      {/* Header Principal */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-2 h-full bg-emerald-500"></div>
-        <div className="pl-4">
-          <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center">
-            <i className="pi pi-sitemap text-emerald-500 mr-3"></i>Mapa Térmico de Almacenes y Reubicación
-          </h1>
-          <p className="text-slate-500 text-sm mt-1">Estructura jerárquica por sucursales, depósitos y estantes con control volumétrico.</p>
-        </div>
         
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Selector de Sucursal Filtro */}
-          <div className="w-56">
+        {/* Fila 1: Título de Pantalla */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-4 border-b border-slate-100 gap-2">
+          <div className="pl-3">
+            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center">
+              <i className="pi pi-sitemap text-emerald-500 mr-3"></i>Mapa Térmico de Almacenes y Reubicación
+            </h1>
+            <p className="text-slate-500 text-sm mt-1">Estructura jerárquica por sucursales, depósitos y estantes con control volumétrico de espacio.</p>
+          </div>
+
+          <Button
+            icon="pi pi-refresh"
+            rounded
+            outlined
+            title="Actualizar Mapa"
+            className="font-bold text-slate-600 border-slate-300 hover:bg-slate-50 self-end md:self-auto"
+            onClick={() => fetchTreeAndOccupancy(selectedFacilityFilter)}
+          />
+        </div>
+
+        {/* Fila 2: Barra Integrada de Filtros y Acciones Directas */}
+        <div className="pt-4 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100 mt-2">
+          {/* Selector de Sucursal */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-600 whitespace-nowrap flex items-center">
+              <i className="pi pi-building text-slate-400 mr-1.5 text-sm"></i>Sucursal:
+            </span>
             <Dropdown
               value={selectedFacilityFilter}
               options={[
@@ -302,39 +319,34 @@ export default function WmsLocationsPage() {
                 ...facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }))
               ]}
               onChange={(e) => handleFacilityFilterChange(e.value)}
-              placeholder="Filtrar por Sucursal..."
-              className="w-full text-xs font-bold"
+              placeholder="Filtrar Sucursal..."
+              className="w-64 text-xs font-bold shadow-none border-slate-300"
             />
           </div>
 
-          <Button 
-            label="Nuevo Almacén" 
-            icon="pi pi-building" 
-            severity="info" 
-            className="font-bold text-xs shadow-md"
-            onClick={() => setNewWhDialogVisible(true)} 
-          />
+          {/* Botones de Acción */}
+          <div className="flex items-center gap-2.5">
+            <Button 
+              label="Nuevo Almacén" 
+              icon="pi pi-building" 
+              outlined
+              className="font-bold text-xs border-slate-300 text-slate-700 hover:bg-white shadow-sm"
+              onClick={() => setNewWhDialogVisible(true)} 
+            />
 
-          <Button 
-            label="Nueva Ubicación / Estante" 
-            icon="pi pi-plus" 
-            severity="success" 
-            className="font-bold text-xs shadow-md"
-            onClick={() => {
-              if (filteredWarehousesForNewLoc.length > 0) {
-                setNewLocWarehouseId(filteredWarehousesForNewLoc[0].id);
-              }
-              setNewLocDialogVisible(true);
-            }} 
-          />
-
-          <Button
-            icon="pi pi-refresh"
-            rounded
-            outlined
-            className="font-bold text-slate-600 border-slate-300 hover:bg-slate-50"
-            onClick={() => fetchTreeAndOccupancy(selectedFacilityFilter)}
-          />
+            <Button 
+              label="Nueva Ubicación / Estante" 
+              icon="pi pi-plus" 
+              severity="success" 
+              className="font-bold text-xs shadow-sm bg-emerald-600 border-emerald-600"
+              onClick={() => {
+                if (filteredWarehousesForNewLoc.length > 0) {
+                  setNewLocWarehouseId(filteredWarehousesForNewLoc[0].id);
+                }
+                setNewLocDialogVisible(true);
+              }} 
+            />
+          </div>
         </div>
       </div>
 
@@ -351,9 +363,9 @@ export default function WmsLocationsPage() {
                       <i className="pi pi-building text-emerald-400"></i> {wh.name}
                     </h3>
                     <Tag 
-                      value={`🏢 SUCURSAL: ${wh.facility_name || 'General'}`} 
+                      value={`🏢 ${wh.facility_name || 'General'}`} 
                       severity="info" 
-                      className="text-[10px] font-black uppercase bg-blue-600 text-white px-2 py-0.5" 
+                      className="text-[10px] font-bold uppercase bg-slate-700 border border-slate-600 text-emerald-300 px-2 py-0.5" 
                     />
                   </div>
                   <p className="text-xs text-slate-400 font-mono mt-0.5">CÓDIGO ALMACÉN: {wh.code}</p>
