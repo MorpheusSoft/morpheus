@@ -1535,6 +1535,27 @@ def approve_inventory_adjustment(
     Aprobación por Supervisor / Gerencia.
     Ejecuta los StockMove en el estante/almacén y actualiza el Kardex.
     """
+    # Verificar permiso RBAC de aprobación
+    can_approve = current_user.is_superuser
+    if not can_approve and current_user.roles:
+        for r in current_user.roles:
+            role_name_upper = (r.name or '').upper()
+            if role_name_upper in ["ADMIN", "SUPERVISOR", "GERENTE", "MANAGER", "ADMINISTRADOR"]:
+                can_approve = True
+                break
+            perms = r.permissions or {}
+            log_perms = perms.get("neo_logistics", {})
+            adj_perms = log_perms.get("direct_adjustments", {}) or log_perms.get("adjustments", {})
+            if adj_perms.get("approve") or adj_perms.get("admin"):
+                can_approve = True
+                break
+
+    if not can_approve and not current_user.is_superuser:
+        raise HTTPException(
+            status_code=403,
+            detail="Acceso Denegado: Su perfil de usuario no posee el permiso 'Aprobar Ajustes Directos' para autorizar este documento."
+        )
+
     adj = db.query(InventoryAdjustment).filter(InventoryAdjustment.id == adjustment_id).first()
     if not adj:
         raise HTTPException(status_code=404, detail="Ajuste no encontrado.")
