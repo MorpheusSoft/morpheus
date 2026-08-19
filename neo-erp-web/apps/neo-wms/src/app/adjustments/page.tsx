@@ -792,7 +792,7 @@ export default function WmsAdjustmentsPage() {
             <Button
               label="Guardar Solicitud (Pendiente)"
               icon="pi pi-send"
-              severity="indigo"
+              severity="info"
               loading={savingAdj}
               className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white"
               onClick={saveDirectAdjustment}
