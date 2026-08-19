@@ -248,12 +248,12 @@ export default function WmsLocationsPage() {
     }
 
     return (
-      <div className="w-48">
-        <div className="flex justify-between items-center mb-1 text-[11px]">
-          <span className="font-bold text-slate-700">{pct}% Llenado</span>
-          <Tag value={tagLabel} severity={tagSeverity} className="text-[9px] px-1.5 py-0.5" />
+      <div className="w-36">
+        <div className="flex justify-between items-center mb-1 text-[10px]">
+          <span className="font-bold text-slate-700">{pct}%</span>
+          <Tag value={tagLabel} severity={tagSeverity} className="text-[8px] px-1 py-0.2" />
         </div>
-        <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden border border-slate-300">
+        <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden border border-slate-300">
           <div className={`h-full ${colorClass} transition-all duration-500`} style={{ width: `${Math.min(100, pct)}%` }}></div>
         </div>
       </div>
@@ -395,12 +395,12 @@ export default function WmsLocationsPage() {
 
               <div className="p-4 flex-1">
                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Ubicaciones y Pasillos ({wh.locations?.length || 0})</h4>
-                <DataTable value={wh.locations || []} size="small" className="p-datatable-sm text-slate-700" stripedRows emptyMessage="No hay ubicaciones en este almacén. Use el botón superior para crear la primera.">
-                  <Column header="CÓDIGO" field="code" body={l => <span className="font-mono text-xs font-bold bg-slate-100 px-2 py-1 rounded text-slate-700">{l.code}</span>} sortable />
-                  <Column header="NOMBRE UBICACIÓN" field="name" body={l => <span className="font-bold text-slate-800">{l.name}</span>} sortable />
-                  <Column header="TIPO" body={l => <Tag severity={getLocationTypeSeverity(l.location_type)} value={l.location_type} className="text-[10px] font-bold" />} sortable />
-                  <Column header="CAPACIDAD (m³)" body={l => <span className="font-mono text-xs text-slate-600 font-semibold">{l.capacity_volume || 10.0} m³</span>} sortable />
-                  <Column header="SATURACIÓN VOLUMÉTRICA" body={occupancyTemplate} />
+                <DataTable value={wh.locations || []} size="small" className="p-datatable-sm text-slate-700 text-xs" stripedRows emptyMessage="No hay ubicaciones en este almacén. Use el botón superior para crear la primera.">
+                  <Column header="CÓDIGO" field="code" body={l => <span className="font-mono text-[11px] font-bold bg-slate-100 px-1.5 py-0.5 rounded text-slate-700">{l.code}</span>} sortable style={{ width: '18%' }} />
+                  <Column header="UBICACIÓN" field="name" body={l => <span className="font-bold text-slate-800 text-xs">{l.name}</span>} sortable style={{ width: '28%' }} />
+                  <Column header="TIPO" body={l => <Tag severity={getLocationTypeSeverity(l.location_type)} value={l.location_type} className="text-[9px] font-bold px-1 py-0.5" />} sortable style={{ width: '14%' }} />
+                  <Column header="CAPACIDAD" body={l => <span className="font-mono text-xs text-slate-600 font-semibold">{l.capacity_volume || 10.0} m³</span>} sortable style={{ width: '16%' }} />
+                  <Column header="SATURACIÓN" body={occupancyTemplate} style={{ width: '24%' }} />
                 </DataTable>
               </div>
             </div>
