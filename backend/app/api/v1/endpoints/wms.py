@@ -651,15 +651,28 @@ def get_wms_lots(
             (Product.name.ilike(search_pattern))
         )
 
-    results = []
-    today = date.today()
+    # Agrupar variantes para determinar la recomendación por producto
+    var_batches_map: dict = {}
 
-    for batch, variant, product in q.limit(100).all():
+    raw_items = q.all()
+    for batch, variant, product in raw_items:
         snapshot_q = db.query(InventorySnapshot).filter(InventorySnapshot.variant_id == variant.id)
         if facility_id:
             snapshot_q = snapshot_q.filter(InventorySnapshot.facility_id == facility_id)
         
         total_stock = sum([float(s.stock_qty or 0) for s in snapshot_q.all()])
+
+        # Buscar la fecha de recepción más antigua registrada en movimientos
+        received_move = db.query(StockMove).filter(
+            StockMove.batch_id == batch.id, 
+            StockMove.state == 'DONE'
+        ).order_by(StockMove.id.asc()).first()
+
+        received_date_str = None
+        if received_move and received_move.created_at:
+            received_date_str = received_move.created_at.strftime("%Y-%m-%d")
+        elif batch.manufacturing_date:
+            received_date_str = batch.manufacturing_date.strftime("%Y-%m-%d")
 
         status = "OK"
         if batch.is_quarantined:
@@ -673,18 +686,40 @@ def get_wms_lots(
                 elif days_to_expire <= 30:
                     status = "WARNING"
 
-        results.append({
+        item_dict = {
             "id": batch.id,
             "batch_number": batch.batch_number,
             "expiry_date": batch.expiry_date.strftime("%Y-%m-%d") if batch.expiry_date else None,
+            "received_at": received_date_str,
             "days_to_expire": days_to_expire,
             "status": status,
             "is_quarantined": bool(batch.is_quarantined),
             "variant_id": variant.id,
             "sku": variant.sku,
             "product_name": product.name,
-            "total_stock": total_stock
-        })
+            "total_stock": total_stock,
+            "is_fefo_recommended": False,
+            "strategy": "FEFO" if batch.expiry_date else "FIFO"
+        }
+
+        if variant.id not in var_batches_map:
+            var_batches_map[variant.id] = []
+        var_batches_map[variant.id].append(item_dict)
+
+    # Determinar Lote Recomendado por Variante (FEFO si hay vencimiento, FIFO si no)
+    results = []
+    for var_id, items in var_batches_map.items():
+        # Filtrar no retenidos ni vencidos
+        valid_items = [i for i in items if i["status"] not in ["BLOCKED", "EXPIRED"] and i["total_stock"] > 0]
+        if valid_items:
+            # Si tienen fecha de expiración se ordena por expiry_date, sino por id/received_at
+            first_expired = sorted(
+                valid_items, 
+                key=lambda x: (x["expiry_date"] if x["expiry_date"] else "9999-12-31", x["received_at"] if x["received_at"] else str(x["id"]))
+            )[0]
+            first_expired["is_fefo_recommended"] = True
+
+        results.extend(items)
 
     return results
 

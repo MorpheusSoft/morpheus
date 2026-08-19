@@ -50,12 +50,12 @@ export default function WmsLotsPage() {
     }
   };
 
-  const getStatusText = (status: string) => {
+  const getStatusText = (status: string, strategy: string) => {
     switch (status) {
       case 'BLOCKED': return 'RETENIDO (CUARENTENA)';
       case 'EXPIRED': return 'VENCIDO';
       case 'WARNING': return 'POR VENCER (< 30 DÍAS)';
-      case 'OK': return 'VIGENTE (FEFO OK)';
+      case 'OK': return strategy === 'FIFO' ? 'VIGENTE (FIFO OK)' : 'VIGENTE (FEFO OK)';
       default: return status;
     }
   };
@@ -69,9 +69,9 @@ export default function WmsLotsPage() {
         <div className="absolute top-0 left-0 w-2 h-full bg-teal-500"></div>
         <div className="pl-4">
           <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center">
-            <i className="pi pi-calendar-plus text-teal-500 mr-3"></i>Control de Lotes & Estrategia FEFO
+            <i className="pi pi-calendar-plus text-teal-500 mr-3"></i>Control de Lotes & Estrategias FEFO / FIFO
           </h1>
-          <p className="text-slate-500 text-sm mt-1">Trazabilidad por número de lote, priorización por vencimiento (First Expired, First Out) y estado de stock.</p>
+          <p className="text-slate-500 text-sm mt-1">Trazabilidad por número de lote, fecha de recepción y fecha de vencimiento con salida sugerida (FEFO / FIFO).</p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -106,7 +106,7 @@ export default function WmsLotsPage() {
           paginator
           rows={12}
           emptyMessage="No hay lotes registrados o coincidentes."
-          className="p-datatable-sm text-slate-700"
+          className="p-datatable-sm text-slate-700 text-xs"
           stripedRows
           responsiveLayout="scroll"
         >
@@ -114,12 +114,16 @@ export default function WmsLotsPage() {
             header="NÚMERO DE LOTE"
             field="batch_number"
             body={l => (
-              <div className="flex items-center gap-2">
-                <span className="font-mono font-bold text-xs bg-slate-100 px-3 py-1 rounded text-slate-800 border border-slate-200">
+              <div className="flex flex-col gap-1 items-start">
+                <span className="font-mono font-bold text-xs bg-slate-100 px-2.5 py-0.5 rounded text-slate-800 border border-slate-200">
                   {l.batch_number}
                 </span>
                 {l.is_fefo_recommended && (
-                  <Tag value="FEFO RECOMENDADO" severity="success" className="text-[10px] px-2 py-0.5 font-bold" />
+                  <Tag 
+                    value={l.expiry_date ? "FEFO RECOMENDADO (VENCE PRIMERO)" : "FIFO RECOMENDADO (LLEGÓ PRIMERO)"} 
+                    severity={l.expiry_date ? "success" : "info"} 
+                    className="text-[9px] px-1.5 py-0.5 font-bold" 
+                  />
                 )}
               </div>
             )}
@@ -130,24 +134,31 @@ export default function WmsLotsPage() {
 
           <Column field="product_name" header="PRODUCTO" body={l => <span className="font-bold text-slate-800">{l.product_name}</span>} sortable />
 
-          <Column header="FECHA EXPIRACIÓN" body={l => (
+          <Column header="FECHA RECEPCIÓN" body={l => (
+            <span className="font-semibold text-slate-700 flex items-center gap-1">
+              <i className="pi pi-inbox text-slate-400 text-xs"></i>
+              {l.received_at || 'Sin Registro'}
+            </span>
+          )} sortable />
+
+          <Column header="FECHA VENCIMIENTO" body={l => (
             <span className="font-bold text-slate-700">
-              {l.expiry_date || 'Sin Vencimiento'}
+              {l.expiry_date || 'Sin Vencimiento (FIFO)'}
             </span>
           )} sortable />
 
           <Column header="DÍAS RESTANTES" body={l => (
             <span className={`font-bold text-xs ${l.days_to_expire !== null && l.days_to_expire < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-              {l.days_to_expire !== null ? (l.days_to_expire < 0 ? `Vencido hace ${Math.abs(l.days_to_expire)} días` : `${l.days_to_expire} días`) : 'N/A'}
+              {l.days_to_expire !== null ? (l.days_to_expire < 0 ? `Vencido hace ${Math.abs(l.days_to_expire)} días` : `${l.days_to_expire} días`) : 'N/A (FIFO)'}
             </span>
           )} align="center" sortable />
 
-          <Column header="ESTADO FEFO" body={l => (
-            <Tag severity={getStatusSeverity(l.status)} value={getStatusText(l.status)} className="font-bold text-[10px] px-2 py-1" />
+          <Column header="ESTADO" body={l => (
+            <Tag severity={getStatusSeverity(l.status)} value={getStatusText(l.status, l.strategy)} className="font-bold text-[9px] px-2 py-1" />
           )} align="center" />
 
           <Column header="STOCK DISPONIBLE" body={l => (
-            <span className="font-bold text-emerald-700 text-sm bg-emerald-50 px-3 py-1 rounded border border-emerald-200">
+            <span className="font-bold text-emerald-700 text-xs bg-emerald-50 px-2.5 py-1 rounded border border-emerald-200">
               {l.total_stock?.toLocaleString('en-US') || 0} Unds
             </span>
           )} align="right" sortable />
