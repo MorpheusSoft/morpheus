@@ -181,13 +181,41 @@ export default function WmsAdjustmentsPage() {
     }));
   }, [locationsTree, selectedWarehouseId]);
 
-  // Handle Reason Change
-  const handleReasonChange = (reasonId: number) => {
-    setSelectedReasonId(reasonId);
-    const r = reasons.find(item => item.id === reasonId);
-    if (r) {
-      setMovementType(r.default_type || 'OUT');
+  // QUICK IN-LINE REASON CREATION
+  const [quickReasonDialogVisible, setQuickReasonDialogVisible] = useState(false);
+  const [quickReasonCode, setQuickReasonCode] = useState('');
+  const [quickReasonName, setQuickReasonName] = useState('');
+  const [quickReasonType, setQuickReasonType] = useState('OUT');
+  const [quickReasonAccount, setQuickReasonAccount] = useState('');
+  const [savingQuickReason, setSavingQuickReason] = useState(false);
+
+  const handleCreateQuickReason = async () => {
+    if (!quickReasonCode.trim() || !quickReasonName.trim()) {
+      toast.current?.show({ severity: 'warn', summary: 'Campos Requeridos', detail: 'Ingrese código y nombre descriptivo del motivo.' });
+      return;
     }
+    setSavingQuickReason(true);
+    try {
+      const res = await api.post('/wms/adjustment-reasons', {
+        code: quickReasonCode.trim(),
+        name: quickReasonName.trim(),
+        default_type: quickReasonType,
+        account_code: quickReasonAccount.trim()
+      });
+      toast.current?.show({ severity: 'success', summary: 'Motivo Creado In-Line', detail: `Motivo "${res.data.name}" agregado y seleccionado.` });
+      setQuickReasonCode('');
+      setQuickReasonName('');
+      setQuickReasonAccount('');
+      setQuickReasonDialogVisible(false);
+      await fetchReasons();
+      if (res.data && res.data.id) {
+        setSelectedReasonId(res.data.id);
+        setMovementType(res.data.default_type || 'OUT');
+      }
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'No se pudo crear el motivo.' });
+    }
+    setSavingQuickReason(false);
   };
 
   // ADD LINE TO ADJUSTMENT
@@ -643,13 +671,28 @@ export default function WmsAdjustmentsPage() {
             </div>
 
             <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-slate-500 uppercase">4. MOTIVO DE AJUSTE *</label>
+              <div className="flex justify-between items-center">
+                <label className="text-[11px] font-bold text-slate-500 uppercase">4. MOTIVO DE AJUSTE *</label>
+                <button
+                  type="button"
+                  onClick={() => setQuickReasonDialogVisible(true)}
+                  className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
+                  title="Crear un motivo rápidamente sin salir"
+                >
+                  <i className="pi pi-plus-circle text-xs"></i>
+                  + Nuevo Motivo
+                </button>
+              </div>
               <Dropdown
                 value={selectedReasonId}
                 options={reasons}
                 optionLabel="name"
                 optionValue="id"
-                onChange={e => handleReasonChange(e.value)}
+                onChange={e => {
+                  setSelectedReasonId(e.value);
+                  const r = reasons.find(item => item.id === e.value);
+                  if (r) setMovementType(r.default_type || 'OUT');
+                }}
                 placeholder="Seleccione Motivo"
                 className="w-full text-xs font-bold"
               />
@@ -1017,6 +1060,68 @@ export default function WmsAdjustmentsPage() {
           <div className="flex justify-end gap-3 mt-4 pt-3 border-t border-slate-200">
             <Button label="Cancelar" outlined severity="secondary" className="font-bold text-xs" onClick={() => setNewSessionDialogVisible(false)} />
             <Button label="Crear Sesión" icon="pi pi-check" loading={creatingSession} className="font-bold text-xs bg-indigo-600 text-white" onClick={createSession} />
+          </div>
+        </div>
+      </Dialog>
+
+      {/* DIÁLOGO RÁPIDO: CREAR MOTIVO IN-LINE */}
+      <Dialog
+        header="⚡ Crear Nuevo Motivo de Ajuste (In-Line)"
+        visible={quickReasonDialogVisible}
+        onHide={() => setQuickReasonDialogVisible(false)}
+        style={{ width: '520px' }}
+        className="rounded-2xl"
+      >
+        <div className="flex flex-col gap-4 py-2 text-xs">
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-indigo-900 font-medium">
+            Al guardar, este nuevo motivo se seleccionará automáticamente en la solicitud actual sin perder tus productos cargados.
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="font-bold text-slate-700">Código del Motivo *</label>
+            <InputText
+              value={quickReasonCode}
+              onChange={e => setQuickReasonCode(e.target.value)}
+              placeholder="Ej. DAÑO_TRANSPORTE, MERMA_MUELE"
+              className="text-xs p-inputtext-sm font-mono font-bold uppercase"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="font-bold text-slate-700">Nombre Descriptivo *</label>
+            <InputText
+              value={quickReasonName}
+              onChange={e => setQuickReasonName(e.target.value)}
+              placeholder="Ej. Daños durante Transporte / Estibado"
+              className="text-xs p-inputtext-sm"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="font-bold text-slate-700">Tipo Predeterminado</label>
+            <Dropdown
+              value={quickReasonType}
+              options={[{ label: 'Descargo (-) Salida', value: 'OUT' }, { label: 'Cargo (+) Entrada', value: 'IN' }]}
+              optionLabel="label"
+              optionValue="value"
+              onChange={e => setQuickReasonType(e.value)}
+              className="text-xs font-bold"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="font-bold text-slate-700">Cuenta Contable Asociada (Opcional)</label>
+            <InputText
+              value={quickReasonAccount}
+              onChange={e => setQuickReasonAccount(e.target.value)}
+              placeholder="Ej. 6.1.02.05"
+              className="text-xs p-inputtext-sm font-mono"
+            />
+          </div>
+
+          <div className="flex justify-end gap-3 mt-4 pt-3 border-t border-slate-200">
+            <Button label="Cancelar" outlined severity="secondary" className="font-bold text-xs" onClick={() => setQuickReasonDialogVisible(false)} />
+            <Button label="Guardar y Seleccionar" icon="pi pi-check" loading={savingQuickReason} className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white" onClick={handleCreateQuickReason} />
           </div>
         </div>
       </Dialog>
