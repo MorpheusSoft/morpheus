@@ -218,16 +218,16 @@ export default function WmsAdjustmentsPage() {
     setSavingQuickReason(false);
   };
 
-  // ADD LINE TO ADJUSTMENT
+  // ADD LINE TO ADJUSTMENT (EMPTY BY DEFAULT)
   const addLine = () => {
     setAdjLines(prev => [
       ...prev,
       {
-        product_variant_id: products[0]?.value || 0,
+        product_variant_id: null,
         batch_id: null,
         quantity: 1,
-        unit_cost: products[0]?.cost || 0.0,
-        total_value: products[0]?.cost || 0.0
+        unit_cost: 0.0,
+        total_value: 0.0
       }
     ]);
   };
@@ -430,13 +430,7 @@ export default function WmsAdjustmentsPage() {
             icon="pi pi-plus"
             className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md hover:bg-indigo-700"
             onClick={() => {
-              setAdjLines([{
-                product_variant_id: products[0]?.value || 0,
-                batch_id: null,
-                quantity: 1,
-                unit_cost: products[0]?.cost || 0.0,
-                total_value: products[0]?.cost || 0.0
-              }]);
+              setAdjLines([]);
               setNewAdjDialogVisible(true);
             }}
           />
@@ -679,8 +673,8 @@ export default function WmsAdjustmentsPage() {
               </div>
             </div>
 
-            {/* Row 2: Motivo, Tipo y Justificación */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Row 2: Motivo y Sentido */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="flex flex-col gap-1.5">
                 <div className="h-6 flex items-center justify-between">
                   <label className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">4. Motivo de Ajuste *</label>
@@ -721,7 +715,7 @@ export default function WmsAdjustmentsPage() {
                     severity={movementType === 'OUT' ? 'danger' : 'secondary'}
                     outlined={movementType !== 'OUT'}
                     onClick={() => setMovementType('OUT')}
-                    className="font-bold text-xs flex-1 !rounded-xl"
+                    className="font-bold text-xs flex-1 !rounded-xl py-2"
                   />
                   <Button
                     type="button"
@@ -730,22 +724,23 @@ export default function WmsAdjustmentsPage() {
                     severity={movementType === 'IN' ? 'success' : 'secondary'}
                     outlined={movementType !== 'IN'}
                     onClick={() => setMovementType('IN')}
-                    className="font-bold text-xs flex-1 !rounded-xl"
+                    className="font-bold text-xs flex-1 !rounded-xl py-2"
                   />
                 </div>
               </div>
+            </div>
 
-              <div className="flex flex-col gap-1.5">
-                <div className="h-6 flex items-center">
-                  <label className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">6. Justificación / Observación</label>
-                </div>
-                <InputText
-                  value={notes}
-                  onChange={e => setNotes(e.target.value)}
-                  placeholder="Ej. Mercancía dañada durante traslado..."
-                  className="text-xs p-inputtext-sm w-full !rounded-xl"
-                />
+            {/* Row 3: Justificación / Observación Full Width */}
+            <div className="flex flex-col gap-1.5">
+              <div className="h-6 flex items-center">
+                <label className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">6. Justificación / Observación (Motivo Detallado)</label>
               </div>
+              <InputText
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+                placeholder="Ej. Mercancía dañada durante traslado en montacargas, se requiere descargo de stock de almacén central..."
+                className="text-xs p-inputtext-sm w-full !rounded-xl"
+              />
             </div>
           </div>
 
@@ -776,53 +771,65 @@ export default function WmsAdjustmentsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {adjLines.map((line, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50">
-                      <td className="p-2">
-                        <Dropdown
-                          value={line.product_variant_id}
-                          options={products}
-                          optionLabel="label"
-                          optionValue="value"
-                          onChange={e => updateLine(idx, 'product_variant_id', e.value)}
-                          className="w-full text-xs"
-                          filter
-                        />
-                      </td>
-                      <td className="p-2">
-                        <InputNumber
-                          value={line.quantity}
-                          onValueChange={e => updateLine(idx, 'quantity', e.value || 0)}
-                          min={0.001}
-                          maxFractionDigits={4}
-                          inputClassName="p-inputtext-sm text-xs font-bold w-full"
-                        />
-                      </td>
-                      <td className="p-2">
-                        <InputNumber
-                          value={line.unit_cost}
-                          onValueChange={e => updateLine(idx, 'unit_cost', e.value || 0)}
-                          mode="currency"
-                          currency="USD"
-                          locale="en-US"
-                          inputClassName="p-inputtext-sm text-xs font-bold w-full"
-                        />
-                      </td>
-                      <td className="p-2 text-right font-mono font-bold text-slate-900">
-                        ${(line.total_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      <td className="p-2 text-center">
-                        <Button
-                          icon="pi pi-trash"
-                          rounded
-                          text
-                          severity="danger"
-                          size="small"
-                          onClick={() => removeLine(idx)}
-                        />
+                  {adjLines.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="p-8 text-center text-slate-400 bg-slate-50/50">
+                        <i className="pi pi-box text-3xl mb-2 text-slate-300 block"></i>
+                        <p className="font-semibold text-xs text-slate-600">No hay productos agregados a esta solicitud.</p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">Haz clic en <b className="text-indigo-600">+ Añadir Producto</b> arriba para seleccionar los artículos a ajustar.</p>
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    adjLines.map((line, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50">
+                        <td className="p-2">
+                          <Dropdown
+                            value={line.product_variant_id}
+                            options={products}
+                            optionLabel="label"
+                            optionValue="value"
+                            onChange={e => updateLine(idx, 'product_variant_id', e.value)}
+                            placeholder="Seleccione Producto / SKU..."
+                            className="w-full text-xs"
+                            filter
+                            showClear
+                          />
+                        </td>
+                        <td className="p-2">
+                          <InputNumber
+                            value={line.quantity}
+                            onValueChange={e => updateLine(idx, 'quantity', e.value || 0)}
+                            min={0.001}
+                            maxFractionDigits={4}
+                            inputClassName="p-inputtext-sm text-xs font-bold w-full"
+                          />
+                        </td>
+                        <td className="p-2">
+                          <InputNumber
+                            value={line.unit_cost}
+                            onValueChange={e => updateLine(idx, 'unit_cost', e.value || 0)}
+                            mode="currency"
+                            currency="USD"
+                            locale="en-US"
+                            inputClassName="p-inputtext-sm text-xs font-bold w-full"
+                          />
+                        </td>
+                        <td className="p-2 text-right font-mono font-bold text-slate-900">
+                          ${(line.total_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-2 text-center">
+                          <Button
+                            icon="pi pi-trash"
+                            rounded
+                            text
+                            severity="danger"
+                            size="small"
+                            onClick={() => removeLine(idx)}
+                          />
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
                 <tfoot className="bg-slate-50 border-t border-slate-200 font-bold text-slate-800">
                   <tr>
