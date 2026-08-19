@@ -13,7 +13,7 @@ class SessionState(str, Enum):
 # LINES
 class InventoryLineBase(BaseModel):
     product_variant_id: int
-    location_id: int
+    location_id: Optional[int] = None
     counted_qty: float
     notes: Optional[str] = None
 
