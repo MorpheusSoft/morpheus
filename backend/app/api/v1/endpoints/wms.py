@@ -653,6 +653,7 @@ def get_wms_lots(
 
     # Agrupar variantes para determinar la recomendación por producto
     var_batches_map: dict = {}
+    today = date.today()
 
     raw_items = q.all()
     for batch, variant, product in raw_items:
