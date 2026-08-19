@@ -270,7 +270,30 @@ export default function WmsAdjustmentsPage() {
       return;
     }
     if (adjLines.length === 0) {
-      toast.current?.show({ severity: 'warn', summary: 'Sin Productos', detail: 'Agregue al menos un producto al ajuste.' });
+      toast.current?.show({ severity: 'warn', summary: 'Sin Productos', detail: 'Agregue al menos un producto a la solicitud de ajuste.' });
+      return;
+    }
+
+    const hasEmptyProduct = adjLines.some(l => !l.product_variant_id);
+    if (hasEmptyProduct) {
+      toast.current?.show({ severity: 'warn', summary: 'Producto No Seleccionado', detail: 'Por favor seleccione un producto/SKU en todas las líneas de la grilla.' });
+      return;
+    }
+
+    const hasZeroQty = adjLines.some(l => !l.quantity || l.quantity <= 0);
+    if (hasZeroQty) {
+      toast.current?.show({ severity: 'warn', summary: 'Cantidad Inválida', detail: 'La cantidad ajustada en cada producto debe ser mayor a 0.' });
+      return;
+    }
+
+    const hasZeroCost = adjLines.some(l => !l.unit_cost || l.unit_cost <= 0);
+    if (hasZeroCost) {
+      toast.current?.show({ severity: 'warn', summary: 'Costo Inválido ($0.00)', detail: 'Un ajuste no puede guardarse en $0.00. El producto debe tener un costo unitario asignado.' });
+      return;
+    }
+
+    if (calcDraftTotal <= 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Total Inválido ($0.00)', detail: 'El total general del ajuste debe ser mayor a $0.00.' });
       return;
     }
 

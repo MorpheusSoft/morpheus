@@ -1452,6 +1452,9 @@ def create_inventory_adjustment(
     count = db.query(func.count(InventoryAdjustment.id)).scalar() or 0
     adj_number = f"AJ-{year}-{(count + 1):04d}"
 
+    if not payload.lines or len(payload.lines) == 0:
+        raise HTTPException(status_code=400, detail="Debe incluir al menos un producto en la solicitud de ajuste.")
+
     total_gen = 0.0
     adjustment = InventoryAdjustment(
         number=adj_number,
@@ -1469,18 +1472,52 @@ def create_inventory_adjustment(
     db.flush()
 
     for line_in in payload.lines:
-        subtotal = round(float(line_in.quantity) * float(line_in.unit_cost or 0.0), 4)
+        if not line_in.product_variant_id:
+            raise HTTPException(status_code=400, detail="Cada línea de ajuste debe tener un producto seleccionado.")
+        
+        q = float(line_in.quantity or 0)
+        c = float(line_in.unit_cost or 0)
+
+        if q <= 0:
+            raise HTTPException(status_code=400, detail="La cantidad ajustada debe ser mayor a 0.")
+        if c <= 0:
+            raise HTTPException(status_code=400, detail="El costo unitario del producto debe ser mayor a $0.00.")
+
+        subtotal = round(q * c, 4)
         total_gen += subtotal
+
+        # Resolver id de variante inteligente (evitar error de FK si viene id de producto padre)
+        target_variant_id = line_in.product_variant_id
+        var_exists = db.query(ProductVariant.id).filter(ProductVariant.id == target_variant_id).first()
+        if not var_exists:
+            # Buscar por product_id
+            var_by_prod = db.query(ProductVariant).filter(ProductVariant.product_id == target_variant_id).first()
+            if var_by_prod:
+                target_variant_id = var_by_prod.id
+            else:
+                # Crear variante por defecto
+                prod_parent = db.query(Product).filter(Product.id == target_variant_id).first()
+                new_var = ProductVariant(
+                    product_id=target_variant_id,
+                    sku=prod_parent.sku if prod_parent else f"SKU-{target_variant_id}",
+                    part_number=prod_parent.part_number if prod_parent else None
+                )
+                db.add(new_var)
+                db.flush()
+                target_variant_id = new_var.id
 
         adj_line = InventoryAdjustmentLine(
             adjustment_id=adjustment.id,
-            product_variant_id=line_in.product_variant_id,
+            product_variant_id=target_variant_id,
             batch_id=line_in.batch_id,
             quantity=line_in.quantity,
             unit_cost=line_in.unit_cost or 0.0,
             total_value=subtotal
         )
         db.add(adj_line)
+
+    if total_gen <= 0:
+        raise HTTPException(status_code=400, detail="El valor total del ajuste debe ser mayor a $0.00.")
 
     adjustment.total_amount = total_gen
     db.commit()
