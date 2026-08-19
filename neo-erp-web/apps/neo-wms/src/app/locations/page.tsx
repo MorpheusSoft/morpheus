@@ -399,7 +399,7 @@ export default function WmsLocationsPage() {
                   <Column header="CÓDIGO" field="code" body={l => <span className="font-mono text-xs font-bold bg-slate-100 px-2 py-1 rounded text-slate-700">{l.code}</span>} sortable />
                   <Column header="NOMBRE UBICACIÓN" field="name" body={l => <span className="font-bold text-slate-800">{l.name}</span>} sortable />
                   <Column header="TIPO" body={l => <Tag severity={getLocationTypeSeverity(l.location_type)} value={l.location_type} className="text-[10px] font-bold" />} sortable />
-                  <Column header="CAPACIDAD MÁX." body={l => <span className="font-mono text-xs text-slate-600 font-semibold">{l.capacity_volume || 100} Unds</span>} sortable />
+                  <Column header="CAPACIDAD (m³)" body={l => <span className="font-mono text-xs text-slate-600 font-semibold">{l.capacity_volume || 10.0} m³</span>} sortable />
                   <Column header="SATURACIÓN VOLUMÉTRICA" body={occupancyTemplate} />
                 </DataTable>
               </div>
@@ -527,12 +527,13 @@ export default function WmsLocationsPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Capacidad Máxima (Unidades):</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Capacidad Máxima (m³):</label>
               <InputNumber 
                 value={newLocCapacity}
                 onValueChange={(e) => setNewLocCapacity(e.value || 100)}
-                min={1}
-                placeholder="100"
+                min={0.1}
+                maxFractionDigits={2}
+                placeholder="Ej. 5.0"
                 className="w-full text-xs font-bold"
               />
             </div>
