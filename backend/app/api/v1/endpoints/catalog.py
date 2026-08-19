@@ -271,6 +271,7 @@ def create_location(
         parent_id=location_in.parent_id,
         location_type=location_in.location_type,
         usage=location_in.usage,
+        capacity_volume=location_in.capacity_volume or 100.0,
         is_blocked=False
     )
     db.add(db_obj)

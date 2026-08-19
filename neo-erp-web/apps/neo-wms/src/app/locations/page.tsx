@@ -18,9 +18,9 @@ export default function WmsLocationsPage() {
   const [loading, setLoading] = useState(true);
   const toast = useRef<Toast>(null);
 
-  // Sucursales y Filtro Activo
+  // Sucursales y Filtro Activo (0 = Todas las Sucursales)
   const [facilities, setFacilities] = useState<any[]>([]);
-  const [selectedFacilityFilter, setSelectedFacilityFilter] = useState<number | null>(null);
+  const [selectedFacilityFilter, setSelectedFacilityFilter] = useState<number>(0);
 
   // Reubicación (Putaway) state
   const [putawayDialogVisible, setPutawayDialogVisible] = useState(false);
@@ -44,6 +44,7 @@ export default function WmsLocationsPage() {
   const [newLocWarehouseId, setNewLocWarehouseId] = useState<number | null>(null);
   const [newLocName, setNewLocName] = useState<string>('');
   const [newLocCode, setNewLocCode] = useState<string>('');
+  const [newLocCapacity, setNewLocCapacity] = useState<number>(100);
   const [newLocType, setNewLocType] = useState<string>('SHELF');
   const [creatingLocation, setCreatingLocation] = useState(false);
 
@@ -64,7 +65,7 @@ export default function WmsLocationsPage() {
   const fetchTreeAndOccupancy = async (facilityId?: number | null) => {
     setLoading(true);
     try {
-      const url = facilityId ? `/wms/locations/tree?facility_id=${facilityId}` : '/wms/locations/tree';
+      const url = (facilityId && facilityId !== 0) ? `/wms/locations/tree?facility_id=${facilityId}` : '/wms/locations/tree';
       const [treeRes, occRes] = await Promise.all([
         api.get(url).catch(() => ({ data: [] })),
         api.get('/wms/locations/occupancy').catch(() => ({ data: [] }))
@@ -125,11 +126,11 @@ export default function WmsLocationsPage() {
 
   useEffect(() => {
     fetchFacilities();
-    fetchTreeAndOccupancy(selectedFacilityFilter);
+    fetchTreeAndOccupancy(0);
     fetchProducts();
   }, []);
 
-  const handleFacilityFilterChange = (facId: number | null) => {
+  const handleFacilityFilterChange = (facId: number) => {
     setSelectedFacilityFilter(facId);
     fetchTreeAndOccupancy(facId);
   };
@@ -202,13 +203,15 @@ export default function WmsLocationsPage() {
         warehouse_id: newLocWarehouseId,
         name: newLocName.trim(),
         code: newLocCode.trim().toUpperCase(),
+        capacity_volume: newLocCapacity || 100.0,
         location_type: newLocType,
         usage: 'INTERNAL'
       });
-      toast.current?.show({ severity: 'success', summary: 'Ubicación Creada', detail: `Ubicación ${newLocName} registrada con éxito.` });
+      toast.current?.show({ severity: 'success', summary: 'Ubicación Creada', detail: `Ubicación ${newLocName} registrada con capacidad de ${newLocCapacity} unidades.` });
       setNewLocDialogVisible(false);
       setNewLocName('');
       setNewLocCode('');
+      setNewLocCapacity(100);
       fetchTreeAndOccupancy(selectedFacilityFilter);
     } catch (e: any) {
       toast.current?.show({ severity: 'error', summary: 'Error al Crear', detail: e.response?.data?.detail || 'No se pudo registrar la ubicación.' });
@@ -271,6 +274,13 @@ export default function WmsLocationsPage() {
     return treeData.filter(wh => wh.facility_id === newLocFacilityId);
   }, [treeData, newLocFacilityId]);
 
+  const facilityDropdownOptions = React.useMemo(() => {
+    return [
+      { label: '🌐 Todas las Sucursales', value: 0 },
+      ...facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }))
+    ];
+  }, [facilities]);
+
   const locationTypeOptions = [
     { label: 'Estante / Rack (SHELF)', value: 'SHELF' },
     { label: 'Muelle Descarga (DOCK)', value: 'DOCK' },
@@ -314,10 +324,7 @@ export default function WmsLocationsPage() {
             </span>
             <Dropdown
               value={selectedFacilityFilter}
-              options={[
-                { label: '🌐 Todas las Sucursales', value: null },
-                ...facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }))
-              ]}
+              options={facilityDropdownOptions}
               onChange={(e) => handleFacilityFilterChange(e.value)}
               placeholder="Filtrar Sucursal..."
               className="w-64 text-xs font-bold shadow-none border-slate-300"
@@ -392,6 +399,7 @@ export default function WmsLocationsPage() {
                   <Column header="CÓDIGO" field="code" body={l => <span className="font-mono text-xs font-bold bg-slate-100 px-2 py-1 rounded text-slate-700">{l.code}</span>} sortable />
                   <Column header="NOMBRE UBICACIÓN" field="name" body={l => <span className="font-bold text-slate-800">{l.name}</span>} sortable />
                   <Column header="TIPO" body={l => <Tag severity={getLocationTypeSeverity(l.location_type)} value={l.location_type} className="text-[10px] font-bold" />} sortable />
+                  <Column header="CAPACIDAD MÁX." body={l => <span className="font-mono text-xs text-slate-600 font-semibold">{l.capacity_volume || 100} Unds</span>} sortable />
                   <Column header="SATURACIÓN VOLUMÉTRICA" body={occupancyTemplate} />
                 </DataTable>
               </div>
@@ -467,7 +475,7 @@ export default function WmsLocationsPage() {
         <div className="flex flex-col gap-4 py-2">
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800 font-medium flex items-center">
             <i className="pi pi-plus-circle text-emerald-600 text-lg mr-2"></i>
-            <span>Agregue un nuevo pasillo, estante o posición dentro del almacén y sucursal correspondientes.</span>
+            <span>Agregue un nuevo pasillo, estante o posición definiendo su <strong>capacidad volumétrica máxima</strong>.</span>
           </div>
 
           <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
@@ -507,14 +515,27 @@ export default function WmsLocationsPage() {
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Código de la Ubicación:</label>
-            <InputText 
-              value={newLocCode}
-              onChange={(e) => setNewLocCode(e.target.value)}
-              placeholder="Ej. PAS-A-EST01"
-              className="w-full text-xs font-mono font-bold"
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Código de Ubicación:</label>
+              <InputText 
+                value={newLocCode}
+                onChange={(e) => setNewLocCode(e.target.value)}
+                placeholder="Ej. PAS-A-EST01"
+                className="w-full text-xs font-mono font-bold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Capacidad Máxima (Unidades):</label>
+              <InputNumber 
+                value={newLocCapacity}
+                onValueChange={(e) => setNewLocCapacity(e.value || 100)}
+                min={1}
+                placeholder="100"
+                className="w-full text-xs font-bold"
+              />
+            </div>
           </div>
 
           <div>

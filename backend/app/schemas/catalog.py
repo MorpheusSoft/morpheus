@@ -116,6 +116,7 @@ class LocationBase(BaseModel):
     parent_id: Optional[int] = None
     location_type: str = "SHELF"
     usage: str = "INTERNAL"
+    capacity_volume: Optional[float] = 100.0
     
 class LocationCreate(LocationBase):
     pass

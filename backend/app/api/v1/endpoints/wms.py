@@ -788,6 +788,7 @@ def get_locations_tree(facility_id: Optional[int] = None, db: Session = Depends(
                 "code": l.code,
                 "barcode": l.barcode,
                 "location_type": l.location_type,
+                "capacity_volume": float(l.capacity_volume or 100.0),
                 "usage": l.usage,
                 "is_blocked": l.is_blocked,
                 "parent_id": l.parent_id
