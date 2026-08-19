@@ -8,9 +8,14 @@ from app.api.deps import get_db, get_current_active_user
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine
 from app.models.inventory import (
     StockPicking, StockMove, StockPickingType, Batch, InventorySnapshot,
-    Location, Warehouse, ProductVariant, Product, ProductFacilityPrice, ProductBarcode
+    Location, Warehouse, ProductVariant, Product, ProductFacilityPrice, ProductBarcode,
+    AdjustmentReason, InventoryAdjustment, InventoryAdjustmentLine
 )
 from app.models.core import Facility, Supplier, User
+from app.schemas.adjustment import (
+    AdjustmentReasonCreate, AdjustmentReasonResponse,
+    InventoryAdjustmentCreate, InventoryAdjustmentResponse
+)
 
 router = APIRouter()
 
@@ -1295,6 +1300,304 @@ def get_locations_occupancy(
         })
         
     return results
+
+
+# ==============================================================================
+# ENDPOINTS: AJUSTES DIRECTOS (Mermas, Hurtos, Consumo Interno, Sobrantes)
+# ==============================================================================
+
+INITIAL_ADJUSTMENT_REASONS = [
+    {"code": "MERMA_01", "name": "Mermas / Desperdicio Operativo", "default_type": "OUT", "account_code": "6.1.02.01"},
+    {"code": "DANNO_01", "name": "Mercancía Averiada / Producto Dañado", "default_type": "OUT", "account_code": "6.1.02.05"},
+    {"code": "HURTO_01", "name": "Faltante por Robo o Hurto", "default_type": "OUT", "account_code": "6.1.05.01"},
+    {"code": "CONS_01", "name": "Consumo Interno de la Empresa", "default_type": "OUT", "account_code": "6.2.01.03"},
+    {"code": "SOBRANTE_01", "name": "Sobrante en Recepción / Ubicación", "default_type": "IN", "account_code": "5.1.09.01"},
+    {"code": "DONACION_01", "name": "Donaciones / Muestras Promocionales", "default_type": "OUT", "account_code": "6.3.01.10"},
+]
+
+@router.get("/adjustment-reasons")
+def get_adjustment_reasons(db: Session = Depends(get_db)):
+    """
+    Listar el Catálogo de Motivos de Ajuste (Mermas, Hurtos, Consumos, etc.)
+    Auto-siembra los motivos iniciales si la tabla está vacía.
+    """
+    reasons = db.query(AdjustmentReason).filter(AdjustmentReason.is_active == True).order_by(AdjustmentReason.id.asc()).all()
+    if not reasons:
+        for item in INITIAL_ADJUSTMENT_REASONS:
+            r = AdjustmentReason(
+                code=item["code"],
+                name=item["name"],
+                default_type=item["default_type"],
+                account_code=item["account_code"],
+                is_active=True
+            )
+            db.add(r)
+        db.commit()
+        reasons = db.query(AdjustmentReason).filter(AdjustmentReason.is_active == True).order_by(AdjustmentReason.id.asc()).all()
+    return reasons
+
+
+@router.post("/adjustment-reasons")
+def create_adjustment_reason(
+    payload: AdjustmentReasonCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    Crear o actualizar un motivo de ajuste con su cuenta contable.
+    """
+    existing = db.query(AdjustmentReason).filter(AdjustmentReason.code == payload.code.strip().upper()).first()
+    if existing:
+        existing.name = payload.name.strip()
+        existing.default_type = payload.default_type or 'OUT'
+        existing.account_code = payload.account_code
+        existing.is_active = True
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    reason = AdjustmentReason(
+        code=payload.code.strip().upper(),
+        name=payload.name.strip(),
+        default_type=payload.default_type or 'OUT',
+        account_code=payload.account_code,
+        is_active=True
+    )
+    db.add(reason)
+    db.commit()
+    db.refresh(reason)
+    return reason
+
+
+@router.get("/adjustments")
+def list_inventory_adjustments(
+    facility_id: Optional[int] = None,
+    state: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Listar solicitudes y ejecuciones de Ajustes Directos de Inventario.
+    """
+    query = db.query(InventoryAdjustment).order_by(InventoryAdjustment.id.desc())
+    if facility_id:
+        query = query.filter(InventoryAdjustment.facility_id == facility_id)
+    if state:
+        query = query.filter(InventoryAdjustment.state == state)
+
+    adjustments = query.all()
+    results = []
+    for adj in adjustments:
+        lines_resp = []
+        for line in adj.lines:
+            var = db.query(ProductVariant).filter(ProductVariant.id == line.product_variant_id).first()
+            prod = db.query(Product).filter(Product.id == var.product_id).first() if var else None
+            batch = db.query(Batch).filter(Batch.id == line.batch_id).first() if line.batch_id else None
+
+            lines_resp.append({
+                "id": line.id,
+                "product_variant_id": line.product_variant_id,
+                "batch_id": line.batch_id,
+                "quantity": float(line.quantity or 0),
+                "unit_cost": float(line.unit_cost or 0),
+                "total_value": float(line.total_value or 0),
+                "sku": var.sku if var else "N/A",
+                "product_name": prod.name if prod else "N/A",
+                "batch_number": batch.batch_number if batch else None
+            })
+
+        creator = db.query(User).filter(User.id == adj.created_by_id).first()
+        approver = db.query(User).filter(User.id == adj.approved_by_id).first() if adj.approved_by_id else None
+
+        results.append({
+            "id": adj.id,
+            "number": adj.number,
+            "facility_id": adj.facility_id,
+            "warehouse_id": adj.warehouse_id,
+            "location_id": adj.location_id,
+            "reason_id": adj.reason_id,
+            "movement_type": adj.movement_type,
+            "total_amount": float(adj.total_amount or 0),
+            "notes": adj.notes,
+            "state": adj.state,
+            "created_by_id": adj.created_by_id,
+            "created_by_name": creator.full_name if creator else f"Usuario #{adj.created_by_id}",
+            "approved_by_id": adj.approved_by_id,
+            "approved_by_name": approver.full_name if approver else (f"Usuario #{adj.approved_by_id}" if adj.approved_by_id else None),
+            "created_at": adj.created_at,
+            "approved_at": adj.approved_at,
+            "reason_name": adj.reason.name if adj.reason else f"Motivo #{adj.reason_id}",
+            "facility_name": adj.facility.name if adj.facility else f"Sucursal #{adj.facility_id}",
+            "warehouse_name": adj.warehouse.name if adj.warehouse else f"Almacén #{adj.warehouse_id}",
+            "location_name": adj.location.name if adj.location else "Ubicación General",
+            "lines": lines_resp
+        })
+
+    return results
+
+
+@router.post("/adjustments")
+def create_inventory_adjustment(
+    payload: InventoryAdjustmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Crear una solicitud de Ajuste Directo de Inventario en estado PENDIENTE.
+    Calcula subtotales por renglón y el total general ($).
+    """
+    if not payload.lines:
+        raise HTTPException(status_code=400, detail="Debe agregar al menos un producto al ajuste.")
+
+    # Generar correlativo AJ-YYYY-XXXX
+    year = datetime.now().year
+    count = db.query(func.count(InventoryAdjustment.id)).scalar() or 0
+    adj_number = f"AJ-{year}-{(count + 1):04d}"
+
+    total_gen = 0.0
+    adjustment = InventoryAdjustment(
+        number=adj_number,
+        facility_id=payload.facility_id,
+        warehouse_id=payload.warehouse_id,
+        location_id=payload.location_id,
+        reason_id=payload.reason_id,
+        movement_type=payload.movement_type or 'OUT',
+        total_amount=0,
+        notes=payload.notes,
+        state='PENDING',
+        created_by_id=current_user.id
+    )
+    db.add(adjustment)
+    db.flush()
+
+    for line_in in payload.lines:
+        subtotal = round(float(line_in.quantity) * float(line_in.unit_cost or 0.0), 4)
+        total_gen += subtotal
+
+        adj_line = InventoryAdjustmentLine(
+            adjustment_id=adjustment.id,
+            product_variant_id=line_in.product_variant_id,
+            batch_id=line_in.batch_id,
+            quantity=line_in.quantity,
+            unit_cost=line_in.unit_cost or 0.0,
+            total_value=subtotal
+        )
+        db.add(adj_line)
+
+    adjustment.total_amount = total_gen
+    db.commit()
+    db.refresh(adjustment)
+    return {"message": "Solicitud de Ajuste Directo creada con éxito en estado PENDIENTE.", "id": adjustment.id, "number": adjustment.number}
+
+
+@router.post("/adjustments/{adjustment_id}/approve")
+def approve_inventory_adjustment(
+    adjustment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Aprobación por Supervisor / Gerencia.
+    Ejecuta los StockMove en el estante/almacén y actualiza el Kardex.
+    """
+    adj = db.query(InventoryAdjustment).filter(InventoryAdjustment.id == adjustment_id).first()
+    if not adj:
+        raise HTTPException(status_code=404, detail="Ajuste no encontrado.")
+
+    if adj.state == 'APPROVED':
+        raise HTTPException(status_code=400, detail="Este ajuste ya fue aprobado previamente.")
+    if adj.state == 'REJECTED':
+        raise HTTPException(status_code=400, detail="No se puede aprobar un ajuste rechazado.")
+
+    # Determinar almacén de tránsito o ubicación virtual si aplica
+    virtual_loss_loc = db.query(Location).filter(
+        Location.warehouse_id == adj.warehouse_id,
+        Location.location_type == 'LOSS'
+    ).first()
+
+    if not virtual_loss_loc:
+        virtual_loss_loc = db.query(Location).filter(Location.warehouse_id == adj.warehouse_id).first()
+
+    target_loc_id = adj.location_id or virtual_loss_loc.id
+
+    for line in adj.lines:
+        qty = float(line.quantity)
+        if adj.movement_type == 'IN':
+            # Cargo (+) Entrada de stock sobrante/encontrado
+            src_id = virtual_loss_loc.id
+            dest_id = target_loc_id
+        else:
+            # Descargo (-) Salida por merma/daño/hurto/consumo
+            src_id = target_loc_id
+            dest_id = virtual_loss_loc.id
+
+        move = StockMove(
+            product_id=line.product_variant_id,
+            location_src_id=src_id,
+            location_dest_id=dest_id,
+            quantity_demand=qty,
+            quantity_done=qty,
+            uom_id='PZA',
+            state='DONE',
+            notes=f"Ajuste Directo {adj.number} [{adj.reason.name if adj.reason else ''}]",
+            batch_id=line.batch_id,
+            unit_cost=line.unit_cost,
+            reference=adj.number,
+            created_by_id=current_user.id
+        )
+        db.add(move)
+
+        # Actualizar Snapshot de Stock Físico
+        snap = db.query(InventorySnapshot).filter(
+            InventorySnapshot.facility_id == adj.facility_id,
+            InventorySnapshot.warehouse_id == adj.warehouse_id,
+            InventorySnapshot.variant_id == line.product_variant_id
+        ).first()
+
+        if snap:
+            if adj.movement_type == 'IN':
+                snap.stock_qty = float(snap.stock_qty or 0) + qty
+            else:
+                snap.stock_qty = max(0.0, float(snap.stock_qty or 0) - qty)
+        else:
+            if adj.movement_type == 'IN':
+                snap = InventorySnapshot(
+                    facility_id=adj.facility_id,
+                    warehouse_id=adj.warehouse_id,
+                    variant_id=line.product_variant_id,
+                    stock_qty=qty
+                )
+                db.add(snap)
+
+    adj.state = 'APPROVED'
+    adj.approved_by_id = current_user.id
+    adj.approved_at = datetime.now()
+    db.commit()
+
+    return {"message": f"Ajuste {adj.number} APROBADO correctamente. Stock físico e inventario actualizados.", "status": "APPROVED"}
+
+
+@router.post("/adjustments/{adjustment_id}/reject")
+def reject_inventory_adjustment(
+    adjustment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Rechazo de solicitud de ajuste por parte de la supervisión.
+    """
+    adj = db.query(InventoryAdjustment).filter(InventoryAdjustment.id == adjustment_id).first()
+    if not adj:
+        raise HTTPException(status_code=404, detail="Ajuste no encontrado.")
+
+    if adj.state == 'APPROVED':
+        raise HTTPException(status_code=400, detail="No se puede rechazar un ajuste que ya ha sido aprobado.")
+
+    adj.state = 'REJECTED'
+    adj.approved_by_id = current_user.id
+    adj.approved_at = datetime.now()
+    db.commit()
+
+    return {"message": f"Ajuste {adj.number} RECHAZADO por la supervisión.", "status": "REJECTED"}
+
 
 
 

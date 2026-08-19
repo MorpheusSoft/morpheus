@@ -411,3 +411,66 @@ class PromotionCampaignLine(Base):
     campaign = relationship("PromotionCampaign", back_populates="campaign_lines")
 
 PromotionCampaign.campaign_lines = relationship("PromotionCampaignLine", back_populates="campaign", cascade="all, delete-orphan")
+
+# ==============================================================================
+# DIRECT INVENTORY ADJUSTMENTS (Mermas, Daños, Hurtos, Consumo Interno, Sobrantes)
+# ==============================================================================
+class AdjustmentReason(Base):
+    __tablename__ = "adjustment_reasons"
+    __table_args__ = {"schema": "inv"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=False, unique=True, index=True) # MERMA, DANNO, HURTO, CONS, SOBRANTE, DONACION
+    name = Column(String, nullable=False) # Descripciones humanas
+    default_type = Column(String, default='OUT', nullable=False) # 'IN' (Cargo +), 'OUT' (Descargo -), 'BOTH'
+    account_code = Column(String, nullable=True) # Ej: 6.1.02.01 (Integración Contable)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+
+class InventoryAdjustment(Base):
+    __tablename__ = "inventory_adjustments"
+    __table_args__ = {"schema": "inv"}
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    number = Column(String, nullable=False, index=True) # AJ-2026-0001
+    facility_id = Column(Integer, ForeignKey("core.facilities.id"), nullable=False)
+    warehouse_id = Column(Integer, ForeignKey("inv.warehouses.id"), nullable=False)
+    location_id = Column(Integer, ForeignKey("inv.locations.id"), nullable=True)
+    reason_id = Column(Integer, ForeignKey("inv.adjustment_reasons.id"), nullable=False)
+
+    movement_type = Column(String, default='OUT', nullable=False) # 'IN' (Cargo +), 'OUT' (Descargo -)
+    total_amount = Column(Numeric(19, 4), default=0, nullable=False)
+    notes = Column(Text, nullable=True)
+    state = Column(String, default='PENDING', nullable=False) # 'DRAFT', 'PENDING', 'APPROVED', 'REJECTED'
+
+    created_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=False)
+    approved_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+
+    reason = relationship("AdjustmentReason")
+    facility = relationship("Facility")
+    warehouse = relationship("Warehouse")
+    location = relationship("Location")
+    created_by = relationship("User", foreign_keys=[created_by_id])
+    approved_by = relationship("User", foreign_keys=[approved_by_id])
+    lines = relationship("InventoryAdjustmentLine", back_populates="adjustment", cascade="all, delete-orphan")
+
+
+class InventoryAdjustmentLine(Base):
+    __tablename__ = "inventory_adjustment_lines"
+    __table_args__ = {"schema": "inv"}
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    adjustment_id = Column(BigInteger, ForeignKey("inv.inventory_adjustments.id", ondelete="CASCADE"), nullable=False)
+    product_variant_id = Column(Integer, ForeignKey("inv.product_variants.id"), nullable=False)
+    batch_id = Column(Integer, ForeignKey("inv.batches.id"), nullable=True)
+
+    quantity = Column(Numeric(19, 4), nullable=False)
+    unit_cost = Column(Numeric(19, 4), default=0, nullable=False)
+    total_value = Column(Numeric(19, 4), default=0, nullable=False)
+
+    adjustment = relationship("InventoryAdjustment", back_populates="lines")
+    variant = relationship("ProductVariant")
+    batch = relationship("Batch")
+
