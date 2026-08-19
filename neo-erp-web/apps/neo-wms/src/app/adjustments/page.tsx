@@ -558,7 +558,14 @@ export default function WmsAdjustmentsPage() {
               <Column header="ESTADO" body={a => (
                 <Tag severity={getAdjStateSeverity(a.state)} value={getAdjStateText(a.state)} className="font-bold text-[9px] px-2 py-1" />
               )} align="center" sortable />
-              <Column field="created_by_name" header="SOLICITADO POR" body={a => <span className="text-slate-600 font-medium">{a.created_by_name}</span>} sortable />
+              <Column field="created_by_name" header="SOLICITADO / FECHA" body={a => (
+                <div className="flex flex-col text-xs">
+                  <span className="text-slate-800 font-bold">{a.created_by_name}</span>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {a.created_at ? new Date(a.created_at).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                  </span>
+                </div>
+              )} sortable />
               <Column header="ACCIONES / CONTROL" body={a => (
                 <div className="flex items-center justify-center gap-2">
                   <Button
@@ -898,23 +905,48 @@ export default function WmsAdjustmentsPage() {
       >
         {selectedAdj && (
           <div className="flex flex-col gap-6 py-2 text-xs">
-            {/* Header info */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+            {/* Header info - Audit Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
               <div>
-                <span className="text-slate-400 font-bold uppercase block text-[10px]">SUCURSAL</span>
+                <span className="text-slate-400 font-bold uppercase block text-[10px]">SUCURSAL / ALMACÉN</span>
                 <span className="font-bold text-slate-800 block mt-0.5">{selectedAdj.facility_name}</span>
-              </div>
-              <div>
-                <span className="text-slate-400 font-bold uppercase block text-[10px]">ALMACÉN / UBICACIÓN</span>
-                <span className="font-bold text-slate-800 block mt-0.5">{selectedAdj.warehouse_name} ({selectedAdj.location_name})</span>
+                <span className="text-[11px] text-slate-500 font-medium">{selectedAdj.warehouse_name} ({selectedAdj.location_name})</span>
               </div>
               <div>
                 <span className="text-slate-400 font-bold uppercase block text-[10px]">MOTIVO DE AJUSTE</span>
-                <span className="font-bold text-slate-800 block mt-0.5">{selectedAdj.reason_name}</span>
+                <span className="font-bold text-indigo-700 block mt-0.5">{selectedAdj.reason_name}</span>
+                <Tag 
+                  value={selectedAdj.movement_type === 'IN' ? 'CARGO (+)' : 'DESCARGO (-)'} 
+                  severity={selectedAdj.movement_type === 'IN' ? 'success' : 'danger'} 
+                  className="font-bold text-[9px] px-1.5 py-0.2 mt-1" 
+                />
               </div>
               <div>
                 <span className="text-slate-400 font-bold uppercase block text-[10px]">ESTADO</span>
-                <Tag severity={getAdjStateSeverity(selectedAdj.state)} value={getAdjStateText(selectedAdj.state)} className="font-bold text-[9px] mt-1" />
+                <Tag severity={getAdjStateSeverity(selectedAdj.state)} value={getAdjStateText(selectedAdj.state)} className="font-bold text-[10px] px-2 py-0.5 mt-1 block w-fit" />
+              </div>
+              <div className="border-t border-slate-200/80 pt-2">
+                <span className="text-slate-400 font-bold uppercase block text-[10px]">REGISTRADO POR</span>
+                <span className="font-bold text-slate-800 block mt-0.5">{selectedAdj.created_by_name}</span>
+                <span className="text-[11px] text-slate-500 block font-mono">
+                  {selectedAdj.created_at ? new Date(selectedAdj.created_at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : 'N/A'}
+                </span>
+              </div>
+              <div className="border-t border-slate-200/80 pt-2 col-span-2">
+                <span className="text-slate-400 font-bold uppercase block text-[10px]">AUDITORÍA DE APROBACIÓN</span>
+                {selectedAdj.state === 'APPROVED' ? (
+                  <div className="mt-0.5 text-emerald-700 font-bold flex items-center gap-1.5">
+                    <i className="pi pi-check-circle text-emerald-600"></i>
+                    <span>Aprobado por <b>{selectedAdj.approved_by_name || 'Supervisor'}</b> {selectedAdj.approved_at ? `el ${new Date(selectedAdj.approved_at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}` : ''}</span>
+                  </div>
+                ) : selectedAdj.state === 'REJECTED' ? (
+                  <div className="mt-0.5 text-rose-700 font-bold flex items-center gap-1.5">
+                    <i className="pi pi-times-circle text-rose-600"></i>
+                    <span>Rechazado por <b>{selectedAdj.approved_by_name || 'Supervisor'}</b></span>
+                  </div>
+                ) : (
+                  <span className="text-amber-600 font-semibold italic block mt-0.5">⏳ Pendiente por revisión de supervisión</span>
+                )}
               </div>
             </div>
 
