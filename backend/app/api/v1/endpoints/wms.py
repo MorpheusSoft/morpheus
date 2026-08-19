@@ -669,8 +669,8 @@ def get_wms_lots(
         ).order_by(StockMove.id.asc()).first()
 
         received_date_str = None
-        if received_move and received_move.created_at:
-            received_date_str = received_move.created_at.strftime("%Y-%m-%d")
+        if received_move and received_move.date:
+            received_date_str = received_move.date.strftime("%Y-%m-%d")
         elif batch.manufacturing_date:
             received_date_str = batch.manufacturing_date.strftime("%Y-%m-%d")
 
