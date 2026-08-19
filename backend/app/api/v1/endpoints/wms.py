@@ -1585,7 +1585,6 @@ def approve_inventory_adjustment(
         # Actualizar Snapshot de Stock Físico
         snap = db.query(InventorySnapshot).filter(
             InventorySnapshot.facility_id == adj.facility_id,
-            InventorySnapshot.warehouse_id == adj.warehouse_id,
             InventorySnapshot.variant_id == line.product_variant_id
         ).first()
 
@@ -1598,7 +1597,6 @@ def approve_inventory_adjustment(
             if adj.movement_type == 'IN':
                 snap = InventorySnapshot(
                     facility_id=adj.facility_id,
-                    warehouse_id=adj.warehouse_id,
                     variant_id=line.product_variant_id,
                     stock_qty=qty
                 )
