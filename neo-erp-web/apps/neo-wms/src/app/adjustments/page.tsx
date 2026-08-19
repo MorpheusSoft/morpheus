@@ -436,9 +436,9 @@ export default function WmsAdjustmentsPage() {
         <div className="absolute top-0 left-0 w-2 h-full bg-gradient-to-b from-indigo-500 to-purple-600"></div>
         <div className="pl-4">
           <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center">
-            <i className="pi pi-sort-alt text-indigo-600 mr-3"></i>Gestión de Ajustes e Inventario Físico
+            <i className="pi pi-sort-alt text-indigo-600 mr-3"></i>Gestión de Ajustes de Inventario
           </h1>
-          <p className="text-slate-500 text-sm mt-1">Ajustes directos por mermas, daños y consumos con flujo de aprobación por supervisión y tomas físicas masivas.</p>
+          <p className="text-slate-500 text-sm mt-1">Registro de cargos y descargos por mermas, daños, hurtos y tomas físicas masivas de stock.</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -447,15 +447,6 @@ export default function WmsAdjustmentsPage() {
             outlined
             className="font-bold text-slate-700 border-slate-300 hover:bg-slate-50 text-xs"
             onClick={() => setReasonsDialogVisible(true)}
-          />
-          <Button
-            label="+ Nuevo Ajuste Directo"
-            icon="pi pi-plus"
-            className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md hover:bg-indigo-700"
-            onClick={() => {
-              setAdjLines([]);
-              setNewAdjDialogVisible(true);
-            }}
           />
           <Button
             icon="pi pi-refresh"
@@ -474,8 +465,8 @@ export default function WmsAdjustmentsPage() {
           onClick={() => setActiveTab(0)}
           className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs transition-all flex-1 ${activeTab === 0 ? 'bg-white shadow-md text-indigo-700' : 'text-slate-600 hover:text-slate-800'}`}
         >
-          <i className="pi pi-exclamation-triangle"></i>
-          Ajustes Directos Puntuales
+          <i className="pi pi-sliders-h"></i>
+          Ajustes
           {pendingCount > 0 && (
             <span className="bg-amber-500 text-white text-[10px] px-1.5 py-0.2 rounded-full font-black ml-1">{pendingCount}</span>
           )}
@@ -490,9 +481,26 @@ export default function WmsAdjustmentsPage() {
         </button>
       </div>
 
-      {/* TAB 0: AJUSTES DIRECTOS */}
+      {/* TAB 0: AJUSTES */}
       {activeTab === 0 && (
         <div className="space-y-6">
+          {/* Tab Header Action Bar */}
+          <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+            <div>
+              <h3 className="text-lg font-bold text-slate-800">Ajustes Directos de Inventario</h3>
+              <p className="text-slate-500 text-xs mt-0.5">Registra solicitudes puntuales de cargo (+) o descargo (-) con justificación y flujo de aprobación.</p>
+            </div>
+            <Button
+              label="+ Nuevo Ajuste"
+              icon="pi pi-plus"
+              severity="info"
+              className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md hover:bg-indigo-700"
+              onClick={() => {
+                setAdjLines([]);
+                setNewAdjDialogVisible(true);
+              }}
+            />
+          </div>
           {/* KPI Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
