@@ -628,110 +628,124 @@ export default function WmsAdjustmentsPage() {
             </div>
           </div>
 
-          {/* Form Header Controls */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-slate-500 uppercase">1. SUCURSAL *</label>
-              <Dropdown
-                value={selectedFacilityId}
-                options={facilities}
-                optionLabel="name"
-                optionValue="id"
-                onChange={e => setSelectedFacilityId(e.value)}
-                placeholder="Seleccione Sucursal"
-                className="w-full text-xs font-bold"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-slate-500 uppercase">2. ALMACÉN *</label>
-              <Dropdown
-                value={selectedWarehouseId}
-                options={filteredWarehouses}
-                optionLabel="name"
-                optionValue="id"
-                onChange={e => setSelectedWarehouseId(e.value)}
-                placeholder="Seleccione Almacén"
-                className="w-full text-xs font-bold"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-slate-500 uppercase">3. UBICACIÓN / ESTANTE</label>
-              <Dropdown
-                value={selectedLocationId}
-                options={availableLocations}
-                optionLabel="label"
-                optionValue="value"
-                onChange={e => setSelectedLocationId(e.value)}
-                placeholder="Ubicación General (Opcional)"
-                className="w-full text-xs"
-                showClear
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <div className="flex justify-between items-center">
-                <label className="text-[11px] font-bold text-slate-500 uppercase">4. MOTIVO DE AJUSTE *</label>
-                <button
-                  type="button"
-                  onClick={() => setQuickReasonDialogVisible(true)}
-                  className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
-                  title="Crear un motivo rápidamente sin salir"
-                >
-                  <i className="pi pi-plus-circle text-xs"></i>
-                  + Nuevo Motivo
-                </button>
-              </div>
-              <Dropdown
-                value={selectedReasonId}
-                options={reasons}
-                optionLabel="name"
-                optionValue="id"
-                onChange={e => {
-                  setSelectedReasonId(e.value);
-                  const r = reasons.find(item => item.id === e.value);
-                  if (r) setMovementType(r.default_type || 'OUT');
-                }}
-                placeholder="Seleccione Motivo"
-                className="w-full text-xs font-bold"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-slate-500 uppercase">TIPO DE MOVIMIENTO</label>
-              <div className="flex gap-2 mt-1">
-                <Button
-                  type="button"
-                  label="DESCARGO (-) Salida"
-                  icon="pi pi-arrow-down-right"
-                  severity={movementType === 'OUT' ? 'danger' : 'secondary'}
-                  outlined={movementType !== 'OUT'}
-                  onClick={() => setMovementType('OUT')}
-                  className="font-bold text-xs flex-1"
+          {/* Form Header Controls - 2 Rows for Maximum Visual Harmony */}
+          <div className="bg-slate-50/80 p-5 rounded-2xl border border-slate-200/80 space-y-4">
+            {/* Row 1: Ubicación Físico-Logística */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex flex-col gap-1.5">
+                <div className="h-6 flex items-center">
+                  <label className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">1. Sucursal *</label>
+                </div>
+                <Dropdown
+                  value={selectedFacilityId}
+                  options={facilities}
+                  optionLabel="name"
+                  optionValue="id"
+                  onChange={e => setSelectedFacilityId(e.value)}
+                  placeholder="Seleccione Sucursal"
+                  className="w-full text-xs font-bold !rounded-xl"
                 />
-                <Button
-                  type="button"
-                  label="CARGO (+) Entrada"
-                  icon="pi pi-arrow-up-right"
-                  severity={movementType === 'IN' ? 'success' : 'secondary'}
-                  outlined={movementType !== 'IN'}
-                  onClick={() => setMovementType('IN')}
-                  className="font-bold text-xs flex-1"
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <div className="h-6 flex items-center">
+                  <label className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">2. Almacén *</label>
+                </div>
+                <Dropdown
+                  value={selectedWarehouseId}
+                  options={filteredWarehouses}
+                  optionLabel="name"
+                  optionValue="id"
+                  onChange={e => setSelectedWarehouseId(e.value)}
+                  placeholder="Seleccione Almacén"
+                  className="w-full text-xs font-bold !rounded-xl"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <div className="h-6 flex items-center">
+                  <label className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">3. Ubicación / Estante</label>
+                </div>
+                <Dropdown
+                  value={selectedLocationId}
+                  options={availableLocations}
+                  optionLabel="label"
+                  optionValue="value"
+                  onChange={e => setSelectedLocationId(e.value)}
+                  placeholder="Ubicación General (Opcional)"
+                  className="w-full text-xs !rounded-xl"
+                  showClear
                 />
               </div>
             </div>
 
-            <div className="md:col-span-2 flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-slate-500 uppercase">JUSTIFICACIÓN / OBSERVACIONES</label>
-              <InputText
-                value={notes}
-                onChange={e => setNotes(e.target.value)}
-                placeholder="Ej. Mercancía rota durante estibado en muelle norte..."
-                className="text-xs p-inputtext-sm w-full"
-              />
+            {/* Row 2: Motivo, Tipo y Justificación */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex flex-col gap-1.5">
+                <div className="h-6 flex items-center justify-between">
+                  <label className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">4. Motivo de Ajuste *</label>
+                  <button
+                    type="button"
+                    onClick={() => setQuickReasonDialogVisible(true)}
+                    className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200/60"
+                    title="Crear un motivo rápidamente sin salir"
+                  >
+                    <i className="pi pi-plus text-[9px]"></i>
+                    Nuevo Motivo
+                  </button>
+                </div>
+                <Dropdown
+                  value={selectedReasonId}
+                  options={reasons}
+                  optionLabel="name"
+                  optionValue="id"
+                  onChange={e => {
+                    setSelectedReasonId(e.value);
+                    const r = reasons.find(item => item.id === e.value);
+                    if (r) setMovementType(r.default_type || 'OUT');
+                  }}
+                  placeholder="Seleccione Motivo"
+                  className="w-full text-xs font-bold !rounded-xl"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <div className="h-6 flex items-center">
+                  <label className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">5. Sentido del Ajuste</label>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    label="DESCARGO (-)"
+                    icon="pi pi-arrow-down-right"
+                    severity={movementType === 'OUT' ? 'danger' : 'secondary'}
+                    outlined={movementType !== 'OUT'}
+                    onClick={() => setMovementType('OUT')}
+                    className="font-bold text-xs flex-1 !rounded-xl"
+                  />
+                  <Button
+                    type="button"
+                    label="CARGO (+)"
+                    icon="pi pi-arrow-up-right"
+                    severity={movementType === 'IN' ? 'success' : 'secondary'}
+                    outlined={movementType !== 'IN'}
+                    onClick={() => setMovementType('IN')}
+                    className="font-bold text-xs flex-1 !rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <div className="h-6 flex items-center">
+                  <label className="text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">6. Justificación / Observación</label>
+                </div>
+                <InputText
+                  value={notes}
+                  onChange={e => setNotes(e.target.value)}
+                  placeholder="Ej. Mercancía dañada durante traslado..."
+                  className="text-xs p-inputtext-sm w-full !rounded-xl"
+                />
+              </div>
             </div>
           </div>
 
