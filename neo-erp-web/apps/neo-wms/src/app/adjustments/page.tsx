@@ -135,13 +135,23 @@ export default function WmsAdjustmentsPage() {
     try {
       const res = await api.get('/products/?limit=1000');
       const list = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.items || []);
-      const formatted = list.map((p: any) => ({
-        label: `${p.sku || 'SKU'} - ${p.name || p.product_name} (${p.uom_base || 'PZA'})`,
-        value: p.variant_id || p.id,
-        sku: p.sku,
-        name: p.name || p.product_name,
-        cost: p.cost_usd || p.cost || 0.0
-      }));
+      const formatted = list.map((p: any) => {
+        const mainVar = (p.variants && p.variants.length > 0) ? p.variants[0] : null;
+        const skuCode = mainVar?.sku || p.sku || p.code || p.default_code || `PRD-${p.id}`;
+        const variantId = mainVar?.id || p.variant_id || p.id;
+        const prodName = p.name || p.product_name || 'Producto Sin Nombre';
+        const costVal = mainVar?.average_cost || mainVar?.standard_cost || p.cost_usd || p.cost || 0.0;
+
+        return {
+          id: variantId,
+          value: variantId,
+          variant_id: variantId,
+          sku: skuCode,
+          name: prodName,
+          label: `[${skuCode}] ${prodName}`,
+          cost: costVal
+        };
+      });
       setProducts(formatted);
     } catch (e) {
       console.error(e);
@@ -1350,7 +1360,7 @@ export default function WmsAdjustmentsPage() {
                     <label className="text-[11px] font-bold text-slate-700">Producto / SKU *</label>
                     <Dropdown
                       value={countingProdId}
-                      options={products.map(p => ({ label: `[${p.sku}] ${p.name}`, value: p.id }))}
+                      options={products}
                       onChange={e => setCountingProdId(e.value)}
                       placeholder="Buscar producto por SKU o Nombre..."
                       filter
@@ -1410,7 +1420,7 @@ export default function WmsAdjustmentsPage() {
                       </tr>
                     ) : (
                       selectedSession.lines.map((line: any, idx: number) => {
-                        const prod = products.find(p => p.id === line.product_variant_id);
+                        const prod = products.find(p => p.id === line.product_variant_id || p.value === line.product_variant_id || p.variant_id === line.product_variant_id);
                         const counted = line.counted_qty ?? 0;
                         const theo = line.theoretical_qty ?? 0;
                         const diff = counted - theo;
