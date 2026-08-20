@@ -103,7 +103,9 @@ def create_inventory_session(
         snapshots_query = snapshots_query.filter(InventorySnapshot.facility_id == session_in.facility_id)
     
     snapshots = snapshots_query.all()
-    default_loc = db.query(Location).filter(Location.facility_id == session_in.facility_id).first() if session_in.facility_id else None
+    
+    target_wh = db.query(Warehouse).filter(Warehouse.facility_id == session_in.facility_id).first() if session_in.facility_id else None
+    default_loc = db.query(Location).filter(Location.warehouse_id == target_wh.id).first() if target_wh else None
 
     for snap in snapshots:
         line = InventoryLine(
@@ -264,13 +266,14 @@ def validate_session(
     if session.state == "DONE":
         raise HTTPException(status_code=400, detail="Ya se encuentra consolidada.")
         
+    target_wh = db.query(Warehouse).filter(Warehouse.facility_id == session.facility_id).first() if session.facility_id else None
     virtual_loss_loc = db.query(Location).filter(Location.code == "INV_ADJ").first()
     if not virtual_loss_loc:
         virtual_loss_loc = Location(
             name="Ubicación Virtual de Ajustes",
             code="INV_ADJ",
             location_type="LOSS",
-            facility_id=session.facility_id
+            warehouse_id=target_wh.id if target_wh else None
         )
         db.add(virtual_loss_loc)
         db.flush()
