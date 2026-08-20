@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.api import deps
 from app.schemas import inventory_session as schemas
-from app.models.inventory import InventorySession, InventoryLine, ProductVariant, Location, StockMove, InventorySnapshot, ProductBarcode, Category
+from app.models.inventory import InventorySession, InventoryLine, ProductVariant, Location, StockMove, InventorySnapshot, ProductBarcode, Category, Warehouse
 from app.models.core import User
 from datetime import datetime
 
