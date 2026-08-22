@@ -101,7 +101,29 @@ def create_inventory_session(
     snapshots_query = db.query(InventorySnapshot)
     if session_in.facility_id:
         snapshots_query = snapshots_query.filter(InventorySnapshot.facility_id == session_in.facility_id)
-    
+
+    # Filtrar por Categoría Jerárquica Descendiente si aplica
+    if session_in.scope_type == 'CATEGORY' and session_in.scope_value:
+        try:
+            target_cat_id = int(session_in.scope_value)
+            parent_cat = db.query(Category).filter(Category.id == target_cat_id).first()
+            if parent_cat:
+                if parent_cat.path:
+                    sub_cats = db.query(Category.id).filter(
+                        (Category.id == parent_cat.id) | (Category.path.like(f"{parent_cat.path}/%"))
+                    ).all()
+                    cat_ids = [c.id for c in sub_cats]
+                else:
+                    cat_ids = [parent_cat.id]
+
+                prod_ids = db.query(Product.id).filter(Product.category_id.in_(cat_ids)).all()
+                p_ids = [p.id for p in prod_ids]
+                var_ids = db.query(ProductVariant.id).filter(ProductVariant.product_id.in_(p_ids)).all()
+                target_vids = [v.id for v in var_ids]
+                snapshots_query = snapshots_query.filter(InventorySnapshot.variant_id.in_(target_vids))
+        except ValueError:
+            pass
+
     snapshots = snapshots_query.all()
     
     target_wh = db.query(Warehouse).filter(Warehouse.facility_id == session_in.facility_id).first() if session_in.facility_id else None
@@ -280,18 +302,35 @@ def validate_session(
         
     user_id_val = getattr(current_user, 'id', None)
 
+    # Si el alcance es GENERAL (Total Almacén), todo producto del almacén no contado se debe llevar a CERO (0)
+    if session.scope_type == 'GENERAL':
+        existing_vids = {line.product_variant_id for line in session.lines}
+        all_snapshots = db.query(InventorySnapshot).filter(InventorySnapshot.facility_id == session.facility_id).all()
+        default_loc = db.query(Location).filter(Location.warehouse_id == target_wh.id).first() if target_wh else None
+
+        for snap in all_snapshots:
+            if snap.variant_id not in existing_vids:
+                new_zero_line = InventoryLine(
+                    session_id=session.id,
+                    product_variant_id=snap.variant_id,
+                    location_id=default_loc.id if default_loc else None,
+                    theoretical_qty=float(snap.stock_qty or 0),
+                    counted_qty=0.0,
+                    notes="Ajuste a CERO por Toma General No Contada"
+                )
+                db.add(new_zero_line)
+        db.flush()
+
     # Consolidar líneas (Delta Dinámico)
     for line in session.lines:
-        # En SQLAlchemy Computed columns (difference_qty) solo existen luego del commit final
-        # Por lo tanto, calculamos el Delta en RAM:
-        diff = float(line.counted_qty) - float(line.theoretical_qty)
+        diff = float(line.counted_qty or 0) - float(line.theoretical_qty or 0)
         
         if diff == 0:
             continue
             
         # Generar movimientos matemáticos compensatorios
-        src_id = virtual_loss_loc.id if diff > 0 else line.location_id
-        dest_id = line.location_id if diff > 0 else virtual_loss_loc.id
+        src_id = virtual_loss_loc.id if diff > 0 else (line.location_id or virtual_loss_loc.id)
+        dest_id = (line.location_id or virtual_loss_loc.id) if diff > 0 else virtual_loss_loc.id
         
         # Consultar Costo en tiempo real
         variant = db.query(ProductVariant).filter(ProductVariant.id == line.product_variant_id).first()
@@ -330,4 +369,79 @@ def validate_session(
     session.state = "DONE"
     session.date_end = datetime.now()
     db.commit()
-    return {"status": "success", "message": "Inventario validado y transferido exitosamente."}
+    return {"status": "success", "message": "Toma Física validada y consolidada exitosamente."}
+
+
+@router.post("/{id}/advance-phase")
+def advance_session_phase(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    target_state: str = "REVIEW"
+) -> Any:
+    session = db.query(InventorySession).filter(InventorySession.id == id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    if session.state == "DONE":
+        raise HTTPException(status_code=400, detail="Sesión ya se encuentra finalizada.")
+
+    session.state = target_state
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+@router.post("/{id}/ai-audit")
+def run_ai_audit(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int
+) -> Any:
+    session = db.query(InventorySession).filter(InventorySession.id == id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    total_items = len(session.lines)
+    exact_matches = 0
+    anomalies = []
+    total_val_diff = 0.0
+
+    for line in session.lines:
+        diff = float(line.counted_qty or 0) - float(line.theoretical_qty or 0)
+        variant = db.query(ProductVariant).filter(ProductVariant.id == line.product_variant_id).first()
+        cost = float(variant.average_cost or variant.standard_cost or 1.0) if variant else 1.0
+        val_diff = round(diff * cost, 2)
+        total_val_diff += val_diff
+
+        if diff == 0:
+            exact_matches += 1
+        elif abs(val_diff) >= 50.0 or abs(diff) >= 10:
+            anomalies.append({
+                "line_id": line.id,
+                "variant_id": line.product_variant_id,
+                "sku": variant.sku if variant else f"VAR-{line.product_variant_id}",
+                "name": variant.product.name if (variant and variant.product) else f"Producto #{line.product_variant_id}",
+                "counted": line.counted_qty,
+                "theoretical": line.theoretical_qty,
+                "diff": diff,
+                "val_diff": val_diff
+            })
+
+    accuracy_pct = round((exact_matches / total_items * 100.0), 2) if total_items > 0 else 100.0
+
+    recommendation = ""
+    if len(anomalies) == 0:
+        recommendation = "✅ Auditoría IA Conforme: 100% de coincidencia física. Se sugiere proceder con la Consolidación Final."
+    else:
+        top_anom = sorted(anomalies, key=lambda x: abs(x['val_diff']), reverse=True)[0]
+        recommendation = f"⚠️ Alerta Auditoría IA: Se detectaron {len(anomalies)} anomalías de impacto significativo. Descuadre principal en SKU [{top_anom['sku']}] {top_anom['name']} (Variación: ${top_anom['val_diff']} USD). Recomendación: Enviar a Reconteo (2da Vuelta) antes de consolidar."
+
+    return {
+        "accuracy_pct": accuracy_pct,
+        "total_items": total_items,
+        "exact_matches": exact_matches,
+        "anomalies_count": len(anomalies),
+        "total_value_diff_usd": round(total_val_diff, 2),
+        "anomalies": anomalies,
+        "ai_recommendation": recommendation
+    }

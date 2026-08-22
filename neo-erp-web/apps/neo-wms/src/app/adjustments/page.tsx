@@ -56,6 +56,8 @@ export default function WmsAdjustmentsPage() {
   const [sessionName, setSessionName] = useState('');
   const [sessionFacilityId, setSessionFacilityId] = useState<number | null>(null);
   const [sessionScopeType, setSessionScopeType] = useState('GENERAL');
+  const [sessionScopeValue, setSessionScopeValue] = useState<string>('');
+  const [categories, setCategories] = useState<any[]>([]);
   const [creatingSession, setCreatingSession] = useState(false);
 
   // MANAGE SESSION MODAL STATE
@@ -63,9 +65,13 @@ export default function WmsAdjustmentsPage() {
   const [selectedSession, setSelectedSession] = useState<any>(null);
   const [countingProdId, setCountingProdId] = useState<number | null>(null);
   const [countingQty, setCountingQty] = useState<number>(0);
+  const [countingSheetNo, setCountingSheetNo] = useState('');
+  const [countingOperator, setCountingOperator] = useState('');
   const [countingNotes, setCountingNotes] = useState('');
   const [savingCount, setSavingCount] = useState(false);
   const [validatingSession, setValidatingSession] = useState(false);
+  const [aiAuditResult, setAiAuditResult] = useState<any>(null);
+  const [loadingAiAudit, setLoadingAiAudit] = useState(false);
 
   // LOAD DATA
   const fetchAdjustments = async () => {
@@ -158,6 +164,15 @@ export default function WmsAdjustmentsPage() {
     }
   };
 
+  const fetchCategories = async () => {
+    try {
+      const res = await api.get('/catalog/categories');
+      setCategories(res.data || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const loadAllData = async () => {
     setLoading(true);
     await Promise.all([
@@ -167,7 +182,8 @@ export default function WmsAdjustmentsPage() {
       fetchWarehouses(),
       fetchLocationsTree(),
       fetchReasons(),
-      fetchProducts()
+      fetchProducts(),
+      fetchCategories()
     ]);
     setLoading(false);
   };
@@ -408,11 +424,13 @@ export default function WmsAdjustmentsPage() {
       await api.post('/inventory-session/', {
         name: sessionName,
         facility_id: sessionFacilityId,
-        scope_type: sessionScopeType || 'GENERAL'
+        scope_type: sessionScopeType || 'GENERAL',
+        scope_value: sessionScopeValue || null
       });
       toast.current?.show({ severity: 'success', summary: 'Toma Física Creada', detail: 'Sesión de recuento e inventario teórico generados con éxito.' });
       setNewSessionDialogVisible(false);
       setSessionName('');
+      setSessionScopeValue('');
       fetchSessions();
     } catch (e: any) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al crear sesión.' });
@@ -427,11 +445,49 @@ export default function WmsAdjustmentsPage() {
       setSelectedSession(res.data);
       setCountingProdId(null);
       setCountingQty(0);
+      setCountingSheetNo('');
+      setCountingOperator('');
       setCountingNotes('');
+      setAiAuditResult(null);
       setManageSessionDialogVisible(true);
+      if (res.data.state === 'REVIEW' || res.data.state === 'DONE') {
+        handleRunAIAudit(sessionId);
+      }
     } catch (e: any) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo cargar el detalle de la toma física.' });
     }
+  };
+
+  // ADVANCE SESSION PHASE (IN_PROGRESS -> REVIEW -> DONE)
+  const handleAdvancePhase = async (targetState: string) => {
+    if (!selectedSession) return;
+    try {
+      const res = await api.post(`/inventory-session/${selectedSession.id}/advance-phase?target_state=${targetState}`);
+      setSelectedSession(res.data);
+      toast.current?.show({
+        severity: 'info',
+        summary: 'Transición de Fase',
+        detail: targetState === 'REVIEW' ? 'Conteo Ciego cerrado. Fase de Análisis & Cotejo iniciada.' : 'Fase actualizada.'
+      });
+      if (targetState === 'REVIEW') {
+        handleRunAIAudit(selectedSession.id);
+      }
+      fetchSessions();
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Fallo al avanzar fase de sesión.' });
+    }
+  };
+
+  // RUN AI AUDIT ASSISTANT
+  const handleRunAIAudit = async (sessionId: number) => {
+    setLoadingAiAudit(true);
+    try {
+      const res = await api.post(`/inventory-session/${sessionId}/ai-audit`);
+      setAiAuditResult(res.data);
+    } catch (e) {
+      console.error(e);
+    }
+    setLoadingAiAudit(false);
   };
 
   // RECORD BLIND COUNT FOR A LINE
@@ -1205,21 +1261,22 @@ export default function WmsAdjustmentsPage() {
         header="Crear Nueva Toma Física de Inventario"
         visible={newSessionDialogVisible}
         onHide={() => setNewSessionDialogVisible(false)}
-        style={{ width: '500px' }}
+        style={{ width: '550px' }}
+        className="rounded-2xl"
       >
         <div className="flex flex-col gap-4 py-2 text-xs">
           <div className="flex flex-col gap-1">
-            <label className="font-bold text-slate-600">Nombre de la Toma / Conteo *</label>
+            <label className="font-bold text-slate-700">Nombre de la Toma / Conteo *</label>
             <InputText
               value={sessionName}
               onChange={e => setSessionName(e.target.value)}
-              placeholder="Ej. Conteo Anual de Pasillo Central 2026"
+              placeholder="Ej. Conteo Cíclico Abarrotes / Anual Total 2026"
               className="text-xs p-inputtext-sm"
             />
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="font-bold text-slate-600">Sucursal *</label>
+            <label className="font-bold text-slate-700">Sucursal *</label>
             <Dropdown
               value={sessionFacilityId}
               options={facilities}
@@ -1231,9 +1288,45 @@ export default function WmsAdjustmentsPage() {
             />
           </div>
 
+          <div className="flex flex-col gap-1">
+            <label className="font-bold text-slate-700">Alcance de la Toma (Scope) *</label>
+            <Dropdown
+              value={sessionScopeType}
+              options={[
+                { label: '🏬 GENERAL (Total Almacén - No contados bajan a 0)', value: 'GENERAL' },
+                { label: '🏷️ CATEGORÍA JERÁRQUICA (Incluye Subcategorías)', value: 'CATEGORY' },
+                { label: '📍 PASILLO / UBICACIÓN ESPECÍFICA', value: 'LOCATION' }
+              ]}
+              optionLabel="label"
+              optionValue="value"
+              onChange={e => {
+                setSessionScopeType(e.value);
+                setSessionScopeValue('');
+              }}
+              className="text-xs font-bold"
+            />
+          </div>
+
+          {sessionScopeType === 'CATEGORY' && (
+            <div className="flex flex-col gap-1 bg-amber-50/80 p-3 rounded-xl border border-amber-200">
+              <label className="font-bold text-amber-900">Categoría Padre *</label>
+              <Dropdown
+                value={sessionScopeValue}
+                options={categories.map(c => ({ label: c.name, value: String(c.id) }))}
+                onChange={e => setSessionScopeValue(e.value)}
+                placeholder="Seleccionar Categoría..."
+                filter
+                className="text-xs"
+              />
+              <span className="text-[10px] text-amber-800 font-medium mt-1">
+                💡 **Jerarquía WMS:** Se incluirán automáticamente los productos de la categoría seleccionada y todas sus subcategorías descendientes (*Harinas*, *Granos*, etc.).
+              </span>
+            </div>
+          )}
+
           <div className="flex justify-end gap-3 mt-4 pt-3 border-t border-slate-200">
             <Button label="Cancelar" outlined severity="secondary" className="font-bold text-xs" onClick={() => setNewSessionDialogVisible(false)} />
-            <Button label="Crear Sesión" icon="pi pi-check" loading={creatingSession} className="font-bold text-xs bg-indigo-600 text-white" onClick={createSession} />
+            <Button label="Crear Sesión (Snapshot Teórico)" icon="pi pi-check" loading={creatingSession} className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md" onClick={createSession} />
           </div>
         </div>
       </Dialog>
@@ -1300,17 +1393,17 @@ export default function WmsAdjustmentsPage() {
         </div>
       </Dialog>
 
-      {/* DIÁLOGO PRINCIPAL: GESTIÓN DE CONTEO CIEGO & CONCILIACIÓN DE TOMA FÍSICA */}
+      {/* DIÁLOGO PRINCIPAL: GESTIÓN DE CONTEO CIEGO & CONCILIACIÓN DE TOMA FÍSICA EN 3 FASES */}
       <Dialog
-        header={selectedSession ? `📋 Gestión & Conciliación de Toma Física: ${selectedSession.name}` : 'Toma Física'}
+        header={selectedSession ? `📋 Gestión de Toma Física: ${selectedSession.name}` : 'Toma Física'}
         visible={manageSessionDialogVisible}
         onHide={() => setManageSessionDialogVisible(false)}
-        style={{ width: '1100px' }}
+        style={{ width: '1150px' }}
         className="rounded-2xl"
       >
         {selectedSession && (
           <div className="flex flex-col gap-6 py-2">
-            {/* Header info bar */}
+            {/* FASE STEPPER / HEADER INFO BAR */}
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-wrap justify-between items-center gap-4">
               <div className="flex items-center gap-4">
                 <div>
@@ -1324,38 +1417,110 @@ export default function WmsAdjustmentsPage() {
                 </div>
                 <div className="h-8 w-[1px] bg-slate-200"></div>
                 <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">ESTADO</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">FASE DE PROCESO</span>
                   <Tag
-                    severity={selectedSession.state === 'DONE' ? 'success' : 'warning'}
-                    value={selectedSession.state === 'DONE' ? 'CONCILIADO & CERRADO' : 'EN PROCESO DE CONTEO'}
+                    severity={selectedSession.state === 'DONE' ? 'success' : selectedSession.state === 'REVIEW' ? 'info' : 'warning'}
+                    value={
+                      selectedSession.state === 'DONE'
+                        ? 'FASE 3: CONCILIADO & CERRADO'
+                        : selectedSession.state === 'REVIEW'
+                        ? 'FASE 2: ANÁLISIS & COTEJO (IA)'
+                        : 'FASE 1: CONTEO CIEGO (Captura)'
+                    }
                     className="font-bold text-[9px] px-2 py-1 mt-0.5"
                   />
                 </div>
               </div>
 
-              {selectedSession.state !== 'DONE' && (
+              {/* BOTONES DE TRANSICIÓN DE FASE */}
+              {selectedSession.state === 'IN_PROGRESS' && (
                 <Button
-                  label="Finalizar & Consolidar Toma Física (Generar Ajustes)"
-                  icon="pi pi-check-circle"
-                  severity="success"
-                  loading={validatingSession}
-                  className="font-bold text-xs bg-emerald-600 border-emerald-600 text-white shadow-md hover:bg-emerald-700"
-                  onClick={() => handleValidateSession(selectedSession.id)}
+                  label="🔒 Finalizar Conteo Ciego y Pasar a Análisis de Cotejo (Fase 2)"
+                  icon="pi pi-arrow-right"
+                  severity="info"
+                  className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md hover:bg-indigo-700"
+                  onClick={() => handleAdvancePhase('REVIEW')}
                 />
+              )}
+
+              {selectedSession.state === 'REVIEW' && (
+                <div className="flex gap-2">
+                  <Button
+                    label="🔓 Reabrir Conteo Ciego"
+                    icon="pi pi-lock-open"
+                    outlined
+                    severity="warning"
+                    className="font-bold text-xs"
+                    onClick={() => handleAdvancePhase('IN_PROGRESS')}
+                  />
+                  <Button
+                    label="✅ Consolidar & Generar Ajustes Automáticos (Fase 3)"
+                    icon="pi pi-check-circle"
+                    severity="success"
+                    loading={validatingSession}
+                    className="font-bold text-xs bg-emerald-600 border-emerald-600 text-white shadow-md hover:bg-emerald-700"
+                    onClick={() => handleValidateSession(selectedSession.id)}
+                  />
+                </div>
               )}
             </div>
 
-            {/* SECCIÓN 1: INGRESO RÁPIDO DE CONTEO CIEGO (Solo si no está cerrada) */}
-            {selectedSession.state !== 'DONE' && (
-              <div className="bg-indigo-50/60 border border-indigo-200/80 p-5 rounded-2xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-extrabold text-indigo-950 uppercase tracking-wider flex items-center">
-                    <i className="pi pi-plus-circle text-indigo-600 mr-2"></i>Registrar / Actualizar Conteo Ciego (Blind Count)
-                  </h4>
-                  <span className="text-[10px] text-indigo-600 font-medium">💡 El operador ingresa la cantidad física contada sin ver la existencia teórica.</span>
+            {/* PANEL ASISTENTE IA DE AUDITORÍA (Fase 2 & Fase 3) */}
+            {(selectedSession.state === 'REVIEW' || selectedSession.state === 'DONE') && (
+              <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-4 rounded-2xl border border-indigo-500/30 text-white shadow-lg space-y-3">
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-3 w-3 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-indigo-500"></span>
+                    </span>
+                    <h4 className="font-extrabold text-xs tracking-wider uppercase text-indigo-300">
+                      🤖 Asistente IA de Auditoría WMS
+                    </h4>
+                  </div>
+                  <Button
+                    label="Re-analizar con IA"
+                    icon="pi pi-refresh"
+                    size="small"
+                    loading={loadingAiAudit}
+                    className="font-bold text-[10px] p-button-text text-indigo-300"
+                    onClick={() => handleRunAIAudit(selectedSession.id)}
+                  />
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                {aiAuditResult ? (
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
+                    <div className="bg-white/10 p-3 rounded-xl backdrop-blur-md">
+                      <span className="text-[10px] text-slate-300 block uppercase">PRECISIÓN IRA %</span>
+                      <span className="text-xl font-black text-emerald-400">{aiAuditResult.accuracy_pct}%</span>
+                    </div>
+                    <div className="bg-white/10 p-3 rounded-xl backdrop-blur-md">
+                      <span className="text-[10px] text-slate-300 block uppercase">ANOMALÍAS DETECTADAS</span>
+                      <span className={`text-xl font-black ${aiAuditResult.anomalies_count > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        {aiAuditResult.anomalies_count} SKUs
+                      </span>
+                    </div>
+                    <div className="md:col-span-2 bg-white/5 p-3 rounded-xl border border-white/10 text-xs font-medium leading-relaxed">
+                      {aiAuditResult.ai_recommendation}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs italic text-slate-400">Analizando discrepancias de inventario con algoritmos predictivos...</div>
+                )}
+              </div>
+            )}
+
+            {/* FASE 1: INGRESO RÁPIDO DE CONTEO CIEGO */}
+            {selectedSession.state === 'IN_PROGRESS' && (
+              <div className="bg-indigo-50/60 border border-indigo-200/80 p-5 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-extrabold text-indigo-950 uppercase tracking-wider flex items-center">
+                    <i className="pi pi-eye-slash text-indigo-600 mr-2"></i>Fase 1: Transcripción / Conteo Ciego (Blind Count)
+                  </h4>
+                  <span className="text-[10px] text-indigo-600 font-medium">🙈 Las cantidades teóricas están ocultas para preservar la imparcialidad del operador.</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
                   <div className="md:col-span-2 flex flex-col gap-1">
                     <label className="text-[11px] font-bold text-slate-700">Producto / SKU *</label>
                     <Dropdown
@@ -1376,7 +1541,17 @@ export default function WmsAdjustmentsPage() {
                       min={0}
                       minFractionDigits={0}
                       maxFractionDigits={4}
-                      className="text-xs w-full p-inputtext-sm"
+                      className="text-xs w-full p-inputtext-sm font-bold"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-bold text-slate-700">Planilla / Hoja #</label>
+                    <InputText
+                      value={countingSheetNo}
+                      onChange={e => setCountingSheetNo(e.target.value)}
+                      placeholder="Ej. PL-014"
+                      className="text-xs p-inputtext-sm font-mono"
                     />
                   </div>
 
@@ -1391,11 +1566,12 @@ export default function WmsAdjustmentsPage() {
               </div>
             )}
 
-            {/* SECCIÓN 2: CUADRO DE CONCILIACIÓN & MATRIZ DE DIFERENCIAS */}
+            {/* SECCIÓN DE MATRIZ DE TABLA DE REGISTROS */}
             <div className="space-y-3">
               <div className="flex justify-between items-center">
                 <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center">
-                  <i className="pi pi-table text-slate-500 mr-2"></i>Matriz de Conciliación & Auditoría de Inventario
+                  <i className="pi pi-table text-slate-500 mr-2"></i>
+                  {selectedSession.state === 'IN_PROGRESS' ? 'Registros de Conteo Ciego' : 'Matriz de Conciliación & Cotejo de Inventario'}
                 </h4>
                 <span className="text-xs text-slate-500 font-medium">Total Renglones: <b>{selectedSession.lines?.length || 0}</b></span>
               </div>
@@ -1405,16 +1581,23 @@ export default function WmsAdjustmentsPage() {
                   <thead className="bg-slate-100 uppercase text-[10px] font-bold text-slate-600 border-b border-slate-200">
                     <tr>
                       <th className="p-3">PRODUCTO / SKU</th>
-                      <th className="p-3 text-right">CONTEO FÍSICO REAL</th>
-                      <th className="p-3 text-right">ESTOCK TEÓRICO (Audit)</th>
-                      <th className="p-3 text-right">DIFERENCIA (UNID)</th>
-                      <th className="p-3 text-center">SEMÁFORO DISCREPANCIA</th>
+                      <th className="p-3 text-right">CANTIDAD CONTADA REAL</th>
+                      {selectedSession.state !== 'IN_PROGRESS' && (
+                        <>
+                          <th className="p-3 text-right">STOCK TEÓRICO (Snapshot)</th>
+                          <th className="p-3 text-right">DIFERENCIA (UNID)</th>
+                          <th className="p-3 text-center">SEMÁFORO DISCREPANCIA</th>
+                        </>
+                      )}
+                      {selectedSession.state === 'IN_PROGRESS' && (
+                        <th className="p-3 text-center">ACCIONES / EDICIÓN</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {(!selectedSession.lines || selectedSession.lines.length === 0) ? (
                       <tr>
-                        <td colSpan={5} className="p-6 text-center text-slate-400 font-medium">
+                        <td colSpan={6} className="p-6 text-center text-slate-400 font-medium">
                           No hay renglones en esta toma física. Registre el primer conteo arriba.
                         </td>
                       </tr>
@@ -1436,27 +1619,59 @@ export default function WmsAdjustmentsPage() {
                             <td className="p-3 text-right font-bold text-slate-900 text-sm">
                               {counted}
                             </td>
-                            <td className="p-3 text-right font-medium text-slate-500">
-                              {theo !== null && theo !== undefined ? theo : <span className="italic text-slate-400">🙈 Ciego</span>}
-                            </td>
-                            <td className="p-3 text-right font-bold">
-                              {diff === 0 ? (
-                                <span className="text-slate-500">0</span>
-                              ) : diff > 0 ? (
-                                <span className="text-emerald-600">+{diff} (Sobrante)</span>
-                              ) : (
-                                <span className="text-rose-600">{diff} (Faltante)</span>
-                              )}
-                            </td>
-                            <td className="p-3 text-center">
-                              {diff === 0 ? (
-                                <Tag severity="success" value="🟢 Coincidencia Exacta" className="text-[9px] font-bold" />
-                              ) : Math.abs(diff) <= 2 ? (
-                                <Tag severity="warning" value="🟡 Tolerancia Menor" className="text-[9px] font-bold" />
-                              ) : (
-                                <Tag severity="danger" value="🔴 Descuadre Crítico" className="text-[9px] font-bold" />
-                              )}
-                            </td>
+
+                            {selectedSession.state !== 'IN_PROGRESS' && (
+                              <>
+                                <td className="p-3 text-right font-medium text-slate-500">
+                                  {theo}
+                                </td>
+                                <td className="p-3 text-right font-bold">
+                                  {diff === 0 ? (
+                                    <span className="text-slate-500">0</span>
+                                  ) : diff > 0 ? (
+                                    <span className="text-emerald-600">+{diff} (Sobrante)</span>
+                                  ) : (
+                                    <span className="text-rose-600">{diff} (Faltante)</span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-center">
+                                  {diff === 0 ? (
+                                    <Tag severity="success" value="🟢 Coincidencia Exacta" className="text-[9px] font-bold" />
+                                  ) : Math.abs(diff) <= 2 ? (
+                                    <Tag severity="warning" value="🟡 Tolerancia Menor" className="text-[9px] font-bold" />
+                                  ) : (
+                                    <div className="flex items-center justify-center gap-2">
+                                      <Tag severity="danger" value="🔴 Descuadre Crítico" className="text-[9px] font-bold" />
+                                      {selectedSession.state === 'REVIEW' && (
+                                        <Button
+                                          icon="pi pi-refresh"
+                                          size="small"
+                                          severity="warning"
+                                          tooltip="Solicitar Reconteo (2da Vuelta)"
+                                          className="p-button-rounded p-button-text p-button-sm h-6 w-6"
+                                        />
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                              </>
+                            )}
+
+                            {selectedSession.state === 'IN_PROGRESS' && (
+                              <td className="p-3 text-center">
+                                <Button
+                                  icon="pi pi-pencil"
+                                  size="small"
+                                  severity="secondary"
+                                  className="p-button-rounded p-button-text h-7 w-7 text-indigo-600"
+                                  tooltip="Editar Cifra Contada"
+                                  onClick={() => {
+                                    setCountingProdId(line.product_variant_id);
+                                    setCountingQty(line.counted_qty);
+                                  }}
+                                />
+                              </td>
+                            )}
                           </tr>
                         );
                       })
