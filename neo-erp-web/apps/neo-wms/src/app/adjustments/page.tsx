@@ -166,10 +166,16 @@ export default function WmsAdjustmentsPage() {
 
   const fetchCategories = async () => {
     try {
-      const res = await api.get('/catalog/categories');
-      setCategories(res.data || []);
+      let res;
+      try {
+        res = await api.get('/categories?limit=1000');
+      } catch (err) {
+        res = await api.get('/catalog/categories?limit=1000');
+      }
+      const list = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.items || []);
+      setCategories(list);
     } catch (e) {
-      console.error(e);
+      console.error('Error cargando categorías:', e);
     }
   };
 
