@@ -97,43 +97,45 @@ def create_inventory_session(
     db.add(db_obj)
     db.flush()
 
+    target_wh = None
+    if session_in.warehouse_id:
+        target_wh = db.query(Warehouse).filter(Warehouse.id == session_in.warehouse_id).first()
+    elif session_in.facility_id:
+        target_wh = db.query(Warehouse).filter(Warehouse.facility_id == session_in.facility_id).first()
+
     # Capturar Fotografía Teórica (Snapshot) para la Toma Física
     snapshots_query = db.query(InventorySnapshot)
     if session_in.facility_id:
         snapshots_query = snapshots_query.filter(InventorySnapshot.facility_id == session_in.facility_id)
 
-    # Filtrar por Categoría Jerárquica Descendiente si aplica
-    if session_in.scope_type == 'CATEGORY' and session_in.scope_value:
-        try:
-            target_cat_id = int(session_in.scope_value)
-            parent_cat = db.query(Category).filter(Category.id == target_cat_id).first()
-            if parent_cat:
-                if parent_cat.path:
-                    sub_cats = db.query(Category.id).filter(
-                        (Category.id == parent_cat.id) | (Category.path.like(f"{parent_cat.path}/%"))
-                    ).all()
-                    cat_ids = [c.id for c in sub_cats]
-                else:
-                    cat_ids = [parent_cat.id]
+    # Filtrar por Categoría Jerárquica (si se especifica en scope_value, category_id o scope_type == 'CYCLIC')
+    cat_id_to_filter = session_in.category_id or (int(session_in.scope_value) if (session_in.scope_value and session_in.scope_value.isdigit()) else None)
+    if cat_id_to_filter:
+        parent_cat = db.query(Category).filter(Category.id == cat_id_to_filter).first()
+        if parent_cat:
+            if parent_cat.path:
+                sub_cats = db.query(Category.id).filter(
+                    (Category.id == parent_cat.id) | (Category.path.like(f"{parent_cat.path}/%"))
+                ).all()
+                cat_ids = [c.id for c in sub_cats]
+            else:
+                cat_ids = [parent_cat.id]
 
-                prod_ids = db.query(Product.id).filter(Product.category_id.in_(cat_ids)).all()
-                p_ids = [p.id for p in prod_ids]
-                var_ids = db.query(ProductVariant.id).filter(ProductVariant.product_id.in_(p_ids)).all()
-                target_vids = [v.id for v in var_ids]
-                snapshots_query = snapshots_query.filter(InventorySnapshot.variant_id.in_(target_vids))
-        except ValueError:
-            pass
+            prod_ids = db.query(Product.id).filter(Product.category_id.in_(cat_ids)).all()
+            p_ids = [p.id for p in prod_ids]
+            var_ids = db.query(ProductVariant.id).filter(ProductVariant.product_id.in_(p_ids)).all()
+            target_vids = [v.id for v in var_ids]
+            snapshots_query = snapshots_query.filter(InventorySnapshot.variant_id.in_(target_vids))
 
     snapshots = snapshots_query.all()
-    
-    target_wh = db.query(Warehouse).filter(Warehouse.facility_id == session_in.facility_id).first() if session_in.facility_id else None
     default_loc = db.query(Location).filter(Location.warehouse_id == target_wh.id).first() if target_wh else None
+    assigned_loc_id = session_in.location_id or (default_loc.id if default_loc else None)
 
     for snap in snapshots:
         line = InventoryLine(
             session_id=db_obj.id,
             product_variant_id=snap.variant_id,
-            location_id=default_loc.id if default_loc else None,
+            location_id=assigned_loc_id,
             theoretical_qty=float(snap.stock_qty or 0),
             counted_qty=0.0,
             notes=None

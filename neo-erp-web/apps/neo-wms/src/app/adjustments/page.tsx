@@ -55,8 +55,11 @@ export default function WmsAdjustmentsPage() {
   const [newSessionDialogVisible, setNewSessionDialogVisible] = useState(false);
   const [sessionName, setSessionName] = useState('');
   const [sessionFacilityId, setSessionFacilityId] = useState<number | null>(null);
+  const [sessionWarehouseId, setSessionWarehouseId] = useState<number | null>(null);
   const [sessionScopeType, setSessionScopeType] = useState('GENERAL');
   const [sessionScopeValue, setSessionScopeValue] = useState<string>('');
+  const [sessionCategoryId, setSessionCategoryId] = useState<number | null>(null);
+  const [sessionLocationId, setSessionLocationId] = useState<number | null>(null);
   const [categories, setCategories] = useState<any[]>([]);
   const [creatingSession, setCreatingSession] = useState(false);
 
@@ -421,8 +424,8 @@ export default function WmsAdjustmentsPage() {
 
   // CREATE PHYSICAL SESSION
   const createSession = async () => {
-    if (!sessionName.trim() || !sessionFacilityId) {
-      toast.current?.show({ severity: 'warn', summary: 'Incompleto', detail: 'Ingrese nombre y sucursal.' });
+    if (!sessionName.trim() || !sessionFacilityId || !sessionWarehouseId) {
+      toast.current?.show({ severity: 'warn', summary: 'Incompleto', detail: 'Debe ingresar Nombre, Sucursal y Almacén obligatorio.' });
       return;
     }
     setCreatingSession(true);
@@ -430,13 +433,18 @@ export default function WmsAdjustmentsPage() {
       await api.post('/inventory-session/', {
         name: sessionName,
         facility_id: sessionFacilityId,
+        warehouse_id: sessionWarehouseId,
         scope_type: sessionScopeType || 'GENERAL',
-        scope_value: sessionScopeValue || null
+        scope_value: sessionCategoryId ? String(sessionCategoryId) : (sessionScopeValue || null),
+        category_id: sessionCategoryId || null,
+        location_id: sessionLocationId || null
       });
       toast.current?.show({ severity: 'success', summary: 'Toma Física Creada', detail: 'Sesión de recuento e inventario teórico generados con éxito.' });
       setNewSessionDialogVisible(false);
       setSessionName('');
       setSessionScopeValue('');
+      setSessionCategoryId(null);
+      setSessionLocationId(null);
       fetchSessions();
     } catch (e: any) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al crear sesión.' });
@@ -1281,51 +1289,92 @@ export default function WmsAdjustmentsPage() {
             />
           </div>
 
-          <div className="flex flex-col gap-1">
-            <label className="font-bold text-slate-700">Sucursal *</label>
-            <Dropdown
-              value={sessionFacilityId}
-              options={facilities}
-              optionLabel="name"
-              optionValue="id"
-              onChange={e => setSessionFacilityId(e.value)}
-              placeholder="Seleccione Sucursal"
-              className="text-xs"
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="font-bold text-slate-700">Sucursal *</label>
+              <Dropdown
+                value={sessionFacilityId}
+                options={facilities}
+                optionLabel="name"
+                optionValue="id"
+                onChange={e => {
+                  setSessionFacilityId(e.value);
+                  setSessionWarehouseId(null);
+                }}
+                placeholder="Seleccione Sucursal"
+                className="text-xs"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="font-bold text-slate-700">Almacén / Depósito *</label>
+              <Dropdown
+                value={sessionWarehouseId}
+                options={warehouses.filter(w => !sessionFacilityId || w.facility_id === sessionFacilityId)}
+                optionLabel="name"
+                optionValue="id"
+                onChange={e => setSessionWarehouseId(e.value)}
+                placeholder="Seleccione Almacén"
+                className="text-xs font-bold"
+              />
+            </div>
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="font-bold text-slate-700">Alcance de la Toma (Scope) *</label>
+            <label className="font-bold text-slate-700">Tipo de Toma Física *</label>
             <Dropdown
               value={sessionScopeType}
               options={[
-                { label: '🏬 GENERAL (Total Almacén - No contados bajan a 0)', value: 'GENERAL' },
-                { label: '🏷️ CATEGORÍA JERÁRQUICA (Incluye Subcategorías)', value: 'CATEGORY' },
-                { label: '📍 PASILLO / UBICACIÓN ESPECÍFICA', value: 'LOCATION' }
+                { label: '🏬 CONTEO GENERAL (Total Almacén - No contados bajan a 0)', value: 'GENERAL' },
+                { label: '📍 CONTEO CÍCLICO / PARCIAL (Filtros Combinados)', value: 'CYCLIC' }
               ]}
               optionLabel="label"
               optionValue="value"
               onChange={e => {
                 setSessionScopeType(e.value);
-                setSessionScopeValue('');
+                if (e.value === 'GENERAL') {
+                  setSessionCategoryId(null);
+                  setSessionLocationId(null);
+                }
               }}
               className="text-xs font-bold"
             />
           </div>
 
-          {sessionScopeType === 'CATEGORY' && (
-            <div className="flex flex-col gap-1 bg-amber-50/80 p-3 rounded-xl border border-amber-200">
-              <label className="font-bold text-amber-900">Categoría Padre *</label>
-              <Dropdown
-                value={sessionScopeValue}
-                options={categories.map(c => ({ label: c.name, value: String(c.id) }))}
-                onChange={e => setSessionScopeValue(e.value)}
-                placeholder="Seleccionar Categoría..."
-                filter
-                className="text-xs"
-              />
-              <span className="text-[10px] text-amber-800 font-medium mt-1">
-                💡 **Jerarquía WMS:** Se incluirán automáticamente los productos de la categoría seleccionada y todas sus subcategorías descendientes (*Harinas*, *Granos*, etc.).
+          {sessionScopeType === 'CYCLIC' && (
+            <div className="bg-amber-50/80 p-4 rounded-xl border border-amber-200 space-y-3">
+              <h5 className="font-bold text-amber-900 text-xs uppercase tracking-wider">🎯 Filtros de Alcance Cíclico (Opcionales / Combinables)</h5>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="font-bold text-amber-900 text-[11px]">Categoría Padre (Opcional)</label>
+                  <Dropdown
+                    value={sessionCategoryId}
+                    options={categories.map(c => ({ label: c.name, value: c.id }))}
+                    onChange={e => setSessionCategoryId(e.value)}
+                    placeholder="Todas las categorías..."
+                    filter
+                    showClear
+                    className="text-xs"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="font-bold text-amber-900 text-[11px]">Estante / Ubicación (Opcional)</label>
+                  <Dropdown
+                    value={sessionLocationId}
+                    options={locationsTree.map(l => ({ label: `[${l.code || 'LOC'}] ${l.name}`, value: l.id }))}
+                    onChange={e => setSessionLocationId(e.value)}
+                    placeholder="Todas las ubicaciones..."
+                    filter
+                    showClear
+                    className="text-xs"
+                  />
+                </div>
+              </div>
+
+              <span className="text-[10px] text-amber-800 font-medium block">
+                💡 **Combinación WMS:** Puedes dejar ambos en blanco (para contar todo el almacén por partes) o elegir una Categoría (incluye subcategorías descendientes) y/o Estante específico.
               </span>
             </div>
           )}
