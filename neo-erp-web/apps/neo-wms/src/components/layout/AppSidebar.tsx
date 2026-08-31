@@ -1,11 +1,9 @@
 'use client';
-import React from 'react';
+import React, { Suspense } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
-export function AppSidebar() {
-
-  // Agregar estado para usuario logueado
+function AppSidebarContent() {
   const [userName, setUserName] = React.useState('Cargando...');
   const [userRole, setUserRole] = React.useState('Verificando...');
   const [userInitials, setUserInitials] = React.useState('--');
@@ -32,89 +30,98 @@ export function AppSidebar() {
 
   const pathname = usePathname() || '';
 
-  const menuItems = [
-    { label: 'Dashboard Muelle', icon: 'pi pi-home', href: '/' },
-    { label: 'Recepción (Inbound)', icon: 'pi pi-truck', href: '/receipts' },
-    // { label: 'Despachos & Picking', icon: 'pi pi-send', href: '/shipments' },
-    { label: 'Transferencias e Reubicación', icon: 'pi pi-arrow-right-arrow-left', href: '/transfers' },
-    { label: 'Mapa de Almacén', icon: 'pi pi-sitemap', href: '/locations' },
+  const analyticsItems = [
+    { label: 'Dashboard Muelle', icon: 'pi pi-chart-pie', href: '/' },
     { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
   ];
 
-  const coreItems = [
+  const operationsItems = [
+    { label: 'Recepción (Inbound)', icon: 'pi pi-truck', href: '/receipts' },
+    { label: 'Despachos & Picking', icon: 'pi pi-send', href: '/shipments' },
+    { label: 'Transferencias Internas', icon: 'pi pi-arrow-right-arrow-left', href: '/transfers' },
+  ];
+
+  const storageItems = [
+    { label: 'Mapa de Almacén', icon: 'pi pi-sitemap', href: '/locations' },
     { label: 'Control de Lotes (FEFO)', icon: 'pi pi-calendar-plus', href: '/lots' },
     { label: 'Ajustes Físicos', icon: 'pi pi-sort-alt', href: '/adjustments' },
   ];
 
   const isActivePath = (href: string) => {
+    if (href === '/') return pathname === '/';
     return pathname === href || (pathname.startsWith(href) && href !== '/');
   };
 
+  const renderNavGroup = (title: string, items: {label: string, icon: string, href: string}[]) => (
+    <div className="mb-6">
+      <div className="text-[11px] font-bold text-slate-500 tracking-widest uppercase mb-[10px] px-[8px]">
+        {title}
+      </div>
+      <ul className="flex flex-col gap-[4px]">
+        {items.map((item) => {
+          const isActive = isActivePath(item.href);
+          return (
+            <li key={item.href}>
+               <Link href={item.href} className={`flex items-center gap-[12px] px-[12px] py-[10px] rounded-lg transition-all duration-300 group relative overflow-hidden ${isActive ? 'bg-[#1e293b]/60 text-white font-medium' : 'text-slate-400 hover:bg-[#1e293b]/40 hover:text-slate-200'}`}>
+                 {isActive && (
+                  <>
+                    <div className="absolute left-0 top-0 h-full w-[4px] bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.5)] z-20"></div>
+                    <div className="absolute left-0 top-0 h-full w-[96px] bg-gradient-to-r from-amber-500/25 to-transparent z-10"></div>
+                  </>
+                 )}
+                 <i className={`${item.icon} text-[18px] transition-transform duration-300 z-30 ${isActive ? 'text-amber-400 scale-110 drop-shadow-sm' : 'text-slate-500 group-hover:text-slate-400 group-hover:scale-110'}`}></i>
+                 <span className="text-[14px] z-30">{item.label}</span>
+               </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+
   return (
     <div className="w-[256px] h-screen bg-[#0f172a] border-r border-[#1e293b] text-slate-300 flex flex-col transition-all duration-300 z-20 sticky top-0 flex-shrink-0" style={{boxSizing: 'border-box'}}>
-      <div className="h-[64px] flex items-center px-[24px] border-b border-[#1e293b] bg-[#0f172a]">
-        <i className="pi pi-compass text-[20px] text-emerald-500 mr-[12px]"></i>
+      {/* Header */}
+      <div className="h-[64px] flex items-center px-[24px] border-b border-[#1e293b] bg-[#0f172a] mb-4">
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-amber-500/30 mr-[12px]">
+           <i className="pi pi-compass text-white text-sm"></i>
+        </div>
         <div className="flex items-baseline gap-[6px] whitespace-nowrap">
-          <span className="text-[17.6px] font-bold text-white tracking-widest">NEO</span>
-          <span className="font-normal text-slate-400 text-[14px]">Warehouse</span>
+          <span className="text-[18px] font-extrabold text-white tracking-widest">NEO</span>
+          <span className="font-medium text-amber-400 text-[13px] tracking-wide">WMS</span>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-[24px] px-[16px] custom-scrollbar">
-        <div className="text-[11px] font-bold text-slate-500 tracking-widest uppercase mb-[16px] px-[8px]">Operaciones Logísticas</div>
-        <ul className="flex flex-col gap-[6px] mb-[32px]">
-          {menuItems.map((item) => {
-            const isActive = isActivePath(item.href);
-            return (
-              <li key={item.href}>
-                <Link href={item.href} className={`flex items-center gap-[12px] px-[12px] py-[10px] rounded-lg transition-all duration-300 group relative overflow-hidden ${isActive ? 'bg-[#1e293b]/60 text-white font-medium' : 'text-slate-400 hover:bg-[#1e293b]/40 hover:text-slate-200'}`}>
-                  {isActive && (
-                    <>
-                      <div className="absolute left-0 top-0 h-full w-[4px] bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)] z-20"></div>
-                      <div className="absolute left-0 top-0 h-full w-[96px] bg-gradient-to-r from-emerald-500/15 to-transparent z-10"></div>
-                    </>
-                  )}
-                  <i className={`${item.icon} text-[18px] transition-transform duration-300 z-30 ${isActive ? 'text-emerald-400 scale-110 drop-shadow-sm' : 'text-slate-500 group-hover:text-slate-400 group-hover:scale-110'}`}></i>
-                  <span className="text-[14px] z-30">{item.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-
-        <div className="text-[11px] font-bold text-slate-500 tracking-widest uppercase mb-[16px] px-[8px]">Configuración</div>
-        <ul className="flex flex-col gap-[6px]">
-          {coreItems.map((item) => {
-            const isActive = isActivePath(item.href);
-            return (
-               <li key={item.href}>
-                 <Link href={item.href} className={`flex items-center gap-[12px] px-[12px] py-[10px] rounded-lg transition-all duration-300 group relative overflow-hidden ${isActive ? 'bg-[#1e293b]/60 text-white font-medium' : 'text-slate-400 hover:bg-[#1e293b]/40 hover:text-slate-200'}`}>
-                   {isActive && (
-                    <>
-                      <div className="absolute left-0 top-0 h-full w-[4px] bg-teal-400 shadow-[0_0_10px_rgba(45,212,191,0.5)] z-20"></div>
-                      <div className="absolute left-0 top-0 h-full w-[96px] bg-gradient-to-r from-teal-500/15 to-transparent z-10"></div>
-                    </>
-                   )}
-                   <i className={`${item.icon} text-[18px] transition-transform duration-300 z-30 ${isActive ? 'text-teal-400 scale-110 drop-shadow-sm' : 'text-slate-500 group-hover:text-slate-400 group-hover:scale-110'}`}></i>
-                   <span className="text-[14px] z-30">{item.label}</span>
-                 </Link>
-               </li>
-            );
-          })}
-        </ul>
+      {/* Navigation */}
+      <div className="flex-1 overflow-y-auto px-[16px] custom-scrollbar">
+        {renderNavGroup("Mando y Análisis", analyticsItems)}
+        {renderNavGroup("Movimientos y Flujos", operationsItems)}
+        {renderNavGroup("Ubicaciones y Control", storageItems)}
       </div>
 
+      {/* User Footer */}
       <div className="p-[16px] border-t border-[#1e293b] bg-[#0f172a]">
-        <div className="rounded-xl p-[8px] flex items-center gap-[12px] hover:bg-[#1e293b] transition-colors cursor-pointer">
-          <div className="w-[36px] h-[36px] rounded-full bg-[#1e293b] border border-slate-700 flex items-center justify-center text-slate-300 font-semibold text-[14px]">
+        <div className="rounded-xl p-[8px] flex items-center gap-[12px] bg-[#1e293b]/50 border border-[#1e293b] hover:bg-[#1e293b] transition-colors cursor-pointer">
+          <div className="w-[36px] h-[36px] rounded-full bg-amber-950 border border-amber-500/50 flex items-center justify-center text-amber-300 font-bold text-[14px] shadow-inner shadow-amber-500/20">
             {userInitials}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[14px] font-medium text-slate-200 truncate">{userName}</p>
-            <p className="text-[12px] text-slate-500 truncate">{userRole}</p>
+            <p className="text-[14px] font-semibold text-white truncate">{userName}</p>
+            <p className="text-[11px] font-medium text-amber-400 truncate flex items-center gap-1">
+               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+               {userRole}
+            </p>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+export function AppSidebar() {
+  return (
+    <Suspense fallback={<div className="w-[256px] h-screen bg-[#0f172a] border-r border-[#1e293b]"></div>}>
+      <AppSidebarContent />
+    </Suspense>
   );
 }

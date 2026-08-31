@@ -24,6 +24,7 @@ export function AppSwitcher() {
     { name: "Neo Compras", icon: "pi pi-shopping-cart", color: "text-emerald-600", bg: "bg-emerald-50", href: isProd ? "https://compras.qa.morpheussoft.net/compras" : "http://localhost:4002/compras" },
     { name: "Neo Logística", icon: "pi pi-truck", color: "text-purple-600", bg: "bg-purple-50", href: isProd ? "https://logistica.qa.morpheussoft.net/wms" : "http://localhost:4003/" },
     { name: "Costos y Precios", icon: "pi pi-percentage", color: "text-rose-600", bg: "bg-rose-50", href: isProd ? "https://costos.qa.morpheussoft.net/costos" : "http://localhost:4004/costos" },
+    { name: "Catálogo B2B", icon: "pi pi-globe", color: "text-teal-600", bg: "bg-teal-50", href: isProd ? "https://b2b.qa.morpheussoft.net" : "http://localhost:4005/", disabled: false },
     { name: "Ventas", icon: "pi pi-dollar", color: "text-amber-600", bg: "bg-amber-50", href: "#", disabled: true },
     { name: "Reportes", icon: "pi pi-chart-bar", color: "text-slate-600", bg: "bg-slate-50", href: "#", disabled: true },
   ];

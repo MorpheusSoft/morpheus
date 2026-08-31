@@ -52,7 +52,8 @@ export function AppSidebar() {
   ];
 
   const isActivePath = (href: string) => {
-    return pathname === href;
+    if (href === '/dashboard') return pathname === '/dashboard';
+    return pathname === href || (pathname.startsWith(href) && href !== '/dashboard');
   };
 
   const renderNavGroup = (title: string, items: {label: string, icon: string, href: string}[]) => (

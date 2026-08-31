@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { Button } from 'primereact/button';
@@ -9,42 +9,47 @@ import { Tag } from 'primereact/tag';
 import { TabView, TabPanel } from 'primereact/tabview';
 import api from '@/lib/api';
 import { format } from 'date-fns';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Dropdown } from 'primereact/dropdown';
 
 // Global in-memory cache for instant zero-latency page transitions
 let globalOrdersCache: any[] | null = null;
 let globalCacheTimestamp: number = 0;
 
-export default function PurchaseOrdersPage() {
+function PurchaseOrdersContent() {
   const [orders, setOrders] = useState<any[]>(() => globalOrdersCache || []);
   const [loading, setLoading] = useState<boolean>(!globalOrdersCache);
-  
-  // Persistir estado de filtros en sessionStorage para que no se pierdan al entrar/salir de una orden
-  const [selectedSupplier, setSelectedSupplier] = useState<string | null>(() => {
-    if (typeof window !== 'undefined') {
-      return sessionStorage.getItem('pur_selectedSupplier') || null;
-    }
-    return null;
-  });
+  const [selectedSupplier, setSelectedSupplier] = useState<string | null>(null);
+  const [selectedFacility, setSelectedFacility] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState<number>(0);
+  const [mounted, setMounted] = useState<boolean>(false);
 
-  const [selectedFacility, setSelectedFacility] = useState<string | null>(() => {
-    if (typeof window !== 'undefined') {
-      return sessionStorage.getItem('pur_selectedFacility') || null;
-    }
-    return null;
-  });
-
-  const [activeIndex, setActiveIndex] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      const savedTab = sessionStorage.getItem('pur_activeIndex');
-      return savedTab ? parseInt(savedTab, 10) : 0;
-    }
-    return 0;
-  });
-
+  const searchParams = useSearchParams();
   const toast = useRef<Toast>(null);
   const router = useRouter();
+
+  useEffect(() => {
+    setMounted(true);
+    if (typeof window !== 'undefined') {
+      const savedSupplier = sessionStorage.getItem('pur_selectedSupplier');
+      if (savedSupplier) setSelectedSupplier(savedSupplier);
+
+      const savedFacility = sessionStorage.getItem('pur_selectedFacility');
+      if (savedFacility) setSelectedFacility(savedFacility);
+
+      const statusParam = searchParams?.get('status');
+      if (statusParam === 'draft') {
+        setActiveIndex(1);
+      } else if (statusParam === 'transit') {
+        setActiveIndex(2);
+      } else if (statusParam === 'received') {
+        setActiveIndex(3);
+      } else {
+        const savedTab = sessionStorage.getItem('pur_activeIndex');
+        if (savedTab) setActiveIndex(parseInt(savedTab, 10));
+      }
+    }
+  }, [searchParams]);
 
   // Guardar en sessionStorage al cambiar filtros
   const handleSupplierChange = (val: string | null) => {
@@ -313,5 +318,13 @@ export default function PurchaseOrdersPage() {
         </DataTable>
       </div>
     </div>
+  );
+}
+
+export default function PurchaseOrdersPage() {
+  return (
+    <Suspense fallback={<div className="p-8"><i className="pi pi-spin pi-spinner text-emerald-600 mr-2"></i> Cargando órdenes de compra...</div>}>
+      <PurchaseOrdersContent />
+    </Suspense>
   );
 }

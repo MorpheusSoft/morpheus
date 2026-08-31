@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { FilterMatchMode } from 'primereact/api';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
@@ -10,76 +10,48 @@ import { useRouter } from 'next/navigation';
 
 export default function ProductsCatalogPage() {
   const router = useRouter();
-  const [products, setProducts] = useState([]);
+  const [products, setProducts] = useState<any[]>([]);
   const [totalRecords, setTotalRecords] = useState(0);
   const [loading, setLoading] = useState(true);
   const [globalFilterValue, setGlobalFilterValue] = useState('');
-  
-  const [lazyState, setLazyState] = useState({
-      first: 0,
-      rows: 10,
-      page: 0
-  });
+  const [first, setFirst] = useState(0);
+  const [rows, setRows] = useState(10);
 
-  const [isMounted, setIsMounted] = useState(false);
+  const fetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-     setIsMounted(true);
-     if (typeof window !== 'undefined') {
-         const savedFilter = sessionStorage.getItem('dt-products-filter');
-         if (savedFilter) setGlobalFilterValue(savedFilter);
-         
-         const savedLazy = sessionStorage.getItem('dt-products-lazy');
-         if (savedLazy) setLazyState(JSON.parse(savedLazy));
-     }
-  }, []);
-
-  useEffect(() => {
-     if (isMounted && typeof window !== 'undefined') {
-         sessionStorage.setItem('dt-products-filter', globalFilterValue);
-     }
-  }, [globalFilterValue, isMounted]);
-
-  useEffect(() => {
-     if (isMounted && typeof window !== 'undefined') {
-         sessionStorage.setItem('dt-products-lazy', JSON.stringify(lazyState));
-     }
-  }, [lazyState, isMounted]);
-
-  const loadLazyData = async (first = lazyState.first, rows = lazyState.rows, filter = globalFilterValue) => {
+  const loadData = useCallback(async (skip: number, limit: number, filterText: string) => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const response = await ProductService.getProducts(first, rows, filter);
+      const response = await ProductService.getProducts(skip, limit, filterText);
       setProducts(response?.data || []);
       setTotalRecords(response?.total || 0);
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching products:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadLazyData(lazyState.first, lazyState.rows, globalFilterValue);
-  }, [lazyState.first, lazyState.rows]);
+    if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
 
-  useEffect(() => {
-    const delay = setTimeout(() => {
-        if (lazyState.first !== 0) {
-           setLazyState(prev => ({ ...prev, first: 0, page: 0 }));
-        } else {
-           loadLazyData(0, lazyState.rows, globalFilterValue);
-        }
-    }, 500);
-    return () => clearTimeout(delay);
-  }, [globalFilterValue]);
+    fetchTimeoutRef.current = setTimeout(() => {
+      loadData(first, rows, globalFilterValue);
+    }, 300);
+
+    return () => {
+      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
+    };
+  }, [first, rows, globalFilterValue, loadData]);
 
   const onPage = (event: any) => {
-      setLazyState(prev => ({ ...prev, ...event }));
+    setFirst(event.first);
+    setRows(event.rows);
   };
 
   const onGlobalFilterChange = (e: any) => {
     setGlobalFilterValue(e.target.value);
+    setFirst(0);
   };
 
   const statusBodyTemplate = (rowData: any) => {
@@ -197,11 +169,11 @@ export default function ProductsCatalogPage() {
           <DataTable 
             value={products} 
             lazy={true}
-            first={lazyState.first}
+            first={first}
+            rows={rows}
             onPage={onPage}
             totalRecords={totalRecords}
             paginator 
-            rows={10} 
             dataKey="id" 
             loading={loading}
             emptyMessage={
