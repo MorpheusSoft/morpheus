@@ -267,16 +267,16 @@ public class MainForm : Form
         var lblBaselineTitle = new Label { Text = "5. Inventario Inicial (Baseline):", Location = new Point(8, 8), AutoSize = true, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.White };
         pnlBaseline.Controls.Add(lblBaselineTitle);
 
-        rbBaselineToday = new RadioButton { Text = "Al momento actual (Hoy)", Checked = true, Location = new Point(12, 34), AutoSize = true, ForeColor = Color.White };
+        rbBaselineToday = new RadioButton { Text = "Al momento actual (Hoy - Inventario Vivo)", Checked = true, Location = new Point(12, 34), AutoSize = true, ForeColor = Color.White };
         pnlBaseline.Controls.Add(rbBaselineToday);
 
-        rbBaselineCustom = new RadioButton { Text = "A fecha especifica:", Location = new Point(210, 34), AutoSize = true, ForeColor = Color.White };
+        rbBaselineCustom = new RadioButton { Text = "A fecha de corte (Fin de día):", Location = new Point(245, 34), AutoSize = true, ForeColor = Color.White };
         pnlBaseline.Controls.Add(rbBaselineCustom);
 
-        txtBaselineDate = new TextBox { Text = "2026-06-07", Location = new Point(340, 32), Width = 100, BackColor = Color.FromArgb(15, 23, 42), ForeColor = Color.White };
+        txtBaselineDate = new TextBox { Text = "2026-06-07", Location = new Point(415, 32), Width = 90, BackColor = Color.FromArgb(15, 23, 42), ForeColor = Color.White };
         pnlBaseline.Controls.Add(txtBaselineDate);
 
-        btnSyncBaseline = CreateButton("Sincronizar Inventario (Baseline)", 460, 28, 240, 32, Color.FromArgb(16, 185, 129));
+        btnSyncBaseline = CreateButton("Sincronizar Inventario (Baseline)", 515, 28, 240, 32, Color.FromArgb(16, 185, 129));
         btnSyncBaseline.Click += BtnSyncBaseline_Click;
         pnlBaseline.Controls.Add(btnSyncBaseline);
 
@@ -719,7 +719,7 @@ public class MainForm : Form
 
     private void BtnSyncBaseline_Click(object? sender, EventArgs e)
     {
-        string date = rbBaselineToday.Checked ? DateTime.Today.ToString("yyyy-MM-dd") : txtBaselineDate.Text.Trim();
+        string date = rbBaselineToday.Checked ? "now" : txtBaselineDate.Text.Trim();
         RunExtractor("baseline", $"--date {date}");
     }
 
@@ -880,7 +880,21 @@ public class MainForm : Form
                 chkAutoSuppliers.Checked = de["Suppliers"]?["Enabled"]?.GetValue<bool>() ?? false;
                 txtIntervalSuppliers.Text = de["Suppliers"]?["IntervalMinutes"]?.ToString() ?? "60";
 
-                txtBaselineDate.Text = de["InventoryBaseline"]?["BaselineCutoffDate"]?.ToString() ?? "2026-06-07";
+                if (de["InventoryBaseline"] != null)
+                {
+                    string savedCutoff = de["InventoryBaseline"]?["BaselineCutoffDate"]?.ToString() ?? "2026-06-07";
+                    if (string.Equals(savedCutoff, "now", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(savedCutoff, "today", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(savedCutoff, "hoy", StringComparison.OrdinalIgnoreCase))
+                    {
+                        rbBaselineToday.Checked = true;
+                    }
+                    else
+                    {
+                        rbBaselineCustom.Checked = true;
+                        txtBaselineDate.Text = savedCutoff;
+                    }
+                }
             }
         }
         catch (Exception ex)
@@ -926,7 +940,7 @@ public class MainForm : Form
             SetExt("SupplierProducts", chkAutoSuppliers.Checked, txtIntervalSuppliers.Text, "supplier-products-legacy");
             
             de["InventoryBaseline"] ??= new JsonObject();
-            de["InventoryBaseline"]!["BaselineCutoffDate"] = txtBaselineDate.Text.Trim();
+            de["InventoryBaseline"]!["BaselineCutoffDate"] = rbBaselineToday.Checked ? "now" : txtBaselineDate.Text.Trim();
             de["InventoryBaseline"]!["TargetApiUrl"] = $"{baseUrl}/api/v1/import/inventory-baseline-legacy";
 
             File.WriteAllText(_appSettingsPath, doc.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));

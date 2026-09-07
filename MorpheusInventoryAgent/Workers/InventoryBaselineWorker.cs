@@ -65,7 +65,31 @@ public class InventoryBaselineWorker : BackgroundService
     {
         string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
         var cutoffStr = dateOverride ?? _configuration.GetValue<string>("DirectExtractors:InventoryBaseline:BaselineCutoffDate", "2026-06-07");
-        DateTime cutoffDate = DateTime.Parse(cutoffStr);
+        
+        DateTime cutoff;
+        bool isNow = string.IsNullOrWhiteSpace(cutoffStr)
+                  || string.Equals(cutoffStr.Trim(), "now", StringComparison.OrdinalIgnoreCase)
+                  || string.Equals(cutoffStr.Trim(), "today", StringComparison.OrdinalIgnoreCase)
+                  || string.Equals(cutoffStr.Trim(), "hoy", StringComparison.OrdinalIgnoreCase);
+
+        if (isNow)
+        {
+            cutoff = DateTime.Now;
+            _logger.LogInformation("Extrayendo inventario baseline VIVO al momento actual ({Cutoff})...", cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
+        }
+        else if (DateTime.TryParse(cutoffStr, out DateTime parsed))
+        {
+            // Si el usuario indicó una fecha sin hora (ej: 2026-06-07), se toma hasta la última hora del día (23:59:59)
+            cutoff = parsed.TimeOfDay == TimeSpan.Zero 
+                ? parsed.Date.AddDays(1).AddSeconds(-1) 
+                : parsed;
+            _logger.LogInformation("Extrayendo inventario baseline al cierre de fecha ({Cutoff})...", cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
+        }
+        else
+        {
+            cutoff = DateTime.Now;
+            _logger.LogWarning("Formato de fecha inválido '{CutoffStr}', usando momento actual ({Cutoff}).", cutoffStr, cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
+        }
         
         string query = @"
             select c_deposito, c_codArticulo, sum(case when c_tipoMov='Descargo' then n_cantidad*-1 else n_cantidad end) Cantidad
@@ -75,22 +99,33 @@ public class InventoryBaselineWorker : BackgroundService
             group by c_deposito, c_codArticulo";
 
         using var connection = new SqlConnection(connectionString);
-        var baseline = await connection.QueryAsync(query, new { Cutoff = cutoffDate.Date }, commandTimeout: 600);
+        var baseline = await connection.QueryAsync(query, new { Cutoff = cutoff }, commandTimeout: 600);
 
-        if (!baseline.Any()) return;
+        if (!baseline.Any())
+        {
+            _logger.LogWarning("No se encontraron movimientos de inventario antes de {Cutoff}.", cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
+            return;
+        }
 
         var json = JsonSerializer.Serialize(baseline);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
         var client = _httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromMinutes(15);
-        client.Timeout = TimeSpan.FromMinutes(5); // It might be a large request
         var response = await client.PostAsync(config.TargetApiUrl, content, stoppingToken);
 
         if (response.IsSuccessStatusCode)
         {
             _logger.LogInformation("Successfully extracted and posted {Count} baseline inventory records.", baseline.Count());
             syncState.BaselineInventoryDone = true;
+            if (syncState.LastMovementSync.Year == 2000)
+            {
+                syncState.LastMovementSync = cutoff;
+            }
+            if (syncState.LastSalesSync.Year == 2000)
+            {
+                syncState.LastSalesSync = cutoff;
+            }
             SyncStateManager.SaveState(syncState);
         }
         else

@@ -72,7 +72,23 @@ public class InventoryMovementsWorker : BackgroundService
         if (syncState.LastMovementSync.Year == 2000)
         {
             var cutoffStr = _configuration.GetValue<string>("DirectExtractors:InventoryBaseline:BaselineCutoffDate", "2026-06-07");
-            syncState.LastMovementSync = DateTime.Parse(cutoffStr).Date;
+            if (string.IsNullOrWhiteSpace(cutoffStr) ||
+                string.Equals(cutoffStr.Trim(), "now", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cutoffStr.Trim(), "today", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cutoffStr.Trim(), "hoy", StringComparison.OrdinalIgnoreCase))
+            {
+                syncState.LastMovementSync = DateTime.Now;
+            }
+            else if (DateTime.TryParse(cutoffStr, out DateTime parsed))
+            {
+                syncState.LastMovementSync = parsed.TimeOfDay == TimeSpan.Zero
+                    ? parsed.Date.AddDays(1).AddSeconds(-1)
+                    : parsed;
+            }
+            else
+            {
+                syncState.LastMovementSync = DateTime.Now;
+            }
             SyncStateManager.SaveState(syncState);
         }
         
