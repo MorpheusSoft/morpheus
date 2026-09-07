@@ -173,29 +173,53 @@ Solucion 100% nativa en C# (.NET). Sin scripts ni ventanas intermedias.
                 z.write(full_path, rel_path)
                 print(f"  -> Incluido: {rel_path} ({os.path.getsize(full_path):,} bytes)")
 
-    # Actualizar script powershell para instalacion web rapida (instalar.ps1)
-    ps1_web = """# Script de Instalacion Oficial Morpheus Sync Agent (Tiendas)
+    # Actualizar script powershell para instalacion web rapida y actualizacion segura (instalar.ps1)
+    ps1_web = """# Script de Instalacion y Actualizacion Oficial Morpheus Sync Agent (Tiendas)
 $ErrorActionPreference = "Stop"
 $zipUrl = "https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip"
 $destDir = "C:\\MorpheusSyncAgent"
 $tempZip = "$env:TEMP\\MorpheusSyncAgent_Installer.zip"
 
 Write-Host "=========================================================" -ForegroundColor Cyan
-Write-Host "  DESCARGANDO MORPHEUS SYNC AGENT (C# NATIVO)" -ForegroundColor Cyan
+Write-Host "  MORPHEUS SYNC AGENT - INSTALACION / ACTUALIZACION (C#)" -ForegroundColor Cyan
 Write-Host "=========================================================" -ForegroundColor Cyan
 
-Write-Host "`n[1/3] Descargando paquete oficial desde QA..." -ForegroundColor Yellow
+# 1. Detener procesos o servicio si estan corriendo para liberar los archivos .exe
+Write-Host "`n[1/4] Verificando y liberando procesos en ejecucion..." -ForegroundColor Yellow
+Get-Process -Name "MorpheusConfigurador", "MorpheusSyncAgent" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+if (Get-Service -Name "MorpheusSyncAgent" -ErrorAction SilentlyContinue) {
+    Stop-Service -Name "MorpheusSyncAgent" -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Seconds 1
+
+# 2. Descargar el nuevo paquete
+Write-Host "[2/4] Descargando version mas reciente desde QA..." -ForegroundColor Yellow
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip
 
-Write-Host "[2/3] Extrayendo paquete en $destDir..." -ForegroundColor Yellow
+# 3. Respaldar appsettings.json previo para no sobreescribir la configuracion de tienda
+$backupConfig = "$env:TEMP\\morpheus_appsettings_backup.json"
+$hasExistingConfig = Test-Path "$destDir\\appsettings.json"
+if ($hasExistingConfig) {
+    Copy-Item "$destDir\\appsettings.json" -Destination $backupConfig -Force
+}
+
+# 4. Extraer actualizacion
+Write-Host "[3/4] Extrayendo archivos actualizados en $destDir..." -ForegroundColor Yellow
 if (!(Test-Path $destDir)) {
     New-Item -ItemType Directory -Path $destDir -Force | Out-Null
 }
 Expand-Archive -Path $tempZip -DestinationPath $destDir -Force
 Remove-Item $tempZip -Force
 
-Write-Host "[3/3] Abriendo MorpheusConfigurador.exe (C#)..." -ForegroundColor Green
+# Restaurar configuracion previa personalizada si existia
+if ($hasExistingConfig -and (Test-Path $backupConfig)) {
+    Copy-Item $backupConfig -Destination "$destDir\\appsettings.json" -Force
+    Remove-Item $backupConfig -Force
+    Write-Host "  -> Tu configuracion previa de tienda y conexion SQL fue preservada [OK]." -ForegroundColor Green
+}
+
+Write-Host "[4/4] Abriendo MorpheusConfigurador.exe actualizado..." -ForegroundColor Green
 Start-Process "$destDir\\MorpheusConfigurador.exe"
 """
     with open(os.path.join(static_dir, "instalar.ps1"), "w", encoding="utf-8-sig") as f:
