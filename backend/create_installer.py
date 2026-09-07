@@ -31,10 +31,16 @@ def build_installer():
     scripts_dir = os.path.join(build_dir, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
 
-    print("[1/5] Extrayendo motor de sincronizacion MorpheusSyncAgent.exe...")
-    with zipfile.ZipFile(src_zip, "r") as z:
-        with open(os.path.join(build_dir, "MorpheusSyncAgent.exe"), "wb") as f:
-            f.write(z.read("msync.exe"))
+    print("[1/5] Obteniendo motor de sincronizacion MorpheusSyncAgent.exe...")
+    agent_dir = os.path.join(static_dir, "agent_win")
+    agent_exe = os.path.join(agent_dir, "MorpheusSyncAgent.exe")
+    if os.path.exists(agent_exe):
+        print(f"  -> Usando binario compilado reciente desde {agent_exe}")
+        shutil.copy2(agent_exe, os.path.join(build_dir, "MorpheusSyncAgent.exe"))
+    else:
+        with zipfile.ZipFile(src_zip, "r") as z:
+            with open(os.path.join(build_dir, "MorpheusSyncAgent.exe"), "wb") as f:
+                f.write(z.read("msync.exe"))
 
     print("[2/5] Incluyendo aplicacion nativa en C# MorpheusConfigurador.exe...")
     conf_exe = os.path.join(configurador_dir, "MorpheusConfigurador.exe")
