@@ -174,8 +174,7 @@ Solucion 100% nativa en C# (.NET). Sin scripts ni ventanas intermedias.
                 print(f"  -> Incluido: {rel_path} ({os.path.getsize(full_path):,} bytes)")
 
     # Actualizar script powershell para instalacion web rapida y actualizacion segura (instalar.ps1)
-    ps1_web = """# Script de Instalacion y Actualizacion Oficial Morpheus Sync Agent (Tiendas)
-$ErrorActionPreference = "Stop"
+    ps1_web = """$ErrorActionPreference = "Stop"
 $zipUrl = "https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip"
 $destDir = "C:\\MorpheusSyncAgent"
 $tempZip = "$env:TEMP\\MorpheusSyncAgent_Installer.zip"
@@ -222,7 +221,7 @@ if ($hasExistingConfig -and (Test-Path $backupConfig)) {
 Write-Host "[4/4] Abriendo MorpheusConfigurador.exe actualizado..." -ForegroundColor Green
 Start-Process "$destDir\\MorpheusConfigurador.exe"
 """
-    with open(os.path.join(static_dir, "instalar.ps1"), "w", encoding="utf-8-sig") as f:
+    with open(os.path.join(static_dir, "instalar.ps1"), "w", encoding="utf-8") as f:
         f.write(ps1_web)
 
     print(f"\n[OK] Instalador empaquetado: {dest_zip} ({os.path.getsize(dest_zip):,} bytes)")
