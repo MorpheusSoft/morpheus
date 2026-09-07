@@ -58,7 +58,14 @@ public class InventoryBaselineWorker : BackgroundService
             };
         }
 
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("=========================================================");
+        Console.WriteLine("  MORPHEUS SYNC AGENT - INVENTARIO INICIAL (BASELINE)");
+        Console.WriteLine("=========================================================");
+        Console.ResetColor();
+
         await ProcessExtractionAsync(config, syncState, date, desc, stoppingToken);
+        Console.WriteLine("=========================================================\n");
     }
 
     private async Task ProcessExtractionAsync(DirectExtractorConfig config, SyncState syncState, string? dateOverride = null, string? descOverride = null, CancellationToken stoppingToken = default)
@@ -75,6 +82,7 @@ public class InventoryBaselineWorker : BackgroundService
         if (isNow)
         {
             cutoff = DateTime.Now;
+            Console.WriteLine($"  Modo: INVENTARIO VIVO al momento actual ({cutoff:yyyy-MM-dd HH:mm:ss})");
             _logger.LogInformation("Extrayendo inventario baseline VIVO al momento actual ({Cutoff})...", cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
         }
         else if (DateTime.TryParse(cutoffStr, out DateTime parsed))
@@ -83,29 +91,38 @@ public class InventoryBaselineWorker : BackgroundService
             cutoff = parsed.TimeOfDay == TimeSpan.Zero 
                 ? parsed.Date.AddDays(1).AddSeconds(-1) 
                 : parsed;
+            Console.WriteLine($"  Modo: FECHA DE CORTE (Fin del día {cutoff:yyyy-MM-dd HH:mm:ss})");
             _logger.LogInformation("Extrayendo inventario baseline al cierre de fecha ({Cutoff})...", cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
         }
         else
         {
             cutoff = DateTime.Now;
+            Console.WriteLine($"  [ALERTA] Formato de fecha '{cutoffStr}' no reconocido. Usando momento actual ({cutoff:yyyy-MM-dd HH:mm:ss})");
             _logger.LogWarning("Formato de fecha inválido '{CutoffStr}', usando momento actual ({Cutoff}).", cutoffStr, cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
         }
         
+        Console.WriteLine("  Consultando existencias consolidadas en SQL Server (puede tomar unos segundos)...");
+
         string query = @"
             select c_deposito, c_codArticulo, sum(case when c_tipoMov='Descargo' then n_cantidad*-1 else n_cantidad end) Cantidad
-            from tr_inventario t
-            inner join ma_inventario m on t.c_concepto = m.c_concepto and t.c_documento=m.c_documento
+            from tr_inventario t WITH (NOLOCK)
+            inner join ma_inventario m WITH (NOLOCK) on t.c_concepto = m.c_concepto and t.c_documento=m.c_documento
             where m.c_status!='ANU' and f_fecha <= @Cutoff
             group by c_deposito, c_codArticulo";
 
         using var connection = new SqlConnection(connectionString);
-        var baseline = await connection.QueryAsync(query, new { Cutoff = cutoff }, commandTimeout: 600);
+        var baseline = (await connection.QueryAsync(query, new { Cutoff = cutoff }, commandTimeout: 600)).ToList();
 
         if (!baseline.Any())
         {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"  [ALERTA] No se encontraron movimientos de inventario antes de {cutoff:yyyy-MM-dd HH:mm:ss}.");
+            Console.ResetColor();
             _logger.LogWarning("No se encontraron movimientos de inventario antes de {Cutoff}.", cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
             return;
         }
+
+        Console.WriteLine($"  -> Encontrados {baseline.Count:N0} artículos con saldo. Transmitiendo a la nube QA...");
 
         var json = JsonSerializer.Serialize(baseline);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -116,7 +133,10 @@ public class InventoryBaselineWorker : BackgroundService
 
         if (response.IsSuccessStatusCode)
         {
-            _logger.LogInformation("Successfully extracted and posted {Count} baseline inventory records.", baseline.Count());
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  [OK] {baseline.Count:N0} artículos sembrados exitosamente como Inventario Inicial.");
+            Console.ResetColor();
+            _logger.LogInformation("Successfully extracted and posted {Count} baseline inventory records.", baseline.Count);
             syncState.BaselineInventoryDone = true;
             if (syncState.LastMovementSync.Year == 2000)
             {
@@ -130,6 +150,9 @@ public class InventoryBaselineWorker : BackgroundService
         }
         else
         {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  [ERROR] Fallo al enviar inventario baseline. Código HTTP: {response.StatusCode}");
+            Console.ResetColor();
             _logger.LogWarning("Failed to post inventory baseline. Status code: {StatusCode}", response.StatusCode);
         }
     }

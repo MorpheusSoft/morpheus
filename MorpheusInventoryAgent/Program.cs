@@ -57,46 +57,59 @@ public class Program
             
             var host = builder.Build();
             
-            if (runName.Equals("baseline", StringComparison.OrdinalIgnoreCase))
+            try
             {
-                var worker = host.Services.GetRequiredService<InventoryBaselineWorker>();
-                await worker.RunOnceAsync(date, desc);
+                if (runName.Equals("baseline", StringComparison.OrdinalIgnoreCase))
+                {
+                    var worker = host.Services.GetRequiredService<InventoryBaselineWorker>();
+                    await worker.RunOnceAsync(date, desc);
+                }
+                else if (runName.Equals("suppliers", StringComparison.OrdinalIgnoreCase))
+                {
+                    var worker = host.Services.GetRequiredService<SuppliersExtractorWorker>();
+                    await worker.RunOnceAsync();
+                }
+                else if (runName.Equals("products", StringComparison.OrdinalIgnoreCase))
+                {
+                    var worker = host.Services.GetRequiredService<ProductMasterExtractorWorker>();
+                    await worker.RunOnceAsync();
+                }
+                else if (runName.Equals("barcodes", StringComparison.OrdinalIgnoreCase))
+                {
+                    var worker = host.Services.GetRequiredService<ProductBarcodesExtractorWorker>();
+                    await worker.RunOnceAsync();
+                }
+                else if (runName.Equals("movements", StringComparison.OrdinalIgnoreCase))
+                {
+                    var worker = host.Services.GetRequiredService<InventoryMovementsWorker>();
+                    await worker.RunOnceAsync();
+                }
+                else if (runName.Equals("sales", StringComparison.OrdinalIgnoreCase))
+                {
+                    var worker = host.Services.GetRequiredService<SalesExtractorWorker>();
+                    await worker.RunOnceAsync();
+                }
+                else if (runName.Equals("supplier-products", StringComparison.OrdinalIgnoreCase))
+                {
+                    var worker = host.Services.GetRequiredService<SupplierProductsExtractorWorker>();
+                    await worker.RunOnceAsync();
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"[ERROR] Extractor desconocido: '{runName}'");
+                    Console.ResetColor();
+                }
             }
-            else if (runName.Equals("suppliers", StringComparison.OrdinalIgnoreCase))
+            catch (Exception ex)
             {
-                var worker = host.Services.GetRequiredService<SuppliersExtractorWorker>();
-                await worker.RunOnceAsync();
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"\n[ERROR CRITICO DURANTE LA EJECUCION]:");
+                Console.WriteLine(ex.Message);
+                Console.WriteLine(ex.ToString());
+                Console.ResetColor();
             }
-            else if (runName.Equals("products", StringComparison.OrdinalIgnoreCase))
-            {
-                var worker = host.Services.GetRequiredService<ProductMasterExtractorWorker>();
-                await worker.RunOnceAsync();
-            }
-            else if (runName.Equals("barcodes", StringComparison.OrdinalIgnoreCase))
-            {
-                var worker = host.Services.GetRequiredService<ProductBarcodesExtractorWorker>();
-                await worker.RunOnceAsync();
-            }
-            else if (runName.Equals("movements", StringComparison.OrdinalIgnoreCase))
-            {
-                var worker = host.Services.GetRequiredService<InventoryMovementsWorker>();
-                await worker.RunOnceAsync();
-            }
-            else if (runName.Equals("sales", StringComparison.OrdinalIgnoreCase))
-            {
-                var worker = host.Services.GetRequiredService<SalesExtractorWorker>();
-                await worker.RunOnceAsync();
-            }
-            else if (runName.Equals("supplier-products", StringComparison.OrdinalIgnoreCase))
-            {
-                var worker = host.Services.GetRequiredService<SupplierProductsExtractorWorker>();
-                await worker.RunOnceAsync();
-            }
-            else
-            {
-                Console.WriteLine($"Unknown extractor: {runName}");
-            }
-            
+
             Environment.Exit(0);
         }
         else

@@ -59,7 +59,14 @@ public class ProductMasterExtractorWorker : BackgroundService
             };
         }
 
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("=========================================================");
+        Console.WriteLine("  MORPHEUS SYNC AGENT - MAESTRO DE PRODUCTOS");
+        Console.WriteLine("=========================================================");
+        Console.ResetColor();
+
         await ProcessExtractionAsync(config, stoppingToken);
+        Console.WriteLine("=========================================================\n");
     }
 
     private async Task ProcessExtractionAsync(DirectExtractorConfig config, CancellationToken stoppingToken = default)
@@ -68,20 +75,30 @@ public class ProductMasterExtractorWorker : BackgroundService
         var syncState = SyncStateManager.LoadState();
         var lastSync = syncState.LastProductSync;
         
-        string baseSelect = "select p.c_Codigo, c_Descri, c_Departamento, n_CostoAct, n_precio1, n_Impuesto1, case when c_CodMoneda='0000000001' then 'VES' else 'USD' end moneda, c_Marca, null imagen from MA_PRODUCTOS p";
+        string baseSelect = "select p.c_Codigo, c_Descri, c_Departamento, n_CostoAct, n_precio1, n_Impuesto1, case when c_CodMoneda='0000000001' then 'VES' else 'USD' end moneda, c_Marca, null imagen from MA_PRODUCTOS p WITH (NOLOCK)";
         string dateFilter = " (p.Update_Date > @LastSync OR p.Add_Date > @LastSync)";
         
         string query = config.ExportMode switch
         {
-            ExportMode.OnlyWithStock => $"{baseSelect} inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>0 AND {dateFilter} order by 1",
-            ExportMode.StockZeroAndAbove => $"{baseSelect} inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>=0 AND {dateFilter} order by 1",
+            ExportMode.OnlyWithStock => $"{baseSelect} inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD WITH (NOLOCK) group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>0 AND {dateFilter} order by 1",
+            ExportMode.StockZeroAndAbove => $"{baseSelect} inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD WITH (NOLOCK) group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>=0 AND {dateFilter} order by 1",
             ExportMode.AllMaster => $"{baseSelect} where {dateFilter} order by 1",
             _ => throw new NotImplementedException()
         };
 
+        Console.WriteLine($"  Consultando catálogo en SQL Server (Modo: {config.ExportMode}, Filtro: > {lastSync:yyyy-MM-dd})...");
         using var connection = new SqlConnection(connectionString);
-        var products = await connection.QueryAsync(query, new { LastSync = lastSync });
+        var products = (await connection.QueryAsync(query, new { LastSync = lastSync })).ToList();
 
+        if (!products.Any())
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("  [--] No se encontraron productos modificados para sincronizar.");
+            Console.ResetColor();
+            return;
+        }
+
+        Console.WriteLine($"  -> Transmitiendo {products.Count:N0} productos a la nube QA...");
         var json = JsonSerializer.Serialize(products);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
@@ -91,12 +108,18 @@ public class ProductMasterExtractorWorker : BackgroundService
 
         if (response.IsSuccessStatusCode)
         {
-            _logger.LogInformation("Successfully extracted and posted {Count} products.", products.Count());
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  [OK] {products.Count:N0} productos sincronizados exitosamente.");
+            Console.ResetColor();
+            _logger.LogInformation("Successfully extracted and posted {Count} products.", products.Count);
             syncState.LastProductSync = DateTime.Now;
             SyncStateManager.SaveState(syncState);
         }
         else
         {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  [ERROR] Fallo al enviar productos. Código HTTP: {response.StatusCode}");
+            Console.ResetColor();
             _logger.LogWarning("Failed to post products. Status code: {StatusCode}", response.StatusCode);
         }
     }

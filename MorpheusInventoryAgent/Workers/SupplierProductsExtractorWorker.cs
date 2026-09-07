@@ -62,7 +62,14 @@ public class SupplierProductsExtractorWorker : BackgroundService
             };
         }
 
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("=========================================================");
+        Console.WriteLine("  MORPHEUS SYNC AGENT - COSTOS Y ARTICULOS POR PROVEEDOR");
+        Console.WriteLine("=========================================================");
+        Console.ResetColor();
+
         await ProcessExtractionAsync(config, stoppingToken);
+        Console.WriteLine("=========================================================\n");
     }
 
     private async Task ProcessExtractionAsync(DirectExtractorConfig config, CancellationToken stoppingToken = default)
@@ -78,21 +85,26 @@ public class SupplierProductsExtractorWorker : BackgroundService
             from (
                 select ROW_NUMBER() over(Partition by c_codprovee, c_codigo order by d_fecha desc) ln, 
                        c_codigo, c_codprovee, n_costo, d_fecha
-                from MA_PRODXPROV
+                from MA_PRODXPROV WITH (NOLOCK)
                 where d_fecha > @LastSync
             ) x
-            inner join MA_PRODUCTOS p on x.c_codigo=p.c_Codigo
+            inner join MA_PRODUCTOS p WITH (NOLOCK) on x.c_codigo=p.c_Codigo
             where ln=1
             order by d_fecha desc";
 
+        Console.WriteLine($"  Consultando cruces de costos en SQL Server (posteriores a {lastSync:yyyy-MM-dd})...");
         using var connection = new SqlConnection(connectionString);
-        var supplierProducts = await connection.QueryAsync(query, new { LastSync = lastSync });
+        var supplierProducts = (await connection.QueryAsync(query, new { LastSync = lastSync })).ToList();
 
         if (!supplierProducts.Any())
         {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("  [--] No se encontraron nuevos cruces producto-proveedor.");
+            Console.ResetColor();
             return;
         }
 
+        Console.WriteLine($"  -> Transmitiendo {supplierProducts.Count:N0} relaciones proveedor-producto a la nube QA...");
         var json = JsonSerializer.Serialize(supplierProducts);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
@@ -102,12 +114,18 @@ public class SupplierProductsExtractorWorker : BackgroundService
 
         if (response.IsSuccessStatusCode)
         {
-            _logger.LogInformation("Successfully extracted and posted {Count} supplier products.", supplierProducts.Count());
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  [OK] {supplierProducts.Count:N0} relaciones proveedor-producto sincronizadas exitosamente.");
+            Console.ResetColor();
+            _logger.LogInformation("Successfully extracted and posted {Count} supplier products.", supplierProducts.Count);
             syncState.LastSupplierProductSync = DateTime.Now;
             SyncStateManager.SaveState(syncState);
         }
         else
         {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  [ERROR] Fallo al enviar cruces. Código HTTP: {response.StatusCode}");
+            Console.ResetColor();
             _logger.LogWarning("Failed to post supplier products. Status code: {StatusCode}", response.StatusCode);
         }
     }

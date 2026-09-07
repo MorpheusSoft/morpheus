@@ -61,7 +61,15 @@ public class InventoryMovementsWorker : BackgroundService
         }
 
         var syncState = SyncStateManager.LoadState();
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("=========================================================");
+        Console.WriteLine("  MORPHEUS SYNC AGENT - MOVIMIENTOS DE INVENTARIO");
+        Console.WriteLine("=========================================================");
+        Console.ResetColor();
+        Console.WriteLine($"  Consultando movimientos posteriores a: {syncState.LastMovementSync:yyyy-MM-dd HH:mm:ss}...");
+
         await ProcessExtractionAsync(config, syncState, stoppingToken);
+        Console.WriteLine("=========================================================\n");
     }
 
     private async Task ProcessExtractionAsync(DirectExtractorConfig config, SyncState syncState, CancellationToken stoppingToken = default)
@@ -97,16 +105,23 @@ public class InventoryMovementsWorker : BackgroundService
         
         string query = @"
             select @FacilityId as facility_id, m.c_documento, t.c_concepto, c_tipoMov, f_fecha, c_deposito, c_codArticulo, t.n_cantidad, t.n_costo, t.n_subtotal
-            from tr_inventario t
-            inner join ma_inventario m on t.c_concepto = m.c_concepto and t.c_documento=m.c_documento
+            from tr_inventario t WITH (NOLOCK)
+            inner join ma_inventario m WITH (NOLOCK) on t.c_concepto = m.c_concepto and t.c_documento=m.c_documento
             where m.c_status != 'ANU' and t.c_concepto not in ('VEN','DEV') 
               and f_fecha >= @LastSyncDate";
 
         using var connection = new SqlConnection(connectionString);
-        var movements = await connection.QueryAsync(query, new { FacilityId = facilityId, LastSyncDate = lastSync.Date }, commandTimeout: 180);
+        var movements = (await connection.QueryAsync(query, new { FacilityId = facilityId, LastSyncDate = lastSync.Date }, commandTimeout: 180)).ToList();
 
-        if (!movements.Any()) return;
+        if (!movements.Any())
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("  [--] No se encontraron nuevos movimientos de inventario por sincronizar.");
+            Console.ResetColor();
+            return;
+        }
 
+        Console.WriteLine($"  -> Transmitiendo {movements.Count:N0} movimientos de inventario a la nube QA...");
         var json = JsonSerializer.Serialize(movements);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
@@ -116,12 +131,18 @@ public class InventoryMovementsWorker : BackgroundService
 
         if (response.IsSuccessStatusCode)
         {
-            _logger.LogInformation("Successfully extracted and posted {Count} inventory movements.", movements.Count());
-            syncState.LastMovementSync = DateTime.Now.Date;
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  [OK] {movements.Count:N0} movimientos de inventario sincronizados exitosamente.");
+            Console.ResetColor();
+            _logger.LogInformation("Successfully extracted and posted {Count} inventory movements.", movements.Count);
+            syncState.LastMovementSync = DateTime.Now;
             SyncStateManager.SaveState(syncState);
         }
         else
         {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  [ERROR] Fallo al enviar movimientos. Código HTTP: {response.StatusCode}");
+            Console.ResetColor();
             _logger.LogWarning("Failed to post inventory movements. Status code: {StatusCode}", response.StatusCode);
         }
     }

@@ -55,20 +55,35 @@ public class SuppliersExtractorWorker : BackgroundService
             };
         }
 
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("=========================================================");
+        Console.WriteLine("  MORPHEUS SYNC AGENT - MAESTRO DE PROVEEDORES");
+        Console.WriteLine("=========================================================");
+        Console.ResetColor();
+
         await ProcessExtractionAsync(config, stoppingToken);
+        Console.WriteLine("=========================================================\n");
     }
 
     private async Task ProcessExtractionAsync(DirectExtractorConfig config, CancellationToken stoppingToken = default)
     {
         string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
         
-        string query = @"SELECT c_codproveed AS codigo, c_razon AS razon_social, c_descripcio AS nombre_comercial, c_rif AS rif, c_direccion AS direccion, c_telefono AS telefono, c_email AS email, 'ACTIVO' AS estatus FROM MA_PROVEEDORES WHERE n_activo = 1";
+        string query = @"SELECT c_codproveed AS codigo, c_razon AS razon_social, c_descripcio AS nombre_comercial, c_rif AS rif, c_direccion AS direccion, c_telefono AS telefono, c_email AS email, 'ACTIVO' AS estatus FROM MA_PROVEEDORES WITH (NOLOCK) WHERE n_activo = 1";
 
+        Console.WriteLine("  Consultando proveedores en SQL Server...");
         using var connection = new SqlConnection(connectionString);
-        var suppliers = await connection.QueryAsync(query);
+        var suppliers = (await connection.QueryAsync(query)).ToList();
 
-        if (!suppliers.Any()) return;
+        if (!suppliers.Any())
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("  [--] No se encontraron proveedores activos en la base de datos local.");
+            Console.ResetColor();
+            return;
+        }
 
+        Console.WriteLine($"  -> Transmitiendo {suppliers.Count:N0} proveedores a la nube QA...");
         var json = JsonSerializer.Serialize(suppliers);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
@@ -78,10 +93,16 @@ public class SuppliersExtractorWorker : BackgroundService
 
         if (response.IsSuccessStatusCode)
         {
-            _logger.LogInformation("Successfully extracted and posted {Count} suppliers.", suppliers.Count());
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  [OK] {suppliers.Count:N0} proveedores sincronizados exitosamente.");
+            Console.ResetColor();
+            _logger.LogInformation("Successfully extracted and posted {Count} suppliers.", suppliers.Count);
         }
         else
         {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  [ERROR] Fallo al enviar proveedores. Código HTTP: {response.StatusCode}");
+            Console.ResetColor();
             _logger.LogWarning("Failed to post suppliers. Status code: {StatusCode}", response.StatusCode);
         }
     }
