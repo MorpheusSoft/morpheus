@@ -1,6 +1,8 @@
-# 🚀 Guía de Instalación y Operación: Morpheus Sync Agent
+# 🚀 Guía de Instalación y Operación: Morpheus Sync Agent (Tiendas)
 
-Este documento detalla el procedimiento oficial paso a paso para instalar, configurar y operar el agente de sincronización **Morpheus Sync Agent** en las computadoras y servidores de las tiendas físicas (entorno Windows).
+Este documento detalla el procedimiento oficial y simplificado para instalar, configurar y operar el agente de sincronización **Morpheus Sync Agent** en las computadoras y servidores de las 15 tiendas físicas (entorno Windows).
+
+Diseñado específicamente para que el **personal de tienda y supervisores** puedan realizar la instalación y puesta en marcha en 2 clics, mediante un **Asistente Visual Gráfico**, sin necesidad de conocimientos técnicos avanzados ni comandos de consola.
 
 ---
 
@@ -8,172 +10,156 @@ Este documento detalla el procedimiento oficial paso a paso para instalar, confi
 
 * **Sistema Operativo:** Windows 10, Windows 11 o Windows Server (64 bits).
 * **Base de Datos Local:** Acceso a la instancia de SQL Server donde opera el sistema de caja/tienda (**VAD10 / VAD20**).
-* **Conectividad:** Conexión a Internet con salida HTTPS hacia `api.qa.morpheussoft.net` (puerto 443).
+* **Conectividad:** Conexión a Internet con salida HTTPS hacia `https://api.qa.morpheussoft.net` (puerto 443).
 * **Permisos:** Cuenta de usuario con permisos de **Administrador** en Windows.
-* **Componentes Externos:** **NO se requiere instalar .NET** ni ningún SDK adicional (el ejecutable es 100% auto-contenido).
+* **Componentes Externos:** **NO se requiere instalar .NET** ni SDK adicional (el binario es 100% auto-contenido).
 
 ---
 
-## ⚡ Método 1: Instalación Rápida en 1 Línea (Recomendado)
+## ⚡ Método 1: Instalación Visual mediante Descarga (Para Personal de Tienda)
 
-En la máquina Windows de la tienda, abre **PowerShell como Administrador** (clic derecho sobre el menú Inicio ➔ *Terminal de Windows (Administrador)* o *Windows PowerShell (Administrador)*) y ejecuta:
+1. En la máquina de la tienda, descarga el paquete oficial desde el navegador:  
+   👉 **[https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip](https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip)**
+
+2. Descomprime el archivo `.zip` en cualquier carpeta (ej. en *Descargas* o en el *Escritorio*).
+
+3. Haz doble clic sobre el archivo:  
+   👉 **`1_Instalar_Morpheus_Tienda.vbs`** *(o `1_Instalar_Morpheus_Tienda.bat`)*
+
+4. **Se abrirá inmediatamente el Asistente Gráfico de Instalación:**
+   ```
+   ┌────────────────────────────────────────────────────────────────────────┐
+   │  Morpheus Sync Agent - Asistente de Instalacion en Tiendas             │
+   ├────────────────────────────────────────────────────────────────────────┤
+   │  PASO 1: SELECCION DE SUCURSAL / TIENDA                                │
+   │  Tienda a Instalar: [ 01 - PATIO TRIGAL (CAT-11)                   ▼ ] │
+   │                                                                        │
+   │  PASO 2: CONEXION AL SISTEMA POS LOCAL (SQL SERVER)                    │
+   │  Servidor SQL:   [ AGUERREVERE\SRVAGUERREVERE                        ] │
+   │  Base de Datos:  [ VAD10                                             ] │
+   │  [ Probar Conexion SQL ] -> [OK] Conexion exitosa con SQL Server       │
+   │                                                                        │
+   │  PASO 3: OPCIONES DE INSTALACION                                       │
+   │  [X] Registrar Servicio de Windows (Permanecera DETENIDO)              │
+   │  [X] Crear acceso directo en el Escritorio (Morpheus - Panel Control)  │
+   │                                                                        │
+   │  [ INSTALAR EN ESTA TIENDA ]                                           │
+   └────────────────────────────────────────────────────────────────────────┘
+   ```
+
+5. **Pasos dentro del Asistente:**
+   * **Paso 1:** Selecciona tu tienda de la lista desplegable (ej. *01 - Patio Trigal*, *10 - Cumboto*, etc.).
+   * **Paso 2:** Haz clic en **`[ Probar Conexion SQL ]`** para verificar que hay enlace con la base de datos de caja.
+   * **Paso 3:** Haz clic en el botón verde grande:  
+     👉 **`[ INSTALAR EN ESTA TIENDA ]`**.
+
+6. El asistente configurará automáticamente `C:\MorpheusSyncAgent`, registrará el servicio de Windows (en estado DETENIDO para evitar transmisiones antes de tiempo), creará el icono oficial en el Escritorio y **abrirá de inmediato el Panel de Control**.
+
+---
+
+## ⚡ Método 2: Instalación por Comando Rápido (Para Soporte / TI)
+
+Si prefieres realizar la instalación en un solo paso mediante PowerShell como Administrador:
 
 ```powershell
 irm https://api.qa.morpheussoft.net/static/instalar.ps1 | iex
 ```
 
-### ¿Qué hace automáticamente este instalador?
-1. Descarga el paquete oficial más reciente desde la nube.
-2. Descomprime los archivos en `C:\MorpheusSyncAgent`.
-3. **Registra el Servicio de Windows** con inicio automático, pero lo deja en estado **DETENIDO** (para que puedas hacer tus validaciones y cargas previas sin interferencias).
-4. Crea el acceso directo en el Escritorio: **`Morpheus - Configurar Agente`**.
-5. Abre automáticamente la **Interfaz Visual de Control**.
+Este comando descargará el paquete, lo ubicará en `C:\MorpheusSyncAgent` y **abrirá de inmediato el Asistente Gráfico de Instalación** para seleccionar la tienda.
 
 ---
 
-## 📁 Método 2: Instalación Manual por ZIP
+## 🖥️ Uso del Panel de Control Visual ("Morpheus - Panel de Control")
 
-Si prefieres realizar el proceso manualmente mediante el Explorador de Archivos:
+Una vez instalado, el personal de tienda puede abrir el panel en cualquier momento desde el acceso directo del **Escritorio**:  
+👉 **`Morpheus - Panel de Control`** *(o ejecutando `Configurar_Agente.vbs`)*.
 
-1. Descarga el archivo comprimido desde el navegador:
-   🔗 [https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip](https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip)
-2. Extrae el contenido en la ruta raíz recomendada:
-   ```
-   C:\MorpheusSyncAgent
-   ```
-3. Haz clic derecho sobre el archivo **`Instalar_Servicio.bat`** y selecciona **"Ejecutar como administrador"**.
-4. Se creará el acceso directo en el Escritorio y el servicio quedará registrado.
-
----
-
-## 🖥️ Uso del Panel de Control Visual (`Configurar_Agente.bat`)
-
-Puedes abrir el panel en cualquier momento haciendo doble clic en el acceso directo del Escritorio **"Morpheus - Configurar Agente"** o ejecutando `C:\MorpheusSyncAgent\Configurar_Agente.bat`.
+> **Cero Ventanas Negras:** Al abrirlo desde el acceso directo o el archivo `.vbs`, la aplicación se ejecuta como interfaz gráfica limpia, sin consolas cmd abiertas ni pantallas intermedias.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  ⚡ Morpheus Sync Agent - Panel de Control & Configuración    [🔴 DETENIDO]  │
+│  M Morpheus Sync Agent - Panel de Control & Sincronizacion   [🔴 DETENIDO]   │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│  [ Pestaña 1: Fases 2 y 3 ] [ Pestaña 2: Ventas ] [ Pestaña 3: Servicio ]   │
-│  [ Pestaña 4: Conexiones & Diagnóstico ]                                     │
+│  [ 1. Puesta a Punto ] [ 2. Sincronizar a Voluntad ] [ 3. Servicio en Fondo ]│
+│  [ 4. Conexiones y Diagnostico ]                                             │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 📍 Paso 1: Validar Conexiones (Pestaña "Conexiones & Diagnóstico")
+### 📍 Paso 1: Puesta a Punto Inicial (Fases 2 y 3)
 
-Antes de transmitir datos, comprueba la comunicación:
-
-1. Ve a la pestaña **🔧 Conexiones & Diagnóstico**.
-2. Verifica los parámetros de SQL Server local:
-   * **Servidor / Instancia:** `AGUERREVERE\SRVAGUERREVERE` (o la instancia local correspondiente).
-   * **Base de Datos:** `VAD10`
-   * **Usuario:** `jqFydZPO` (o usuario con lectura a VAD10 y VAD20)
-   * **Contraseña:** `+121f4T$19`
-3. Presiona **`🔍 Probar Conexión SQL`**. Debe responder:  
-   `✅ Conexión Exitosa con SQL Server`.
-4. Revisa la URL Base de la API: `https://api.qa.morpheussoft.net`.
-5. Presiona **`🌐 Probar Conexión Nube`**. Debe responder:  
-   `✅ Conexión Exitosa con Nube Morpheus`.
-6. Si hiciste cambios, presiona **`💾 Guardar Configuración`**.
-
----
-
-### 📍 Paso 2: Resetear el Estado Local (Pestaña "Puesta a Punto" - FASE 2)
-
-Para garantizar que la extracción no use marcas de tiempo obsoletas:
-
-1. Ve a la pestaña **🚀 Puesta a Punto (Fases 2 y 3)**.
-2. En la sección superior (Fase 2), presiona:
+#### A. Limpieza de Estado Local (Fase 2)
+1. Ve a la pestaña **1. Puesta a Punto (Fases 2 y 3)**.
+2. En la sección superior, presiona:
    ```
-   [ 🧹 Resetear Estado Local Ahora ]
+   [ Limpiar / Resetear Estado Local ]
    ```
-3. Confirma el mensaje. El sistema:
-   * Creará automáticamente una copia de respaldo en `C:\MorpheusSyncAgent\backup\`.
-   * Eliminará `sync_state.json` y `morpheus_local.db`.
-   * Dejará el estado listo para arrancar en cero absoluto.
+3. Confirma el mensaje. El sistema creará un respaldo de seguridad en `/backup` y dejará el estado listo para sembrar datos desde cero.
+
+#### B. Carga de Maestros Inicial (Fase 3)
+Presiona los botones en el orden indicado:
+1. **`[ 1. Sincronizar Proveedores ]`** (Catálogo de proveedores de compra).
+2. **`[ 2. Sincronizar Productos & Variantes ]`** (Catálogo de artículos, SKU y descripciones).
+3. **`[ 3. Sincronizar Codigos de Barra ]`** (Barras de empaque y unidades).
+4. **`[ 4. Sincronizar Costos & Cruces ]`** (Costos de compra de proveedores).
+5. **`5. Inventario Inicial (Baseline):`**
+   * Selecciona **"Al momento actual (Hoy)"** si deseas el inventario vivo.
+   * O selecciona **"A fecha especifica de corte"** e indica la fecha deseada (ej. `2026-06-07`).
+   * Presiona **`[ Sincronizar Inventario Inicial (Baseline) ]`**.
+
+> **Monitoreo en vivo:** Cada botón abre una ventana visible donde podrás ver la cantidad de registros transmitidos con la barra de progreso.
 
 ---
 
-### 📍 Paso 3: Carga de Maestros Inicial (Pestaña "Puesta a Punto" - FASE 3)
+### 📍 Paso 2: Sincronizar Ventas Históricas a Voluntad
 
-Ejecuta los extractores en **orden estricto** haciendo clic en los botones correspondientes:
+Si deseas enviar un bloque de ventas del POS para alimentar las sugerencias de compra (MRP):
 
-1. **`[ 1️⃣ Sincronizar Proveedores ]`**  
-   *Extrae el directorio de proveedores de compras.*
-2. **`[ 2️⃣ Sincronizar Productos & Variantes ]`**  
-   *Extrae el catálogo general de artículos, descripciones y precios base.*
-3. **`[ 3️⃣ Sincronizar Códigos de Barra ]`**  
-   *Extrae códigos de barra alternativos y multipack.*
-4. **`[ 4️⃣ Sincronizar Costos & Cruces ]`**  
-   *Extrae costos por proveedor y empaques.*
-5. **`5️⃣ Inventario Inicial (Baseline):`**  
-   * Selecciona **"Al momento actual (Hoy)"** si deseas registrar el stock vivo a la fecha de hoy.
-   * O selecciona **"A fecha específica de corte"** e indica la fecha deseada (ej. `2026-06-07`).
-   * Presiona **`[ 🚀 Sincronizar Inventario Inicial (Baseline) ]`**.
-
-> **Nota:** Cada botón abre una ventana de consola visible para que puedas observar en tiempo real la cantidad de registros procesados y los tiempos de respuesta.
+1. Ve a la pestaña **2. Sincronizar a Voluntad**.
+2. Selecciona el rango deseado:
+   * `( ) Ultimos 30 dias`
+   * `(•) Ultimos 3 meses (Recomendado para UAT)`
+   * `( ) Ultimos 6 meses`
+   * `( ) Todo el Historial Completo`
+   * `( ) Fecha personalizada (Desde: [ AAAA-MM-DD ])`
+3. Presiona **`[ Sincronizar Ventas Ahora ]`**.
 
 ---
 
-### 📍 Paso 4: Carga de Ventas Históricas (Pestaña "Sincronizar a Voluntad")
+### 📍 Paso 3: Poner el Servicio en Marcha en Segundo Plano
 
-Si deseas enviar un bloque específico de ventas pasadas para alimentar el motor de reabastecimiento (MRP):
+Una vez culminada la carga inicial:
 
-1. Ve a la pestaña **🛒 Sincronizar a Voluntad (Parámetros)**.
-2. En la sección de ventas, selecciona el rango deseado:
-   * `( ) Últimos 30 días`
-   * `(•) Últimos 3 meses (Recomendado para UAT)`
-   * `( ) Últimos 6 meses`
-   * `( ) Todo el historial disponible`
-   * `( ) Desde fecha personalizada: [ AAAA-MM-DD ]`
-3. Presiona **`[ ▶️ Sincronizar Ventas Ahora ]`**.
-4. La ventana de consola procesará las ventas hora por hora hasta llegar al presente.
-
----
-
-### 📍 Paso 5: Activar el Servicio Continuo en Segundo Plano
-
-Una vez cargada toda la semilla:
-
-1. Ve a la pestaña **⚙️ Servicio Continuo (Background)**.
-2. En la lista de extractores, confirma que solo esté marcado lo que deseas que corra automáticamente (por defecto: ☑️ **Ventas continuas** cada 10 minutos).
-3. Presiona el botón verde:
+1. Ve a la pestaña **3. Servicio en Segundo Plano**.
+2. Verifica qué datos sincronizará automáticamente el servicio (por defecto: ☑️ **Ventas** cada 10 min).
+3. Presiona el botón:
    ```
-   [ ▶️ Iniciar Servicio ]
+   [ Iniciar Servicio ]
    ```
-4. El indicador superior cambiará a **`EN EJECUCIÓN 🟢`**.
+4. El indicador superior cambiará a **`EN EJECUCION [ACTIVO]`** con color verde.
 
-A partir de este momento, el agente operará de forma transparente y se reiniciará automáticamente cada vez que se encienda o reinicie la computadora de la tienda.
+A partir de este momento, las ventas se sincronizarán solas cada 10 minutos y el servicio se reiniciará automáticamente si se reinicia la máquina de la tienda.
 
 ---
 
-## 🛠️ Scripts Auxiliares de Consola (`.bat`)
+## 🛠️ Estructura de Archivos en `C:\MorpheusSyncAgent`
 
-Para tareas rápidas sin abrir la interfaz gráfica, la carpeta `C:\MorpheusSyncAgent` cuenta con:
-
-| Archivo `.bat` | Función |
+| Archivo | Función |
 | :--- | :--- |
-| `Configurar_Agente.bat` | Abre el Panel de Control Visual (solicita permisos de Administrador automáticamente). |
-| `1_Carga_Inicial_Maestros.bat` | Ejecuta de corrido la secuencia de los 5 extractores semilla. |
-| `2_Iniciar_Servicio.bat` | Inicia el servicio de Windows en segundo plano. |
-| `3_Detener_Servicio.bat` | Detiene el servicio de Windows. |
-| `4_Probar_En_Consola.bat` | Ejecuta el agente en primer plano para ver todos los logs en vivo. |
-| `5_Desinstalar_Servicio.bat` | Detiene y elimina el servicio de Windows de forma segura. |
+| **`1_Instalar_Morpheus_Tienda.vbs`** | **Asistente Gráfico de Instalación** (Ejecución limpia sin consola negra). |
+| **`Configurar_Agente.vbs`** | **Panel de Control y Sincronización** (Ejecución limpia sin consola negra). |
+| **`MorpheusConfigurador.exe`** | Ejecutable nativo generado durante la instalación para acceso directo. |
+| **`MorpheusSyncAgent.exe`** | Binario motor de sincronización con SQL Server y la Nube Morpheus. |
+| **`appsettings.json`** | Archivo de configuración con ID de tienda y conexiones. |
+| **`scripts/`** | Carpeta con herramientas técnicas de mantenimiento (`Iniciar_Servicio.bat`, `Detener_Servicio.bat`, `Desinstalar_Servicio.bat`). |
 
 ---
 
-## ❓ Preguntas Frecuentes y Solución de Problemas
+## ❓ Preguntas Frecuentes
 
-### 1. El botón de prueba SQL indica "Error al conectar"
-* Verifica que el servicio de **SQL Server (MSSQLSERVER o SQLEXPRESS)** esté iniciado en Windows (`services.msc`).
-* Asegúrate de que el protocolo **TCP/IP** esté habilitado en el *SQL Server Configuration Manager*.
-* Confirma que el usuario y la contraseña tengan acceso de lectura a las bases de datos `VAD10` y `VAD20`.
+### ¿Qué tienda debo seleccionar en el instalador?
+Selecciona el nombre de la sucursal donde estás físicamente instalando (ej. *01 - PATIO TRIGAL*). Esto asegura que todo el inventario y las ventas de esa caja se asignen a su sucursal correspondiente en el ERP central.
 
-### 2. El botón de prueba Nube indica "Error de conexión"
-* Comprueba que la computadora tenga salida a Internet.
-* Abre el navegador en la tienda e ingresa a: `https://api.qa.morpheussoft.net/docs`. Si abre la página de documentación, la red está en orden.
-
-### 3. ¿Cómo saber cuándo fue la última sincronización?
-En la pestaña **🚀 Puesta a Punto**, consulta la tarjeta **📊 Marcas de Agua Actuales** y presiona **`🔄 Refrescar`**. Te mostrará la fecha y hora exacta registrada en `sync_state.json` para cada elemento.
+### ¿Puedo probar la conexión a la base de datos antes de instalar?
+Sí, en el Asistente de Instalación presiona **`[ Probar Conexion SQL ]`**. Si los datos son correctos verás un mensaje verde de confirmación `[OK] Conexion exitosa`.
