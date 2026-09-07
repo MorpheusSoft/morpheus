@@ -21,60 +21,46 @@ Diseñado específicamente para que el **personal de tienda y supervisores** pue
 1. En la máquina de la tienda, descarga el paquete oficial desde el navegador:  
    👉 **[https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip](https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip)**
 
-2. Descomprime el archivo `.zip` en cualquier carpeta (ej. en *Descargas* o en el *Escritorio*).
+2. Descomprime el archivo `.zip` en cualquier carpeta (o se extrae automáticamente en `C:\MorpheusSyncAgent`).
 
-3. Haz doble clic sobre el archivo:  
-   👉 **`1_Instalar_Morpheus_Tienda.vbs`** *(o `1_Instalar_Morpheus_Tienda.bat`)*
+3. Haz doble clic directamente sobre el ejecutable oficial:  
+   👉 **`MorpheusConfigurador.exe`**
 
-4. **Se abrirá inmediatamente el Asistente Gráfico de Instalación:**
+4. **Se abrirá inmediatamente la Aplicación Nativa en C#:**
    ```
-   ┌────────────────────────────────────────────────────────────────────────┐
-   │  Morpheus Sync Agent - Asistente de Instalacion en Tiendas             │
-   ├────────────────────────────────────────────────────────────────────────┤
-   │  PASO 1: SELECCION DE SUCURSAL / TIENDA                                │
-   │  Tienda a Instalar: [ 01 - PATIO TRIGAL (CAT-11)                   ▼ ] │
-   │                                                                        │
-   │  PASO 2: CONEXION AL SISTEMA POS LOCAL (SQL SERVER)                    │
-   │  Servidor SQL:   [ AGUERREVERE\SRVAGUERREVERE                        ] │
-   │  Base de Datos:  [ VAD10                                             ] │
-   │  [ Probar Conexion SQL ] -> [OK] Conexion exitosa con SQL Server       │
-   │                                                                        │
-   │  PASO 3: OPCIONES DE INSTALACION                                       │
-   │  [X] Registrar Servicio de Windows (Permanecera DETENIDO)              │
-   │  [X] Crear acceso directo en el Escritorio (Morpheus - Panel Control)  │
-   │                                                                        │
-   │  [ INSTALAR EN ESTA TIENDA ]                                           │
-   └────────────────────────────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────────────────────────────┐
+   │  M Morpheus Sync Agent - Panel de Control & Sincronizacion   [🔴 DETENIDO]   │
+   ├──────────────────────────────────────────────────────────────────────────────┤
+   │  [ 1. Puesta a Punto ] [ 2. Sincronizar a Voluntad ] [ 3. Servicio en Fondo ]│
+   │  [ 4. Conexiones y Tienda ]                                                  │
+   └──────────────────────────────────────────────────────────────────────────────┘
    ```
 
-5. **Pasos dentro del Asistente:**
-   * **Paso 1:** Selecciona tu tienda de la lista desplegable (ej. *01 - Patio Trigal*, *10 - Cumboto*, etc.).
-   * **Paso 2:** Haz clic en **`[ Probar Conexion SQL ]`** para verificar que hay enlace con la base de datos de caja.
-   * **Paso 3:** Haz clic en el botón verde grande:  
-     👉 **`[ INSTALAR EN ESTA TIENDA ]`**.
-
-6. El asistente configurará automáticamente `C:\MorpheusSyncAgent`, registrará el servicio de Windows (en estado DETENIDO para evitar transmisiones antes de tiempo), creará el icono oficial en el Escritorio y **abrirá de inmediato el Panel de Control**.
+5. **Pasos dentro de la aplicación para configurar la tienda:**
+   * **Paso 1 (Pestaña 4 - Conexiones y Tienda):** Selecciona tu tienda de la lista desplegable (ej. *01 - Patio Trigal*, *10 - Cumboto*, etc.) y haz clic en **`[ Probar Conexion SQL ]`** para verificar enlace con la base de datos local. Haz clic en **`[ Guardar Configuracion ]`**.
+   * **Paso 2 (Pestaña 3 - Servicio en Fondo):** Haz clic en **`[ Instalar Servicio de Windows ]`** (se registra en estado DETENIDO) y en **`[ Crear Acceso Directo en el Escritorio ]`**.
+   * **Paso 3 (Pestaña 1 - Puesta a Punto):** Ejecuta la siembra ordenada de datos.
 
 ---
 
 ## ⚡ Método 2: Instalación por Comando Rápido (Para Soporte / TI)
 
-Si prefieres realizar la instalación en un solo paso mediante PowerShell como Administrador:
+Si prefieres realizar la descarga e inicio en un solo comando mediante PowerShell como Administrador:
 
 ```powershell
 irm https://api.qa.morpheussoft.net/static/instalar.ps1 | iex
 ```
 
-Este comando descargará el paquete, lo ubicará en `C:\MorpheusSyncAgent` y **abrirá de inmediato el Asistente Gráfico de Instalación** para seleccionar la tienda.
+Este comando descargará el paquete oficial, lo extraerá en `C:\MorpheusSyncAgent` y **abrirá de inmediato `MorpheusConfigurador.exe`**.
 
 ---
 
 ## 🖥️ Uso del Panel de Control Visual ("Morpheus - Panel de Control")
 
 Una vez instalado, el personal de tienda puede abrir el panel en cualquier momento desde el acceso directo del **Escritorio**:  
-👉 **`Morpheus - Panel de Control`** *(o ejecutando `Configurar_Agente.vbs`)*.
+👉 **`Morpheus - Panel de Control`** *(o ejecutando directamente `MorpheusConfigurador.exe`)*.
 
-> **Cero Ventanas Negras:** Al abrirlo desde el acceso directo o el archivo `.vbs`, la aplicación se ejecuta como interfaz gráfica limpia, sin consolas cmd abiertas ni pantallas intermedias.
+> **Aplicación Nativa C# WinForms:** 100% binario compilado de 64 bits. Sin intérpretes, sin scripts VBScript ni PowerShell, sin ventanas negras y libre de bloqueos de antivirus.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -147,12 +133,12 @@ A partir de este momento, las ventas se sincronizarán solas cada 10 minutos y e
 
 | Archivo | Función |
 | :--- | :--- |
-| **`1_Instalar_Morpheus_Tienda.vbs`** | **Asistente Gráfico de Instalación** (Ejecución limpia sin consola negra). |
-| **`Configurar_Agente.vbs`** | **Panel de Control y Sincronización** (Ejecución limpia sin consola negra). |
-| **`MorpheusConfigurador.exe`** | Ejecutable nativo generado durante la instalación para acceso directo. |
-| **`MorpheusSyncAgent.exe`** | Binario motor de sincronización con SQL Server y la Nube Morpheus. |
+| **`MorpheusConfigurador.exe`** | **Aplicación Nativa C# WinForms** (Panel de Control, configuración de tienda y ejecutor de siembra). |
+| **`MorpheusSyncAgent.exe`** | Binario motor de sincronización en tiempo real con SQL Server y la Nube Morpheus. |
+| **`Microsoft.Data.SqlClient.SNI.dll`** | Biblioteca de soporte nativo para conexiones cifradas a SQL Server. |
 | **`appsettings.json`** | Archivo de configuración con ID de tienda y conexiones. |
-| **`scripts/`** | Carpeta con herramientas técnicas de mantenimiento (`Iniciar_Servicio.bat`, `Detener_Servicio.bat`, `Desinstalar_Servicio.bat`). |
+| **`Configurar_Agente.bat`** | Lanzador de respaldo para iniciar `MorpheusConfigurador.exe`. |
+| **`scripts/`** | Carpeta con utilitarios de servicio (`Iniciar_Servicio.bat`, `Detener_Servicio.bat`, `Desinstalar_Servicio.bat`). |
 
 ---
 
