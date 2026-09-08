@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.api import deps
 from app.models.inventory import Product, ProductVariant, Category, ProductFacilityPrice, ProductBarcode, ProductPackaging
-from app.models.core import Currency, Tribute, Supplier
+from app.models.core import Currency, Tribute, Supplier, Facility
 from app.models.purchasing import SupplierProduct
 
 router = APIRouter()
