@@ -60,7 +60,7 @@ gantt
 * **Módulo:** WMS & Neo Inventario
 * **Casos del Protocolo:** `UAT-INV-01`, `UAT-INV-02`, `UAT-INV-03`, `UAT-INV-04`
 * **Flujo a Validar:**
-  1. **Estructura:** Creación de Sucursal -> Almacén -> Pasillos/Estantes.
+  1. **Stock Operativo:** Auditoría y verificación de existencias sincronizadas del POS en el Almacén Principal pre-configurado.
   2. **Toma Física en 3 Fases:**
      - Fase 1: Conteo Ciego del auditor.
      - Fase 2: Comparativa de discrepancias + Diagnóstico del Asistente IA.

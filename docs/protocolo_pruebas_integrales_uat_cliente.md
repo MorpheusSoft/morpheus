@@ -17,15 +17,15 @@ Cada caso de prueba debe ser ejecutado por el usuario clave o el auditor asignad
 
 ## 📦 MÓDULO 1: GESTIÓN DE INVENTARIOS Y ALMACENES (WMS & SALDOS)
 
-### Caso UAT-INV-01: Creación de Estructura de Almacén y Jerarquía de Ubicaciones
-* **Objetivo:** Verificar la parametrización de Sucursales, Almacenes (`Warehouse`) y Ubicaciones anidadas (`Location`).
-* **Prerrequisitos:** Usuario con rol Administrador / WMS.
+### Caso UAT-INV-01: Consulta y Auditoría de Stock de Tienda en Tiempo Real
+* **Objetivo:** Validar la consulta inmediata de existencias reales sincronizadas desde el POS para la sucursal activa, filtros por departamento/marca y verificación de precios bimonetarios y costos.
+* **Prerrequisitos:** Tienda seleccionada (Almacén Principal pre-configurado de fábrica).
 * **Pasos a Ejecutar:**
-  1. Ingresar a `WMS -> Estructura / Ubicaciones`.
-  2. Crear o seleccionar una Sucursal (Ej. *Sucursal Patio Trigal*).
-  3. Crear un Almacén físico (Ej. *Almacén Principal*).
-  4. Crear ubicaciones tipo Pasillo, Estante y Casilla (Ej. `PASILLO-01`, `ESTANTE-A01`, `LOSS / INV_ADJ`).
-* **Resultado Esperado:** Visualización en árbol jerárquico impecable. Cada ubicación debe quedar asignada al almacén correcto.
+  1. Ingresar a `Neo Inventario -> Existencias / Stock`.
+  2. Seleccionar la Sucursal activa (Ej. *Sucursal Patio Trigal* o *Cumboto*).
+  3. Filtrar por departamento o marca comercial (Ej. *Polar*, *Nestlé*).
+  4. Abrir la ficha de un producto y verificar: Stock Físico Disponible, Costo Promedio Ponderado, PVP y Almacén Principal asignado.
+* **Resultado Esperado:** Visualización instantánea del catálogo y saldos sincronizados sin requerir configuración manual de almacenes o ubicaciones.
 * **Estado:** [ ] 🟢 OK  |  [ ] 🟡 Obs  |  [ ] 🔴 Error
 
 ---
