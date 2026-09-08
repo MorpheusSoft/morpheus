@@ -37,7 +37,7 @@ public class Program
         // Configuración para que funcione como Windows Service
         builder.Services.AddWindowsService(options =>
         {
-            options.ServiceName = "NEO";
+            options.ServiceName = "NeoAgentSync";
         });
 
         // Configuración para que funcione como Daemon en Linux (Systemd)

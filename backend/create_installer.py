@@ -138,27 +138,30 @@ start "" "%~dp0MorpheusConfigurador.exe"
 
     # Scripts auxiliares dentro de scripts/
     bat_start = """@echo off
-net start "NEO"
+net start "NeoAgentSync"
 pause
 """
     with open(os.path.join(scripts_dir, "Iniciar_Servicio.bat"), "w", encoding="utf-8") as f:
         f.write(bat_start)
 
     bat_stop = """@echo off
-net stop "NEO"
+net stop "NeoAgentSync"
 pause
 """
     with open(os.path.join(scripts_dir, "Detener_Servicio.bat"), "w", encoding="utf-8") as f:
         f.write(bat_stop)
 
     bat_uninstall = """@echo off
+sc stop "NeoAgentSync" >nul 2>&1
+timeout /t 1 /nobreak >nul
+sc delete "NeoAgentSync"
 sc stop "NEO" >nul 2>&1
 timeout /t 1 /nobreak >nul
 sc delete "NEO"
 sc stop "MorpheusSyncAgent" >nul 2>&1
 timeout /t 1 /nobreak >nul
 sc delete "MorpheusSyncAgent"
-echo Servicio NEO desinstalado exitosamente.
+echo Servicio NEO Agent Sync desinstalado exitosamente.
 pause
 """
     with open(os.path.join(scripts_dir, "Desinstalar_Servicio.bat"), "w", encoding="utf-8") as f:
@@ -175,7 +178,7 @@ INSTRUCCIONES DE USO:
 
 2. Desde la aplicacion podras:
    - Pestaña 4: Seleccionar tu tienda (Patio Trigal, Cumboto, etc.) y probar conexion SQL.
-   - Pestaña 3: Registrar el servicio de Windows (NEO) y crear icono en el Escritorio.
+   - Pestaña 3: Registrar el servicio de Windows (NEO Agent Sync) y crear icono en el Escritorio.
    - Pestaña 1: Resetear estado local (Fase 2) y sembrar maestros 1 al 5 (Fase 3).
    - Pestaña 2: Sincronizar ventas historicas y movimientos (Kardex).
    - Pestaña 3: Iniciar el servicio para que opere en segundo plano.
@@ -209,8 +212,12 @@ Write-Host "=========================================================" -Foregrou
 # 1. Detener procesos o servicios previos si estan corriendo para liberar los archivos .exe
 Write-Host "`n[1/4] Verificando y liberando procesos en ejecucion..." -ForegroundColor Yellow
 Get-Process -Name "MorpheusConfigurador", "MorpheusSyncAgent" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+if (Get-Service -Name "NeoAgentSync" -ErrorAction SilentlyContinue) {
+    Stop-Service -Name "NeoAgentSync" -Force -ErrorAction SilentlyContinue
+}
 if (Get-Service -Name "NEO" -ErrorAction SilentlyContinue) {
     Stop-Service -Name "NEO" -Force -ErrorAction SilentlyContinue
+    & sc.exe delete "NEO" | Out-Null
 }
 if (Get-Service -Name "MorpheusSyncAgent" -ErrorAction SilentlyContinue) {
     Stop-Service -Name "MorpheusSyncAgent" -Force -ErrorAction SilentlyContinue
@@ -245,16 +252,16 @@ if ($hasExistingConfig -and (Test-Path $backupConfig)) {
     Write-Host "  -> Tu configuracion previa de tienda y conexion SQL fue preservada [OK]." -ForegroundColor Green
 }
 
-# Registrar o actualizar servicio NEO con descripcion 'integrador con Stellar'
+# Registrar o actualizar servicio NeoAgentSync con nombre 'NEO Agent Sync' y descripcion 'Integrador con Stellar'
 $agentExe = "$destDir\\MorpheusSyncAgent.exe"
 if (Test-Path $agentExe) {
-    if (!(Get-Service -Name "NEO" -ErrorAction SilentlyContinue)) {
-        & sc.exe create "NEO" binPath= "`"$agentExe`"" start= auto DisplayName= "NEO" | Out-Null
+    if (!(Get-Service -Name "NeoAgentSync" -ErrorAction SilentlyContinue)) {
+        & sc.exe create "NeoAgentSync" binPath= "`"$agentExe`"" start= auto DisplayName= "NEO Agent Sync" | Out-Null
     } else {
-        & sc.exe config "NEO" binPath= "`"$agentExe`"" DisplayName= "NEO" | Out-Null
+        & sc.exe config "NeoAgentSync" binPath= "`"$agentExe`"" DisplayName= "NEO Agent Sync" | Out-Null
     }
-    & sc.exe description "NEO" "integrador con Stellar" | Out-Null
-    Write-Host "  -> Servicio Windows 'NEO' registrado con descripcion 'integrador con Stellar' [OK]." -ForegroundColor Green
+    & sc.exe description "NeoAgentSync" "Integrador con Stellar" | Out-Null
+    Write-Host "  -> Servicio Windows 'NEO Agent Sync' registrado con descripcion 'Integrador con Stellar' [OK]." -ForegroundColor Green
 }
 
 Write-Host "[4/4] Abriendo MorpheusConfigurador.exe actualizado..." -ForegroundColor Green

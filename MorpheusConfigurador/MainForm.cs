@@ -471,7 +471,7 @@ public class MainForm : Form
     {
         var panel = new Panel { AutoScroll = true, Dock = DockStyle.Fill, Padding = new Padding(16) };
 
-        var gbControl = CreateGroupBox("Control del Servicio de Windows (NEO)", 16, 12, 810, 140, Color.FromArgb(203, 213, 225));
+        var gbControl = CreateGroupBox("Control del Servicio de Windows (NEO Agent Sync)", 16, 12, 810, 140, Color.FromArgb(203, 213, 225));
         
         btnStartService = CreateButton("Iniciar Servicio", 16, 36, 160, 38, Color.FromArgb(16, 185, 129));
         btnStartService.Click += (s, e) => ControlService("start");
@@ -727,24 +727,34 @@ public class MainForm : Form
     {
         try
         {
-            var sc = new ServiceController("NEO");
+            var sc = new ServiceController("NeoAgentSync");
             var _ = sc.Status;
-            detectedServiceName = "NEO";
+            detectedServiceName = "NEO Agent Sync";
             return sc;
         }
         catch
         {
             try
             {
-                var scOld = new ServiceController("MorpheusSyncAgent");
-                var _ = scOld.Status;
-                detectedServiceName = "MorpheusSyncAgent";
-                return scOld;
+                var scNeo = new ServiceController("NEO");
+                var _ = scNeo.Status;
+                detectedServiceName = "NEO";
+                return scNeo;
             }
             catch
             {
-                detectedServiceName = "NEO";
-                return null;
+                try
+                {
+                    var scOld = new ServiceController("MorpheusSyncAgent");
+                    var _ = scOld.Status;
+                    detectedServiceName = "MorpheusSyncAgent";
+                    return scOld;
+                }
+                catch
+                {
+                    detectedServiceName = "NEO Agent Sync";
+                    return null;
+                }
             }
         }
     }
@@ -760,7 +770,7 @@ public class MainForm : Form
                 lblServiceStatus.BackColor = Color.FromArgb(51, 65, 85);
                 if (lblServiceTabStatus != null)
                 {
-                    lblServiceTabStatus.Text = "⚠ Estado del servicio: NO INSTALADO en este equipo (Registralo abajo como 'NEO')";
+                    lblServiceTabStatus.Text = "⚠ Estado del servicio: NO INSTALADO en este equipo (Registralo abajo como 'NEO Agent Sync')";
                     lblServiceTabStatus.ForeColor = Color.FromArgb(245, 158, 11);
                 }
                 return;
@@ -817,7 +827,7 @@ public class MainForm : Form
             using var sc = GetActiveServiceController(out string svcName);
             if (sc == null)
             {
-                MessageBox.Show("El servicio de Windows 'NEO' no esta instalado.\n\nPor favor haz clic en 'Registrar Servicio Windows' abajo para registrarlo.", "Servicio No Instalado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("El servicio de Windows 'NEO Agent Sync' no esta instalado.\n\nPor favor haz clic en 'Registrar Servicio Windows' abajo para registrarlo.", "Servicio No Instalado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -1323,23 +1333,26 @@ public class MainForm : Form
     {
         try
         {
-            // Detener y eliminar servicio anterior si existia bajo el nombre viejo MorpheusSyncAgent
+            // Detener y eliminar versiones/nombres previos si existian
             try
             {
-                var psiCleanup = new ProcessStartInfo { FileName = "sc.exe", Arguments = "stop MorpheusSyncAgent", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
-                var pClean = Process.Start(psiCleanup);
-                pClean?.WaitForExit();
+                foreach (var oldSvc in new[] { "NEO", "MorpheusSyncAgent" })
+                {
+                    var psiCleanup = new ProcessStartInfo { FileName = "sc.exe", Arguments = $"stop {oldSvc}", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+                    var pClean = Process.Start(psiCleanup);
+                    pClean?.WaitForExit();
 
-                var psiDelOld = new ProcessStartInfo { FileName = "sc.exe", Arguments = "delete MorpheusSyncAgent", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
-                var pDelOld = Process.Start(psiDelOld);
-                pDelOld?.WaitForExit();
+                    var psiDelOld = new ProcessStartInfo { FileName = "sc.exe", Arguments = $"delete {oldSvc}", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+                    var pDelOld = Process.Start(psiDelOld);
+                    pDelOld?.WaitForExit();
+                }
             }
             catch {}
 
             var psi = new ProcessStartInfo
             {
                 FileName = "sc.exe",
-                Arguments = $"create \"NEO\" binPath= \"\"{_agentExePath}\"\" start= auto DisplayName= \"NEO\"",
+                Arguments = $"create \"NeoAgentSync\" binPath= \"\"{_agentExePath}\"\" start= auto DisplayName= \"NEO Agent Sync\"",
                 Verb = "runas",
                 UseShellExecute = true,
                 WindowStyle = ProcessWindowStyle.Hidden
@@ -1351,7 +1364,7 @@ public class MainForm : Form
             var psiDesc = new ProcessStartInfo
             {
                 FileName = "sc.exe",
-                Arguments = "description \"NEO\" \"integrador con Stellar\"",
+                Arguments = "description \"NeoAgentSync\" \"Integrador con Stellar\"",
                 Verb = "runas",
                 UseShellExecute = true,
                 WindowStyle = ProcessWindowStyle.Hidden
@@ -1360,7 +1373,7 @@ public class MainForm : Form
             pDesc?.WaitForExit();
 
             UpdateServiceStatus();
-            MessageBox.Show("Servicio 'NEO' registrado exitosamente en Windows con la descripcion 'integrador con Stellar'.", "Servicio Registrado", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("Servicio 'NEO Agent Sync' registrado exitosamente en Windows con la descripcion 'Integrador con Stellar'.", "Servicio Registrado", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -1370,30 +1383,25 @@ public class MainForm : Form
 
     private void UninstallService()
     {
-        var res = MessageBox.Show("¿Deseas desinstalar y eliminar el servicio 'NEO' de Windows?", "Confirmar Desinstalacion", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        var res = MessageBox.Show("¿Deseas desinstalar y eliminar el servicio 'NEO Agent Sync' de Windows?", "Confirmar Desinstalacion", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (res != DialogResult.Yes) return;
 
         try
         {
-            var psiStop = new ProcessStartInfo { FileName = "sc.exe", Arguments = "stop NEO", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
-            var p1 = Process.Start(psiStop);
-            p1?.WaitForExit();
-
-            var psiDel = new ProcessStartInfo { FileName = "sc.exe", Arguments = "delete NEO", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
-            var p2 = Process.Start(psiDel);
-            p2?.WaitForExit();
-
-            // Limpiar tambien nombre anterior si existiera
-            try
+            foreach (var svc in new[] { "NeoAgentSync", "NEO", "MorpheusSyncAgent" })
             {
-                var psiStopOld = new ProcessStartInfo { FileName = "sc.exe", Arguments = "stop MorpheusSyncAgent", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
-                var pOld1 = Process.Start(psiStopOld);
-                pOld1?.WaitForExit();
-                var psiDelOld = new ProcessStartInfo { FileName = "sc.exe", Arguments = "delete MorpheusSyncAgent", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
-                var pOld2 = Process.Start(psiDelOld);
-                pOld2?.WaitForExit();
+                try
+                {
+                    var psiStop = new ProcessStartInfo { FileName = "sc.exe", Arguments = $"stop {svc}", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+                    var p1 = Process.Start(psiStop);
+                    p1?.WaitForExit();
+
+                    var psiDel = new ProcessStartInfo { FileName = "sc.exe", Arguments = $"delete {svc}", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+                    var p2 = Process.Start(psiDel);
+                    p2?.WaitForExit();
+                }
+                catch {}
             }
-            catch {}
 
             UpdateServiceStatus();
             MessageBox.Show("Servicio desinstalado exitosamente.", "Desinstalado", MessageBoxButtons.OK, MessageBoxIcon.Information);
