@@ -29,9 +29,11 @@ def import_products_legacy(
 ):
     print("Iniciando carga Maestro de Productos con UPSERT (Sin truncar tablas)...")
     
-    # 1. Obtener monedas
+    # 1. Obtener monedas y sucursal por defecto
     currencies = {c.code.upper(): c.id for c in session.query(Currency).all()}
     default_currency_id = currencies.get('USD') or currencies.get('VES') or 1
+    default_fac = session.query(Facility).first()
+    default_fac_id = default_fac.id if default_fac else 10
     
     # Obtener Impuestos
     taxes_db = session.query(Tribute).all()
@@ -148,7 +150,7 @@ def import_products_legacy(
             
             facility_price = ProductFacilityPrice(
                 variant_id=variant.id,
-                facility_id=1,
+                facility_id=default_fac_id,
                 sales_price=price,
                 target_utility_pct=margin_pct
             )
@@ -241,9 +243,11 @@ def import_inventory_baseline(
     stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
     variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
     
+    default_fac = session.query(Facility).first()
+    default_fac_id = default_fac.id if default_fac else 10
     inv_session = InventorySession(
         name=f"Baseline Legacy {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        facility_id=1,
+        facility_id=default_fac_id,
         state='DONE',
         scope_type='GENERAL'
     )
