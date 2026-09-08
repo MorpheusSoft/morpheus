@@ -1,64 +1,73 @@
-# 📘 Manual de Acompañamiento UAT: Módulo 1 - Inventarios, Stock y Auditorías WMS
+# 📘 Manual de Acompañamiento UAT: Módulo 1 - Inventarios, Almacenes y WMS
 ## Protocolo Práctico de Pruebas Integrales de Usuario
 **Proyecto:** Morpheus ERP / WMS  
 **Entorno de Pruebas:** QA (`https://hub.qa.morpheussoft.net`)  
-**Audiencia:** Auditores de Inventario, Jefes de Tienda, Encargados de Almacén y Facilitador Morpheus  
+**Audiencia:** Auditores de Inventario, Jefes de Almacén y Facilitador Morpheus  
 **Punto de Entrada General:** Todos los casos inician autenticándose en el portal central **Neo Core**.
-
----
-
-> [!IMPORTANT]
-> **Arquitectura de Producción (Cero Configuración Manual de Almacenes):**  
-> En Morpheus, los almacenes y depósitos operativos de cada una de las 15 sucursales (**Almacén Principal**, **Piso de Ventas**, **Depósito General**) ya vienen **100% pre-configurados y creados automáticamente** para cada tienda.  
-> Los operadores, gerentes y auditores **NO necesitan crear almacenes, pasillos ni ubicaciones manualmente**. Todo el entorno está listo para operar tal como en producción real.
 
 ---
 
 ## 🧭 Flujo Universal de Acceso desde Neo Core
 
-Todos los evaluadores acceden a los módulos a través del portal central:
+Todos los usuarios evaluadores deben seguir este procedimiento para acceder a cualquier módulo:
 
 ```
 ┌────────────────────────────────┐       ┌────────────────────────┐       ┌────────────────────────┐
 │ 1. Iniciar Sesión en Neo Core  │  ──>  │ 2. Abrir AppSwitcher   │  ──>  │ 3. Seleccionar Módulo  │
-│ https://hub.qa.morpheussoft.net│       │  (Icono de 9 puntos ▦) │       │   (Inventario o WMS)   │
+│ https://hub.qa.morpheussoft.net│       │  (Icono de 9 puntos ▦) │       │   (WMS o Inventario)   │
 └────────────────────────────────┘       └────────────────────────┘       └────────────────────────┘
 ```
 
 1. Abre el navegador (Chrome o Edge) e ingresa a:  
    👉 **`https://hub.qa.morpheussoft.net`**
-2. Inicia sesión con tus credenciales:
+2. Inicia sesión con tus credenciales asignadas:
    * **Usuario:** `admin@morpheus.com` (o usuario auditor asignado)
    * **Contraseña:** *(Entregada por el facilitador en la sesión)*
-3. En la esquina superior derecha, haz clic en el **AppSwitcher (▦)** y selecciona **"Neo Inventario"** o **"Neo Logística"**.
+3. Al ingresar al Dashboard Principal de **Neo Core**, ubica en la esquina superior derecha o barra superior el **AppSwitcher** (icono con cuadrícula de 9 puntos `▦`).
+4. Haz clic sobre el módulo al que te dirija cada caso de prueba (ej. **Neo Logística / WMS** o **Neo Inventario**). El sistema te transferirá manteniendo tu sesión activa de forma transparente.
 
 ---
 
-## 🧪 CASO 1: UAT-INV-01 — Consulta y Auditoría de Stock de Tienda en Tiempo Real
+## 🧪 CASO 1: UAT-INV-01 — Estructura de Almacén y Jerarquía de Ubicaciones
 
-* **Rol Evaluador:** Auditor de Inventarios / Gerente de Tienda.
-* **Módulo:** Neo Core ➔ Neo Inventario (`https://inventario.qa.morpheussoft.net/inventario`).
+* **Rol Evaluador:** Jefe de Almacén / Administrador Logístico.
+* **Módulos Involucrados:** Neo Core ➔ Neo Logística (WMS).
 * **Tiempo Estimado:** 10 minutos.
+* **Prelación:** **Alta (Fundacional).** Este caso debe ejecutarse primero para que existan recintos físicos donde recibir o contar mercancía.
 
 ### 🎯 1. Objetivo de Negocio
-Validar que el personal de tienda puede auditar de inmediato las existencias físicas de su sucursal, verificar la concordancia con el ERP local (Stellar/VAD10), filtrar por departamentos, marcas o niveles de stock (agotados, con existencia) y consultar los precios y costos en bolívares y dólares.
+Validar que el cliente puede modelar sus sucursales reales, crear sus almacenes físicos y definir pasillos, estantes y zonas de merma/ajuste en una estructura jerárquica clara.
 
 ### 🖱️ 2. Paso a Paso Guiado desde el Core
 
-1. Desde **Neo Core**, haz clic en el **AppSwitcher (▦)** y selecciona **"Neo Inventario"**.
-2. En la barra superior, confirma que esté seleccionada tu sucursal activa (ej. *01 - Patio Trigal* o *10 - Cumboto*).
-3. En el menú lateral, haz clic en **"Existencias / Stock"** (`/inventario`).
-4. Observa el catálogo con las existencias sincronizadas desde el punto de venta:
-   * **Búsqueda Rápida:** Escribe en la barra de búsqueda el nombre de un artículo de alta rotación (ej. *Harina PAN* o código de barra).
-   * **Filtro por Marca:** Selecciona una marca comercial (ej. *Polar*, *Nestlé*).
-   * **Filtro de Estado:** Prueba el selector *"Solo con Existencia"* y *"Agotados / Quiebre"*.
-5. Haz clic sobre cualquier producto para abrir su **Ficha de Inventario**:
-   * Verifica la visualización de: *Stock Físico Disponible*, *Costo Promedio Ponderado*, *Precio de Venta al Público (PVP)* y *Almacén Asignado* (Almacén Principal de la Tienda).
+#### Parte A: Verificación de Almacén en Neo Core
+1. Estando en **Neo Core** (`https://hub.qa.morpheussoft.net`), abre el menú lateral izquierdo y haz clic en **"Almacenes"** (`/core/warehouses`).
+2. Verifica que aparezca tu sucursal activa (ej. *Patio Trigal*) con su **Almacén Principal**.
+3. Si deseas crear un almacén secundario (ej. *Almacén de Merma / Cuarentena*):
+   * Presiona **"+ Nuevo Almacén"**.
+   * Nombre: `Almacén Averías y Mermas`.
+   * Código: `WH-MERMA-01`.
+   * Presiona **"Guardar"**.
+
+#### Parte B: Mapeo de Pasillos y Estantes en Neo WMS
+4. En la barra superior, haz clic en el **AppSwitcher (▦)** y selecciona **"Neo Logística"**.
+   * *El sistema te llevará a `https://logistica.qa.morpheussoft.net/wms`.*
+5. En el menú lateral izquierdo, haz clic en la sección *Almacenamiento* ➔ **"Mapa de Almacén"** (`/wms/locations`).
+6. En la parte superior, presiona **"+ Nueva Ubicación"**:
+   * **Nombre / Etiqueta:** `PASILLO-01`
+   * **Tipo de Ubicación:** Selecciona `Pasillo`.
+   * **Capacidad / Estado:** `Activo`.
+   * Presiona **"Guardar Ubicación"**.
+7. Ahora agrega un estante hijo dentro de ese pasillo:
+   * Presiona **"+ Nueva Ubicación"**.
+   * **Nombre / Etiqueta:** `ESTANTE-A1`
+   * **Ubicación Padre:** Selecciona `PASILLO-01`.
+   * **Tipo:** `Estante / Rack`.
+   * Presiona **"Guardar Ubicación"**.
 
 ### 👁️ 3. Resultado Esperado (Criterio de Éxito)
-* ✅ El catálogo carga de inmediato con las existencias reales transmitidas por el agente.
-* ✅ Los filtros por departamento, marca y estado responden con rapidez.
-* ✅ Cada producto se encuentra debidamente asociado al Almacén Principal de la tienda sin necesidad de configuración manual.
+* ✅ En el árbol jerárquico se observa claramente: `Almacén Principal` ➔ `PASILLO-01` ➔ `ESTANTE-A1`.
+* ✅ Las ubicaciones quedan disponibles de inmediato para recepciones de mercancía y conteos.
 
 ### ✍️ 4. Registro de Evaluación
 * **Estado:** [ ] 🟢 Conforme (OK) &nbsp;&nbsp;&nbsp; [ ] 🟡 Con Observación &nbsp;&nbsp;&nbsp; [ ] 🔴 No Conforme
@@ -72,38 +81,40 @@ Validar que el personal de tienda puede auditar de inmediato las existencias fí
 * **Rol Evaluador:** Auditor de Inventarios / Gerente de Operaciones.
 * **Módulo:** Neo Core ➔ Neo Inventario (`/inventario/physical-counts`).
 * **Tiempo Estimado:** 20 minutos.
+* **Prelación:** Requiere que exista catálogo de productos y un almacén creado (`UAT-INV-01`).
 
 ### 🎯 1. Objetivo de Negocio
-Comprobar el flujo de auditoría de inventario físico más exigente del mercado: **Conteo Ciego** (el auditor cuenta físicamente sin ver las existencias teóricas para evitar vicios o conteos complacientes), **Diagnóstico Asistido por Inteligencia Artificial** (prioriza discrepancias monetarias) y **Consolidación Automática** con ajuste en Kardex.
+Comprobar el flujo de auditoría de inventario físico más exigente del mercado: **Conteo Ciego** (el operador cuenta sin ver las existencias teóricas para evitar sesgos), **Diagnóstico Asistido por Inteligencia Artificial** (detecta anomalías monetarias) y **Consolidación Automática** con ajuste en Kardex.
 
 ### 📝 2. Datos de Prueba Sugeridos
-* **Sucursal:** *Patio Trigal* (o tu tienda de prueba).
-* **Almacén:** *Almacén Principal* (Seleccionado automáticamente).
-* **Alcance:** *Cíclico por Categoría* (ej. *Víveres*) o *General*.
-* **SKU a Descuadrar a Propósito:** Seleccionar un SKU con existencia teórica (ej. 50 pzas) y digitar **`42`** en físico (diferencia de -8 unidades).
+* **Sucursal:** *Patio Trigal*
+* **Almacén:** *Almacén Principal*
+* **Tipo de Toma:** *Cíclica por Categoría* (ej. *Víveres*) o *General*.
+* **SKU a Descuadrar a Propósito:** Seleccionar un SKU que tenga stock teórico (ej. 50 pzas) y digitar **`42`** en físico (diferencia de -8 unidades).
 
 ### 🖱️ 3. Paso a Paso Guiado desde el Core
 
-1. Desde **Neo Core**, usa el **AppSwitcher (▦)** y ve a **"Neo Inventario"**.
-2. En el menú lateral, haz clic en **"Tomas Físicas"** (`/inventario/physical-counts`).
+1. Desde **Neo Core**, abre el **AppSwitcher (▦)** y haz clic en **"Neo Inventario"**.
+   * *El sistema te abrirá `https://inventario.qa.morpheussoft.net/inventario`.*
+2. En el menú lateral izquierdo, ve a la sección *Auditoría* y haz clic en **"Tomas Físicas"** (`/inventario/physical-counts`).
 3. Presiona el botón superior **"+ Nueva Toma Física"**:
-   * **Sucursal:** Verifica tu tienda activa.
-   * **Almacén:** *Almacén Principal* (Ya viene seleccionado por defecto).
+   * **Sucursal:** Selecciona *Patio Trigal*.
+   * **Almacén:** Selecciona *Almacén Principal*.
    * **Alcance:** Selecciona *Cíclico* o *General*.
    * Presiona **"Crear Sesión de Conteo"**.
 
 #### 🔒 Fase 1: Conteo Ciego (Registro del Auditor)
 4. El sistema abre la planilla digital de conteo.
-5. **Comprobación clave:** Verifica que las columnas **"Stock Teórico"** y **"Diferencia"** permanezcan **completamente ocultas**.
+5. **Comprobación clave:** Verifica que las columnas **"Stock Teórico"** y **"Diferencia"** se encuentren **completamente ocultas**.
 6. Digita las cantidades físicas contadas en los renglones correspondientes. En el SKU de prueba, escribe **`42`**.
 7. Presiona el botón azul: **`🔒 Finalizar Conteo Ciego y Pasar a Análisis (Fase 2)`**.
 
-#### 🤖 Fase 2: Cotejo de Diferencias y Asistente IA
+#### 🤖 Fase 2: Cotejo de Diferencias y Asistente IA (Caso UAT-IA-01)
 8. Al cambiar a Fase 2, el sistema **desbloquea y revela** el stock del sistema y calcula la discrepancia:
    * Teórico: `50` | Físico: `42` | Diferencia: `-8` (Marcado en color rojo).
 9. En la parte superior derecha, observa el indicador **IRA %** (*Inventory Record Accuracy* / Exactitud del Inventario).
 10. Haz clic en el botón **"🧠 Re-analizar con Asistente IA"**:
-    * Lee el diagnóstico generado por la IA (Gemini). Señala qué líneas representan el mayor impacto financiero y si amerita reconteo.
+    * Lee el diagnóstico generado por Gemini. La IA te señalará qué líneas representan el mayor impacto financiero y te recomendará si amerita reconteo.
 11. Prueba el botón **"🔄 Solicitar Reconteo (2da Vuelta)"** en la línea descuadrada. Modifica la cantidad a `45`.
 
 #### ✅ Fase 3: Consolidación y Generación de Ajustes
@@ -113,7 +124,7 @@ Comprobar el flujo de auditoría de inventario físico más exigente del mercado
 ### 👁️ 4. Resultado Esperado (Criterio de Éxito)
 * ✅ La toma física cambia a estado **`CONSOLIDADA`**.
 * ✅ Se generan automáticamente los movimientos de compensación en el Kardex.
-* ✅ Al consultar el inventario del SKU en `/inventario`, el saldo disponible refleja exactamente las **`45`** unidades físicas consolidadas.
+* ✅ Al consultar el inventario del SKU de prueba en `/inventario`, el saldo disponible refleja exactamente las **`45`** unidades físicas consolidadas.
 
 ### ✍️ 5. Registro de Evaluación
 * **Estado:** [ ] 🟢 Conforme (OK) &nbsp;&nbsp;&nbsp; [ ] 🟡 Con Observación &nbsp;&nbsp;&nbsp; [ ] 🔴 No Conforme
@@ -124,16 +135,17 @@ Comprobar el flujo de auditoría de inventario físico más exigente del mercado
 
 ## 🧪 CASO 3: UAT-INV-03 — Control de Lotes, Fechas de Vencimiento y Cuarentena
 
-* **Rol Evaluador:** Supervisor de Almacén / Control de Calidad.
-* **Módulo:** Neo Core ➔ Neo Logística (`https://logistica.qa.morpheussoft.net/wms`).
+* **Rol Evaluador:** Supervisor de Almacén / Calidad.
+* **Módulo:** Neo Core ➔ Neo Logística (WMS).
 * **Tiempo Estimado:** 15 minutos.
+* **Prelación:** Puede ejecutarse tras recibir un lote o registrando un lote existente.
 
 ### 🎯 1. Objetivo de Negocio
-Garantizar la trazabilidad de productos perecederos (alimentos, bebidas, farmacia), validar que el sistema advierta de vencimientos próximos bajo esquema FEFO (*First Expired, First Out*) y comprobar que un lote puesto en **Cuarentena** queda inmediatamente bloqueado para despachos o ventas.
+Garantizar la trazabilidad de productos perecederos (medicinas, alimentos, perecederos), validar que el sistema advierta de vencimientos próximos y comprobar que un lote puesto en **Cuarentena** queda inmediatamente bloqueado para despachos o ventas.
 
 ### 🖱️ 2. Paso a Paso Guiado desde el Core
 
-1. Desde **Neo Core**, abre el **AppSwitcher (▦)** y haz clic en **"Neo Logística"**.
+1. Desde **Neo Core**, abre el **AppSwitcher (▦)** y haz clic en **"Neo Logística"** (`https://logistica.qa.morpheussoft.net/wms`).
 2. En el menú lateral izquierdo, haz clic en **"Control de Lotes (FEFO)"** (`/wms/lots`).
 3. En el listado de lotes, ubica un lote de prueba o filtra por un producto perecedero.
 4. **Validación Visual de Semáforo:**
@@ -141,11 +153,11 @@ Garantizar la trazabilidad de productos perecederos (alimentos, bebidas, farmaci
    * Lotes por vencer (< 30 días): Badge Amarillo de alerta.
    * Lotes vencidos: Badge Rojo.
 5. **Prueba de Bloqueo por Cuarentena:**
-   * En la fila del lote seleccionado (ej. `LOTE-UAT-2026`), haz clic en **"Retener / Bloquear Lote (Cuarentena)"**.
-   * Ingresa el motivo: *"Inspección por rotura de empaque secundario"*.
-   * Confirma la retención. El estado cambiará a `RETENIDO / CUARENTENA`.
+   * En la fila del lote seleccionado (ej. `LOTE-UAT-2026`), haz clic en el botón de opciones o presiona **"Retener / Bloquear Lote (Cuarentena)"**.
+   * Ingresa el motivo: *"Inspección por empaque roto en muelle"*.
+   * Confirma la retención. El estado del lote cambiará a `RETENIDO / CUARENTENA`.
 6. **Comprobación de Seguridad Operativa:**
-   * Intenta ir a **"Transferencias"** (`/transfers`) y seleccionar dicho producto.
+   * Intenta ir a **"Transferencias Internas"** (`/wms/transfers`) y seleccionar dicho producto.
    * El sistema no permitirá asignar el lote retenido para preparación de salida.
 7. Regresa a `/wms/lots` y presiona **"Liberar Lote"** para devolverlo a estado disponible.
 
@@ -165,14 +177,14 @@ Garantizar la trazabilidad de productos perecederos (alimentos, bebidas, farmaci
 * **Rol Evaluador:** Almacenista (Operador) y Gerente de Tienda (Aprobador).
 * **Módulo:** Neo Core ➔ Neo Logística (WMS).
 * **Tiempo Estimado:** 15 minutos.
-* **Prelación:** Requiere usuarios con dos roles distintos para validar la separación de funciones.
+* **Prelación:** Requiere usuarios con dos roles distintos para validar la separación de funciones (Seguridad RBAC).
 
 ### 🎯 1. Objetivo de Negocio
-Validar que los operadores pueden registrar mermas o roturas puntuales ocurridas en piso, pero que el inventario **no se descuenta del Kardex** hasta que un supervisor con rol autorizado ingrese y apruebe el ajuste con su firma digital.
+Validar que los operadores pueden registrar mermas o roturas puntuales, pero que el inventario **no se descuenta del Kardex** hasta que un supervisor con rol autorizado ingrese y apruebe el ajuste con su firma digital.
 
 ### 📝 2. Datos de Prueba Sugeridos
 * **Tipo:** Descargo (-)
-* **Motivo:** *Merma por Avería Interna*
+* **Motivo:** *Merma por Transporte / Avería Interna*
 * **SKU:** Seleccionar cualquier producto de alta rotación.
 * **Cantidad:** `2` unidades.
 
@@ -187,7 +199,7 @@ Validar que los operadores pueden registrar mermas o roturas puntuales ocurridas
    * **Motivo de Ajuste:** Selecciona `Merma por Avería`.
    * **Producto (SKU):** Busca por nombre o código tu producto de prueba.
    * **Cantidad:** Escribe `2`.
-   * **Observación:** *"2 botellas rotas durante acomodo en anaquel"*.
+   * **Observación:** *"2 botellas rotas durante acomodo en pasillo"*.
 5. Presiona **"Guardar como Pendiente / Borrador"**.
 6. **Validación RBAC 1:** Verifica que en el listado el botón **"Aprobar"** aparezca bloqueado o deshabilitado para este usuario operativo.
 7. Consulta el inventario del producto: el stock aún **NO ha cambiado** (sigue intacto).
@@ -211,11 +223,12 @@ Validar que los operadores pueden registrar mermas o roturas puntuales ocurridas
 
 ---
 
-## 📋 Resumen de Cierre de la Sesión del Módulo 1
+## 📋 Resumen de Cierre de la Sesión del Módulo
 
 | Caso de Prueba | Nombre del Flujo | Conformidad | Firma Key User |
 | :--- | :--- | :---: | :--- |
-| `UAT-INV-01` | Consulta y Auditoría de Stock en Tiempo Real | [ ] OK &nbsp; [ ] Obs &nbsp; [ ] Error | _____________________ |
+| `UAT-INV-01` | Estructura de Almacén y Jerarquía | [ ] OK &nbsp; [ ] Obs &nbsp; [ ] Error | _____________________ |
 | `UAT-INV-02` | Toma Física 3 Fases (Ciego, IA, Kardex) | [ ] OK &nbsp; [ ] Obs &nbsp; [ ] Error | _____________________ |
 | `UAT-INV-03` | Lotes, Vencimientos y Cuarentena | [ ] OK &nbsp; [ ] Obs &nbsp; [ ] Error | _____________________ |
 | `UAT-INV-04` | Ajustes Directos y Aprobación RBAC | [ ] OK &nbsp; [ ] Obs &nbsp; [ ] Error | _____________________ |
+
