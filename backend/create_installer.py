@@ -8,21 +8,11 @@ def build_installer():
     static_dir = os.path.join(base_dir, "static")
     os.makedirs(static_dir, exist_ok=True)
     
-    src_zip = os.path.join(static_dir, "msync_update.zip")
-    if not os.path.exists(src_zip):
-        alt_zip = os.path.join(base_dir, "..", "static", "msync_update.zip")
-        if os.path.exists(alt_zip):
-            src_zip = alt_zip
-        else:
-            raise FileNotFoundError(f"Cannot find source msync_update.zip at {src_zip}")
+    published_agent = os.path.join(base_dir, "..", "MorpheusInventoryAgent", "bin", "Release", "net9.0", "win-x64", "publish", "MorpheusSyncAgent.exe")
+    published_conf = os.path.join(base_dir, "..", "MorpheusConfigurador", "bin", "Release", "net9.0-windows", "win-x64", "publish", "MorpheusConfigurador.exe")
 
+    src_zip = os.path.join(static_dir, "msync_update.zip")
     configurador_dir = os.path.join(static_dir, "configurador_win")
-    if not os.path.exists(configurador_dir):
-        alt_conf = os.path.join(base_dir, "..", "MorpheusConfigurador", "publish")
-        if os.path.exists(alt_conf):
-            configurador_dir = alt_conf
-        else:
-            raise FileNotFoundError(f"Cannot find compiled MorpheusConfigurador at {configurador_dir}")
 
     build_dir = "/tmp/morpheus_installer_build"
     if os.path.exists(build_dir):
@@ -32,9 +22,13 @@ def build_installer():
     os.makedirs(scripts_dir, exist_ok=True)
 
     print("[1/5] Obteniendo motor de sincronizacion MorpheusSyncAgent.exe...")
+    published_agent = os.path.join(base_dir, "..", "MorpheusInventoryAgent", "bin", "Release", "net9.0", "win-x64", "publish", "MorpheusSyncAgent.exe")
     agent_dir = os.path.join(static_dir, "agent_win")
     agent_exe = os.path.join(agent_dir, "MorpheusSyncAgent.exe")
-    if os.path.exists(agent_exe):
+    if os.path.exists(published_agent):
+        print(f"  -> Usando binario compilado reciente desde {published_agent}")
+        shutil.copy2(published_agent, os.path.join(build_dir, "MorpheusSyncAgent.exe"))
+    elif os.path.exists(agent_exe):
         print(f"  -> Usando binario compilado reciente desde {agent_exe}")
         shutil.copy2(agent_exe, os.path.join(build_dir, "MorpheusSyncAgent.exe"))
     else:
@@ -43,12 +37,32 @@ def build_installer():
                 f.write(z.read("msync.exe"))
 
     print("[2/5] Incluyendo aplicacion nativa en C# MorpheusConfigurador.exe...")
+    published_conf = os.path.join(base_dir, "..", "MorpheusConfigurador", "bin", "Release", "net9.0-windows", "win-x64", "publish", "MorpheusConfigurador.exe")
     conf_exe = os.path.join(configurador_dir, "MorpheusConfigurador.exe")
-    shutil.copy2(conf_exe, os.path.join(build_dir, "MorpheusConfigurador.exe"))
+    if os.path.exists(published_conf):
+        print(f"  -> Usando binario compilado reciente desde {published_conf}")
+        shutil.copy2(published_conf, os.path.join(build_dir, "MorpheusConfigurador.exe"))
+    elif os.path.exists(conf_exe):
+        shutil.copy2(conf_exe, os.path.join(build_dir, "MorpheusConfigurador.exe"))
     
-    sni_dll = os.path.join(configurador_dir, "Microsoft.Data.SqlClient.SNI.dll")
-    if os.path.exists(sni_dll):
-        shutil.copy2(sni_dll, os.path.join(build_dir, "Microsoft.Data.SqlClient.SNI.dll"))
+    # Include native DLLs (SNI and SQLite) for rock-solid runtime execution on any Windows
+    native_dirs = [
+        os.path.dirname(published_conf),
+        os.path.dirname(os.path.dirname(published_conf)),
+        os.path.dirname(published_agent),
+        os.path.dirname(os.path.dirname(published_agent)),
+        configurador_dir,
+        agent_dir,
+        os.path.expanduser("~/.nuget/packages/microsoft.data.sqlclient.sni.runtime/6.0.2/runtimes/win-x64/native")
+    ]
+    for nd in native_dirs:
+        if not os.path.exists(nd): continue
+        for native_name in ["Microsoft.Data.SqlClient.SNI.dll", "Microsoft.Data.SqlClient.SNI.x64.dll", "e_sqlite3.dll"]:
+            cand = os.path.join(nd, native_name)
+            target = os.path.join(build_dir, native_name)
+            if os.path.exists(cand) and not os.path.exists(target):
+                print(f"  -> Incluyendo DLL nativa: {native_name}")
+                shutil.copy2(cand, target)
 
     print("[3/5] Generando appsettings.json base preconfigurado...")
     appsettings = {
@@ -63,6 +77,11 @@ def build_installer():
             "LocalSQLite": "Data Source=morpheus_local.db"
         },
         "DirectExtractors": {
+            "Categories": {
+                "Enabled": False,
+                "IntervalMinutes": 1440,
+                "TargetApiUrl": "https://api.qa.morpheussoft.net/api/v1/import/categories-legacy"
+            },
             "Products": {
                 "Enabled": False,
                 "IntervalMinutes": 60,

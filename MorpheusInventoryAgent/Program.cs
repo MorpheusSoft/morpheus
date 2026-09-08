@@ -7,6 +7,8 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
+        AppContext.SetSwitch("Switch.Microsoft.Data.SqlClient.UseManagedNetworkingOnWindows", true);
+
         string? runName = null;
         string? date = null;
         string? desc = null;
