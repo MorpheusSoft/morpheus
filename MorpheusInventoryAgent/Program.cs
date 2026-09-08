@@ -47,6 +47,7 @@ public class Program
         if (!string.IsNullOrEmpty(runName))
         {
             // Register workers as transient for direct resolution
+            builder.Services.AddTransient<CategoryExtractorWorker>();
             builder.Services.AddTransient<InventoryBaselineWorker>();
             builder.Services.AddTransient<SuppliersExtractorWorker>();
             builder.Services.AddTransient<ProductMasterExtractorWorker>();
@@ -59,7 +60,12 @@ public class Program
             
             try
             {
-                if (runName.Equals("baseline", StringComparison.OrdinalIgnoreCase))
+                if (runName.Equals("categories", StringComparison.OrdinalIgnoreCase))
+                {
+                    var worker = host.Services.GetRequiredService<CategoryExtractorWorker>();
+                    await worker.RunOnceAsync();
+                }
+                else if (runName.Equals("baseline", StringComparison.OrdinalIgnoreCase))
                 {
                     var worker = host.Services.GetRequiredService<InventoryBaselineWorker>();
                     await worker.RunOnceAsync(date, desc);
@@ -122,6 +128,7 @@ public class Program
             builder.Services.AddHostedService<SalesExtractorWorker>();
             builder.Services.AddHostedService<SupplierProductsExtractorWorker>();
             builder.Services.AddHostedService<SuppliersExtractorWorker>();
+            builder.Services.AddHostedService<CategoryExtractorWorker>();
 
             var host = builder.Build();
             host.Run();

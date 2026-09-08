@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from typing import List, Optional
+from typing import List, Optional, Union
 from pydantic import BaseModel
 from decimal import Decimal
 from sqlalchemy.orm import Session
@@ -14,11 +14,11 @@ router = APIRouter()
 class LegacyProduct(BaseModel):
     c_Codigo: str
     c_Descri: str
-    c_Departamento: str
-    n_CostoAct: float
-    n_precio1: float
-    n_Impuesto1: float
-    moneda: str
+    c_Departamento: Optional[str] = None
+    n_CostoAct: Optional[float] = 0.0
+    n_precio1: Optional[float] = 0.0
+    n_Impuesto1: Optional[float] = 0.0
+    moneda: Optional[str] = "USD"
     c_Marca: Optional[str] = None
     imagen: Optional[str] = None
 
@@ -61,10 +61,10 @@ def import_products_legacy(
         if legacy_stellar_code.lower() in ('codigo', 'sku'): continue
         
         name = p.c_Descri.strip()
-        cat_code = p.c_Departamento.strip()
+        cat_code = str(p.c_Departamento).strip() if p.c_Departamento else ""
         
-        cost = Decimal(str(p.n_CostoAct))
-        price = Decimal(str(p.n_precio1))
+        cost = Decimal(str(p.n_CostoAct or 0.0))
+        price = Decimal(str(p.n_precio1 or 0.0))
         tax_rate = float(p.n_Impuesto1)
         
         currency_code = p.moneda.strip().upper()
@@ -678,19 +678,19 @@ def import_suppliers_legacy(
     return {"message": "Success", "imported": count}
 
 class LegacyDepartment(BaseModel):
-    c_Codigo: str
+    c_Codigo: Union[str, int]
     c_Descripcio: str
 
 class LegacyGroup(BaseModel):
-    c_Codigo: str
+    c_Codigo: Union[str, int]
     c_Descripcio: str
-    c_Departamento: str
+    c_Departamento: Union[str, int]
 
 class LegacySubGroup(BaseModel):
-    c_Codigo: str
+    c_Codigo: Union[str, int]
     c_Descripcio: str
-    c_in_departamento: str
-    c_in_grupo: str
+    c_in_departamento: Union[str, int]
+    c_in_grupo: Union[str, int]
 
 class LegacyCategoriesPayload(BaseModel):
     departments: List[LegacyDepartment] = []
@@ -708,8 +708,8 @@ def import_categories_legacy(
     # 1. Departamentos (Nivel 1 - Raíz)
     dept_map = {}
     for d in payload.departments:
-        code = d.c_Codigo.strip()
-        name = d.c_Descripcio.strip()
+        code = str(d.c_Codigo).strip()
+        name = str(d.c_Descripcio).strip()
         if not code: continue
         slug = f"dep-{code}"
         cat = session.query(Category).filter_by(slug=slug).first()
@@ -727,9 +727,9 @@ def import_categories_legacy(
     # 2. Grupos (Nivel 2 - Hijos de Depto)
     grp_map = {}
     for g in payload.groups:
-        code = g.c_Codigo.strip()
-        name = g.c_Descripcio.strip()
-        dep_code = g.c_Departamento.strip()
+        code = str(g.c_Codigo).strip()
+        name = str(g.c_Descripcio).strip()
+        dep_code = str(g.c_Departamento).strip()
         if not code: continue
         slug = f"grp-{dep_code}-{code}"
         parent = dept_map.get(dep_code) or session.query(Category).filter_by(slug=f"dep-{dep_code}").first()
@@ -752,10 +752,10 @@ def import_categories_legacy(
     
     # 3. Subgrupos (Nivel 3 - Hijos de Grupo)
     for s in payload.subgroups:
-        code = s.c_Codigo.strip()
-        name = s.c_Descripcio.strip()
-        dep_code = s.c_in_departamento.strip()
-        grp_code = s.c_in_grupo.strip()
+        code = str(s.c_Codigo).strip()
+        name = str(s.c_Descripcio).strip()
+        dep_code = str(s.c_in_departamento).strip()
+        grp_code = str(s.c_in_grupo).strip()
         if not code: continue
         slug = f"sub-{grp_code}-{code}"
         

@@ -26,6 +26,7 @@ public class MainForm : Form
     // Tab 1: Puesta a Punto
     private Button btnResetLocalState = null!;
     private Label lblResetStatus = null!;
+    private Button btnSyncCategories = null!;
     private Button btnSyncSuppliers = null!;
     private Button btnSyncProducts = null!;
     private Button btnSyncBarcodes = null!;
@@ -246,19 +247,23 @@ public class MainForm : Form
         };
         gbFase3.Controls.Add(lblFase3Desc);
 
-        btnSyncSuppliers = CreateButton("1. Sincronizar Proveedores", 16, 54, 220, 34, Color.FromArgb(2, 132, 199));
+        btnSyncCategories = CreateButton("0. Sincronizar Categorías (Árbol)", 16, 54, 230, 34, Color.FromArgb(14, 165, 233));
+        btnSyncCategories.Click += (s, e) => RunExtractor("categories");
+        gbFase3.Controls.Add(btnSyncCategories);
+
+        btnSyncSuppliers = CreateButton("1. Sincronizar Proveedores", 256, 54, 220, 34, Color.FromArgb(2, 132, 199));
         btnSyncSuppliers.Click += (s, e) => RunExtractor("suppliers");
         gbFase3.Controls.Add(btnSyncSuppliers);
 
-        btnSyncProducts = CreateButton("2. Sincronizar Productos & Variantes", 246, 54, 250, 34, Color.FromArgb(2, 132, 199));
+        btnSyncProducts = CreateButton("2. Sincronizar Productos & Variantes", 486, 54, 270, 34, Color.FromArgb(2, 132, 199));
         btnSyncProducts.Click += (s, e) => RunExtractor("products");
         gbFase3.Controls.Add(btnSyncProducts);
 
-        btnSyncBarcodes = CreateButton("3. Sincronizar Codigos Barra", 506, 54, 220, 34, Color.FromArgb(2, 132, 199));
+        btnSyncBarcodes = CreateButton("3. Sincronizar Codigos Barra", 16, 96, 230, 34, Color.FromArgb(2, 132, 199));
         btnSyncBarcodes.Click += (s, e) => RunExtractor("barcodes");
         gbFase3.Controls.Add(btnSyncBarcodes);
 
-        btnSyncCosts = CreateButton("4. Sincronizar Costos & Cruces", 16, 96, 220, 34, Color.FromArgb(2, 132, 199));
+        btnSyncCosts = CreateButton("4. Sincronizar Costos & Cruces", 256, 96, 220, 34, Color.FromArgb(2, 132, 199));
         btnSyncCosts.Click += (s, e) => RunExtractor("supplier-products");
         gbFase3.Controls.Add(btnSyncCosts);
 
@@ -932,6 +937,7 @@ public class MainForm : Form
                 de[name]!["TargetApiUrl"] = $"{baseUrl}/api/v1/import/{endpoint}";
             }
 
+            SetExt("Categories", true, "1440", "categories-legacy");
             SetExt("Sales", chkAutoSales.Checked, txtIntervalSales.Text, "sales-legacy");
             SetExt("InventoryMovements", chkAutoMovements.Checked, txtIntervalMovements.Text, "inventory-movements-legacy");
             SetExt("Products", chkAutoProducts.Checked, txtIntervalProducts.Text, "products-legacy");
