@@ -50,6 +50,10 @@ def import_products_legacy(
         if cat.slug:
             part = cat.slug.split('-')[-1]
             cat_cache[part] = cat.id
+            clean_p = part.lstrip('0')
+            if clean_p:
+                cat_cache[clean_p] = cat.id
+                cat_cache[clean_p.zfill(3)] = cat.id
             
     # Cache existing variants based on STELLAR_CODE to speed up lookups
     stellar_barcodes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
@@ -74,7 +78,7 @@ def import_products_legacy(
         if img and img.upper() == "NULL": img = None
         
         curr_id = currencies.get(currency_code, default_currency_id)
-        cat_id = cat_cache.get(cat_code, None)
+        cat_id = cat_cache.get(cat_code) or cat_cache.get(cat_code.lstrip('0')) or cat_cache.get(cat_code.zfill(3))
         tax_id = get_tax_id(tax_rate)
         
         # Calculate Utility Pct (MarkUp)
