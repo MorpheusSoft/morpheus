@@ -103,15 +103,18 @@ public class InventoryBaselineWorker : BackgroundService
         
         Console.WriteLine("  Consultando existencias consolidadas en SQL Server (puede tomar unos segundos)...");
 
+        int facilityId = _configuration.GetValue<int>("StoreFacilityId", 1);
+        string facilityCode = _configuration.GetValue<string>("StoreFacilityCode", "");
+
         string query = @"
-            select c_deposito, c_codArticulo, sum(case when c_tipoMov='Descargo' then n_cantidad*-1 else n_cantidad end) Cantidad
+            select @FacilityId as facility_id, @FacilityCode as facility_code, c_deposito, c_codArticulo, sum(case when c_tipoMov='Descargo' then n_cantidad*-1 else n_cantidad end) Cantidad
             from tr_inventario t WITH (NOLOCK)
             inner join ma_inventario m WITH (NOLOCK) on t.c_concepto = m.c_concepto and t.c_documento=m.c_documento
             where m.c_status!='ANU' and f_fecha <= @Cutoff
             group by c_deposito, c_codArticulo";
 
         using var connection = new SqlConnection(connectionString);
-        var baseline = (await connection.QueryAsync(query, new { Cutoff = cutoff }, commandTimeout: 600)).ToList();
+        var baseline = (await connection.QueryAsync(query, new { FacilityId = facilityId, FacilityCode = facilityCode, Cutoff = cutoff }, commandTimeout: 600)).ToList();
 
         if (!baseline.Any())
         {

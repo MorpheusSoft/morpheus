@@ -22,6 +22,23 @@ class LegacyProduct(BaseModel):
     c_Marca: Optional[str] = None
     imagen: Optional[str] = None
 
+@router.get("/facilities")
+def get_legacy_facilities(session: Session = Depends(deps.get_db)):
+    """
+    Retorna la lista activa de sucursales en Morpheus para que el Agente
+    y el Configurador puedan asociar dinámicamente cada tienda física por ID y Código.
+    """
+    facilities = session.query(Facility).filter(Facility.is_active == True).order_by(Facility.id).all()
+    return [
+        {
+            "id": f.id,
+            "code": f.code,
+            "name": f.name
+        }
+        for f in facilities
+    ]
+
+
 @router.post("/products-legacy")
 def import_products_legacy(
     products_in: List[LegacyProduct],
@@ -229,7 +246,40 @@ def import_barcodes_legacy(
     print(f"✅ ¡Carga de Códigos terminada! Insertados: {count}, No encontrados: {not_found}")
     return {"message": "Success", "imported": count, "not_found": not_found}
 
+def resolve_facility(session: Session, fid: Optional[int] = None, fcode: Optional[str] = None) -> Optional[Facility]:
+    """
+    Resuelve inteligentemente la sucursal de Morpheus a partir del ID numérico,
+    del código de sede (ej: 'CAT-02') o del número/nombre de tienda (ej: '08').
+    """
+    fac = None
+    if fid:
+        fac = session.query(Facility).filter(Facility.id == fid).first()
+        if fac:
+            return fac
+    if fcode and str(fcode).strip():
+        code_clean = str(fcode).strip()
+        fac = session.query(Facility).filter(
+            (Facility.code.ilike(code_clean)) |
+            (Facility.name.ilike(f"%{code_clean}%"))
+        ).first()
+        if fac:
+            return fac
+    if fid:
+        # Fallback: buscar si el ID fue usado como código (ej: código '08' o '8')
+        fid_str = str(fid).zfill(2)
+        fac = session.query(Facility).filter(
+            (Facility.code.ilike(f"%{fid}%")) |
+            (Facility.code.ilike(f"%{fid_str}%")) |
+            (Facility.name.ilike(f"%{fid}%")) |
+            (Facility.name.ilike(f"%{fid_str}%"))
+        ).first()
+        if fac:
+            return fac
+    return session.query(Facility).first()
+
 class LegacyInventoryBaseline(BaseModel):
+    facility_id: Optional[int] = None
+    facility_code: Optional[str] = None
     c_deposito: str
     c_codArticulo: str
     Cantidad: float
@@ -247,11 +297,14 @@ def import_inventory_baseline(
     stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
     variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
     
-    default_fac = session.query(Facility).first()
-    default_fac_id = default_fac.id if default_fac else 10
+    first_item = baseline_in[0] if baseline_in else None
+    fac = resolve_facility(session, getattr(first_item, 'facility_id', None), getattr(first_item, 'facility_code', None))
+    fac_id = fac.id if fac else 10
+    fac_name = fac.name if fac else f"Sucursal #{fac_id}"
+    
     inv_session = InventorySession(
-        name=f"Baseline Legacy {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        facility_id=default_fac_id,
+        name=f"Baseline Legacy {fac_name} {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        facility_id=fac_id,
         state='DONE',
         scope_type='GENERAL'
     )
@@ -287,7 +340,8 @@ def import_inventory_baseline(
     return {"message": "Success", "imported": count, "not_found": not_found}
 
 class LegacyInventoryMovement(BaseModel):
-    facility_id: int = 1
+    facility_id: Optional[int] = 1
+    facility_code: Optional[str] = None
     c_documento: str
     c_concepto: str
     c_tipoMov: str
@@ -316,12 +370,12 @@ def import_inventory_movements(
     # Group by document
     grouped_moves = {}
     for m in movements_in:
-        key = (m.c_documento, m.c_concepto, m.c_tipoMov, m.f_fecha, m.facility_id, m.c_deposito)
+        key = (m.c_documento, m.c_concepto, m.c_tipoMov, m.f_fecha, m.facility_id, getattr(m, 'facility_code', None), m.c_deposito)
         if key not in grouped_moves:
             grouped_moves[key] = []
         grouped_moves[key].append(m)
         
-    for (doc, concepto, tipo_mov, fecha, facility_id, deposito), lines in grouped_moves.items():
+    for (doc, concepto, tipo_mov, fecha, facility_id, facility_code, deposito), lines in grouped_moves.items():
         # Deduplication check
         existing = session.query(StockPicking).filter(StockPicking.origin_document==doc).first()
         if existing:
@@ -330,25 +384,47 @@ def import_inventory_movements(
         is_in = tipo_mov.strip().lower() == 'cargo'
         doc_date = datetime.fromisoformat(fecha) if 'T' in fecha else datetime.strptime(fecha, '%Y-%m-%d %H:%M:%S')
         
+        fac = resolve_facility(session, facility_id, facility_code)
+        resolved_fac_id = fac.id if fac else (facility_id or 1)
+
         # Resolve locations based on warehouse code
         loc_src_id = 1
         loc_dest_id = 1
         
-        wh = session.query(Warehouse).filter_by(facility_id=facility_id, code=deposito.strip()).first()
-        if wh:
+        wh = session.query(Warehouse).filter_by(facility_id=resolved_fac_id, code=deposito.strip()).first()
+        if not wh:
+            wh = Warehouse(
+                name=f"Almacén {deposito.strip()}",
+                code=deposito.strip(),
+                facility_id=resolved_fac_id,
+                is_active=True
+            )
+            session.add(wh)
+            session.flush()
+            internal_loc = Location(
+                name=f"ALM-{deposito.strip()}/STOCK",
+                code=f"ALM-{deposito.strip()}/STOCK",
+                warehouse_id=wh.id,
+                usage="INTERNAL",
+                is_active=True
+            )
+            session.add(internal_loc)
+            session.flush()
+        else:
             internal_loc = session.query(Location).filter_by(warehouse_id=wh.id, usage='INTERNAL').first()
             if not internal_loc:
                 internal_loc = session.query(Location).filter_by(warehouse_id=wh.id).first()
-            if internal_loc:
-                if is_in:
-                    loc_src_id = 1 # Proveedores / Virtual
-                    loc_dest_id = internal_loc.id
-                else:
-                    loc_src_id = internal_loc.id
-                    loc_dest_id = 1 # Proveedores / Virtual
+                
+        if internal_loc:
+            if is_in:
+                loc_src_id = 1 # Proveedores / Virtual
+                loc_dest_id = internal_loc.id
+            else:
+                loc_src_id = internal_loc.id
+                loc_dest_id = 1 # Proveedores / Virtual
                     
         picking = StockPicking(
-            facility_id=facility_id,
+            facility_id=resolved_fac_id,
             name=f"LEG-{doc}-{concepto}"[:45],
             picking_type_id=1 if is_in else 2, 
             origin_document=doc,
@@ -389,7 +465,8 @@ def import_inventory_movements(
     return {"message": "Success", "imported": count, "not_found": not_found}
 
 class LegacySalesDocument(BaseModel):
-    facility_id: int
+    facility_id: Optional[int] = 1
+    facility_code: Optional[str] = None
     c_Numero: str
     f_Fecha: str
     Cod_Principal: str
@@ -427,7 +504,27 @@ def import_sales_legacy(
         if key in loc_cache:
             return loc_cache[key]
         wh = session.query(Warehouse).filter_by(facility_id=fac_id, code=dep_code).first()
-        if wh:
+        if not wh:
+            wh = Warehouse(
+                name=f"Almacén {dep_code}",
+                code=dep_code,
+                facility_id=fac_id,
+                is_active=True
+            )
+            session.add(wh)
+            session.flush()
+            loc = Location(
+                name=f"ALM-{dep_code}/STOCK",
+                code=f"ALM-{dep_code}/STOCK",
+                warehouse_id=wh.id,
+                usage="INTERNAL",
+                is_active=True
+            )
+            session.add(loc)
+            session.flush()
+            loc_cache[key] = loc.id
+            return loc.id
+        else:
             loc = session.query(Location).filter_by(warehouse_id=wh.id, usage='INTERNAL').first()
             if not loc:
                 loc = session.query(Location).filter_by(warehouse_id=wh.id).first()
@@ -448,16 +545,19 @@ def import_sales_legacy(
             
         doc_date = datetime.fromisoformat(s.f_Fecha) if 'T' in s.f_Fecha else datetime.strptime(s.f_Fecha, '%Y-%m-%d %H:%M:%S')
         
+        fac = resolve_facility(session, s.facility_id, getattr(s, 'facility_code', None))
+        fac_id = fac.id if fac else (s.facility_id or 1)
+
         # Deduplication check
         existing = session.query(Document).filter(
-            Document.facility_id == s.facility_id,
+            Document.facility_id == fac_id,
             Document.document_number == s.c_Numero
         ).first()
         if existing:
             continue
             
         doc = Document(
-            facility_id=s.facility_id,
+            facility_id=fac_id,
             customer_id=1,
             currency_id=1,
             type='INVOICE',
@@ -483,7 +583,7 @@ def import_sales_legacy(
         
         # Deduct inventory (Double deduction is avoided because VEN is excluded from Kardex)
         picking = StockPicking(
-            facility_id=s.facility_id,
+            facility_id=fac_id,
             name=f"SALE-{s.c_Numero}-{s.Cod_Principal}"[:45],
             picking_type_id=2, # Delivery
             origin_document=s.c_Numero,

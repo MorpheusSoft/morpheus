@@ -121,7 +121,8 @@ def build_installer():
                 "TargetApiUrl": "https://api.qa.morpheussoft.net/api/v1/import/suppliers-legacy"
             }
         },
-        "StoreFacilityId": 1
+        "StoreFacilityId": 10,
+        "StoreFacilityCode": "CAT-01"
     }
 
     with open(os.path.join(build_dir, "appsettings.json"), "w", encoding="utf-8") as f:

@@ -526,30 +526,89 @@ public class MainForm : Form
         return btn;
     }
 
-    private void PopulateStoresComboBox()
+    private void PopulateStoresComboBox(List<FacilityOption>? dynamicFacilities = null)
     {
-        cmbStores.Items.Add("01 - PATIO TRIGAL (CAT-11) [ID: 1]");
-        cmbStores.Items.Add("10 - CUMBOTO (CAT-01) [ID: 10]");
-        cmbStores.Items.Add("02 - SUCURSAL 02 [ID: 2]");
-        cmbStores.Items.Add("03 - SUCURSAL 03 [ID: 3]");
-        cmbStores.Items.Add("04 - SUCURSAL 04 [ID: 4]");
-        cmbStores.Items.Add("05 - SUCURSAL 05 [ID: 5]");
-        cmbStores.Items.Add("06 - SUCURSAL 06 [ID: 6]");
-        cmbStores.Items.Add("07 - SUCURSAL 07 [ID: 7]");
-        cmbStores.Items.Add("08 - SUCURSAL 08 [ID: 8]");
-        cmbStores.Items.Add("09 - SUCURSAL 09 [ID: 9]");
-        cmbStores.Items.Add("11 - SUCURSAL 11 [ID: 11]");
-        cmbStores.Items.Add("12 - SUCURSAL 12 [ID: 12]");
-        cmbStores.Items.Add("13 - SUCURSAL 13 [ID: 13]");
-        cmbStores.Items.Add("14 - SUCURSAL 14 [ID: 14]");
-        cmbStores.Items.Add("15 - SUCURSAL 15 [ID: 15]");
-        cmbStores.Items.Add("[Ingresar ID Personalizado...]");
-        cmbStores.SelectedIndex = 0;
+        cmbStores.Items.Clear();
 
-        cmbStores.SelectedIndexChanged += (s, e) =>
+        if (dynamicFacilities != null && dynamicFacilities.Count > 0)
         {
-            txtCustomStoreId.Visible = (cmbStores.SelectedIndex == cmbStores.Items.Count - 1);
-        };
+            foreach (var fac in dynamicFacilities)
+            {
+                cmbStores.Items.Add(fac);
+            }
+        }
+        else
+        {
+            // Sedes conocidas en Morpheus QA
+            cmbStores.Items.Add(new FacilityOption { Id = 10, Code = "CAT-01", Name = "10 - TUCACAS" });
+            cmbStores.Items.Add(new FacilityOption { Id = 11, Code = "CAT-02", Name = "08 - MARACAY" });
+            cmbStores.Items.Add(new FacilityOption { Id = 1, Code = "CAT-11", Name = "01 - PATIO TRIGAL" });
+        }
+
+        cmbStores.Items.Add("[Ingresar ID Personalizado...]");
+        if (cmbStores.Items.Count > 0)
+        {
+            cmbStores.SelectedIndex = 0;
+        }
+
+        cmbStores.SelectedIndexChanged -= CmbStores_SelectedIndexChanged;
+        cmbStores.SelectedIndexChanged += CmbStores_SelectedIndexChanged;
+    }
+
+    private void CmbStores_SelectedIndexChanged(object? s, EventArgs e)
+    {
+        txtCustomStoreId.Visible = (cmbStores.SelectedIndex == cmbStores.Items.Count - 1);
+    }
+
+    private int GetSelectedFacilityId()
+    {
+        if (cmbStores.SelectedItem is FacilityOption opt) return opt.Id;
+        if (cmbStores.SelectedIndex == cmbStores.Items.Count - 1 && int.TryParse(txtCustomStoreId.Text.Trim(), out var customId)) return customId;
+        return 1;
+    }
+
+    private string GetSelectedFacilityCode()
+    {
+        if (cmbStores.SelectedItem is FacilityOption opt) return opt.Code;
+        return string.Empty;
+    }
+
+    private void SelectFacilityByIdOrCode(int targetId, string? targetCode)
+    {
+        for (int i = 0; i < cmbStores.Items.Count - 1; i++)
+        {
+            if (cmbStores.Items[i] is FacilityOption opt)
+            {
+                if (opt.Id == targetId || (!string.IsNullOrEmpty(targetCode) && opt.Code.Equals(targetCode, StringComparison.OrdinalIgnoreCase)))
+                {
+                    cmbStores.SelectedIndex = i;
+                    txtCustomStoreId.Visible = false;
+                    return;
+                }
+            }
+        }
+
+        cmbStores.SelectedIndex = cmbStores.Items.Count - 1;
+        txtCustomStoreId.Text = targetId.ToString();
+        txtCustomStoreId.Visible = true;
+    }
+
+    private async Task<List<FacilityOption>?> FetchFacilitiesFromCloudAsync(string baseUrl)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+            string url = $"{baseUrl.TrimEnd('/')}/api/v1/import/facilities";
+            var resp = await http.GetAsync(url);
+            if (resp.IsSuccessStatusCode)
+            {
+                var json = await resp.Content.ReadAsStringAsync();
+                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                return JsonSerializer.Deserialize<List<FacilityOption>>(json, options);
+            }
+        }
+        catch { }
+        return null;
     }
 
     private void UpdateServiceStatus()
@@ -804,13 +863,27 @@ public class MainForm : Form
     {
         lblCloudTestResult.ForeColor = Color.FromArgb(245, 158, 11);
         lblCloudTestResult.Text = "Probando API nube...";
-        lblStatusText.Text = "Probando Nube Morpheus...";
+        lblStatusText.Text = "Probando conexión con Nube Morpheus y sincronizando sedes...";
 
-        string url = $"{txtCloudUrl.Text.TrimEnd('/')}/docs";
+        string baseUrl = txtCloudUrl.Text.TrimEnd('/');
         try
         {
+            var facilities = await FetchFacilitiesFromCloudAsync(baseUrl);
+            if (facilities != null && facilities.Count > 0)
+            {
+                int currentId = GetSelectedFacilityId();
+                string currentCode = GetSelectedFacilityCode();
+                PopulateStoresComboBox(facilities);
+                SelectFacilityByIdOrCode(currentId, currentCode);
+
+                lblCloudTestResult.ForeColor = Color.FromArgb(16, 185, 129);
+                lblCloudTestResult.Text = $"[OK] Conectado ({facilities.Count} sedes activas en NEO)";
+                lblStatusText.Text = $"Conexión exitosa. Se sincronizaron {facilities.Count} sedes registradas en NEO.";
+                return;
+            }
+
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(7) };
-            var resp = await http.GetAsync(url);
+            var resp = await http.GetAsync($"{baseUrl}/docs");
             if (resp.IsSuccessStatusCode)
             {
                 lblCloudTestResult.ForeColor = Color.FromArgb(16, 185, 129);
@@ -859,13 +932,22 @@ public class MainForm : Form
             }
 
             int facId = doc["StoreFacilityId"]?.GetValue<int>() ?? 1;
-            if (facId == 1) cmbStores.SelectedIndex = 0;
-            else if (facId == 10) cmbStores.SelectedIndex = 1;
-            else
+            string? facCode = doc["StoreFacilityCode"]?.ToString();
+            SelectFacilityByIdOrCode(facId, facCode);
+
+            // Cargar sedes dinámicamente en segundo plano
+            _ = Task.Run(async () =>
             {
-                cmbStores.SelectedIndex = cmbStores.Items.Count - 1;
-                txtCustomStoreId.Text = facId.ToString();
-            }
+                var liveFacilities = await FetchFacilitiesFromCloudAsync(txtCloudUrl.Text.Trim());
+                if (liveFacilities != null && liveFacilities.Count > 0)
+                {
+                    this.Invoke(() =>
+                    {
+                        PopulateStoresComboBox(liveFacilities);
+                        SelectFacilityByIdOrCode(facId, facCode);
+                    });
+                }
+            });
 
             var de = doc["DirectExtractors"];
             if (de != null)
@@ -920,10 +1002,21 @@ public class MainForm : Form
             doc["ConnectionStrings"]!["LocalSqlServer"] = $"Server={txtSqlServer.Text.Trim()};Database={txtSqlDb.Text.Trim()};User Id={txtSqlUser.Text.Trim()};Password={txtSqlPass.Text.Trim()};TrustServerCertificate=True;";
 
             int storeId = 1;
-            if (cmbStores.SelectedIndex == 0) storeId = 1;
-            else if (cmbStores.SelectedIndex == 1) storeId = 10;
-            else if (int.TryParse(txtCustomStoreId.Text.Trim(), out var parsedId)) storeId = parsedId;
+            string storeCode = "";
+            if (cmbStores.SelectedItem is FacilityOption opt)
+            {
+                storeId = opt.Id;
+                storeCode = opt.Code;
+            }
+            else if (cmbStores.SelectedIndex == cmbStores.Items.Count - 1)
+            {
+                if (int.TryParse(txtCustomStoreId.Text.Trim(), out var parsedId)) storeId = parsedId;
+            }
             doc["StoreFacilityId"] = storeId;
+            if (!string.IsNullOrEmpty(storeCode))
+            {
+                doc["StoreFacilityCode"] = storeCode;
+            }
 
             string baseUrl = txtCloudUrl.Text.TrimEnd('/');
             doc["DirectExtractors"] ??= new JsonObject();
@@ -1030,3 +1123,13 @@ public class MainForm : Form
         }
     }
 }
+
+public class FacilityOption
+{
+    public int Id { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+
+    public override string ToString() => $"[{Code}] {Name} (ID: {Id})";
+}
+
