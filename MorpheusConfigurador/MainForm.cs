@@ -51,11 +51,16 @@ public class MainForm : Form
     private TextBox txtSalesCustomDate = null!;
     private Button btnSyncSales = null!;
     private Button btnSyncMovements = null!;
+    private RadioButton rbMovementsIncremental = null!;
+    private RadioButton rbMovementsCustom = null!;
+    private TextBox txtMovementsCustomDate = null!;
+    private Label lblMovementsInfo = null!;
 
     // Tab 3: Servicio de Windows
     private Button btnStartService = null!;
     private Button btnStopService = null!;
     private Button btnRestartService = null!;
+    private Label lblServiceTabStatus = null!;
     private CheckBox chkAutoSales = null!;
     private TextBox txtIntervalSales = null!;
     private CheckBox chkAutoMovements = null!;
@@ -269,14 +274,14 @@ public class MainForm : Form
 
         // Baseline Controls
         var pnlBaseline = new Panel { Location = new Point(16, 140), Size = new Size(770, 72), BackColor = Color.FromArgb(30, 41, 59) };
-        var lblBaselineTitle = new Label { Text = "5. Inventario Inicial (Baseline):", Location = new Point(8, 8), AutoSize = true, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.White };
+        var lblBaselineTitle = new Label { Text = "5. Inventario Inicial (Baseline):", Location = new Point(12, 8), AutoSize = true, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.White };
         pnlBaseline.Controls.Add(lblBaselineTitle);
 
         rbBaselineToday = new RadioButton 
         { 
-            Text = "Al momento actual (Hoy - Inventario Vivo)", 
+            Text = "Hoy (Inventario Vivo)", 
             Checked = true, 
-            Location = new Point(12, 34), 
+            Location = new Point(14, 34), 
             AutoSize = true, 
             ForeColor = Color.White,
             Cursor = Cursors.Hand
@@ -285,8 +290,8 @@ public class MainForm : Form
 
         rbBaselineCustom = new RadioButton 
         { 
-            Text = "Fecha de corte:", 
-            Location = new Point(295, 34), 
+            Text = "A fecha de corte:", 
+            Location = new Point(220, 34), 
             AutoSize = true, 
             ForeColor = Color.White,
             Cursor = Cursors.Hand
@@ -296,7 +301,7 @@ public class MainForm : Form
         txtBaselineDate = new TextBox 
         { 
             Text = DateTime.Today.ToString("yyyy-MM-dd"), 
-            Location = new Point(415, 32), 
+            Location = new Point(365, 32), 
             Width = 95, 
             BackColor = Color.FromArgb(15, 23, 42), 
             ForeColor = Color.White,
@@ -304,9 +309,19 @@ public class MainForm : Form
         };
         pnlBaseline.Controls.Add(txtBaselineDate);
 
-        btnSyncBaseline = CreateButton("Sincronizar Inventario (Baseline)", 525, 28, 230, 34, Color.FromArgb(16, 185, 129));
+        btnSyncBaseline = CreateButton("Sincronizar Inventario (Baseline)", 495, 26, 260, 36, Color.FromArgb(16, 185, 129));
         btnSyncBaseline.Click += BtnSyncBaseline_Click;
         pnlBaseline.Controls.Add(btnSyncBaseline);
+
+        void UpdateBaselineLayout()
+        {
+            rbBaselineToday.Location = new Point(14, 34);
+            rbBaselineCustom.Location = new Point(rbBaselineToday.Right + 25, 34);
+            txtBaselineDate.Location = new Point(rbBaselineCustom.Right + 8, 31);
+            btnSyncBaseline.Location = new Point(pnlBaseline.Width - btnSyncBaseline.Width - 14, 26);
+        }
+
+        pnlBaseline.Layout += (s, e) => UpdateBaselineLayout();
 
         rbBaselineToday.CheckedChanged += (s, e) =>
         {
@@ -331,6 +346,8 @@ public class MainForm : Form
         {
             rbBaselineCustom.Checked = true;
         };
+
+        UpdateBaselineLayout();
 
         gbFase3.Controls.Add(pnlBaseline);
         panel.Controls.Add(gbFase3);
@@ -394,18 +411,56 @@ public class MainForm : Form
         panel.Controls.Add(gbSales);
 
         // Movimientos
-        var gbMovements = CreateGroupBox("Sincronizacion de Movimientos de Almacen (Kardex)", 16, 265, 810, 110, Color.FromArgb(99, 102, 241));
+        var gbMovements = CreateGroupBox("Sincronizacion de Movimientos de Almacen (Kardex)", 16, 265, 810, 190, Color.FromArgb(99, 102, 241));
         var lblMovDesc = new Label
         {
-            Text = "Extrae entradas, salidas, traslados y mermas registradas localmente:",
+            Text = "Extrae entradas, salidas, traslados y mermas registradas localmente posteriores al inventario inicial:",
             Location = new Point(16, 26),
             Size = new Size(770, 20),
             ForeColor = Color.FromArgb(148, 163, 184)
         };
         gbMovements.Controls.Add(lblMovDesc);
 
-        btnSyncMovements = CreateButton("Sincronizar Movimientos Ahora", 16, 56, 240, 36, Color.FromArgb(99, 102, 241));
-        btnSyncMovements.Click += (s, e) => RunExtractor("movements");
+        lblMovementsInfo = new Label
+        {
+            Text = "Ultima sincronizacion de movimientos: Verificando...",
+            Location = new Point(20, 50),
+            Size = new Size(760, 22),
+            ForeColor = Color.FromArgb(56, 189, 248),
+            Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+        };
+        gbMovements.Controls.Add(lblMovementsInfo);
+
+        rbMovementsIncremental = new RadioButton
+        {
+            Text = "Sincronizacion incremental (Recomendado: posterior a la ultima fecha o corte de Baseline)",
+            Checked = true,
+            Location = new Point(20, 76),
+            AutoSize = true,
+            ForeColor = Color.White
+        };
+        gbMovements.Controls.Add(rbMovementsIncremental);
+
+        rbMovementsCustom = new RadioButton
+        {
+            Text = "Desde fecha especifica:",
+            Location = new Point(20, 104),
+            AutoSize = true,
+            ForeColor = Color.White
+        };
+        txtMovementsCustomDate = new TextBox
+        {
+            Text = DateTime.Today.ToString("yyyy-MM-dd"),
+            Location = new Point(200, 102),
+            Width = 100,
+            BackColor = Color.FromArgb(15, 23, 42),
+            ForeColor = Color.White
+        };
+        gbMovements.Controls.Add(rbMovementsCustom);
+        gbMovements.Controls.Add(txtMovementsCustomDate);
+
+        btnSyncMovements = CreateButton("Sincronizar Movimientos Ahora", 20, 136, 250, 36, Color.FromArgb(99, 102, 241));
+        btnSyncMovements.Click += BtnSyncMovements_Click;
         gbMovements.Controls.Add(btnSyncMovements);
 
         panel.Controls.Add(gbMovements);
@@ -416,28 +471,38 @@ public class MainForm : Form
     {
         var panel = new Panel { AutoScroll = true, Dock = DockStyle.Fill, Padding = new Padding(16) };
 
-        var gbControl = CreateGroupBox("Control del Servicio de Windows (MorpheusSyncAgent)", 16, 12, 810, 120, Color.FromArgb(203, 213, 225));
+        var gbControl = CreateGroupBox("Control del Servicio de Windows (MorpheusSyncAgent)", 16, 12, 810, 140, Color.FromArgb(203, 213, 225));
         
-        btnStartService = CreateButton("Iniciar Servicio", 16, 40, 160, 38, Color.FromArgb(16, 185, 129));
+        btnStartService = CreateButton("Iniciar Servicio", 16, 36, 160, 38, Color.FromArgb(16, 185, 129));
         btnStartService.Click += (s, e) => ControlService("start");
         gbControl.Controls.Add(btnStartService);
 
-        btnStopService = CreateButton("Detener Servicio", 186, 40, 160, 38, Color.FromArgb(239, 68, 68));
+        btnStopService = CreateButton("Detener Servicio", 186, 36, 160, 38, Color.FromArgb(239, 68, 68));
         btnStopService.Click += (s, e) => ControlService("stop");
         gbControl.Controls.Add(btnStopService);
 
-        btnRestartService = CreateButton("Reiniciar Servicio", 356, 40, 160, 38, Color.FromArgb(51, 65, 85));
+        btnRestartService = CreateButton("Reiniciar Servicio", 356, 36, 160, 38, Color.FromArgb(51, 65, 85));
         btnRestartService.Click += (s, e) => ControlService("restart");
         gbControl.Controls.Add(btnRestartService);
 
-        var btnConsole = CreateButton("Probar en Consola", 526, 40, 160, 38, Color.FromArgb(51, 65, 85));
+        var btnConsole = CreateButton("Probar en Consola", 526, 36, 160, 38, Color.FromArgb(51, 65, 85));
         btnConsole.Click += (s, e) => RunExtractor("");
         gbControl.Controls.Add(btnConsole);
+
+        lblServiceTabStatus = new Label
+        {
+            Text = "Estado actual del servicio: Verificando...",
+            Location = new Point(20, 92),
+            Size = new Size(760, 32),
+            Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(148, 163, 184)
+        };
+        gbControl.Controls.Add(lblServiceTabStatus);
 
         panel.Controls.Add(gbControl);
 
         // Extractores automaticos
-        var gbExtractors = CreateGroupBox("Que datos debe sincronizar el servicio en segundo plano?", 16, 145, 810, 240, Color.FromArgb(56, 189, 248));
+        var gbExtractors = CreateGroupBox("Que datos debe sincronizar el servicio en segundo plano?", 16, 165, 810, 240, Color.FromArgb(56, 189, 248));
         
         chkAutoSales = new CheckBox { Text = "Ventas (Recomendado activo)", Checked = true, Location = new Point(20, 36), AutoSize = true, ForeColor = Color.White };
         txtIntervalSales = new TextBox { Text = "10", Location = new Point(260, 34), Width = 50, BackColor = Color.FromArgb(15, 23, 42), ForeColor = Color.White };
@@ -470,7 +535,7 @@ public class MainForm : Form
         panel.Controls.Add(gbExtractors);
 
         // Mantenimiento de Servicio & Escritorio
-        var gbInstall = CreateGroupBox("Mantenimiento del Servicio & Escritorio", 16, 400, 810, 90, Color.FromArgb(203, 213, 225));
+        var gbInstall = CreateGroupBox("Mantenimiento del Servicio & Escritorio", 16, 420, 810, 90, Color.FromArgb(203, 213, 225));
 
         var btnInstall = CreateButton("Registrar Servicio Windows", 16, 32, 230, 36, Color.FromArgb(16, 185, 129));
         btnInstall.Click += (s, e) => InstallService();
@@ -668,22 +733,42 @@ public class MainForm : Form
             {
                 lblServiceStatus.Text = "EN EJECUCION [OK]";
                 lblServiceStatus.BackColor = Color.FromArgb(16, 185, 129);
+                if (lblServiceTabStatus != null)
+                {
+                    lblServiceTabStatus.Text = "● Estado del servicio: EN EJECUCIÓN [ACTIVO]";
+                    lblServiceTabStatus.ForeColor = Color.FromArgb(16, 185, 129);
+                }
             }
             else if (status == ServiceControllerStatus.Stopped)
             {
                 lblServiceStatus.Text = "DETENIDO";
                 lblServiceStatus.BackColor = Color.FromArgb(239, 68, 68);
+                if (lblServiceTabStatus != null)
+                {
+                    lblServiceTabStatus.Text = "■ Estado del servicio: DETENIDO (No sincroniza en segundo plano)";
+                    lblServiceTabStatus.ForeColor = Color.FromArgb(239, 68, 68);
+                }
             }
             else
             {
                 lblServiceStatus.Text = status.ToString().ToUpper();
                 lblServiceStatus.BackColor = Color.FromArgb(245, 158, 11);
+                if (lblServiceTabStatus != null)
+                {
+                    lblServiceTabStatus.Text = $"▲ Estado del servicio: {status.ToString().ToUpper()}";
+                    lblServiceTabStatus.ForeColor = Color.FromArgb(245, 158, 11);
+                }
             }
         }
         catch
         {
             lblServiceStatus.Text = "NO INSTALADO";
             lblServiceStatus.BackColor = Color.FromArgb(51, 65, 85);
+            if (lblServiceTabStatus != null)
+            {
+                lblServiceTabStatus.Text = "⚠ Estado del servicio: NO INSTALADO en este equipo";
+                lblServiceTabStatus.ForeColor = Color.FromArgb(245, 158, 11);
+            }
         }
     }
 
@@ -691,17 +776,36 @@ public class MainForm : Form
     {
         try
         {
-            lblStatusText.Text = $"Ejecutando {action} en servicio MorpheusSyncAgent...";
+            lblStatusText.Text = $"Ejecutando acción '{action}' en servicio MorpheusSyncAgent...";
             using var sc = new ServiceController("MorpheusSyncAgent");
-            if (action == "start" && sc.Status == ServiceControllerStatus.Stopped)
+
+            if (action == "start")
             {
+                if (sc.Status == ServiceControllerStatus.Running)
+                {
+                    UpdateServiceStatus();
+                    MessageBox.Show("El servicio MorpheusSyncAgent ya se encuentra en ejecución.", "Servicio Activo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
                 sc.Start();
                 sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(10));
+                UpdateServiceStatus();
+                lblStatusText.Text = "Servicio iniciado con éxito.";
+                MessageBox.Show("El servicio de Windows 'MorpheusSyncAgent' se ha INICIADO con éxito.\n\nAhora está sincronizando en segundo plano según los intervalos configurados.", "Servicio Iniciado", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
-            else if (action == "stop" && sc.Status == ServiceControllerStatus.Running)
+            else if (action == "stop")
             {
+                if (sc.Status == ServiceControllerStatus.Stopped)
+                {
+                    UpdateServiceStatus();
+                    MessageBox.Show("El servicio MorpheusSyncAgent ya se encuentra detenido.", "Servicio Detenido", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
                 sc.Stop();
                 sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                UpdateServiceStatus();
+                lblStatusText.Text = "Servicio detenido con éxito.";
+                MessageBox.Show("El servicio de Windows 'MorpheusSyncAgent' se ha DETENIDO con éxito.", "Servicio Detenido", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             else if (action == "restart")
             {
@@ -712,13 +816,15 @@ public class MainForm : Form
                 }
                 sc.Start();
                 sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(10));
+                UpdateServiceStatus();
+                lblStatusText.Text = "Servicio reiniciado con éxito.";
+                MessageBox.Show("El servicio de Windows 'MorpheusSyncAgent' se ha REINICIADO con éxito y se encuentra en ejecución.", "Servicio Reiniciado", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
-            UpdateServiceStatus();
-            lblStatusText.Text = "Servicio actualizado.";
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Error al controlar el servicio:\n{ex.Message}", "Error de Servicio", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            UpdateServiceStatus();
+            MessageBox.Show($"Error al controlar el servicio:\n{ex.Message}\n\nVerifica que la aplicación se esté ejecutando con permisos de Administrador.", "Error de Servicio", MessageBoxButtons.OK, MessageBoxIcon.Error);
             lblStatusText.Text = $"Error: {ex.Message}";
         }
     }
@@ -742,6 +848,12 @@ public class MainForm : Form
                     lblLastBaseline.ForeColor = baseline ? Color.FromArgb(16, 185, 129) : Color.FromArgb(245, 158, 11);
 
                     lblLastSales.Text = $"Ultima Venta:\n{doc["LastSalesSync"]?.ToString() ?? "Sin iniciar"}";
+
+                    string lastMov = doc["LastMovementSync"]?.ToString() ?? "Sin iniciar";
+                    if (lblMovementsInfo != null)
+                    {
+                        lblMovementsInfo.Text = $"Ultima sincronizacion de movimientos registrada: {lastMov}";
+                    }
                 }
             }
             catch (Exception ex)
@@ -756,6 +868,10 @@ public class MainForm : Form
             lblLastCosts.Text = "Costos:\nEstado Limpio";
             lblLastBaseline.Text = "Baseline:\nPendiente (Cero)";
             lblLastSales.Text = "Ventas:\nEstado Limpio";
+            if (lblMovementsInfo != null)
+            {
+                lblMovementsInfo.Text = "Ultima sincronizacion de movimientos: Sin registrar (Estado limpio)";
+            }
         }
         UpdateServiceStatus();
     }
@@ -881,6 +997,52 @@ public class MainForm : Form
         {
             MessageBox.Show($"Error ajustando fecha de ventas:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void BtnSyncMovements_Click(object? sender, EventArgs e)
+    {
+        if (rbMovementsCustom.Checked)
+        {
+            if (!DateTime.TryParse(txtMovementsCustomDate.Text.Trim(), out DateTime start))
+            {
+                MessageBox.Show("Formato de fecha invalido para movimientos. Usa AAAA-MM-DD.", "Fecha Invalida", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            try
+            {
+                JsonNode stateObj;
+                if (File.Exists(_syncStatePath))
+                {
+                    stateObj = JsonNode.Parse(File.ReadAllText(_syncStatePath)) ?? new JsonObject();
+                }
+                else
+                {
+                    stateObj = new JsonObject
+                    {
+                        ["LastProductSync"] = "2000-01-01T00:00:00",
+                        ["LastBarcodeSync"] = "2000-01-01T00:00:00",
+                        ["BaselineInventoryDone"] = true,
+                        ["LastMovementSync"] = "2000-01-01T00:00:00",
+                        ["LastSalesSync"] = "2000-01-01T00:00:00",
+                        ["LastSupplierProductSync"] = "2000-01-01T00:00:00"
+                    };
+                }
+
+                stateObj["LastMovementSync"] = start.ToString("yyyy-MM-ddT00:00:00");
+                stateObj["BaselineInventoryDone"] = true;
+                File.WriteAllText(_syncStatePath, stateObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+
+                RefreshSyncState();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error ajustando fecha de movimientos:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+        }
+
+        RunExtractor("movements");
     }
 
     private async void BtnTestSql_Click(object? sender, EventArgs e)
