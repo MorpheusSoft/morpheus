@@ -18,6 +18,7 @@ import { Dropdown } from 'primereact/dropdown';
 import { Checkbox } from 'primereact/checkbox';
 import { InputNumber } from 'primereact/inputnumber';
 import ConciliationPanel from './components/ConciliationPanel';
+import Link from 'next/link';
 
 export default function OrderDetailsPage() {
   const params = useParams();
@@ -1128,6 +1129,60 @@ export default function OrderDetailsPage() {
       {/* PANEL DE CONCILIACIÓN 3-WAY MATCH (FASE 8) */}
       {order.status === 'received' && (
           <ConciliationPanel order={order} currencies={currencies} currencyId={currencyId} onConciliated={fetchOrder} />
+      )}
+
+      {/* PANEL DE AUDITORÍA FISCAL (3-WAY MATCH CONCILIADA) */}
+      {order.status === 'conciliated' && (
+          <div className="bg-white rounded-2xl shadow-lg border-2 border-emerald-500 mt-8 overflow-hidden">
+              <div className="bg-emerald-50/80 p-5 border-b border-emerald-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                      <span className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-lg font-bold shadow-md shadow-emerald-500/20">
+                          <i className="pi pi-check-circle"></i>
+                      </span>
+                      <div>
+                          <h2 className="text-lg font-black text-slate-800">Orden Conciliada Fiscalmente (3-Way Match OK)</h2>
+                          <p className="text-xs text-slate-500 font-medium">Esta orden fue contrastada con el documento fiscal del proveedor y autorizada para Cuentas por Pagar.</p>
+                      </div>
+                  </div>
+                  <Tag value={order.reconciliation_status === 'MATCH_WITH_DEBIT_NOTE' ? 'Aprobada c/ Nota Débito' : '100% Match Exacto'} severity={order.reconciliation_status === 'MATCH_WITH_DEBIT_NOTE' ? 'warning' : 'success'} className="font-bold text-xs px-3 py-1" />
+              </div>
+              <div className="p-6 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-sm bg-white">
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <span className="text-xs uppercase font-bold text-slate-500 block">Factura Fiscal / Control</span>
+                      <span className="text-base font-black text-slate-800 font-mono">📄 {order.invoice_number || 'N/A'}</span>
+                      <span className="text-xs text-slate-400 block mt-0.5">Fecha: {order.invoice_date ? format(new Date(order.invoice_date), 'dd/MM/yyyy') : 'N/A'}</span>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <span className="text-xs uppercase font-bold text-slate-500 block">Fecha de Conciliación</span>
+                      <span className="text-base font-bold text-slate-800">
+                          {order.conciliated_at ? format(new Date(order.conciliated_at), 'dd/MM/yyyy HH:mm') : 'N/A'}
+                      </span>
+                      <span className="text-xs text-slate-400 block mt-0.5">Autorizado para CxP</span>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <span className="text-xs uppercase font-bold text-slate-500 block">Nota de Débito / Retención</span>
+                      {order.debit_note_number ? (
+                          <>
+                              <span className="text-base font-black text-purple-700 font-mono">{order.debit_note_number}</span>
+                              <span className="text-xs font-bold text-red-600 block mt-0.5">Deducción: -${Number(order.debit_note_amount || 0).toFixed(2)}</span>
+                          </>
+                      ) : (
+                          <span className="text-slate-400 italic text-xs">Sin deducción (100% Match)</span>
+                      )}
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex flex-col justify-center">
+                      <span className="text-xs uppercase font-bold text-slate-500 block mb-1">Módulo 3-Way Match</span>
+                      <Link href="/reconciliation">
+                          <Button label="Ver Bandeja de Conciliación" icon="pi pi-external-link" size="small" outlined className="text-xs w-full font-bold" />
+                      </Link>
+                  </div>
+              </div>
+              {order.reconciliation_notes && (
+                  <div className="px-6 pb-4 pt-1 text-xs text-slate-500 bg-white border-t border-slate-100">
+                      <strong>Observaciones de Auditoría:</strong> {order.reconciliation_notes}
+                  </div>
+              )}
+          </div>
       )}
       
       {/* DIÁLOGO DE REGALÍA */}

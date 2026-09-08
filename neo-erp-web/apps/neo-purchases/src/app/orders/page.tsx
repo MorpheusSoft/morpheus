@@ -108,6 +108,7 @@ function PurchaseOrdersContent() {
   const draftCount = baseFilteredOrders.filter((o: any) => ['draft', 'pending_approval'].includes(o.status)).length;
   const transitCount = baseFilteredOrders.filter((o: any) => ['approved', 'sent', 'viewed', 'partial'].includes(o.status)).length;
   const receivedCount = baseFilteredOrders.filter((o: any) => o.status === 'received').length;
+  const conciliatedCount = baseFilteredOrders.filter((o: any) => o.status === 'conciliated').length;
 
   // 3. Filtrar por la Pestaña activa
   const filteredOrders = React.useMemo(() => {
@@ -115,6 +116,7 @@ function PurchaseOrdersContent() {
       if (activeIndex === 1) return ['draft', 'pending_approval'].includes(o.status);
       if (activeIndex === 2) return ['approved', 'sent', 'viewed', 'partial'].includes(o.status);
       if (activeIndex === 3) return o.status === 'received';
+      if (activeIndex === 4) return o.status === 'conciliated';
       return true; // Tab 0: Todas
     });
   }, [baseFilteredOrders, activeIndex]);
@@ -175,7 +177,8 @@ function PurchaseOrdersContent() {
           case 'pending_approval': return 'danger';
           case 'approved': return 'info';
           case 'sent': return 'success';
-          case 'received': return 'success';
+          case 'received': return 'info';
+          case 'conciliated': return 'success';
           default: return 'info';
       }
   };
@@ -187,6 +190,7 @@ function PurchaseOrdersContent() {
           case 'approved': return 'Aprobada (Lista p/ Enviar)';
           case 'sent': return 'Enviada al Proveedor';
           case 'received': return 'Recibida en WMS';
+          case 'conciliated': return 'Conciliada (3-Way OK)';
           default: return status.toUpperCase();
       }
   };
@@ -265,7 +269,8 @@ function PurchaseOrdersContent() {
           <TabPanel header={`Todas (${allCount})`} leftIcon="pi pi-list mr-2" />
           <TabPanel header={`Por Autorizar (${draftCount})`} leftIcon="pi pi-clock mr-2" />
           <TabPanel header={`Aprobadas / En Tránsito (${transitCount})`} leftIcon="pi pi-send mr-2" />
-          <TabPanel header={`Recibidas WMS (${receivedCount})`} leftIcon="pi pi-check-circle mr-2" />
+          <TabPanel header={`Recibidas WMS (${receivedCount})`} leftIcon="pi pi-box mr-2" />
+          <TabPanel header={`Conciliadas (${conciliatedCount})`} leftIcon="pi pi-verified mr-2" />
         </TabView>
 
         <DataTable value={filteredOrders} loading={loading} emptyMessage="No hay órdenes de compra que coincidan con el filtro seleccionado." size="small" stripedRows rowHover className="text-sm border-t border-slate-100 mt-2">

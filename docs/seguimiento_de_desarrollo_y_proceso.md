@@ -61,7 +61,7 @@
 | **Emisión de Órdenes de Compra (PO)** | `[✓]` | `/orders/new` | Creación de órdenes de compra con moneda dual (USD / VES) y descuentos encadenados. |
 | **Portal B2B de Proveedor (Acceso Público sin Login)** | `[✓]` | `/public/orders/[token]` | Enlace con token seguro donde el proveedor visualiza la orden, descarga PDF y confirma aceptación con fecha y registro de IP. |
 | **Recepción contra Orden de Compra** | `[✓]` | `/wms/receipts` | Descarga de mercancía en muelle validando cantidades pedidas vs recibidas. |
-| **Conciliación 3-Way Match Automática** | `[X]` | `/reconciliation` | **Pendiente:** Actualmente la pantalla es una tarjeta informativa/placeholder. Falta el motor de cruce automático Factura Fiscal vs Recepción WMS vs Orden de Compra. |
+| **Conciliación 3-Way Match Automática** | `[✓]` | `/reconciliation` | Motor automático de cruce Factura Fiscal vs Recepción WMS vs ODC, cálculo de variaciones, emisión automática de Notas de Débito por faltantes/sobreprecios y protección de márgenes. |
 
 ---
 
@@ -112,17 +112,16 @@
 ====================================================================
   TOTAL DE FUNCIONALIDADES CLAVE AUDITADAS: 35
 --------------------------------------------------------------------
-  [✓] LISTAS Y OPERATIVAS EN QA:           28   (80.0%)
+  [✓] LISTAS Y OPERATIVAS EN QA:           29   (82.9%)
   [~] PARCIALES / EN PROCESO:               3   ( 8.6%)
-  [X] PENDIENTES / BACKLOG FUTURO:          4   (11.4%)
+  [X] PENDIENTES / BACKLOG FUTURO:          3   ( 8.5%)
 ====================================================================
 ```
 
-### 📌 Las 4 Opciones que Faltan en Totalidad:
-1. **`[X]` Conciliación 3-Way Match Automática:** Motor de cotejo de Factura Fiscal vs ODC vs Recepción (actualmente maqueta).
-2. **`[X]` Bajada de Precios desde la Nube al POS:** Escribir los nuevos PVP calculados en `Neo Pricing` hacia las tablas de Stellar en tienda.
-3. **`[X]` Bajada de Promociones a las Cajas:** Replicar las ofertas configuradas en la nube hacia el POS físico.
-4. **`[X]` Diagnóstico IA Embebido en Pantalla de Toma Física:** Botón de diagnóstico directo dentro de la tabla de discrepancias del conteo ciego.
+### 📌 Las 3 Opciones que Faltan en Totalidad:
+1. **`[X]` Bajada de Precios desde la Nube al POS:** Escribir los nuevos PVP calculados en `Neo Pricing` hacia las tablas de Stellar en tienda.
+2. **`[X]` Bajada de Promociones a las Cajas:** Replicar las ofertas configuradas en la nube hacia el POS físico.
+3. **`[X]` Diagnóstico IA Embebido en Pantalla de Toma Física:** Botón de diagnóstico directo dentro de la tabla de discrepancias del conteo ciego.
 
 ---
 

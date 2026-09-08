@@ -236,6 +236,13 @@ def read_purchase_order_details(
             "name": facility.name,
             "code": facility.code
         } if facility else None,
+        "invoice_number": order.invoice_number,
+        "invoice_date": order.invoice_date,
+        "conciliated_at": order.conciliated_at,
+        "reconciliation_status": order.reconciliation_status or ("MATCH_EXACT" if order.status == 'conciliated' else "PENDING"),
+        "debit_note_number": order.debit_note_number,
+        "debit_note_amount": order.debit_note_amount,
+        "reconciliation_notes": order.reconciliation_notes,
         "lines": lines_rich
     }
 

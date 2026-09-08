@@ -42,6 +42,10 @@ class PurchaseOrder(Base):
     invoice_date = Column(Date)
     conciliated_by_id = Column(Integer, ForeignKey("core.users.id"))
     conciliated_at = Column(DateTime(timezone=True))
+    reconciliation_status = Column(String, default="PENDING")  # PENDING, MATCH_EXACT, MATCH_WITH_DEBIT_NOTE, REJECTED
+    debit_note_number = Column(String, nullable=True)
+    debit_note_amount = Column(Numeric(19, 4), default=0)
+    reconciliation_notes = Column(Text, nullable=True)
     
     supplier = relationship("Supplier")
     dest_facility = relationship("Facility")
