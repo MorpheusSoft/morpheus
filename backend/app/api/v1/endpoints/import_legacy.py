@@ -676,3 +676,112 @@ def import_suppliers_legacy(
     session.commit()
     print(f"✅ ¡Carga de Proveedores terminada! Registros procesados: {count}")
     return {"message": "Success", "imported": count}
+
+class LegacyDepartment(BaseModel):
+    c_Codigo: str
+    c_Descripcio: str
+
+class LegacyGroup(BaseModel):
+    c_Codigo: str
+    c_Descripcio: str
+    c_Departamento: str
+
+class LegacySubGroup(BaseModel):
+    c_Codigo: str
+    c_Descripcio: str
+    c_in_departamento: str
+    c_in_grupo: str
+
+class LegacyCategoriesPayload(BaseModel):
+    departments: List[LegacyDepartment] = []
+    groups: List[LegacyGroup] = []
+    subgroups: List[LegacySubGroup] = []
+
+@router.post("/categories-legacy")
+def import_categories_legacy(
+    payload: LegacyCategoriesPayload,
+    session: Session = Depends(deps.get_db)
+):
+    print(f"Iniciando carga de Categorías Jerárquicas ({len(payload.departments)} Deptos, {len(payload.groups)} Grupos, {len(payload.subgroups)} Subgrupos)...")
+    from app.models.inventory import Category
+    
+    # 1. Departamentos (Nivel 1 - Raíz)
+    dept_map = {}
+    for d in payload.departments:
+        code = d.c_Codigo.strip()
+        name = d.c_Descripcio.strip()
+        if not code: continue
+        slug = f"dep-{code}"
+        cat = session.query(Category).filter_by(slug=slug).first()
+        is_liquor = 'LICOR' in name.upper() or code == '11'
+        if not cat:
+            cat = Category(name=name, slug=slug, parent_id=None, path=slug, is_liquor=is_liquor)
+            session.add(cat)
+            session.flush()
+        else:
+            cat.name = name
+            cat.is_liquor = is_liquor
+        dept_map[code] = cat
+    session.commit()
+    
+    # 2. Grupos (Nivel 2 - Hijos de Depto)
+    grp_map = {}
+    for g in payload.groups:
+        code = g.c_Codigo.strip()
+        name = g.c_Descripcio.strip()
+        dep_code = g.c_Departamento.strip()
+        if not code: continue
+        slug = f"grp-{dep_code}-{code}"
+        parent = dept_map.get(dep_code) or session.query(Category).filter_by(slug=f"dep-{dep_code}").first()
+        parent_id = parent.id if parent else None
+        parent_path = parent.path if parent else ""
+        is_liquor = (parent and parent.is_liquor) or 'LICOR' in name.upper()
+        
+        cat = session.query(Category).filter_by(slug=slug).first()
+        if not cat:
+            cat = Category(name=name, slug=slug, parent_id=parent_id, path=f"{parent_path}/{slug}" if parent_path else slug, is_liquor=is_liquor)
+            session.add(cat)
+            session.flush()
+        else:
+            cat.name = name
+            cat.parent_id = parent_id
+            cat.is_liquor = is_liquor
+        grp_map[(dep_code, code)] = cat
+        grp_map[code] = cat
+    session.commit()
+    
+    # 3. Subgrupos (Nivel 3 - Hijos de Grupo)
+    for s in payload.subgroups:
+        code = s.c_Codigo.strip()
+        name = s.c_Descripcio.strip()
+        dep_code = s.c_in_departamento.strip()
+        grp_code = s.c_in_grupo.strip()
+        if not code: continue
+        slug = f"sub-{grp_code}-{code}"
+        
+        parent = grp_map.get((dep_code, grp_code)) or grp_map.get(grp_code) or session.query(Category).filter_by(slug=f"grp-{dep_code}-{grp_code}").first()
+        parent_id = parent.id if parent else None
+        parent_path = parent.path if parent else ""
+        is_liquor = (parent and parent.is_liquor) or 'LICOR' in name.upper()
+        
+        cat = session.query(Category).filter_by(slug=slug).first()
+        if not cat:
+            cat = Category(name=name, slug=slug, parent_id=parent_id, path=f"{parent_path}/{slug}" if parent_path else slug, is_liquor=is_liquor)
+            session.add(cat)
+            session.flush()
+        else:
+            cat.name = name
+            cat.parent_id = parent_id
+            cat.is_liquor = is_liquor
+    session.commit()
+    
+    total = session.query(Category).count()
+    print(f"✅ ¡Categorías procesadas exitosamente! Total en base de datos: {total}")
+    return {
+        "message": "Success",
+        "departments_processed": len(payload.departments),
+        "groups_processed": len(payload.groups),
+        "subgroups_processed": len(payload.subgroups),
+        "total_categories_in_db": total
+    }
+
