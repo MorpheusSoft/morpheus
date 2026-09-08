@@ -471,7 +471,7 @@ public class MainForm : Form
     {
         var panel = new Panel { AutoScroll = true, Dock = DockStyle.Fill, Padding = new Padding(16) };
 
-        var gbControl = CreateGroupBox("Control del Servicio de Windows (MorpheusSyncAgent)", 16, 12, 810, 140, Color.FromArgb(203, 213, 225));
+        var gbControl = CreateGroupBox("Control del Servicio de Windows (NEO)", 16, 12, 810, 140, Color.FromArgb(203, 213, 225));
         
         btnStartService = CreateButton("Iniciar Servicio", 16, 36, 160, 38, Color.FromArgb(16, 185, 129));
         btnStartService.Click += (s, e) => ControlService("start");
@@ -723,11 +723,49 @@ public class MainForm : Form
         return null;
     }
 
+    private ServiceController? GetActiveServiceController(out string detectedServiceName)
+    {
+        try
+        {
+            var sc = new ServiceController("NEO");
+            var _ = sc.Status;
+            detectedServiceName = "NEO";
+            return sc;
+        }
+        catch
+        {
+            try
+            {
+                var scOld = new ServiceController("MorpheusSyncAgent");
+                var _ = scOld.Status;
+                detectedServiceName = "MorpheusSyncAgent";
+                return scOld;
+            }
+            catch
+            {
+                detectedServiceName = "NEO";
+                return null;
+            }
+        }
+    }
+
     private void UpdateServiceStatus()
     {
         try
         {
-            using var sc = new ServiceController("MorpheusSyncAgent");
+            using var sc = GetActiveServiceController(out string svcName);
+            if (sc == null)
+            {
+                lblServiceStatus.Text = "NO INSTALADO";
+                lblServiceStatus.BackColor = Color.FromArgb(51, 65, 85);
+                if (lblServiceTabStatus != null)
+                {
+                    lblServiceTabStatus.Text = "⚠ Estado del servicio: NO INSTALADO en este equipo (Registralo abajo como 'NEO')";
+                    lblServiceTabStatus.ForeColor = Color.FromArgb(245, 158, 11);
+                }
+                return;
+            }
+
             var status = sc.Status;
             if (status == ServiceControllerStatus.Running)
             {
@@ -735,7 +773,7 @@ public class MainForm : Form
                 lblServiceStatus.BackColor = Color.FromArgb(16, 185, 129);
                 if (lblServiceTabStatus != null)
                 {
-                    lblServiceTabStatus.Text = "● Estado del servicio: EN EJECUCIÓN [ACTIVO]";
+                    lblServiceTabStatus.Text = $"● Estado del servicio ({svcName}): EN EJECUCIÓN [ACTIVO]";
                     lblServiceTabStatus.ForeColor = Color.FromArgb(16, 185, 129);
                 }
             }
@@ -745,7 +783,7 @@ public class MainForm : Form
                 lblServiceStatus.BackColor = Color.FromArgb(239, 68, 68);
                 if (lblServiceTabStatus != null)
                 {
-                    lblServiceTabStatus.Text = "■ Estado del servicio: DETENIDO (No sincroniza en segundo plano)";
+                    lblServiceTabStatus.Text = $"■ Estado del servicio ({svcName}): DETENIDO (No sincroniza en segundo plano)";
                     lblServiceTabStatus.ForeColor = Color.FromArgb(239, 68, 68);
                 }
             }
@@ -755,7 +793,7 @@ public class MainForm : Form
                 lblServiceStatus.BackColor = Color.FromArgb(245, 158, 11);
                 if (lblServiceTabStatus != null)
                 {
-                    lblServiceTabStatus.Text = $"▲ Estado del servicio: {status.ToString().ToUpper()}";
+                    lblServiceTabStatus.Text = $"▲ Estado del servicio ({svcName}): {status.ToString().ToUpper()}";
                     lblServiceTabStatus.ForeColor = Color.FromArgb(245, 158, 11);
                 }
             }
@@ -776,36 +814,42 @@ public class MainForm : Form
     {
         try
         {
-            lblStatusText.Text = $"Ejecutando acción '{action}' en servicio MorpheusSyncAgent...";
-            using var sc = new ServiceController("MorpheusSyncAgent");
+            using var sc = GetActiveServiceController(out string svcName);
+            if (sc == null)
+            {
+                MessageBox.Show("El servicio de Windows 'NEO' no esta instalado.\n\nPor favor haz clic en 'Registrar Servicio Windows' abajo para registrarlo.", "Servicio No Instalado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            lblStatusText.Text = $"Ejecutando accion '{action}' en servicio {svcName}...";
 
             if (action == "start")
             {
                 if (sc.Status == ServiceControllerStatus.Running)
                 {
                     UpdateServiceStatus();
-                    MessageBox.Show("El servicio MorpheusSyncAgent ya se encuentra en ejecución.", "Servicio Activo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show($"El servicio {svcName} ya se encuentra en ejecucion.", "Servicio Activo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
                 sc.Start();
                 sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(10));
                 UpdateServiceStatus();
-                lblStatusText.Text = "Servicio iniciado con éxito.";
-                MessageBox.Show("El servicio de Windows 'MorpheusSyncAgent' se ha INICIADO con éxito.\n\nAhora está sincronizando en segundo plano según los intervalos configurados.", "Servicio Iniciado", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                lblStatusText.Text = "Servicio iniciado con exito.";
+                MessageBox.Show($"El servicio de Windows '{svcName}' se ha INICIADO con exito.\n\nAhora esta sincronizando en segundo plano segun los intervalos configurados.", "Servicio Iniciado", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             else if (action == "stop")
             {
                 if (sc.Status == ServiceControllerStatus.Stopped)
                 {
                     UpdateServiceStatus();
-                    MessageBox.Show("El servicio MorpheusSyncAgent ya se encuentra detenido.", "Servicio Detenido", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show($"El servicio {svcName} ya se encuentra detenido.", "Servicio Detenido", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
                 sc.Stop();
                 sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
                 UpdateServiceStatus();
-                lblStatusText.Text = "Servicio detenido con éxito.";
-                MessageBox.Show("El servicio de Windows 'MorpheusSyncAgent' se ha DETENIDO con éxito.", "Servicio Detenido", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                lblStatusText.Text = "Servicio detenido con exito.";
+                MessageBox.Show($"El servicio de Windows '{svcName}' se ha DETENIDO con exito.", "Servicio Detenido", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             else if (action == "restart")
             {
@@ -817,14 +861,14 @@ public class MainForm : Form
                 sc.Start();
                 sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(10));
                 UpdateServiceStatus();
-                lblStatusText.Text = "Servicio reiniciado con éxito.";
-                MessageBox.Show("El servicio de Windows 'MorpheusSyncAgent' se ha REINICIADO con éxito y se encuentra en ejecución.", "Servicio Reiniciado", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                lblStatusText.Text = "Servicio reiniciado con exito.";
+                MessageBox.Show($"El servicio de Windows '{svcName}' se ha REINICIADO con exito y se encuentra en ejecucion.", "Servicio Reiniciado", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
         catch (Exception ex)
         {
             UpdateServiceStatus();
-            MessageBox.Show($"Error al controlar el servicio:\n{ex.Message}\n\nVerifica que la aplicación se esté ejecutando con permisos de Administrador.", "Error de Servicio", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show($"Error al controlar el servicio:\n{ex.Message}\n\nVerifica que la aplicacion se este ejecutando con permisos de Administrador.", "Error de Servicio", MessageBoxButtons.OK, MessageBoxIcon.Error);
             lblStatusText.Text = $"Error: {ex.Message}";
         }
     }
@@ -883,13 +927,11 @@ public class MainForm : Form
 
         try
         {
-            using (var sc = new ServiceController("MorpheusSyncAgent"))
+            using var sc = GetActiveServiceController(out string svcName);
+            if (sc != null && sc.Status == ServiceControllerStatus.Running)
             {
-                if (sc.Status == ServiceControllerStatus.Running)
-                {
-                    MessageBox.Show("El servicio de Windows esta activo. Debes detenerlo antes de resetear.", "Servicio Activo", MessageBoxButtons.OK, MessageBoxIcon.Stop);
-                    return;
-                }
+                MessageBox.Show($"El servicio de Windows '{svcName}' esta activo. Debes detenerlo antes de resetear.", "Servicio Activo", MessageBoxButtons.OK, MessageBoxIcon.Stop);
+                return;
             }
         }
         catch {}
@@ -1281,18 +1323,44 @@ public class MainForm : Form
     {
         try
         {
+            // Detener y eliminar servicio anterior si existia bajo el nombre viejo MorpheusSyncAgent
+            try
+            {
+                var psiCleanup = new ProcessStartInfo { FileName = "sc.exe", Arguments = "stop MorpheusSyncAgent", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+                var pClean = Process.Start(psiCleanup);
+                pClean?.WaitForExit();
+
+                var psiDelOld = new ProcessStartInfo { FileName = "sc.exe", Arguments = "delete MorpheusSyncAgent", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+                var pDelOld = Process.Start(psiDelOld);
+                pDelOld?.WaitForExit();
+            }
+            catch {}
+
             var psi = new ProcessStartInfo
             {
                 FileName = "sc.exe",
-                Arguments = $"create \"MorpheusSyncAgent\" binPath= \"\"{_agentExePath}\"\" start= auto DisplayName= \"Morpheus Sync Agent\"",
+                Arguments = $"create \"NEO\" binPath= \"\"{_agentExePath}\"\" start= auto DisplayName= \"NEO\"",
                 Verb = "runas",
                 UseShellExecute = true,
                 WindowStyle = ProcessWindowStyle.Hidden
             };
             var p = Process.Start(psi);
             p?.WaitForExit();
+
+            // Configurar descripcion del servicio
+            var psiDesc = new ProcessStartInfo
+            {
+                FileName = "sc.exe",
+                Arguments = "description \"NEO\" \"integrador con Stellar\"",
+                Verb = "runas",
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+            var pDesc = Process.Start(psiDesc);
+            pDesc?.WaitForExit();
+
             UpdateServiceStatus();
-            MessageBox.Show("Servicio 'MorpheusSyncAgent' registrado exitosamente en Windows.", "Servicio Registrado", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("Servicio 'NEO' registrado exitosamente en Windows con la descripcion 'integrador con Stellar'.", "Servicio Registrado", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -1302,18 +1370,30 @@ public class MainForm : Form
 
     private void UninstallService()
     {
-        var res = MessageBox.Show("¿Deseas desinstalar y eliminar el servicio 'MorpheusSyncAgent' de Windows?", "Confirmar Desinstalacion", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        var res = MessageBox.Show("¿Deseas desinstalar y eliminar el servicio 'NEO' de Windows?", "Confirmar Desinstalacion", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (res != DialogResult.Yes) return;
 
         try
         {
-            var psiStop = new ProcessStartInfo { FileName = "sc.exe", Arguments = "stop MorpheusSyncAgent", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+            var psiStop = new ProcessStartInfo { FileName = "sc.exe", Arguments = "stop NEO", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
             var p1 = Process.Start(psiStop);
             p1?.WaitForExit();
 
-            var psiDel = new ProcessStartInfo { FileName = "sc.exe", Arguments = "delete MorpheusSyncAgent", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+            var psiDel = new ProcessStartInfo { FileName = "sc.exe", Arguments = "delete NEO", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
             var p2 = Process.Start(psiDel);
             p2?.WaitForExit();
+
+            // Limpiar tambien nombre anterior si existiera
+            try
+            {
+                var psiStopOld = new ProcessStartInfo { FileName = "sc.exe", Arguments = "stop MorpheusSyncAgent", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+                var pOld1 = Process.Start(psiStopOld);
+                pOld1?.WaitForExit();
+                var psiDelOld = new ProcessStartInfo { FileName = "sc.exe", Arguments = "delete MorpheusSyncAgent", Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+                var pOld2 = Process.Start(psiDelOld);
+                pOld2?.WaitForExit();
+            }
+            catch {}
 
             UpdateServiceStatus();
             MessageBox.Show("Servicio desinstalado exitosamente.", "Desinstalado", MessageBoxButtons.OK, MessageBoxIcon.Information);

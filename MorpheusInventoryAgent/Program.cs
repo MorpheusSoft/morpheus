@@ -37,7 +37,7 @@ public class Program
         // Configuración para que funcione como Windows Service
         builder.Services.AddWindowsService(options =>
         {
-            options.ServiceName = "MorpheusSyncAgent";
+            options.ServiceName = "NEO";
         });
 
         // Configuración para que funcione como Daemon en Linux (Systemd)
