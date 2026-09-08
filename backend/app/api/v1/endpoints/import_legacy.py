@@ -396,8 +396,7 @@ def import_inventory_movements(
             wh = Warehouse(
                 name=f"Almacén {deposito.strip()}",
                 code=deposito.strip(),
-                facility_id=resolved_fac_id,
-                is_active=True
+                facility_id=resolved_fac_id
             )
             session.add(wh)
             session.flush()
@@ -405,8 +404,7 @@ def import_inventory_movements(
                 name=f"ALM-{deposito.strip()}/STOCK",
                 code=f"ALM-{deposito.strip()}/STOCK",
                 warehouse_id=wh.id,
-                usage="INTERNAL",
-                is_active=True
+                usage="INTERNAL"
             )
             session.add(internal_loc)
             session.flush()
@@ -508,8 +506,7 @@ def import_sales_legacy(
             wh = Warehouse(
                 name=f"Almacén {dep_code}",
                 code=dep_code,
-                facility_id=fac_id,
-                is_active=True
+                facility_id=fac_id
             )
             session.add(wh)
             session.flush()
@@ -517,8 +514,7 @@ def import_sales_legacy(
                 name=f"ALM-{dep_code}/STOCK",
                 code=f"ALM-{dep_code}/STOCK",
                 warehouse_id=wh.id,
-                usage="INTERNAL",
-                is_active=True
+                usage="INTERNAL"
             )
             session.add(loc)
             session.flush()
