@@ -268,22 +268,69 @@ public class MainForm : Form
         gbFase3.Controls.Add(btnSyncCosts);
 
         // Baseline Controls
-        var pnlBaseline = new Panel { Location = new Point(16, 140), Size = new Size(770, 68), BackColor = Color.FromArgb(30, 41, 59) };
+        var pnlBaseline = new Panel { Location = new Point(16, 140), Size = new Size(770, 72), BackColor = Color.FromArgb(30, 41, 59) };
         var lblBaselineTitle = new Label { Text = "5. Inventario Inicial (Baseline):", Location = new Point(8, 8), AutoSize = true, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.White };
         pnlBaseline.Controls.Add(lblBaselineTitle);
 
-        rbBaselineToday = new RadioButton { Text = "Al momento actual (Hoy - Inventario Vivo)", Checked = true, Location = new Point(12, 34), AutoSize = true, ForeColor = Color.White };
+        rbBaselineToday = new RadioButton 
+        { 
+            Text = "Al momento actual (Hoy - Inventario Vivo)", 
+            Checked = true, 
+            Location = new Point(12, 34), 
+            AutoSize = true, 
+            ForeColor = Color.White,
+            Cursor = Cursors.Hand
+        };
         pnlBaseline.Controls.Add(rbBaselineToday);
 
-        rbBaselineCustom = new RadioButton { Text = "A fecha de corte (Fin de día):", Location = new Point(245, 34), AutoSize = true, ForeColor = Color.White };
+        rbBaselineCustom = new RadioButton 
+        { 
+            Text = "Fecha de corte:", 
+            Location = new Point(295, 34), 
+            AutoSize = true, 
+            ForeColor = Color.White,
+            Cursor = Cursors.Hand
+        };
         pnlBaseline.Controls.Add(rbBaselineCustom);
 
-        txtBaselineDate = new TextBox { Text = "2026-06-07", Location = new Point(415, 32), Width = 90, BackColor = Color.FromArgb(15, 23, 42), ForeColor = Color.White };
+        txtBaselineDate = new TextBox 
+        { 
+            Text = DateTime.Today.ToString("yyyy-MM-dd"), 
+            Location = new Point(415, 32), 
+            Width = 95, 
+            BackColor = Color.FromArgb(15, 23, 42), 
+            ForeColor = Color.White,
+            TextAlign = HorizontalAlignment.Center
+        };
         pnlBaseline.Controls.Add(txtBaselineDate);
 
-        btnSyncBaseline = CreateButton("Sincronizar Inventario (Baseline)", 515, 28, 240, 32, Color.FromArgb(16, 185, 129));
+        btnSyncBaseline = CreateButton("Sincronizar Inventario (Baseline)", 525, 28, 230, 34, Color.FromArgb(16, 185, 129));
         btnSyncBaseline.Click += BtnSyncBaseline_Click;
         pnlBaseline.Controls.Add(btnSyncBaseline);
+
+        rbBaselineToday.CheckedChanged += (s, e) =>
+        {
+            if (rbBaselineToday.Checked)
+            {
+                txtBaselineDate.Enabled = false;
+                txtBaselineDate.ForeColor = Color.Gray;
+            }
+        };
+
+        rbBaselineCustom.CheckedChanged += (s, e) =>
+        {
+            if (rbBaselineCustom.Checked)
+            {
+                txtBaselineDate.Enabled = true;
+                txtBaselineDate.ForeColor = Color.White;
+                txtBaselineDate.Focus();
+            }
+        };
+
+        txtBaselineDate.Click += (s, e) =>
+        {
+            rbBaselineCustom.Checked = true;
+        };
 
         gbFase3.Controls.Add(pnlBaseline);
         panel.Controls.Add(gbFase3);
@@ -969,18 +1016,34 @@ public class MainForm : Form
 
                 if (de["InventoryBaseline"] != null)
                 {
-                    string savedCutoff = de["InventoryBaseline"]?["BaselineCutoffDate"]?.ToString() ?? "2026-06-07";
-                    if (string.Equals(savedCutoff, "now", StringComparison.OrdinalIgnoreCase) ||
+                    string savedCutoff = de["InventoryBaseline"]?["BaselineCutoffDate"]?.ToString() ?? "now";
+                    if (string.IsNullOrWhiteSpace(savedCutoff) ||
+                        string.Equals(savedCutoff, "now", StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(savedCutoff, "today", StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(savedCutoff, "hoy", StringComparison.OrdinalIgnoreCase))
                     {
                         rbBaselineToday.Checked = true;
+                        rbBaselineCustom.Checked = false;
+                        txtBaselineDate.Text = DateTime.Today.ToString("yyyy-MM-dd");
+                        txtBaselineDate.Enabled = false;
+                        txtBaselineDate.ForeColor = Color.Gray;
                     }
                     else
                     {
                         rbBaselineCustom.Checked = true;
+                        rbBaselineToday.Checked = false;
                         txtBaselineDate.Text = savedCutoff;
+                        txtBaselineDate.Enabled = true;
+                        txtBaselineDate.ForeColor = Color.White;
                     }
+                }
+                else
+                {
+                    rbBaselineToday.Checked = true;
+                    rbBaselineCustom.Checked = false;
+                    txtBaselineDate.Text = DateTime.Today.ToString("yyyy-MM-dd");
+                    txtBaselineDate.Enabled = false;
+                    txtBaselineDate.ForeColor = Color.Gray;
                 }
             }
         }

@@ -98,7 +98,7 @@ def build_installer():
                 "Enabled": False,
                 "IntervalMinutes": 60,
                 "TargetApiUrl": "https://api.qa.morpheussoft.net/api/v1/import/inventory-baseline-legacy",
-                "BaselineCutoffDate": "2026-06-07"
+                "BaselineCutoffDate": "now"
             },
             "InventoryMovements": {
                 "Enabled": False,
