@@ -32,3 +32,15 @@ export async function updateJob(jobCode: string, data: any) {
   revalidatePath("/dashboard/jobs")
   return res.json()
 }
+
+export async function runJobNow(jobCode: string) {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_URL}/jobs/${jobCode}/run`, {
+    method: "POST",
+    headers,
+  })
+  if (!res.ok) throw new Error("Failed to execute job")
+  revalidatePath("/dashboard/jobs")
+  return res.json()
+}
+

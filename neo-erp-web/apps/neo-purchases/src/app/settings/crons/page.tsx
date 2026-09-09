@@ -12,6 +12,7 @@ export default function CronsSettingsPage() {
     const [jobs, setJobs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [runningJobCode, setRunningJobCode] = useState<string | null>(null);
     const toast = useRef<Toast>(null);
 
     const fetchJobs = async () => {
@@ -51,6 +52,19 @@ export default function CronsSettingsPage() {
             toast.current?.show({ severity: 'error', summary: 'Rechazo', detail: 'Fallo al guardar.' });
         }
         setSaving(false);
+    };
+
+    const runJob = async (job: any) => {
+        setRunningJobCode(job.job_code);
+        try {
+            await api.post(`/jobs/${job.job_code}/run`);
+            toast.current?.show({ severity: 'success', summary: 'Ejecutado', detail: `El autómata '${job.name}' se ejecutó exitosamente.` });
+            fetchJobs();
+        } catch (e: any) {
+            toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al ejecutar la tarea.' });
+        } finally {
+            setRunningJobCode(null);
+        }
     };
 
     const updateJobState = (index: number, field: string, value: any) => {
@@ -105,6 +119,17 @@ export default function CronsSettingsPage() {
                                 </div>
 
                                 <Button icon="pi pi-save" rounded severity={job.is_enabled ? "success" : "secondary"} aria-label="Guardar" onClick={() => saveJob(job)} loading={saving} tooltip="Aplicar Cambios en Caliente" tooltipOptions={{position: 'top'}} className="ml-2 shadow-md" />
+                                <Button 
+                                    icon={runningJobCode === job.job_code ? "pi pi-spin pi-spinner" : "pi pi-play"} 
+                                    rounded 
+                                    severity="info" 
+                                    aria-label="Ejecutar Ahora" 
+                                    onClick={() => runJob(job)} 
+                                    loading={runningJobCode === job.job_code} 
+                                    tooltip="Ejecutar Ahora" 
+                                    tooltipOptions={{position: 'top'}} 
+                                    className="ml-2 shadow-md" 
+                                />
                             </div>
                         </div>
                     </Card>

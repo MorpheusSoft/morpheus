@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getJobs, updateJob } from "@/app/actions/jobs";
+import { getJobs, updateJob, runJobNow } from "@/app/actions/jobs";
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCode, setEditingCode] = useState<string | null>(null);
+  const [runningCode, setRunningCode] = useState<string | null>(null);
   
   // Form state
   const [name, setName] = useState("");
@@ -63,6 +64,20 @@ export default function JobsPage() {
       fetchJobs();
     } catch (error) {
       alert("Error guardando el Job");
+    }
+  };
+
+  const handleRunNow = async (job: any) => {
+    if (!window.confirm(`¿Deseas ejecutar de inmediato la tarea '${job.name}'?`)) return;
+    setRunningCode(job.job_code);
+    try {
+      await runJobNow(job.job_code);
+      await fetchJobs();
+      alert(`Autómata '${job.name}' ejecutado con éxito.`);
+    } catch (e: any) {
+      alert(e.message || "Error al ejecutar la tarea programada.");
+    } finally {
+      setRunningCode(null);
     }
   };
 
@@ -122,13 +137,23 @@ export default function JobsPage() {
                      </div>
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <button 
-                      onClick={() => openEditModal(job)}
-                      className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                      title="Editar Horario"
-                    >
-                      <i className="pi pi-cog"></i>
-                    </button>
+                    <div className="flex justify-end gap-1.5">
+                      <button 
+                        onClick={() => handleRunNow(job)}
+                        disabled={runningCode === job.job_code}
+                        className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors disabled:opacity-50"
+                        title="Ejecutar Ahora"
+                      >
+                        <i className={`pi ${runningCode === job.job_code ? "pi-spin pi-spinner" : "pi-play"} text-xs`}></i>
+                      </button>
+                      <button 
+                        onClick={() => openEditModal(job)}
+                        className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                        title="Editar Horario"
+                      >
+                        <i className="pi pi-cog"></i>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
