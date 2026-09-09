@@ -79,7 +79,7 @@ def create_purchase_order(
             unit_cost=cost
         )
         db.add(line)
-        total_amount += (qty * cost)
+        total_amount += (base_qty * cost)
         
     order.total_amount = total_amount
     db.commit()

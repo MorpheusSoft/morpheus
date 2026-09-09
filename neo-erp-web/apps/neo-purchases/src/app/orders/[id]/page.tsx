@@ -97,7 +97,15 @@ export default function OrderDetailsPage() {
     try {
       const res = await api.get(`/purchase-orders/${orderId}/details`);
       setOrder(res.data);
-      setLines(res.data.lines);
+      const mappedLines = (res.data.lines || []).map((l: any) => {
+          const factor = (l.qty_per_pack && l.qty_per_pack > 0) ? l.qty_per_pack : 1;
+          const uCost = parseFloat(l.unit_cost) || 0;
+          return {
+              ...l,
+              pack_cost: Number((uCost * factor).toFixed(4))
+          };
+      });
+      setLines(mappedLines);
       
       setInvoiceDiscountStr(res.data.invoice_discount_str || "");
       setConditionDiscountStr(res.data.condition_discount_str || "");
@@ -276,6 +284,7 @@ export default function OrderDetailsPage() {
           qty_ordered: 1,
           expected_base_qty: 1 * qty_per_pack,
           unit_cost: 0,
+          pack_cost: 0,
           line_discount_str: '',
           subtotal: 0
       };
@@ -312,6 +321,44 @@ export default function OrderDetailsPage() {
           row.line_discount_str = str;
           const gross = row.expected_base_qty * row.unit_cost;
           row.subtotal = calcDiscountCascade(gross, str);
+          updatedLines[rowIndex] = row;
+          return updatedLines;
+      });
+  };
+
+  const handlePackCostChange = (rowIndex: number, newPackCost: number) => {
+      setLines(prev => {
+          const updatedLines = [...prev];
+          if(!updatedLines[rowIndex]) return updatedLines;
+          const row = { ...updatedLines[rowIndex] };
+          
+          const pCost = isNaN(newPackCost) || newPackCost < 0 ? 0 : newPackCost;
+          const factor = (row.qty_per_pack && row.qty_per_pack > 0) ? row.qty_per_pack : 1;
+          
+          row.pack_cost = pCost;
+          row.unit_cost = pCost / factor;
+          const gross = (row.expected_base_qty || (row.qty_ordered * factor)) * row.unit_cost;
+          row.subtotal = calcDiscountCascade(gross, row.line_discount_str);
+          
+          updatedLines[rowIndex] = row;
+          return updatedLines;
+      });
+  };
+
+  const handleUnitCostChange = (rowIndex: number, newUnitCost: number) => {
+      setLines(prev => {
+          const updatedLines = [...prev];
+          if(!updatedLines[rowIndex]) return updatedLines;
+          const row = { ...updatedLines[rowIndex] };
+          
+          const uCost = isNaN(newUnitCost) || newUnitCost < 0 ? 0 : newUnitCost;
+          const factor = (row.qty_per_pack && row.qty_per_pack > 0) ? row.qty_per_pack : 1;
+          
+          row.unit_cost = uCost;
+          row.pack_cost = uCost * factor;
+          const gross = (row.expected_base_qty || (row.qty_ordered * factor)) * uCost;
+          row.subtotal = calcDiscountCascade(gross, row.line_discount_str);
+          
           updatedLines[rowIndex] = row;
           return updatedLines;
       });
@@ -394,6 +441,7 @@ export default function OrderDetailsPage() {
           qty_ordered: initial_qty,
           expected_base_qty: initial_qty * qty_per_unit,
           unit_cost: replacement_cost,
+          pack_cost: Number((replacement_cost * qty_per_unit).toFixed(4)),
           line_discount_str: '',
           subtotal: initial_qty * qty_per_unit * replacement_cost
       };
@@ -465,6 +513,7 @@ export default function OrderDetailsPage() {
           row.pack_name = newName;
           row.qty_per_pack = newQty;
           row.expected_base_qty = row.qty_ordered * newQty;
+          row.pack_cost = Number(((row.unit_cost || 0) * newQty).toFixed(4));
           
           const gross = row.expected_base_qty * row.unit_cost;
           row.subtotal = calcDiscountCascade(gross, row.line_discount_str);
@@ -915,10 +964,56 @@ export default function OrderDetailsPage() {
              return <div className="flex justify-end pr-2"><span className="font-semibold text-slate-400">{val.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} Unds</span></div>;
           }} align="right" />
           
-          <Column header="Costo Unitario" body={r => {
-              if (parseFloat(r.unit_cost) === 0) return <span className="font-bold text-amber-500 bg-amber-50 px-2 py-1 rounded-lg border border-amber-200 text-xs shadow-sm"><i className="pi pi-gift mr-1"></i>REGALÍA</span>;
-              return <span className="text-slate-600 font-bold">{currencies.find(c => c.id === currencyId)?.symbol || '$'}{parseFloat(r.unit_cost).toLocaleString('en-US', {minimumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2, maximumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2})}</span>;
-          }} align="right" />
+           <Column header="Costo x Bulto" body={(r, options) => {
+               const sym = currencies.find(c => c.id === currencyId)?.symbol || '$';
+               const dec = currencies.find(c => c.id === currencyId)?.decimal_places ?? 2;
+               const packCostVal = r.pack_cost != null ? Number(r.pack_cost) : Number(((Number(r.unit_cost) || 0) * (r.qty_per_pack || 1)).toFixed(dec));
+               
+               if (!isDraft) {
+                   return <span className="text-slate-700 font-semibold">{sym}{packCostVal.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})}</span>;
+               }
+               
+               return (
+                   <div className="flex justify-end items-center gap-1">
+                       <span className="font-bold text-slate-400 text-xs">{sym}</span>
+                       <input 
+                          type="number" 
+                          value={packCostVal} 
+                          step="0.01"
+                          onChange={(e) => handlePackCostChange(options.rowIndex, parseFloat(e.target.value))}
+                          className="w-24 text-right font-bold p-1.5 text-sm rounded-lg border-2 border-sky-200 outline-none focus:border-sky-500 bg-sky-50/50 text-sky-900 shadow-inner" 
+                          placeholder="0.00"
+                       />
+                   </div>
+               );
+           }} align="right" />
+           
+           <Column header="Costo x Unidad" body={(r, options) => {
+               const sym = currencies.find(c => c.id === currencyId)?.symbol || '$';
+               const uCost = Number(r.unit_cost) || 0;
+               
+               if (uCost === 0 && !isDraft) {
+                   return <span className="font-bold text-amber-500 bg-amber-50 px-2 py-1 rounded-lg border border-amber-200 text-xs shadow-sm"><i className="pi pi-gift mr-1"></i>REGALÍA</span>;
+               }
+               
+               if (!isDraft) {
+                   return <span className="text-slate-600 font-bold">{sym}{uCost.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>;
+               }
+               
+               return (
+                   <div className="flex justify-end items-center gap-1">
+                       <span className="font-bold text-slate-400 text-xs">{sym}</span>
+                       <input 
+                          type="number" 
+                          value={Number(uCost.toFixed(4))} 
+                          step="0.0001"
+                          onChange={(e) => handleUnitCostChange(options.rowIndex, parseFloat(e.target.value))}
+                          className="w-24 text-right font-bold p-1.5 text-sm rounded-lg border-2 border-slate-200 outline-none focus:border-emerald-500 bg-slate-50 text-slate-700 shadow-inner" 
+                          placeholder="0.00"
+                       />
+                   </div>
+               );
+           }} align="right" />
           
           <Column header="% Dscto (Renglón)" body={(r, options) => {
               if (parseFloat(r.unit_cost) === 0) return null;

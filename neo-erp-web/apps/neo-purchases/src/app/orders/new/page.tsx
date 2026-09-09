@@ -238,9 +238,10 @@ export default function NewOrderPage() {
         return;
     }
     
-    const qty_per_unit = selectedProduct.qty_per_unit || 1;
+    const qty_per_unit = parseFloat(selectedProduct.qty_per_unit) || 1;
     const initial_qty = 1;
-    const replacement_cost = selectedProduct.replacement_cost || 0;
+    const replacement_cost = parseFloat(selectedProduct.replacement_cost) || 0;
+    const initial_pack_cost = Number((replacement_cost * qty_per_unit).toFixed(4));
     
     const newLine = {
         internal_id: Math.random().toString(),
@@ -248,10 +249,11 @@ export default function NewOrderPage() {
         sku: selectedProduct.variant_sku || 'N/A',
         product_name: selectedProduct.product_name,
         pack_id: selectedProduct.pack_id,
-        pack_name: selectedProduct.pack_name || 'Unidad Base',
+        pack_name: selectedProduct.pack_name || 'Und. Base',
         qty_per_pack: qty_per_unit,
         qty_ordered: initial_qty,
         unit_cost: replacement_cost,
+        pack_cost: initial_pack_cost,
         expected_base_qty: qty_per_unit * initial_qty,
         subtotal: replacement_cost * qty_per_unit * initial_qty
     };
@@ -275,26 +277,47 @@ export default function NewOrderPage() {
           const row = { ...updatedLines[rowIndex] };
           
           const qty = isNaN(newQty) || newQty < 0 ? 0 : newQty;
+          const factor = (row.qty_per_pack && row.qty_per_pack > 0) ? row.qty_per_pack : 1;
           
           row.qty_ordered = qty;
-          row.expected_base_qty = qty * row.qty_per_pack;
-          row.subtotal = row.expected_base_qty * row.unit_cost;
+          row.expected_base_qty = qty * factor;
+          row.subtotal = row.expected_base_qty * (row.unit_cost || 0);
           
           updatedLines[rowIndex] = row;
           return updatedLines;
       });
   };
   
-  const handleCostChange = (rowIndex: number, newCost: number) => {
+  const handlePackCostChange = (rowIndex: number, newPackCost: number) => {
       setLines(prev => {
           const updatedLines = [...prev];
           if(!updatedLines[rowIndex]) return updatedLines;
           const row = { ...updatedLines[rowIndex] };
           
-          const cost = isNaN(newCost) || newCost < 0 ? 0 : newCost;
+          const pCost = isNaN(newPackCost) || newPackCost < 0 ? 0 : newPackCost;
+          const factor = (row.qty_per_pack && row.qty_per_pack > 0) ? row.qty_per_pack : 1;
           
-          row.unit_cost = cost;
-          row.subtotal = row.expected_base_qty * row.unit_cost;
+          row.pack_cost = pCost;
+          row.unit_cost = pCost / factor;
+          row.subtotal = (row.expected_base_qty || (row.qty_ordered * factor)) * row.unit_cost;
+          
+          updatedLines[rowIndex] = row;
+          return updatedLines;
+      });
+  };
+
+  const handleUnitCostChange = (rowIndex: number, newUnitCost: number) => {
+      setLines(prev => {
+          const updatedLines = [...prev];
+          if(!updatedLines[rowIndex]) return updatedLines;
+          const row = { ...updatedLines[rowIndex] };
+          
+          const uCost = isNaN(newUnitCost) || newUnitCost < 0 ? 0 : newUnitCost;
+          const factor = (row.qty_per_pack && row.qty_per_pack > 0) ? row.qty_per_pack : 1;
+          
+          row.unit_cost = uCost;
+          row.pack_cost = uCost * factor;
+          row.subtotal = (row.expected_base_qty || (row.qty_ordered * factor)) * uCost;
           
           updatedLines[rowIndex] = row;
           return updatedLines;
@@ -479,38 +502,57 @@ export default function NewOrderPage() {
           
           <Column header="Nomenclatura" field="product_name" body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
           
-          <Column header="Unidad Comercial" body={r => (
-             <span className="text-xs font-bold text-slate-500 bg-slate-50 px-2 py-1.5 rounded border border-slate-200 uppercase tracking-wide">
+          <Column header="Presentación" body={r => (
+             <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-1.5 rounded border border-slate-200 uppercase tracking-wide">
                 <i className="pi pi-box mr-1 text-slate-400 text-[10px]"></i>
                 {r.pack_name} (x{r.qty_per_pack})
              </span>
           )} align="center" />
           
           <Column header="Cant. a Comprar" body={(r, options) => (
-             <div className="flex justify-center">
+             <div className="flex flex-col items-center gap-1">
                  <input 
                     type="number" 
                     value={r.qty_ordered} 
+                    min="1"
                     onChange={(e) => handleQtyChange(options.rowIndex, parseFloat(e.target.value))}
-                    className="w-24 text-center text-lg font-black p-2 rounded-lg border-2 border-indigo-200 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 bg-indigo-50 transition-all text-indigo-700 shadow-inner" 
+                    className="w-20 text-center text-base font-black p-1.5 rounded-lg border-2 border-indigo-200 outline-none focus:border-indigo-500 bg-indigo-50/70 text-indigo-700 shadow-inner" 
                  />
+                 <span className="text-[10px] font-semibold text-slate-400">
+                    {r.expected_base_qty} {r.qty_per_pack > 1 ? 'Unds' : ''}
+                 </span>
              </div>
           )} align="center" />
           
-          <Column header="Costo Negociado" body={(r, options) => (
+          <Column header="Costo x Bulto" body={(r, options) => (
              <div className="flex justify-end items-center gap-1">
-                 <span className="font-bold text-slate-400">$</span>
+                 <span className="font-bold text-slate-400 text-xs">$</span>
                  <input 
                     type="number" 
-                    value={r.unit_cost} 
+                    value={r.pack_cost != null ? Number(r.pack_cost) : Number((r.unit_cost * r.qty_per_pack).toFixed(2))} 
                     step="0.01"
-                    onChange={(e) => handleCostChange(options.rowIndex, parseFloat(e.target.value))}
-                    className="w-28 text-right font-bold p-2 rounded-lg border-2 border-slate-200 outline-none focus:border-emerald-500 bg-slate-50 text-slate-700" 
+                    onChange={(e) => handlePackCostChange(options.rowIndex, parseFloat(e.target.value))}
+                    className="w-24 text-right font-bold p-1.5 text-sm rounded-lg border-2 border-sky-200 outline-none focus:border-sky-500 bg-sky-50/50 text-sky-900" 
+                    placeholder="0.00"
+                 />
+             </div>
+          )} align="right" />
+
+          <Column header="Costo x Unidad" body={(r, options) => (
+             <div className="flex justify-end items-center gap-1">
+                 <span className="font-bold text-slate-400 text-xs">$</span>
+                 <input 
+                    type="number" 
+                    value={r.unit_cost != null ? Number(Number(r.unit_cost).toFixed(4)) : 0} 
+                    step="0.0001"
+                    onChange={(e) => handleUnitCostChange(options.rowIndex, parseFloat(e.target.value))}
+                    className="w-24 text-right font-bold p-1.5 text-sm rounded-lg border-2 border-slate-200 outline-none focus:border-emerald-500 bg-slate-50 text-slate-700" 
+                    placeholder="0.00"
                  />
              </div>
           )} align="right" />
           
-          <Column header="Subtotal" body={r => <span className="font-black text-emerald-700 text-base">${parseFloat(r.subtotal).toLocaleString('en-US', {minimumFractionDigits: 2})}</span>} align="right" />
+          <Column header="Subtotal" body={r => <span className="font-black text-emerald-700 text-base">${parseFloat(r.subtotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>} align="right" />
           
           <Column body={(r, options) => (
              <Button type="button" icon="pi pi-trash" rounded text severity="danger" onClick={() => removeLine(options.rowIndex)} aria-label="Eliminar" />
