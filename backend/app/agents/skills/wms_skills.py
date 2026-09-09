@@ -23,7 +23,7 @@ def audit_negative_stock(db: Session, worker: DigitalWorker) -> List[Dict[str, A
     y registra cada hallazgo en la bitácora de acciones del trabajador digital.
     """
     results = []
-    allowed_facility_ids = [f.id for f in worker.user.facilities] if worker.user and worker.user.facilities else [1]
+    allowed_facility_ids = [f.id for f in worker.user.facilities] if worker.user and worker.user.facilities else [f.id for f in db.query(Facility).all()]
 
     # Buscar snapshots negativos
     negative_snapshots = db.query(InventorySnapshot, ProductVariant, Product, Facility)\

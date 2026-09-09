@@ -44,8 +44,7 @@ def run_mrp_draft_generation(db: Session, worker: DigitalWorker) -> List[Dict[st
     Si se detecta quiebre de stock proyectado, genera las Órdenes de Compra en estado 'draft'
     (Borrador) agrupadas por proveedor y sede, respetando empaques maestros y MOQ.
     Registra cada orden creada en la bitácora de acciones del trabajador digital.
-    """
-    allowed_facility_ids = [f.id for f in worker.user.facilities] if worker.user and worker.user.facilities else [1]
+    allowed_facility_ids = [f.id for f in worker.user.facilities] if worker.user and worker.user.facilities else [f.id for f in db.query(Facility).all()]
     orders_to_create: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
     results = []
 

@@ -171,13 +171,15 @@ def run_migration():
             arturo_user_id = conn.execute(text("SELECT id FROM core.users WHERE email = 'arturo.wms@morpheus.internal'")).scalar()
             clara_user_id = conn.execute(text("SELECT id FROM core.users WHERE email = 'clara.compras@morpheus.internal'")).scalar()
 
-            # Asignar a la sede 1 (PATIO TRIGAL)
-            for uid in [arturo_user_id, clara_user_id]:
-                conn.execute(text("""
-                    INSERT INTO core.user_facilities (user_id, facility_id)
-                    VALUES (:uid, 1)
-                    ON CONFLICT DO NOTHING;
-                """), {"uid": uid})
+            # Asignar a la primera sede disponible
+            first_fac_id = conn.execute(text("SELECT id FROM core.facilities ORDER BY id LIMIT 1")).scalar()
+            if first_fac_id:
+                for uid in [arturo_user_id, clara_user_id]:
+                    conn.execute(text("""
+                        INSERT INTO core.user_facilities (user_id, facility_id)
+                        VALUES (:uid, :fac_id)
+                        ON CONFLICT DO NOTHING;
+                    """), {"uid": uid, "fac_id": first_fac_id})
 
             # Crear registros en core.digital_workers
             conn.execute(text("""
