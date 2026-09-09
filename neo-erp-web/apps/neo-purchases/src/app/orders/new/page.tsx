@@ -413,28 +413,28 @@ export default function NewOrderPage() {
       <Toast ref={toast} position="bottom-right" />
       
       {/* HEADER EJECUTIVO */}
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden">
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-2 h-full bg-indigo-500"></div>
           <div>
               <div className="flex items-center gap-3 mb-1">
                  <Button icon="pi pi-arrow-left" rounded text aria-label="Volver" onClick={() => router.push('/orders')} />
-                 <h1 className="text-3xl font-black text-slate-800 tracking-tight">Crear Orden Manual</h1>
+                 <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">Crear Orden Manual</h1>
               </div>
-              <p className="text-slate-500 ml-12 text-sm mt-2">
+              <p className="text-slate-500 ml-12 text-xs sm:text-sm mt-1 sm:mt-2">
                  Construya una Orden de Compra física (DRAFT) sin pasar por el simulador MRP.
               </p>
           </div>
           
-          <div className="flex flex-col items-end bg-slate-50 p-4 rounded-xl border border-slate-100 min-w-[200px]">
+          <div className="flex flex-col items-start sm:items-end bg-slate-50 p-4 rounded-xl border border-slate-100 w-full lg:w-auto shrink-0 min-w-[200px]">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total Estimado</span>
-              <span className="text-4xl font-black text-indigo-600 block leading-none">
+              <span className="text-3xl sm:text-4xl font-black text-indigo-600 block leading-none">
                  <span className="text-xl text-indigo-400 mr-1">$</span>
                  {calculateTotal().toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
               </span>
           </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-6">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-2">
              <label className="text-sm font-bold text-slate-700 uppercase tracking-wide">1. Proveedor Origen</label>
              <Dropdown 
@@ -467,11 +467,13 @@ export default function NewOrderPage() {
       </div>
 
       {/* Selector de Catálogo */}
-      <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col items-start gap-4">
-          <SelectButton value={searchMode} onChange={(e) => { if(e.value) setSearchMode(e.value) }} options={searchModeOptions} optionLabel="label" />
+      <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col items-start gap-4">
+          <div className="w-full overflow-x-auto pb-1">
+             <SelectButton value={searchMode} onChange={(e) => { if(e.value) setSearchMode(e.value) }} options={searchModeOptions} optionLabel="label" />
+          </div>
           
-          <div className="w-full flex flex-col sm:flex-row items-center gap-4">
-            <div className="flex-1 w-full flex items-center gap-2">
+          <div className="w-full flex flex-col xl:flex-row items-stretch xl:items-center gap-3">
+            <div className="flex-1 w-full flex items-center gap-2 min-w-0">
               <Dropdown 
                   value={selectedProduct} 
                   onChange={(e) => {
@@ -498,15 +500,16 @@ export default function NewOrderPage() {
                     icon="pi pi-bolt" 
                     tooltip="Alta Rápida de Insumo Cero-Fricción"
                     tooltipOptions={{ position: 'top' }}
-                    className="p-button-rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200 border-none shrink-0 w-12 h-12" 
+                    className="p-button-rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200 border-none shrink-0 w-11 h-11" 
                     onClick={() => setShowProductModal(true)} 
                 />
             )}
             </div>
 
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full xl:w-auto shrink-0 justify-end">
             {selectedProduct && selectedProduct.available_packagings && selectedProduct.available_packagings.length > 1 && (
-               <div className="flex items-center gap-2 shrink-0 bg-indigo-50/70 px-3 py-1.5 rounded-xl border border-indigo-200">
-                  <span className="text-xs font-bold text-indigo-700 uppercase">Presentación:</span>
+               <div className="flex items-center gap-2 bg-indigo-50/70 px-3 py-2 rounded-xl border border-indigo-200 w-full sm:w-auto justify-between sm:justify-start">
+                  <span className="text-xs font-bold text-indigo-700 uppercase whitespace-nowrap">Presentación:</span>
                   <Dropdown
                      value={selectedPackId}
                      onChange={(e) => setSelectedPackId(e.value)}
@@ -514,16 +517,24 @@ export default function NewOrderPage() {
                      optionLabel="label"
                      optionValue="id"
                      placeholder="Presentación"
-                     className="w-44 p-inputtext-sm text-xs font-bold border-indigo-300 bg-white text-indigo-900 rounded-lg shadow-sm"
+                     className="w-full sm:w-48 p-inputtext-sm text-xs font-bold border-indigo-300 bg-white text-indigo-900 rounded-lg shadow-sm"
                   />
                </div>
             )}
 
-            <Button label="Añadir a Orden" icon="pi pi-plus" onClick={addLine} disabled={!selectedProduct} className="font-bold shrink-0 bg-indigo-600 hover:bg-indigo-700 border-none rounded-xl" />
+            <Button label="Añadir a Orden" icon="pi pi-plus" onClick={addLine} disabled={!selectedProduct} className="w-full sm:w-auto font-bold bg-indigo-600 hover:bg-indigo-700 border-none rounded-xl px-5 py-3 text-sm justify-center whitespace-nowrap shadow-md shadow-indigo-500/20" />
+            </div>
           </div>
       </div>
 
-      <Dialog header={<div className="flex items-center gap-2 text-xl font-black text-slate-800"><i className="pi pi-bolt text-emerald-500"></i> Creador Fast-Track</div>} visible={showProductModal} style={{ width: '35vw' }} onHide={() => setShowProductModal(false)} className="rounded-2xl overflow-hidden">
+      <Dialog 
+         header={<div className="flex items-center gap-2 text-xl font-black text-slate-800"><i className="pi pi-bolt text-emerald-500"></i> Creador Fast-Track</div>} 
+         visible={showProductModal} 
+         style={{ width: '40vw', minWidth: '320px' }} 
+         breakpoints={{ '1200px': '55vw', '960px': '75vw', '640px': '95vw' }}
+         onHide={() => setShowProductModal(false)} 
+         className="rounded-2xl overflow-hidden"
+      >
          <div className="p-2 flex flex-col gap-4 mt-2">
             <p className="text-slate-500 text-sm mb-2">Crearás un producto real en el Maestro y se anclará automáticamente a este Proveedor.</p>
             
@@ -561,12 +572,22 @@ export default function NewOrderPage() {
 
       {/* MATRIZ DE EDICIÓN */}
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden mb-6">
-        <DataTable dataKey="internal_id" value={lines} emptyMessage="No has añadido productos a esta orden." size="small" stripedRows rowHover className="text-sm">
-          <Column header="SKU" field="sku" body={r => <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{r.sku}</span>} />
+        <div className="overflow-x-auto w-full">
+          <DataTable 
+            dataKey="internal_id" 
+            value={lines} 
+            emptyMessage="No has añadido productos a esta orden." 
+            size="small" 
+            stripedRows 
+            rowHover 
+            responsiveLayout="scroll"
+            className="text-sm min-w-[780px]"
+          >
+          <Column header="SKU" field="sku" style={{ width: '90px', minWidth: '80px' }} body={r => <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{r.sku}</span>} />
           
-          <Column header="Nomenclatura" field="product_name" body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
+          <Column header="Nomenclatura" field="product_name" style={{ minWidth: '160px' }} body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
           
-          <Column header="Presentación" body={(r, options) => (
+          <Column header="Presentación" style={{ minWidth: '160px' }} body={(r, options) => (
              <div className="flex items-center justify-center">
                 {r.available_packagings && r.available_packagings.length > 1 ? (
                     <Dropdown
@@ -586,7 +607,7 @@ export default function NewOrderPage() {
              </div>
           )} align="center" />
           
-          <Column header="Cant. a Comprar" body={(r, options) => {
+          <Column header="Cant. a Comprar" style={{ minWidth: '120px' }} body={(r, options) => {
              const isPack = r.qty_per_pack > 1;
              return (
                  <div className="flex flex-col items-center gap-1">
@@ -610,7 +631,7 @@ export default function NewOrderPage() {
              );
           }} align="center" />
           
-          <Column header="Costo x Bulto" body={(r, options) => {
+          <Column header="Costo x Bulto" style={{ minWidth: '130px' }} body={(r, options) => {
              const isPack = r.qty_per_pack > 1;
              const packCostVal = r.pack_cost != null ? Number(r.pack_cost) : Number(((Number(r.unit_cost) || 0) * (r.qty_per_pack || 1)).toFixed(2));
              
@@ -637,7 +658,7 @@ export default function NewOrderPage() {
              );
           }} align="right" />
 
-          <Column header="Costo x Unidad" body={(r, options) => (
+          <Column header="Costo x Unidad" style={{ minWidth: '130px' }} body={(r, options) => (
              <div className="flex justify-end items-center gap-1">
                  <span className="font-bold text-slate-400 text-xs">$</span>
                  <input 
@@ -651,18 +672,19 @@ export default function NewOrderPage() {
              </div>
           )} align="right" />
           
-          <Column header="Subtotal" body={r => <span className="font-black text-emerald-700 text-base">${parseFloat(r.subtotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>} align="right" />
+          <Column header="Subtotal" style={{ minWidth: '110px' }} body={r => <span className="font-black text-emerald-700 text-base">${parseFloat(r.subtotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>} align="right" />
           
-          <Column body={(r, options) => (
+          <Column style={{ width: '60px', minWidth: '60px' }} body={(r, options) => (
              <Button type="button" icon="pi pi-trash" rounded text severity="danger" onClick={() => removeLine(options.rowIndex)} aria-label="Eliminar" />
           )} align="center" />
-        </DataTable>
+          </DataTable>
+        </div>
       </div>
 
       {/* CONSOLA DE ACCIONES */}
-      <div className="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+      <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
          <span className="text-slate-400 text-sm"><i className="pi pi-info-circle mr-2"></i>La orden creada iniciará como Borrador (Draft)</span>
-         <Button label="Crear Borrador" icon="pi pi-arrow-right" iconPos="right" onClick={createDraft} disabled={saving || lines.length === 0} className="font-bold px-8 shadow-lg hover:shadow-xl transition-all shadow-indigo-500/30 text-lg bg-indigo-600 border-none text-white" />
+         <Button label="Crear Borrador" icon="pi pi-arrow-right" iconPos="right" onClick={createDraft} disabled={saving || lines.length === 0} className="w-full sm:w-auto font-bold px-8 shadow-lg hover:shadow-xl transition-all shadow-indigo-500/30 text-lg bg-indigo-600 border-none text-white justify-center" />
       </div>
 
     </div>

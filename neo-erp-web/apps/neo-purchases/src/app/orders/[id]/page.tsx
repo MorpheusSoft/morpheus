@@ -823,19 +823,19 @@ export default function OrderDetailsPage() {
       <Toast ref={toast} position="bottom-right" />
       
       {/* HEADER EJECUTIVO */}
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden">
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 relative overflow-hidden">
           <div className="absolute top-0 left-0 w-2 h-full bg-emerald-500"></div>
           <div>
               <div className="flex items-center gap-3 mb-1">
                  <Button icon="pi pi-arrow-left" rounded text aria-label="Volver" onClick={() => router.push('/orders')} />
-                 <h1 className="text-3xl font-black text-slate-800 tracking-tight">{order.reference}</h1>
+                 <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">{order.reference}</h1>
                  {order.status === 'draft' && <Tag severity="warning" value="BORRADOR" className="ml-2 font-bold tracking-widest px-3 py-1" />}
                  {order.status === 'pending_approval' && <Tag severity="info" value="ESPERANDO GERENCIA" className="ml-2 font-bold tracking-widest px-3 py-1 bg-orange-500" />}
                  {order.status === 'approved' && <Tag severity="success" value="APROBADA" className="ml-2 font-bold tracking-widest px-3 py-1" />}
                  {order.status === 'sent' && <Tag severity="success" value="ENVIADA (SIN LEER)" className="ml-2 font-bold tracking-widest px-3 py-1 bg-sky-500 border-none" icon="pi pi-send" />}
                  {order.status === 'viewed' && <Tag severity="success" value="LEÍDA (DOBLE CHECK)" className="ml-2 font-bold tracking-widest px-3 py-1 bg-indigo-600 border-none" icon="pi pi-check-circle" />}
               </div>
-              <p className="text-slate-500 ml-12 text-sm mt-2 flex flex-wrap items-center gap-y-1">
+              <p className="text-slate-500 ml-12 text-xs sm:text-sm mt-1 sm:mt-2 flex flex-wrap items-center gap-y-1">
                   <span className="flex items-center"><i className="pi pi-building mr-2 text-indigo-400"></i> Proveedor: <span className="font-bold text-slate-700 ml-1">{order.supplier.name}</span></span>
                   <span className="mx-3 text-slate-200">|</span>
                   <span className="flex items-center"><i className="pi pi-map-marker mr-2 text-indigo-400"></i> Destino: <span className="font-bold text-slate-700 ml-1">{order.dest_facility ? order.dest_facility.name : 'General (Libre)'}</span></span>
@@ -846,13 +846,13 @@ export default function OrderDetailsPage() {
               </p>
           </div>
           
-          <div className="flex flex-col items-end gap-2 bg-slate-50 p-4 rounded-xl border border-slate-100 min-w-[200px]">
+          <div className="flex flex-col items-start sm:items-end gap-2 bg-slate-50 p-4 rounded-xl border border-slate-100 w-full lg:w-auto shrink-0 min-w-[220px]">
               <div className="flex flex-col w-full">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">Moneda Transaccional</label>
                   <Dropdown value={currencyId} options={currencies} onChange={(e) => handleCurrencyChange(e.value)} optionLabel="code" optionValue="id" disabled={!isDraft} className="w-full font-black text-slate-800 bg-white border-slate-200" />
               </div>
               <div className="flex flex-col items-end mt-3 border-t border-slate-100 pt-3 w-full">
-                  <span className="text-4xl font-black text-emerald-600 block leading-none">
+                  <span className="text-3xl sm:text-4xl font-black text-emerald-600 block leading-none">
                      <span className="text-xl text-emerald-400 mr-1">{currencies.find(c => c.id === currencyId)?.symbol || '$'}</span>
                      {calculateTotal().toLocaleString('en-US', {minimumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2, maximumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2})}
                   </span>
@@ -882,9 +882,9 @@ export default function OrderDetailsPage() {
 
       {/* MATRIZ DE EDICIÓN */}
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden mb-6">
-        <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+        <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <h3 className="font-bold text-slate-700 tracking-tight"><i className="pi pi-shopping-cart mr-2 text-indigo-500"></i>Desglose de Renglones</h3>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap items-center gap-2">
                 {isDraft && <Button icon="pi pi-gift" label="Añadir Regalía (Bonif.)" severity="warning" outlined size="small" onClick={openRegaliaModal} />}
                 {isDraft && <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 shadow-sm"><i className="pi pi-pencil text-[10px] mr-2"></i>Edición Abierta</span>}
             </div>
@@ -892,69 +892,83 @@ export default function OrderDetailsPage() {
         
         {/* BARRA DE BÚSQUEDA Y AGREGADO DE PRODUCTOS (SOLO BORRADOR) */}
         {isDraft && (
-           <div className="bg-slate-50/50 p-4 border-b border-slate-100 flex flex-wrap gap-4 items-center">
-              <Dropdown 
-                 value={searchMode} 
-                 options={searchModeOptions} 
-                 onChange={(e) => setSearchMode(e.value)} 
-                 className="w-44 text-xs font-bold border-slate-200" 
-              />
-              <div className="flex-1 min-w-[250px]">
+           <div className="bg-slate-50/50 p-4 border-b border-slate-100 flex flex-col xl:flex-row items-stretch xl:items-center gap-3">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1 min-w-0">
                  <Dropdown 
-                    value={selectedProduct} 
-                    options={searchMode === 'CATALOG' ? catalog : globalVariants} 
-                    onChange={(e) => {
-                       setSelectedProduct(e.value);
-                       setSelectedPackId(null);
-                    }} 
-                    optionLabel="display_name" 
-                    filter 
-                    onFilter={handleDropdownFilter}
-                    filterBy="display_name"
-                    placeholder={searchMode === 'CATALOG' ? "Buscar en catálogo del proveedor..." : "Buscar en maestro global de productos..."} 
-                    className="w-full text-xs border-slate-200" 
+                    value={searchMode} 
+                    options={searchModeOptions} 
+                    onChange={(e) => setSearchMode(e.value)} 
+                    className="w-full sm:w-44 text-xs font-bold border-slate-200 shrink-0" 
                  />
-              </div>
-
-              {selectedProduct && selectedProduct.available_packagings && selectedProduct.available_packagings.length > 1 && (
-                 <div className="flex items-center gap-2 shrink-0 bg-indigo-50/70 px-3 py-1.5 rounded-xl border border-indigo-200">
-                    <span className="text-xs font-bold text-indigo-700 uppercase">Presentación:</span>
-                    <Dropdown
-                       value={selectedPackId}
-                       onChange={(e) => setSelectedPackId(e.value)}
-                       options={selectedProduct.available_packagings}
-                       optionLabel="label"
-                       optionValue="id"
-                       placeholder="Presentación"
-                       className="w-44 p-inputtext-sm text-xs font-bold border-indigo-300 bg-white text-indigo-900 rounded-lg shadow-sm"
+                 <div className="flex-1 min-w-0">
+                    <Dropdown 
+                       value={selectedProduct} 
+                       options={searchMode === 'CATALOG' ? catalog : globalVariants} 
+                       onChange={(e) => {
+                          setSelectedProduct(e.value);
+                          setSelectedPackId(null);
+                       }} 
+                       optionLabel="display_name" 
+                       filter 
+                       onFilter={handleDropdownFilter}
+                       filterBy="display_name"
+                       placeholder={searchMode === 'CATALOG' ? "Buscar en catálogo del proveedor..." : "Buscar en maestro global de productos..."} 
+                       className="w-full text-xs border-slate-200" 
                     />
                  </div>
-              )}
+              </div>
 
-              <Button 
-                 label="Añadir a Orden" 
-                 icon="pi pi-plus-circle" 
-                 onClick={handleAddProductLine} 
-                 disabled={!selectedProduct} 
-                 className="bg-indigo-600 hover:bg-indigo-700 border-none font-bold px-6 shadow-md shadow-indigo-500/20" 
-              />
-              {searchMode === 'CATALOG' && (
+              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full xl:w-auto shrink-0 justify-end">
+                 {selectedProduct && selectedProduct.available_packagings && selectedProduct.available_packagings.length > 1 && (
+                    <div className="flex items-center gap-2 bg-indigo-50/70 px-3 py-2 rounded-xl border border-indigo-200 w-full sm:w-auto justify-between sm:justify-start">
+                       <span className="text-xs font-bold text-indigo-700 uppercase whitespace-nowrap">Presentación:</span>
+                       <Dropdown
+                          value={selectedPackId}
+                          onChange={(e) => setSelectedPackId(e.value)}
+                          options={selectedProduct.available_packagings}
+                          optionLabel="label"
+                          optionValue="id"
+                          placeholder="Presentación"
+                          className="w-full sm:w-48 p-inputtext-sm text-xs font-bold border-indigo-300 bg-white text-indigo-900 rounded-lg shadow-sm"
+                       />
+                    </div>
+                 )}
+
                  <Button 
-                    label="Crear Insumo Rápido" 
-                    icon="pi pi-bolt" 
-                    severity="success" 
-                    outlined
-                    onClick={() => setShowProductModal(true)} 
-                    className="font-bold border-2" 
+                    label="Añadir a Orden" 
+                    icon="pi pi-plus-circle" 
+                    onClick={handleAddProductLine} 
+                    disabled={!selectedProduct} 
+                    className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 border-none font-bold px-5 py-2.5 text-sm shadow-md shadow-indigo-500/20 whitespace-nowrap justify-center" 
                  />
-              )}
+                 {searchMode === 'CATALOG' && (
+                    <Button 
+                       label="Crear Insumo Rápido" 
+                       icon="pi pi-bolt" 
+                       severity="success" 
+                       outlined
+                       onClick={() => setShowProductModal(true)} 
+                       className="w-full sm:w-auto font-bold border-2 whitespace-nowrap justify-center text-sm" 
+                    />
+                 )}
+              </div>
            </div>
         )}
 
-        <DataTable dataKey="id" value={lines} emptyMessage="Esta orden está vacía como el desierto." size="small" stripedRows rowHover className="text-sm">
-          <Column header="SKU" field="sku" body={r => <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{r.sku}</span>} />
-          
-          <Column header="Nomenclatura" field="product_name" body={r => (
+        <div className="overflow-x-auto w-full">
+          <DataTable 
+            dataKey="id" 
+            value={lines} 
+            emptyMessage="Esta orden está vacía como el desierto." 
+            size="small" 
+            stripedRows 
+            rowHover 
+            responsiveLayout="scroll"
+            className="text-sm min-w-[850px]"
+          >
+            <Column header="SKU" field="sku" style={{ width: '90px', minWidth: '80px' }} body={r => <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{r.sku}</span>} />
+            
+            <Column header="Nomenclatura" field="product_name" style={{ minWidth: '180px' }} body={r => (
              <div className="flex items-center justify-between gap-2">
                  <span className="font-bold text-slate-800">{r.product_name}</span>
                  {r.ai_analysis && (
@@ -983,7 +997,7 @@ export default function OrderDetailsPage() {
              </div>
           )} />
           
-           <Column header="Unidad de Compra" body={(r, options) => {
+           <Column header="Unidad de Compra" style={{ minWidth: '160px' }} body={(r, options) => {
               if (!isDraft) {
                   return (
                       <div className="flex justify-end items-center gap-2">
@@ -1025,7 +1039,7 @@ export default function OrderDetailsPage() {
               );
            }} align="right" />
           
-          <Column header="Cant. a Facturar" body={(r, options) => {
+          <Column header="Cant. a Facturar" style={{ minWidth: '120px' }} body={(r, options) => {
              const isPack = r.qty_per_pack > 1;
              const isWeight = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'].includes(r.uom_base?.toUpperCase());
              const dec = isPack ? 0 : (isWeight ? 3 : 0);
@@ -1045,14 +1059,14 @@ export default function OrderDetailsPage() {
              )
           }} align="right" />
           
-          <Column header="Equivalencia Neta" field="expected_base_qty" body={r => {
+          <Column header="Equivalencia Neta" field="expected_base_qty" style={{ minWidth: '110px' }} body={r => {
              const isWeight = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'].includes(r.uom_base?.toUpperCase());
              const dec = isWeight ? 3 : 0;
              const val = Number(r.expected_base_qty) || 0;
              return <div className="flex justify-end pr-2"><span className="font-semibold text-slate-400">{val.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} Unds</span></div>;
           }} align="right" />
           
-           <Column header="Costo x Bulto" body={(r, options) => {
+           <Column header="Costo x Bulto" style={{ minWidth: '130px' }} body={(r, options) => {
                const sym = currencies.find(c => c.id === currencyId)?.symbol || '$';
                const dec = currencies.find(c => c.id === currencyId)?.decimal_places ?? 2;
                const isPack = r.qty_per_pack > 1;
@@ -1081,7 +1095,7 @@ export default function OrderDetailsPage() {
                );
            }} align="right" />
            
-           <Column header="Costo x Unidad" body={(r, options) => {
+           <Column header="Costo x Unidad" style={{ minWidth: '130px' }} body={(r, options) => {
                const sym = currencies.find(c => c.id === currencyId)?.symbol || '$';
                const uCost = Number(r.unit_cost) || 0;
                
@@ -1108,7 +1122,7 @@ export default function OrderDetailsPage() {
                );
            }} align="right" />
           
-          <Column header="% Dscto (Renglón)" body={(r, options) => {
+          <Column header="% Dscto (Renglón)" style={{ minWidth: '110px' }} body={(r, options) => {
               if (parseFloat(r.unit_cost) === 0) return null;
               if (!isDraft) return <div className="flex justify-end pr-2"><span className="font-bold text-amber-600">{r.line_discount_str ? `-${r.line_discount_str}%` : ''}</span></div>;
               return (
@@ -1118,7 +1132,7 @@ export default function OrderDetailsPage() {
               );
           }} align="right" />
           
-          <Column header="Subtotal" body={r => <span className="font-black text-emerald-700 text-base">{currencies.find(c => c.id === currencyId)?.symbol || '$'}{parseFloat(r.subtotal).toLocaleString('en-US', {minimumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2, maximumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2})}</span>} align="right" />
+          <Column header="Subtotal" style={{ minWidth: '110px' }} body={r => <span className="font-black text-emerald-700 text-base">{currencies.find(c => c.id === currencyId)?.symbol || '$'}{parseFloat(r.subtotal).toLocaleString('en-US', {minimumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2, maximumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2})}</span>} align="right" />
           
           {isDraft && (
               <Column header="Acciones" body={(r, options) => (
@@ -1136,7 +1150,8 @@ export default function OrderDetailsPage() {
               )} align="center" style={{ width: '5rem' }} />
           )}
           
-        </DataTable>
+          </DataTable>
+        </div>
       </div>
 
       {/* PANEL DE NEGOCIACIÓN LOGÍSTICA (FASE 6.7) */}
@@ -1484,7 +1499,14 @@ export default function OrderDetailsPage() {
       </Dialog>
 
       {/* CREADOR FAST-TRACK DE PRODUCTOS */}
-      <Dialog header={<div className="flex items-center gap-2 text-xl font-black text-slate-800"><i className="pi pi-bolt text-emerald-500"></i> Creador Fast-Track</div>} visible={showProductModal} style={{ width: '35vw' }} onHide={() => setShowProductModal(false)} className="rounded-2xl overflow-hidden">
+      <Dialog 
+          header={<div className="flex items-center gap-2 text-xl font-black text-slate-800"><i className="pi pi-bolt text-emerald-500"></i> Creador Fast-Track</div>} 
+          visible={showProductModal} 
+          style={{ width: '40vw', minWidth: '320px' }} 
+          breakpoints={{ '1200px': '55vw', '960px': '75vw', '640px': '95vw' }}
+          onHide={() => setShowProductModal(false)} 
+          className="rounded-2xl overflow-hidden"
+      >
           <div className="flex flex-col gap-4 mt-2 p-2">
               <div>
                   <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Nombre del Insumo / Producto</label>
