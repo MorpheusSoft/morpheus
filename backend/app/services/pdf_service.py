@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 from decimal import Decimal
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine
 from app.models.core import Supplier, Facility, Company, User, Buyer, Tribute
-from app.models.inventory import ProductVariant, Product, ProductPackaging
+from typing import Optional
+from app.models.inventory import ProductVariant, Product, ProductPackaging, ProductBarcode
 
 def calculate_discount_cascade(base_amount: float, discount_str: str) -> float:
     if not discount_str:
@@ -19,11 +20,138 @@ def calculate_discount_cascade(base_amount: float, discount_str: str) -> float:
             pass
     return net
 
+def sanitize_pdf_text(text: Optional[str]) -> str:
+    if not text:
+        return ""
+    # Map common non-latin-1 typographic unicode characters to ASCII/latin-1 equivalents
+    replacements = {
+        '\u2018': "'",
+        '\u2019': "'",
+        '\u201c': '"',
+        '\u201d': '"',
+        '\u2013': '-',
+        '\u2014': '-',
+        '\u2026': '...',
+        '\u2022': '*',
+        '\u00a0': ' ',
+        '\u200b': '',
+        '\u20ac': 'EUR',
+        '–': '-',
+        '—': '-',
+        '“': '"',
+        '”': '"',
+        '’': "'",
+        '‘': "'",
+        '…': '...',
+    }
+    for orig, rep in replacements.items():
+        text = text.replace(orig, rep)
+    return text.encode('latin-1', 'replace').decode('latin-1')
+
+def get_multicell_height(pdf: FPDF, w: float, line_height: float, text: str) -> float:
+    lines = 0
+    # Available text width accounts for FPDF's cell margins (1mm each side = 2mm)
+    max_txt_w = max(1.0, w - 2.0)
+    for paragraph in text.split('\n'):
+        words = paragraph.split(' ')
+        cur_w = 0.0
+        p_lines = 1
+        for word in words:
+            word_w = pdf.get_string_width(word + ' ')
+            if cur_w + word_w > max_txt_w:
+                p_lines += 1
+                cur_w = word_w
+            else:
+                cur_w += word_w
+        lines += p_lines
+    return lines * line_height
+
+def resolve_line_code(
+    db: Optional[Session],
+    variant: Optional[ProductVariant],
+    pack: Optional[ProductPackaging],
+    line_variant_id: int,
+    code_type: str = "barcode"
+) -> str:
+    sku_fallback = variant.sku if (variant and variant.sku) else f"VR-{line_variant_id}"
+    
+    # If not in barcode mode or no variant exists, return the SKU
+    if (code_type or "barcode").strip().lower() != "barcode" or not variant:
+        return sku_fallback
+        
+    if db:
+        barcodes = (
+            db.query(ProductBarcode)
+            .filter(ProductBarcode.product_variant_id == variant.id)
+            .order_by(ProductBarcode.id.asc())
+            .all()
+        )
+    elif hasattr(variant, 'barcodes') and variant.barcodes:
+        barcodes = list(variant.barcodes)
+    else:
+        barcodes = []
+    
+    standard_bcs = [
+        b for b in barcodes
+        if (b.code_type or "").strip().upper() != "STELLAR_CODE" and b.barcode and b.barcode.strip()
+    ]
+    stellar_bcs = [
+        b for b in barcodes
+        if (b.code_type or "").strip().upper() == "STELLAR_CODE" and b.barcode and b.barcode.strip()
+    ]
+    
+    # 1. Pack barcode if the line is ordered by packaging (conversion_factor == pack.qty_per_unit)
+    if pack and pack.qty_per_unit is not None:
+        try:
+            target_pack_factor = float(pack.qty_per_unit)
+            for b in standard_bcs:
+                if b.conversion_factor is not None and abs(float(b.conversion_factor) - target_pack_factor) < 1e-4:
+                    return b.barcode.strip()
+        except (ValueError, TypeError):
+            pass
+
+    # 2. Base unit barcode (conversion_factor == 1)
+    for b in standard_bcs:
+        if b.conversion_factor is not None:
+            try:
+                if abs(float(b.conversion_factor) - 1.0) < 1e-4:
+                    return b.barcode.strip()
+            except (ValueError, TypeError):
+                pass
+                
+    # 3. Any barcode (standard barcode, or variant.barcode)
+    if standard_bcs:
+        return standard_bcs[0].barcode.strip()
+    if variant.barcode and variant.barcode.strip():
+        return variant.barcode.strip()
+        
+    # 4. Stellar code fallback (prioritize pack factor or base unit if multiple)
+    if stellar_bcs:
+        if pack and pack.qty_per_unit is not None:
+            try:
+                target_pack_factor = float(pack.qty_per_unit)
+                for b in stellar_bcs:
+                    if b.conversion_factor is not None and abs(float(b.conversion_factor) - target_pack_factor) < 1e-4:
+                        return b.barcode.strip()
+            except (ValueError, TypeError):
+                pass
+        for b in stellar_bcs:
+            if b.conversion_factor is not None:
+                try:
+                    if abs(float(b.conversion_factor) - 1.0) < 1e-4:
+                        return b.barcode.strip()
+                except (ValueError, TypeError):
+                    pass
+        return stellar_bcs[0].barcode.strip()
+        
+    # 5. SKU fallback
+    return sku_fallback
+
 class PurchaseOrderPDF(FPDF):
     def __init__(self, reference, currency_code, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.reference = reference
-        self.currency_code = currency_code
+        self.reference = sanitize_pdf_text(reference)
+        self.currency_code = sanitize_pdf_text(currency_code)
         self.alias_nb_pages()
 
     def header(self):
@@ -64,15 +192,15 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
     if facility and facility.company_id:
         company = db.query(Company).filter(Company.id == facility.company_id).first()
         
-    issuer_name = company.name if company else "NEO SOLUTIONS C.A."
-    issuer_tax_id = company.tax_id if company else "J-31415926-9"
-    issuer_address = facility.address if facility else "Calle La Planta, Edif. Neo ERP, Caracas, Venezuela"
+    issuer_name = sanitize_pdf_text(company.name if company else "NEO SOLUTIONS C.A.")
+    issuer_tax_id = sanitize_pdf_text(company.tax_id if company else "J-31415926-9")
+    issuer_address = sanitize_pdf_text(facility.address if facility else "Calle La Planta, Edif. Neo ERP, Caracas, Venezuela")
     issuer_email = "compras@neosolutions.com"
     
-    supplier_name = supplier.name if supplier else "N/A"
-    supplier_tax_id = supplier.tax_id if supplier else "N/A"
-    supplier_address = supplier.fiscal_address if supplier and supplier.fiscal_address else "N/A"
-    supplier_email = supplier.commercial_email if supplier and supplier.commercial_email else "N/A"
+    supplier_name = sanitize_pdf_text(supplier.name if supplier else "N/A")
+    supplier_tax_id = sanitize_pdf_text(supplier.tax_id if supplier else "N/A")
+    supplier_address = sanitize_pdf_text(supplier.fiscal_address if supplier and supplier.fiscal_address else "N/A")
+    supplier_email = sanitize_pdf_text(supplier.commercial_email if supplier and supplier.commercial_email else "N/A")
     
     from app.models.core import Currency
     currency = db.query(Currency).filter(Currency.id == order.currency_id).first() if order.currency_id else None
@@ -80,8 +208,8 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         currency = db.query(Currency).filter(Currency.id == supplier.currency_id).first()
         
     currency_decimals = currency.decimal_places if currency else 2
-    currency_symbol = currency.symbol if currency and hasattr(currency, 'symbol') and currency.symbol else "$"
-    currency_code = currency.code if currency else "USD"
+    currency_symbol = sanitize_pdf_text(currency.symbol if currency and hasattr(currency, 'symbol') and currency.symbol else "$")
+    currency_code = sanitize_pdf_text(currency.code if currency else "USD")
     
     emission_date = order.created_at.strftime('%Y-%m-%d') if order.created_at else "N/A"
     expiration_date = order.expiration_date.strftime('%Y-%m-%d') if order.expiration_date else "N/A"
@@ -92,7 +220,7 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         if buyer:
             buyer_user = db.query(User).filter(User.id == buyer.user_id).first()
             if buyer_user:
-                buyer_name = buyer_user.full_name
+                buyer_name = sanitize_pdf_text(buyer_user.full_name)
                 
     pdf = PurchaseOrderPDF(reference=order.reference, currency_code=currency_code)
     pdf.set_margins(15, 15, 15)
@@ -100,56 +228,86 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
     
     y_start = pdf.get_y()
     
+    box_w = 88
+    inner_w = 82
+    
+    # Sanitize and guard text lengths to fit comfortably within the boxes
+    issuer_name_disp = issuer_name[:70] + "..." if len(issuer_name) > 70 else issuer_name
+    issuer_addr_disp = issuer_address[:100] + "..." if len(issuer_address) > 100 else issuer_address
+    issuer_email_disp = issuer_email[:40] + "..." if len(issuer_email) > 40 else issuer_email
+    
+    supplier_name_disp = supplier_name[:70] + "..." if len(supplier_name) > 70 else supplier_name
+    supplier_addr_disp = supplier_address[:100] + "..." if len(supplier_address) > 100 else supplier_address
+    supplier_email_disp = supplier_email[:40] + "..." if len(supplier_email) > 40 else supplier_email
+
+    emisor_txt = f"Nombre: {issuer_name_disp}\nRIF: {issuer_tax_id}\nDirección: {issuer_addr_disp}\nEmail: {issuer_email_disp}"
+    proveedor_txt = f"Razón Social: {supplier_name_disp}\nRIF: {supplier_tax_id}\nDirección: {supplier_addr_disp}\nEmail: {supplier_email_disp}"
+
+    # Calculate required box height dynamically so content never overflows
+    pdf.set_font("Helvetica", "", 8)
+    h_emisor = get_multicell_height(pdf, inner_w, 4.2, emisor_txt)
+    h_proveedor = get_multicell_height(pdf, inner_w, 4.2, proveedor_txt)
+    box_h = max(38.0, max(h_emisor, h_proveedor) + 11.0)
+
     # 1. Structured boxes for Issuer and Supplier
     pdf.set_draw_color(226, 232, 240)
     pdf.set_fill_color(248, 250, 252)
-    pdf.rect(15, y_start, 88, 38, 'DF')
-    pdf.set_xy(17, y_start + 2)
+    
+    # --- Box 1: EMISOR (Left: 15 to 103) ---
+    pdf.rect(15, y_start, box_w, box_h, 'DF')
+    pdf.set_xy(18, y_start + 2.5)
     pdf.set_font("Helvetica", "B", 9)
     pdf.set_text_color(51, 65, 85)
-    pdf.cell(84, 4, "EMISOR / FACTURAR A:", ln=True)
+    pdf.cell(inner_w, 4, "EMISOR / FACTURAR A:")
+    pdf.set_xy(18, y_start + 7.5)
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(71, 85, 105)
-    pdf.multi_cell(84, 4.5, f"Nombre: {issuer_name}\nRIF: {issuer_tax_id}\nDirección: {issuer_address}\nEmail: {issuer_email}")
+    pdf.multi_cell(inner_w, 4.2, emisor_txt)
     
-    pdf.rect(107, y_start, 88, 38, 'DF')
-    pdf.set_xy(109, y_start + 2)
+    # --- Box 2: PROVEEDOR (Right: 107 to 195) ---
+    pdf.rect(107, y_start, box_w, box_h, 'DF')
+    pdf.set_xy(110, y_start + 2.5)
     pdf.set_font("Helvetica", "B", 9)
     pdf.set_text_color(51, 65, 85)
-    pdf.cell(84, 4, "PROVEEDOR:", ln=True)
+    pdf.cell(inner_w, 4, "PROVEEDOR:")
+    pdf.set_xy(110, y_start + 7.5)
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(71, 85, 105)
-    pdf.multi_cell(84, 4.5, f"Razón Social: {supplier_name}\nRIF: {supplier_tax_id}\nDirección: {supplier_address}\nEmail: {supplier_email}")
+    pdf.multi_cell(inner_w, 4.2, proveedor_txt)
     
-    pdf.set_y(y_start + 40)
-    
-    # Metadata bar
+    # Metadata bar positioned cleanly below both boxes
+    bar_y = y_start + box_h + 3
     pdf.set_fill_color(241, 245, 249)
-    pdf.rect(15, pdf.get_y(), 180, 10, 'F')
-    pdf.set_xy(17, pdf.get_y() + 2)
+    pdf.rect(15, bar_y, 180, 10, 'F')
+    pdf.set_xy(17, bar_y + 2)
     pdf.set_font("Helvetica", "B", 8)
     pdf.set_text_color(71, 85, 105)
-    pdf.cell(45, 6, f"F. Emisión: {emission_date}")
-    pdf.cell(45, 6, f"F. Vencimiento: {expiration_date}")
-    pdf.cell(45, 6, f"Moneda: {currency_code} ({currency_symbol})")
-    pdf.cell(45, 6, f"Comprador: {buyer_name}")
+    pdf.cell(44, 6, f"F. Emisión: {emission_date}")
+    pdf.cell(44, 6, f"F. Vencimiento: {expiration_date}")
+    pdf.cell(44, 6, f"Moneda: {currency_code} ({currency_symbol})")
+    buyer_disp = buyer_name[:20] + "..." if len(buyer_name) > 20 else buyer_name
+    pdf.cell(44, 6, f"Comprador: {buyer_disp}")
     
-    pdf.ln(12)
+    pdf.set_y(bar_y + 13)
     
     # 2. Items Table
-    pdf.set_fill_color(79, 70, 229)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_draw_color(79, 70, 229)
-    pdf.set_font("Helvetica", "B", 8)
-    
-    pdf.cell(25, 8, "CÓDIGO", border=1, fill=True, align="L")
-    pdf.cell(45, 8, "DESCRIPCIÓN", border=1, fill=True, align="L")
-    pdf.cell(25, 8, "EMPAQUE", border=1, fill=True, align="L")
-    pdf.cell(30, 8, "CANTIDAD", border=1, fill=True, align="C")
-    pdf.cell(20, 8, "COSTO UNIT.", border=1, fill=True, align="R")
-    pdf.cell(15, 8, "DSCTO.", border=1, fill=True, align="C")
-    pdf.cell(20, 8, "SUBTOTAL", border=1, fill=True, align="R")
-    pdf.ln()
+    def render_table_header():
+        pdf.set_fill_color(79, 70, 229)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_draw_color(79, 70, 229)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.cell(25, 8, "CÓDIGO", border=1, fill=True, align="L")
+        pdf.cell(45, 8, "DESCRIPCIÓN", border=1, fill=True, align="L")
+        pdf.cell(25, 8, "EMPAQUE", border=1, fill=True, align="L")
+        pdf.cell(30, 8, "CANTIDAD", border=1, fill=True, align="C")
+        pdf.cell(20, 8, "COSTO UNIT.", border=1, fill=True, align="R")
+        pdf.cell(15, 8, "DSCTO.", border=1, fill=True, align="C")
+        pdf.cell(20, 8, "SUBTOTAL", border=1, fill=True, align="R")
+        pdf.ln()
+        pdf.set_text_color(51, 65, 85)
+        pdf.set_draw_color(226, 232, 240)
+
+    render_table_header()
     
     pdf.set_text_color(51, 65, 85)
     pdf.set_draw_color(226, 232, 240)
@@ -163,13 +321,10 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         pack = db.query(ProductPackaging).filter(ProductPackaging.id == line.pack_id).first() if line.pack_id else None
         
         # Code selection
-        if code_type == "barcode" and variant and variant.barcode:
-            code_str = variant.barcode
-        else:
-            code_str = variant.sku if variant else f"VR-{line.variant_id}"
+        code_str = resolve_line_code(db, variant, pack, line.variant_id, code_type=code_type)
             
-        prod_name = prod.name if prod else "N/A"
-        pack_name = pack.name if pack else "Und. Base"
+        prod_name = sanitize_pdf_text(prod.name if prod else "N/A")
+        pack_name = sanitize_pdf_text(pack.name if pack else "Und. Base")
         qty_per_pack = float(pack.qty_per_unit) if pack else 1.0
         
         pack_str = f"{pack_name} (x{int(qty_per_pack) if qty_per_pack % 1 == 0 else qty_per_pack})"
@@ -195,7 +350,7 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         
         line_details.append({
             "line": line,
-            "code_str": code_str,
+            "code_str": sanitize_pdf_text(code_str),
             "prod_name": prod_name,
             "pack_str": pack_str,
             "qty_str": qty_str,
@@ -205,17 +360,29 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         })
         
     for item in line_details:
+        if pdf.get_y() > 260:
+            pdf.add_page()
+            render_table_header()
+
         pdf.set_font("Helvetica", "", 8)
         
         desc_truncated = item["prod_name"]
         if len(desc_truncated) > 26:
             desc_truncated = desc_truncated[:23] + "..."
             
-        code_truncated = item["code_str"]
-        if len(code_truncated) > 14:
-            code_truncated = code_truncated[:12] + "..."
+        code_str = str(item["code_str"])
+        code_font_size = 8.0
+        pdf.set_font("Helvetica", "", code_font_size)
+        while code_font_size > 5.5 and pdf.get_string_width(code_str) > 23.0:
+            code_font_size -= 0.5
+            pdf.set_font("Helvetica", "", code_font_size)
+        if pdf.get_string_width(code_str) > 23.0:
+            while len(code_str) > 3 and pdf.get_string_width(code_str + "...") > 23.0:
+                code_str = code_str[:-1]
+            code_str += "..."
             
-        pdf.cell(25, 7, code_truncated, border=1)
+        pdf.cell(25, 7, code_str, border=1)
+        pdf.set_font("Helvetica", "", 8)
         pdf.cell(45, 7, desc_truncated, border=1)
         pdf.cell(25, 7, item["pack_str"], border=1)
         pdf.cell(30, 7, item["qty_str"], border=1, align="C")
@@ -255,7 +422,7 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
     pdf.set_text_color(100, 116, 139)
     pdf.cell(106, 4, "NOTAS Y CONDICIONES:", ln=True)
     pdf.set_font("Helvetica", "", 7)
-    notes_str = order.notes if order.notes else "Entrega sujeta a los términos generales de compra de Neo ERP."
+    notes_str = sanitize_pdf_text(order.notes) if order.notes else "Entrega sujeta a los términos generales de compra de Neo ERP."
     if len(notes_str) > 180:
         notes_str = notes_str[:177] + "..."
     pdf.multi_cell(106, 3.5, notes_str)
@@ -316,5 +483,5 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
     
     pdf_bytes = pdf.output(dest='S')
     if isinstance(pdf_bytes, str):
-        pdf_bytes = pdf_bytes.encode('latin-1')
+        pdf_bytes = pdf_bytes.encode('latin-1', 'replace')
     return pdf_bytes

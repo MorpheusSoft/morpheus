@@ -76,12 +76,16 @@ def accept_public_order(token: UUID, request: Request, db: Session = Depends(get
     return {"ok": True, "accepted_at": order.accepted_by_supplier_at}
 
 @router.get("/{token}/pdf")
-def download_public_order_pdf(token: UUID, db: Session = Depends(get_db)) -> Any:
+def download_public_order_pdf(
+    token: UUID,
+    code_type: str = "barcode",
+    db: Session = Depends(get_db)
+) -> Any:
     order = db.query(PurchaseOrder).filter(PurchaseOrder.public_token == token).first()
     if not order:
         raise HTTPException(status_code=404, detail="Orden de compra no encontrada")
         
-    pdf_bytes = generate_purchase_order_pdf(order.id, db, code_type="sku")
+    pdf_bytes = generate_purchase_order_pdf(order.id, db, code_type=code_type)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
