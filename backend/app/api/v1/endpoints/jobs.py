@@ -28,3 +28,31 @@ def update_job(
     db.commit()
     db.refresh(job)
     return job
+
+@router.post("/{job_code}/run")
+def run_job_now(
+    job_code: str,
+    db: Session = Depends(get_db)
+):
+    from datetime import datetime, timezone, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        CARACAS_TZ = ZoneInfo("America/Caracas")
+    except Exception:
+        CARACAS_TZ = timezone(timedelta(hours=-4))
+
+    job = db.query(SystemJob).filter(SystemJob.job_code == job_code).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Cron Job no encontrado")
+        
+    from app.services.jobs_service import execute_job_by_code
+    try:
+        execute_job_by_code(job_code, db)
+        job.last_executed_at = datetime.now(CARACAS_TZ)
+        db.commit()
+        db.refresh(job)
+        return {"message": f"Autómata '{job.name}' ejecutado con éxito.", "job": job}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error ejecutando autómata: {str(e)}")
+

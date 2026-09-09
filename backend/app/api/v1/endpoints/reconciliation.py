@@ -5,9 +5,10 @@ from sqlalchemy import desc, func, or_
 from decimal import Decimal
 from datetime import datetime, date
 
+from pydantic import BaseModel
 from app.api import deps
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine, SupplierProduct
-from app.models.inventory import ProductVariant, Product, ProductPackaging, InventorySnapshot
+from app.models.inventory import ProductVariant, Product, ProductPackaging, InventorySnapshot, SupplierReturn, SupplierReturnLine
 from app.models.core import Supplier, Currency, Facility, User, Company
 from app.schemas.reconciliation import (
     ReconciliationOrderDetail,
@@ -578,3 +579,142 @@ def get_debit_note_document_data(
             "notes": order.reconciliation_notes
         }
     }
+
+
+# ==============================================================================
+# CONCILIACIÓN DE DEVOLUCIONES A PROVEEDORES (NOTAS DE CRÉDITO 3-WAY INVERSA)
+# ==============================================================================
+
+class CloseReturnPayload(BaseModel):
+    credit_note_number: str
+    credit_note_amount: float
+    credit_note_date: date
+    notes: Optional[str] = None
+
+
+@router.get("/returns")
+def list_returns_for_reconciliation(
+    db: Session = Depends(deps.get_db),
+    status: Optional[str] = "DISPATCHED",
+    supplier_id: Optional[int] = None,
+    facility_id: Optional[int] = None,
+    search: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """Lista devoluciones a proveedores para conciliación administrativa (3-Way Inversa)."""
+    q = db.query(SupplierReturn).options(
+        selectinload(SupplierReturn.facility),
+        selectinload(SupplierReturn.supplier),
+        selectinload(SupplierReturn.purchase_order),
+        selectinload(SupplierReturn.dispatched_by),
+        selectinload(SupplierReturn.conciliated_by),
+        selectinload(SupplierReturn.lines).selectinload(SupplierReturnLine.variant).selectinload(ProductVariant.product)
+    )
+
+    if status and status.upper() != "ALL":
+        q = q.filter(SupplierReturn.status == status.upper())
+    else:
+        # Excluir borradores o cancelados de la vista de conciliación por defecto
+        q = q.filter(SupplierReturn.status.in_(["DISPATCHED", "CONCILIATED"]))
+
+    if supplier_id:
+        q = q.filter(SupplierReturn.supplier_id == supplier_id)
+    if facility_id:
+        q = q.filter(SupplierReturn.facility_id == facility_id)
+    if search:
+        pattern = f"%{search}%"
+        q = q.join(Supplier, SupplierReturn.supplier_id == Supplier.id).filter(
+            or_(
+                SupplierReturn.return_number.ilike(pattern),
+                Supplier.name.ilike(pattern),
+                SupplierReturn.credit_note_number.ilike(pattern)
+            )
+        )
+
+    total = q.count()
+    items = q.order_by(desc(SupplierReturn.id)).offset(skip).limit(limit).all()
+
+    results = []
+    for r in items:
+        results.append({
+            "id": r.id,
+            "return_number": r.return_number,
+            "facility_id": r.facility_id,
+            "facility_name": r.facility.name if r.facility else "N/A",
+            "supplier_id": r.supplier_id,
+            "supplier_name": r.supplier.name if r.supplier else "N/A",
+            "supplier_tax_id": r.supplier.tax_id if r.supplier else "N/A",
+            "purchase_order_id": r.purchase_order_id,
+            "purchase_order_reference": r.purchase_order.po_number if r.purchase_order else (r.purchase_order.reference if r.purchase_order else None),
+            "status": r.status,
+            "total_estimated_amount": float(r.total_estimated_amount or 0),
+            "dispatched_at": r.dispatched_at.strftime("%d/%m/%Y %H:%M") if r.dispatched_at else None,
+            "dispatched_by": r.dispatched_by.full_name if r.dispatched_by else None,
+            "carrier_name": r.carrier_name,
+            "carrier_plate": r.carrier_plate,
+            "credit_note_number": r.credit_note_number,
+            "credit_note_amount": float(r.credit_note_amount) if r.credit_note_amount else None,
+            "credit_note_date": r.credit_note_date.strftime("%d/%m/%Y") if r.credit_note_date else None,
+            "conciliated_at": r.conciliated_at.strftime("%d/%m/%Y %H:%M") if r.conciliated_at else None,
+            "conciliated_by": r.conciliated_by.full_name if r.conciliated_by else None,
+            "notes": r.notes,
+            "lines": [
+                {
+                    "id": l.id,
+                    "variant_id": l.variant_id,
+                    "sku": l.variant.sku if l.variant else "N/A",
+                    "product_name": l.variant.product.name if (l.variant and l.variant.product) else f"SKU {l.variant_id}",
+                    "quantity": float(l.quantity or 0),
+                    "unit_cost": float(l.unit_cost or 0),
+                    "subtotal": float(l.subtotal or 0),
+                    "reason": l.reason
+                }
+                for l in r.lines
+            ]
+        })
+
+    return {"total": total, "items": results}
+
+
+@router.post("/returns/{return_id}/close")
+def close_return_reconciliation(
+    return_id: int,
+    payload: CloseReturnPayload,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """Concilia y cierra la orden de devolución registrando la Nota de Crédito del proveedor."""
+    ret = db.query(SupplierReturn).filter(SupplierReturn.id == return_id).first()
+    if not ret:
+        raise HTTPException(status_code=404, detail="Orden de devolución no encontrada.")
+
+    if ret.status != "DISPATCHED":
+        raise HTTPException(status_code=400, detail=f"Solo se pueden conciliar devoluciones en estado 'DISPATCHED'. Estado actual: '{ret.status}'.")
+
+    if payload.credit_note_amount <= 0:
+        raise HTTPException(status_code=400, detail="El monto de la Nota de Crédito debe ser mayor a 0.")
+
+    ret.credit_note_number = payload.credit_note_number.strip().upper()
+    ret.credit_note_amount = Decimal(str(payload.credit_note_amount))
+    ret.credit_note_date = payload.credit_note_date
+    ret.status = "CONCILIATED"
+    ret.conciliated_by_id = current_user.id
+    ret.conciliated_at = datetime.utcnow()
+
+    if payload.notes:
+        ret.notes = f"{ret.notes or ''}\n[Conciliación]: {payload.notes}".strip()
+
+    db.commit()
+    db.refresh(ret)
+
+    return {
+        "status": "success",
+        "message": f"Devolución {ret.return_number} conciliada exitosamente con N/C {ret.credit_note_number}.",
+        "return_number": ret.return_number,
+        "credit_note_number": ret.credit_note_number,
+        "credit_note_amount": float(ret.credit_note_amount),
+        "conciliated_at": ret.conciliated_at.strftime("%d/%m/%Y %H:%M")
+    }
+

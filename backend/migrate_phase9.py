@@ -28,6 +28,14 @@ def run_migration():
             """))
             print("Job mrp_nightly_consolidation seeded.")
 
+            # Seed BCV Daily Rate Sync Job
+            conn.execute(text("""
+                INSERT INTO core.system_jobs (job_code, name, is_enabled, execution_time)
+                VALUES ('bcv_daily_rate_sync', 'Sincronización Diaria Tasa BCV', TRUE, '06:00:00')
+                ON CONFLICT (job_code) DO NOTHING;
+            """))
+            print("Job bcv_daily_rate_sync seeded.")
+
 if __name__ == "__main__":
     run_migration()
     print("Migration Phase 9 completed successfully.")

@@ -10,8 +10,8 @@ import { Calendar } from 'primereact/calendar';
 import { Dialog } from 'primereact/dialog';
 import { Toast } from 'primereact/toast';
 import { Tag } from 'primereact/tag';
-import { TabView, TabPanel } from 'primereact/tabview';
 import { Dropdown } from 'primereact/dropdown';
+import { InputTextarea } from 'primereact/inputtextarea';
 import api from '@/lib/api';
 import { format } from 'date-fns';
 
@@ -61,6 +61,17 @@ export default function ReconciliationPage() {
   const [debitNoteData, setDebitNoteData] = useState<any | null>(null);
   const [loadingDebitNote, setLoadingDebitNote] = useState(false);
 
+  // Tab 2: Devoluciones a Proveedores (RTV) State
+  const [returnsList, setReturnsList] = useState<any[]>([]);
+  const [loadingReturns, setLoadingReturns] = useState(false);
+  const [showReturnModal, setShowReturnModal] = useState(false);
+  const [selectedReturn, setSelectedReturn] = useState<any | null>(null);
+  const [creditNoteNumber, setCreditNoteNumber] = useState('');
+  const [creditNoteAmount, setCreditNoteAmount] = useState<number>(0);
+  const [creditNoteDate, setCreditNoteDate] = useState<Date | null>(new Date());
+  const [returnNotes, setReturnNotes] = useState('');
+  const [submittingReturn, setSubmittingReturn] = useState(false);
+
   // Fetch KPIs
   const fetchKpis = async () => {
     try {
@@ -85,9 +96,26 @@ export default function ReconciliationPage() {
     setLoading(false);
   };
 
+  // Fetch Returns
+  const fetchReturns = async () => {
+    setLoadingReturns(true);
+    try {
+      const res = await api.get('/reconciliation/returns?status=ALL');
+      setReturnsList(res.data || []);
+    } catch (err) {
+      console.error("Error loading returns for reconciliation:", err);
+    }
+    setLoadingReturns(false);
+  };
+
   useEffect(() => {
     fetchKpis();
-    fetchOrders();
+    if (activeTab === 2) {
+      fetchReturns();
+    } else {
+      fetchOrders();
+    }
+    fetchReturns();
   }, [activeTab]);
 
   // Suppliers for dropdown filter
@@ -109,6 +137,66 @@ export default function ReconciliationPage() {
       return matchesSupplier && matchesSearch;
     });
   }, [orders, selectedSupplier, searchTerm]);
+
+  // Filtered returns list
+  const filteredReturns = useMemo(() => {
+    return returnsList.filter((r) => {
+      const matchesSupplier = !selectedSupplier || r.supplier_name === selectedSupplier;
+      const term = searchTerm.toLowerCase().trim();
+      const matchesSearch = !term ||
+        r.return_number?.toLowerCase().includes(term) ||
+        r.supplier_name?.toLowerCase().includes(term) ||
+        r.credit_note_number?.toLowerCase().includes(term) ||
+        r.carrier_name?.toLowerCase().includes(term);
+      return matchesSupplier && matchesSearch;
+    });
+  }, [returnsList, selectedSupplier, searchTerm]);
+
+  const openCloseReturnModal = (ret: any) => {
+    setSelectedReturn(ret);
+    setCreditNoteNumber(ret.credit_note_number || '');
+    setCreditNoteAmount(Number(ret.credit_note_amount || ret.total_estimated_amount || 0));
+    setCreditNoteDate(new Date());
+    setReturnNotes('');
+    setShowReturnModal(true);
+  };
+
+  const submitCloseReturn = async () => {
+    if (!selectedReturn) return;
+    if (!creditNoteNumber.trim()) {
+      toast.current?.show({ severity: 'warn', summary: 'Campo Requerido', detail: 'Debe ingresar el Número de Nota de Crédito.' });
+      return;
+    }
+    if (Number(creditNoteAmount) <= 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Monto Inválido', detail: 'El monto de la Nota de Crédito debe ser mayor a 0.' });
+      return;
+    }
+    if (!creditNoteDate) {
+      toast.current?.show({ severity: 'warn', summary: 'Campo Requerido', detail: 'Debe seleccionar la fecha de la Nota de Crédito.' });
+      return;
+    }
+
+    setSubmittingReturn(true);
+    try {
+      const formattedDate = creditNoteDate.toISOString().split('T')[0];
+      const payload = {
+        credit_note_number: creditNoteNumber.trim(),
+        credit_note_amount: Number(creditNoteAmount),
+        credit_note_date: formattedDate,
+        notes: returnNotes || null
+      };
+
+      const res = await api.post(`/reconciliation/returns/${selectedReturn.id}/close`, payload);
+      toast.current?.show({ severity: 'success', summary: 'Conciliación Exitosa', detail: res.data?.message || 'Devolución conciliada con Nota de Crédito.' });
+      setShowReturnModal(false);
+      fetchReturns();
+      fetchKpis();
+    } catch (err: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error al Conciliar', detail: err.response?.data?.detail || 'No se pudo registrar la Nota de Crédito.' });
+    } finally {
+      setSubmittingReturn(false);
+    }
+  };
 
   // Open 3-Way Match Modal
   const openReconciliationModal = async (orderId: number) => {
@@ -430,6 +518,21 @@ export default function ReconciliationPage() {
                 {kpis.conciliated_count}
               </span>
             </button>
+
+            <button
+              onClick={() => setActiveTab(2)}
+              className={`px-4 py-2.5 rounded-t-xl text-sm font-bold transition-all border-b-2 flex items-center gap-2 ${
+                activeTab === 2
+                  ? 'border-indigo-600 text-indigo-600 bg-white shadow-sm'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <i className="pi pi-replay"></i>
+              <span>Devoluciones RTV (Notas de Crédito)</span>
+              <span className="ml-1.5 px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-800 font-black">
+                {returnsList.filter(r => r.status === 'DISPATCHED').length}
+              </span>
+            </button>
           </div>
 
           {/* Search and Filters */}
@@ -456,144 +559,393 @@ export default function ReconciliationPage() {
 
         {/* Table Content */}
         <div className="p-4">
-          <DataTable
-            value={filteredOrders}
-            loading={loading}
-            paginator
-            rows={10}
-            rowsPerPageOptions={[10, 25, 50]}
-            dataKey="id"
-            emptyMessage="No se encontraron órdenes en esta bandeja."
-            className="text-sm"
-            rowHover
-          >
-            <Column
-              field="reference"
-              header="Orden de Compra"
-              body={(r) => (
-                <div>
-                  <span className="font-bold text-indigo-600 font-mono text-sm block">{r.reference}</span>
-                  <span className="text-xs text-slate-400">
-                    {r.created_at ? format(new Date(r.created_at), 'dd/MM/yyyy') : ''}
-                  </span>
-                </div>
-              )}
-            />
-
-            <Column
-              field="supplier_name"
-              header="Proveedor"
-              body={(r) => (
-                <div>
-                  <span className="font-bold text-slate-800 block text-sm">{r.supplier_name}</span>
-                  <span className="text-xs font-mono text-slate-400">{r.supplier_tax_id || 'Sin RIF'}</span>
-                </div>
-              )}
-            />
-
-            <Column
-              field="dest_facility_name"
-              header="Destino"
-              body={(r) => (
-                <span className="text-xs font-medium text-slate-600 bg-slate-100 px-2 py-1 rounded">
-                  {r.dest_facility_name || 'N/A'}
-                </span>
-              )}
-            />
-
-            <Column
-              header="Recepción Física (WMS)"
-              body={(r) => (
-                <div className="text-right">
-                  <span className="font-black text-slate-800 block">
-                    ${Number(r.total_received || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                  </span>
-                  <span className="text-xs text-slate-400">
-                    {r.items_count} {r.items_count === 1 ? 'renglón' : 'renglones'}
-                  </span>
-                </div>
-              )}
-              align="right"
-            />
-
-            {activeTab === 1 && (
+          {activeTab === 2 ? (
+            <DataTable
+              value={filteredReturns}
+              loading={loadingReturns}
+              paginator
+              rows={10}
+              rowsPerPageOptions={[10, 25, 50]}
+              dataKey="id"
+              emptyMessage="No se encontraron devoluciones a proveedores para conciliar."
+              className="text-sm"
+              rowHover
+            >
               <Column
-                header="Factura Fiscal"
+                field="return_number"
+                header="N° RTV"
                 body={(r) => (
                   <div>
-                    {r.invoice_number ? (
+                    <span className="font-bold text-purple-700 font-mono text-sm block">{r.return_number}</span>
+                    <span className="text-xs text-slate-400">{r.facility_name}</span>
+                  </div>
+                )}
+              />
+
+              <Column
+                field="supplier_name"
+                header="Proveedor"
+                body={(r) => (
+                  <div>
+                    <span className="font-bold text-slate-800 block text-sm">{r.supplier_name}</span>
+                    <span className="text-xs font-mono text-slate-400">{r.supplier_tax_id || 'Sin RIF'}</span>
+                  </div>
+                )}
+              />
+
+              <Column
+                field="purchase_order_reference"
+                header="ODC Origen"
+                body={(r) => (
+                  r.purchase_order_reference ? (
+                    <span className="font-semibold text-blue-600 font-mono text-xs">{r.purchase_order_reference}</span>
+                  ) : (
+                    <span className="text-xs text-slate-400 italic">Directa / Sin ODC</span>
+                  )
+                )}
+              />
+
+              <Column
+                field="dispatched_at"
+                header="Despacho en Muelle"
+                body={(r) => (
+                  <div>
+                    <span className="text-xs font-semibold text-slate-700 block">{r.dispatched_at || 'Pendiente'}</span>
+                    {r.carrier_name && <span className="text-[11px] text-slate-400">Chofer: {r.carrier_name}</span>}
+                  </div>
+                )}
+              />
+
+              <Column
+                header="Salida Kardex ($)"
+                body={(r) => (
+                  <div className="text-right">
+                    <span className="font-black text-slate-800 block">
+                      ${Number(r.total_estimated_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      {r.lines?.length || 0} renglones
+                    </span>
+                  </div>
+                )}
+                align="right"
+              />
+
+              <Column
+                header="Nota de Crédito"
+                body={(r) => (
+                  <div>
+                    {r.credit_note_number ? (
                       <div>
-                        <span className="font-bold font-mono text-slate-800 text-xs block">
-                          📄 {r.invoice_number}
+                        <span className="font-bold font-mono text-emerald-800 text-xs block">
+                          📄 {r.credit_note_number}
                         </span>
-                        <span className="text-[11px] text-slate-400">
-                          {r.invoice_date ? format(new Date(r.invoice_date), 'dd/MM/yyyy') : ''}
+                        <span className="text-[11px] text-slate-500 font-bold">
+                          ${Number(r.credit_note_amount || 0).toFixed(2)} ({r.credit_note_date})
                         </span>
                       </div>
                     ) : (
-                      <span className="text-xs text-slate-400 italic">No registrada</span>
+                      <span className="text-xs text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                        Pendiente N/C
+                      </span>
                     )}
                   </div>
                 )}
               />
-            )}
 
-            <Column
-              field="reconciliation_status"
-              header="Estado"
-              body={(r) => (
-                <div className="flex flex-col gap-1 items-start">
-                  {getStatusBadge(r.reconciliation_status)}
-                  {r.debit_note_number && (
-                    <span className="text-[11px] font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
-                      Retención: -${Number(r.debit_note_amount || 0).toFixed(2)}
-                    </span>
-                  )}
-                </div>
-              )}
-            />
-
-            <Column
-              header="Acciones"
-              body={(r) => (
-                <div className="flex items-center justify-end gap-2">
-                  {activeTab === 0 ? (
-                    <Button
-                      label="Cotejar 3-Way Match"
-                      icon="pi pi-check-square"
-                      size="small"
-                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-1.5 px-3 rounded-lg shadow-sm"
-                      onClick={() => openReconciliationModal(r.id)}
-                    />
+              <Column
+                field="status"
+                header="Estado"
+                body={(r) => (
+                  r.status === 'CONCILIATED' ? (
+                    <Tag severity="success" value="Conciliado" icon="pi pi-check-circle" />
                   ) : (
-                    <>
+                    <Tag severity="info" value="Despachado en Muelle" icon="pi pi-send" />
+                  )
+                )}
+              />
+
+              <Column
+                header="Acciones"
+                body={(r) => (
+                  <div className="flex items-center justify-end gap-2">
+                    {r.status === 'DISPATCHED' ? (
                       <Button
-                        label="Ver Cotejo"
-                        icon="pi pi-eye"
+                        label="Registrar N/C"
+                        icon="pi pi-receipt"
+                        size="small"
+                        className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs py-1.5 px-3 rounded-lg shadow-sm"
+                        onClick={() => openCloseReturnModal(r)}
+                      />
+                    ) : (
+                      <Button
+                        label="Ver N/C"
+                        icon="pi pi-check"
                         size="small"
                         outlined
                         className="text-xs py-1 px-2.5 p-button-secondary font-medium"
+                        onClick={() => openCloseReturnModal(r)}
+                      />
+                    )}
+                  </div>
+                )}
+                align="right"
+              />
+            </DataTable>
+          ) : (
+            <DataTable
+              value={filteredOrders}
+              loading={loading}
+              paginator
+              rows={10}
+              rowsPerPageOptions={[10, 25, 50]}
+              dataKey="id"
+              emptyMessage="No se encontraron órdenes en esta bandeja."
+              className="text-sm"
+              rowHover
+            >
+              <Column
+                field="reference"
+                header="Orden de Compra"
+                body={(r) => (
+                  <div>
+                    <span className="font-bold text-indigo-600 font-mono text-sm block">{r.reference}</span>
+                    <span className="text-xs text-slate-400">
+                      {r.created_at ? format(new Date(r.created_at), 'dd/MM/yyyy') : ''}
+                    </span>
+                  </div>
+                )}
+              />
+
+              <Column
+                field="supplier_name"
+                header="Proveedor"
+                body={(r) => (
+                  <div>
+                    <span className="font-bold text-slate-800 block text-sm">{r.supplier_name}</span>
+                    <span className="text-xs font-mono text-slate-400">{r.supplier_tax_id || 'Sin RIF'}</span>
+                  </div>
+                )}
+              />
+
+              <Column
+                field="dest_facility_name"
+                header="Destino"
+                body={(r) => (
+                  <span className="text-xs font-medium text-slate-600 bg-slate-100 px-2 py-1 rounded">
+                    {r.dest_facility_name || 'N/A'}
+                  </span>
+                )}
+              />
+
+              <Column
+                header="Recepción Física (WMS)"
+                body={(r) => (
+                  <div className="text-right">
+                    <span className="font-black text-slate-800 block">
+                      ${Number(r.total_received || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      {r.items_count} {r.items_count === 1 ? 'renglón' : 'renglones'}
+                    </span>
+                  </div>
+                )}
+                align="right"
+              />
+
+              {activeTab === 1 && (
+                <Column
+                  header="Factura Fiscal"
+                  body={(r) => (
+                    <div>
+                      {r.invoice_number ? (
+                        <div>
+                          <span className="font-bold font-mono text-slate-800 text-xs block">
+                            📄 {r.invoice_number}
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            {r.invoice_date ? format(new Date(r.invoice_date), 'dd/MM/yyyy') : ''}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">No registrada</span>
+                      )}
+                    </div>
+                  )}
+                />
+              )}
+
+              <Column
+                field="reconciliation_status"
+                header="Estado"
+                body={(r) => (
+                  <div className="flex flex-col gap-1 items-start">
+                    {getStatusBadge(r.reconciliation_status)}
+                    {r.debit_note_number && (
+                      <span className="text-[11px] font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+                        Retención: -${Number(r.debit_note_amount || 0).toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                )}
+              />
+
+              <Column
+                header="Acciones"
+                body={(r) => (
+                  <div className="flex items-center justify-end gap-2">
+                    {activeTab === 0 ? (
+                      <Button
+                        label="Cotejar 3-Way Match"
+                        icon="pi pi-check-square"
+                        size="small"
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-1.5 px-3 rounded-lg shadow-sm"
                         onClick={() => openReconciliationModal(r.id)}
                       />
-                      {r.debit_note_number && (
+                    ) : (
+                      <>
                         <Button
-                          label="Nota Débito"
-                          icon="pi pi-file-pdf"
+                          label="Ver Cotejo"
+                          icon="pi pi-eye"
                           size="small"
-                          severity="help"
-                          className="text-xs py-1 px-2.5 font-bold"
-                          onClick={() => openDebitNoteVoucher(r.id)}
+                          outlined
+                          className="text-xs py-1 px-2.5 p-button-secondary font-medium"
+                          onClick={() => openReconciliationModal(r.id)}
                         />
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-              align="right"
-            />
-          </DataTable>
+                        {r.debit_note_number && (
+                          <Button
+                            label="Nota Débito"
+                            icon="pi pi-file-pdf"
+                            size="small"
+                            severity="help"
+                            className="text-xs py-1 px-2.5 font-bold"
+                            onClick={() => openDebitNoteVoucher(r.id)}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+                align="right"
+              />
+            </DataTable>
+          )}
         </div>
       </div>
+
+      {/* MODAL REGISTRAR NOTA DE CRÉDITO DEVOLUCIÓN RTV */}
+      <Dialog
+        header={`Conciliación de Devolución: ${selectedReturn?.return_number}`}
+        visible={showReturnModal}
+        onHide={() => setShowReturnModal(false)}
+        style={{ width: '650px' }}
+        className="text-xs"
+      >
+        {selectedReturn && (
+          <div className="p-4 space-y-4">
+            <div className="bg-purple-50 p-3 rounded-xl border border-purple-200 text-purple-900 text-xs">
+              <i className="pi pi-info-circle mr-2 text-purple-600 font-bold"></i>
+              Conciliación 3-Way Inversa: cruza la salida física de almacén con la Nota de Crédito emitida por el proveedor para liquidar el saldo a favor en administración.
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+              <div>
+                <p><strong>Proveedor:</strong> {selectedReturn.supplier_name}</p>
+                <p><strong>RIF:</strong> {selectedReturn.supplier_tax_id}</p>
+                <p><strong>Sucursal:</strong> {selectedReturn.facility_name}</p>
+                <p><strong>ODC Ref:</strong> {selectedReturn.purchase_order_reference || 'Directa / Sin ODC'}</p>
+              </div>
+              <div>
+                <p><strong>Despachado el:</strong> {selectedReturn.dispatched_at}</p>
+                <p><strong>Chofer:</strong> {selectedReturn.carrier_name || 'N/A'}</p>
+                <p><strong>Placa:</strong> {selectedReturn.carrier_plate || 'N/A'}</p>
+                <p><strong>Total Salida Kardex:</strong> <span className="text-purple-700 font-black">${Number(selectedReturn.total_estimated_amount).toFixed(2)}</span></p>
+              </div>
+            </div>
+
+            {selectedReturn.status === 'CONCILIATED' ? (
+              <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-200 text-emerald-900 text-xs space-y-2">
+                <p className="font-extrabold text-sm flex items-center gap-2">
+                  <i className="pi pi-check-circle text-emerald-600"></i>
+                  Esta orden ya se encuentra conciliada y cerrada.
+                </p>
+                <p><strong>N° Nota de Crédito:</strong> {selectedReturn.credit_note_number}</p>
+                <p><strong>Monto N/C:</strong> ${Number(selectedReturn.credit_note_amount).toFixed(2)}</p>
+                <p><strong>Fecha N/C:</strong> {selectedReturn.credit_note_date}</p>
+                <p><strong>Conciliado por:</strong> {selectedReturn.conciliated_by} ({selectedReturn.conciliated_at})</p>
+                {selectedReturn.notes && <p><strong>Notas:</strong> {selectedReturn.notes}</p>}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">N° Nota de Crédito Fiscal *</label>
+                    <InputText
+                      value={creditNoteNumber}
+                      onChange={(e) => setCreditNoteNumber(e.target.value)}
+                      placeholder="Ej. NC-0004521"
+                      className="w-full text-xs font-mono font-bold uppercase"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">Monto Nota de Crédito ($) *</label>
+                    <InputNumber
+                      value={creditNoteAmount}
+                      onValueChange={(e) => setCreditNoteAmount(e.value || 0)}
+                      minFractionDigits={2}
+                      maxFractionDigits={4}
+                      className="w-full text-xs font-bold"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">Fecha Emisión Nota de Crédito *</label>
+                    <Calendar
+                      value={creditNoteDate}
+                      onChange={(e) => setCreditNoteDate(e.value as Date)}
+                      dateFormat="dd/mm/yy"
+                      showIcon
+                      className="w-full text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1">Observaciones de Conciliación</label>
+                  <InputTextarea
+                    value={returnNotes}
+                    onChange={(e) => setReturnNotes(e.target.value)}
+                    rows={2}
+                    placeholder="Detalles sobre deducción en cuenta por pagar o abono en cuenta..."
+                    className="w-full text-xs"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
+              <Button
+                label="Cerrar"
+                icon="pi pi-times"
+                outlined
+                severity="secondary"
+                onClick={() => setShowReturnModal(false)}
+              />
+              {selectedReturn.status !== 'CONCILIATED' && (
+                <Button
+                  label="Confirmar y Conciliar Devolución"
+                  icon="pi pi-check"
+                  loading={submittingReturn}
+                  className="bg-purple-600 hover:bg-purple-700 text-white font-bold border-none"
+                  onClick={submitCloseReturn}
+                />
+              )}
+            </div>
+          </div>
+        )}
+      </Dialog>
 
       {/* 3-WAY MATCH INTERACTIVE MODAL */}
       <Dialog

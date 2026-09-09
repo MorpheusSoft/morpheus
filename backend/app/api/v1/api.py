@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.api import deps
-from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, inventory_session, suppliers, buyers, mrp, purchase_orders, reconciliation, currencies, wms, wms_transfers, jobs, dashboard, facilities, pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b, labels, import_legacy, print_templates, promotions, sales_report
+from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, inventory_session, suppliers, buyers, mrp, purchase_orders, reconciliation, currencies, wms, wms_transfers, jobs, dashboard, facilities, pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b, labels, import_legacy, print_templates, promotions, sales_report, returns
 
 from app.api.v1.endpoints import public_orders
 
@@ -29,6 +29,7 @@ api_router.include_router(purchase_orders.router, prefix="/purchase-orders", tag
 api_router.include_router(reconciliation.router, prefix="/reconciliation", tags=["reconciliation"], dependencies=secure_dependencies)
 api_router.include_router(currencies.router, prefix="/currencies", tags=["currencies"], dependencies=secure_dependencies)
 api_router.include_router(wms.router, prefix="/wms", tags=["wms"], dependencies=secure_dependencies)
+api_router.include_router(returns.router, prefix="/wms", tags=["returns"], dependencies=secure_dependencies)
 api_router.include_router(wms_transfers.router, prefix="/wms-transfers", tags=["wms transfers"], dependencies=secure_dependencies)
 api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"], dependencies=secure_dependencies)
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"], dependencies=secure_dependencies)

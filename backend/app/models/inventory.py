@@ -474,3 +474,123 @@ class InventoryAdjustmentLine(Base):
     variant = relationship("ProductVariant")
     batch = relationship("Batch")
 
+
+# ==============================================================================
+# DEVOLUCIONES A PROVEEDOR (RTV) & CANJES 1 A 1
+# ==============================================================================
+class SupplierReturn(Base):
+    __tablename__ = "supplier_returns"
+    __table_args__ = {"schema": "inv"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    return_number = Column(String(50), unique=True, index=True, nullable=False)
+    facility_id = Column(Integer, ForeignKey("core.facilities.id"), nullable=False)
+    supplier_id = Column(Integer, ForeignKey("core.suppliers.id"), nullable=False)
+    purchase_order_id = Column(Integer, ForeignKey("pur.purchase_orders.id"), nullable=True)
+    status = Column(String(30), default='DRAFT', nullable=False) # 'DRAFT', 'DISPATCHED', 'CONCILIATED', 'CANCELLED'
+    total_estimated_amount = Column(Numeric(19, 4), default=0, nullable=False)
+    
+    # Datos de Despacho / Transportista
+    carrier_name = Column(String(150), nullable=True)
+    carrier_id_doc = Column(String(50), nullable=True)
+    carrier_plate = Column(String(30), nullable=True)
+    notes = Column(Text, nullable=True)
+    dispatched_at = Column(DateTime(timezone=True), nullable=True)
+    dispatched_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    
+    # Visado Comercial (si no tenía ODC previa)
+    buyer_approved_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    buyer_approved_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # Conciliación Financiera (Cierre en Compras / Administración)
+    credit_note_number = Column(String(80), nullable=True)
+    credit_note_amount = Column(Numeric(19, 4), nullable=True)
+    credit_note_date = Column(Date, nullable=True)
+    conciliated_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    conciliated_at = Column(DateTime(timezone=True), nullable=True)
+    
+    created_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    facility = relationship("Facility")
+    supplier = relationship("Supplier")
+    purchase_order = relationship("PurchaseOrder")
+    dispatched_by = relationship("User", foreign_keys=[dispatched_by_id])
+    buyer_approved_by = relationship("User", foreign_keys=[buyer_approved_by_id])
+    conciliated_by = relationship("User", foreign_keys=[conciliated_by_id])
+    created_by = relationship("User", foreign_keys=[created_by_id])
+    lines = relationship("SupplierReturnLine", back_populates="return_order", cascade="all, delete-orphan")
+
+
+class SupplierReturnLine(Base):
+    __tablename__ = "supplier_return_lines"
+    __table_args__ = {"schema": "inv"}
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    return_id = Column(Integer, ForeignKey("inv.supplier_returns.id", ondelete="CASCADE"), nullable=False)
+    variant_id = Column(Integer, ForeignKey("inv.product_variants.id"), nullable=False)
+    batch_id = Column(Integer, ForeignKey("inv.batches.id"), nullable=True)
+    
+    quantity = Column(Numeric(19, 4), nullable=False)
+    unit_cost = Column(Numeric(19, 4), default=0, nullable=False)
+    subtotal = Column(Numeric(19, 4), default=0, nullable=False)
+    reason = Column(String(80), default='DEFECTO_FABRICA', nullable=False) # 'DEFECTO_FABRICA', 'VENCIMIENTO', 'ROTURA_TRANSPORTE', 'SOBRESTOCK', 'RECLAMO_CALIDAD'
+
+    return_order = relationship("SupplierReturn", back_populates="lines")
+    variant = relationship("ProductVariant")
+    batch = relationship("Batch")
+
+
+class VendorSwap(Base):
+    __tablename__ = "vendor_swaps"
+    __table_args__ = {"schema": "inv"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    swap_number = Column(String(50), unique=True, index=True, nullable=False)
+    facility_id = Column(Integer, ForeignKey("core.facilities.id"), nullable=False)
+    supplier_id = Column(Integer, ForeignKey("core.suppliers.id"), nullable=False)
+    variant_id = Column(Integer, ForeignKey("inv.product_variants.id"), nullable=False)
+    damaged_batch_id = Column(Integer, ForeignKey("inv.batches.id"), nullable=True)
+    
+    qty_quarantined = Column(Numeric(19, 4), nullable=False)
+    qty_swapped = Column(Numeric(19, 4), default=0, nullable=False)
+    status = Column(String(30), default='PENDING', nullable=False) # 'PENDING', 'PARTIAL', 'COMPLETED', 'CANCELLED'
+    damage_reason = Column(String(100), nullable=True)
+    notes = Column(Text, nullable=True)
+    
+    quarantined_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    quarantined_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    facility = relationship("Facility")
+    supplier = relationship("Supplier")
+    variant = relationship("ProductVariant")
+    damaged_batch = relationship("Batch")
+    quarantined_by = relationship("User", foreign_keys=[quarantined_by_id])
+    executions = relationship("VendorSwapExecution", back_populates="swap", cascade="all, delete-orphan")
+
+
+class VendorSwapExecution(Base):
+    __tablename__ = "vendor_swap_executions"
+    __table_args__ = {"schema": "inv"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    swap_id = Column(Integer, ForeignKey("inv.vendor_swaps.id", ondelete="CASCADE"), nullable=False)
+    qty = Column(Numeric(19, 4), nullable=False)
+    
+    # Nuevos datos de trazabilidad sanitaria
+    new_batch_number = Column(String(100), nullable=False)
+    new_expiration_date = Column(Date, nullable=False)
+    
+    carrier_name = Column(String(150), nullable=True)
+    carrier_plate = Column(String(30), nullable=True)
+    
+    stock_move_out_id = Column(BigInteger, ForeignKey("inv.stock_moves.id"), nullable=True)
+    stock_move_in_id = Column(BigInteger, ForeignKey("inv.stock_moves.id"), nullable=True)
+    executed_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    executed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    swap = relationship("VendorSwap", back_populates="executions")
+    executed_by = relationship("User", foreign_keys=[executed_by_id])
+    stock_move_out = relationship("StockMove", foreign_keys=[stock_move_out_id])
+    stock_move_in = relationship("StockMove", foreign_keys=[stock_move_in_id])
+

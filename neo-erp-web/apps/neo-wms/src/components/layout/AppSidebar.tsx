@@ -37,6 +37,7 @@ function AppSidebarContent() {
 
   const operationsItems = [
     { label: 'Recepción (Inbound)', icon: 'pi pi-truck', href: '/receipts' },
+    { label: 'Devoluciones y Canjes', icon: 'pi pi-replay', href: '/returns' },
     { label: 'Despachos & Picking', icon: 'pi pi-send', href: '/shipments' },
     { label: 'Transferencias Internas', icon: 'pi pi-arrow-right-arrow-left', href: '/transfers' },
   ];

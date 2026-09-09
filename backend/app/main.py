@@ -22,10 +22,13 @@ async def run_mrp_bot_scheduler():
     from app.models.purchasing import MRPBotLog
     import datetime
     import asyncio
-    import pytz
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("America/Caracas")
+    except Exception:
+        tz = datetime.timezone(datetime.timedelta(hours=-4))
     
     print("[MRP BOT SCHEDULER] Iniciando...")
-    tz = pytz.timezone("America/Caracas")
     while True:
         try:
             now = datetime.datetime.now(tz)
