@@ -54,7 +54,6 @@ function AppSidebarContent() {
   const settingsItems = [
     { label: 'Equipo de Compradores', icon: 'pi pi-id-card', href: '/buyers' },
     { label: 'Bot de Compras (IA)', icon: 'pi pi-cog', href: '/settings/bot' },
-    { label: 'Tareas Programadas', icon: 'pi pi-calendar', href: '/settings/crons' },
   ];
 
   const isActivePath = (href: string) => {
