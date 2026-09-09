@@ -92,6 +92,18 @@ export default function OrderDetailsPage() {
       updatePermanently: true
   });
 
+  const [selectedPackId, setSelectedPackId] = useState<number | null>(null);
+
+  const mapPackagings = (packagings: any[]) => [
+      { id: null, name: 'Und. Base', qty_per_unit: 1, label: 'Unidad Base (x1)' },
+      ...(packagings || []).map((pk: any) => ({
+          id: pk.id,
+          name: pk.name,
+          qty_per_unit: Number(pk.qty_per_unit),
+          label: `${pk.name} (x${pk.qty_per_unit})`
+      }))
+  ];
+
   const fetchOrder = async () => {
     setLoading(true);
     try {
@@ -102,7 +114,8 @@ export default function OrderDetailsPage() {
           const uCost = parseFloat(l.unit_cost) || 0;
           return {
               ...l,
-              pack_cost: Number((uCost * factor).toFixed(4))
+              pack_cost: Number((uCost * factor).toFixed(4)),
+              available_packagings: mapPackagings(l.packagings)
           };
       });
       setLines(mappedLines);
@@ -142,7 +155,8 @@ export default function OrderDetailsPage() {
         .then(res => {
             const mapped = res.data.map((item: any) => ({
                 ...item,
-                display_name: `${item.product_name} (${item.variant_sku}) - Costo: $${item.replacement_cost} | Empaque: ${item.pack_name || 'Unidad Base'}`
+                display_name: `${item.variant_sku || ''} - ${item.product_name} - $${item.replacement_cost}`,
+                available_packagings: mapPackagings(item.packagings)
             }));
             setCatalog(mapped);
         })
@@ -164,6 +178,7 @@ export default function OrderDetailsPage() {
                       const productsList = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
                       productsList.forEach((p: any) => {
                           if (p.variants) {
+                              const pPacks = mapPackagings(p.packagings);
                               p.variants.forEach((v: any) => {
                                   variants.push({
                                       variant_id: v.id,
@@ -173,7 +188,8 @@ export default function OrderDetailsPage() {
                                       pack_name: 'Und. Base',
                                       qty_per_unit: 1,
                                       replacement_cost: v.replacement_cost || p.replacement_cost || 0,
-                                      display_name: `[GLOBAL] ${v.sku || ''} - ${p.name} - $${v.replacement_cost || p.replacement_cost || 0}`
+                                      display_name: `[GLOBAL] ${v.sku || ''} - ${p.name} - $${v.replacement_cost || p.replacement_cost || 0}`,
+                                      available_packagings: pPacks
                                   });
                               });
                           }
@@ -192,6 +208,7 @@ export default function OrderDetailsPage() {
           const productsList = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
           productsList.forEach((p: any) => {
               if (p.variants) {
+                  const pPacks = mapPackagings(p.packagings);
                   p.variants.forEach((v: any) => {
                       variants.push({
                           variant_id: v.id,
@@ -201,7 +218,8 @@ export default function OrderDetailsPage() {
                           pack_name: 'Und. Base',
                           qty_per_unit: 1,
                           replacement_cost: v.replacement_cost || p.replacement_cost || 0,
-                          display_name: `[GLOBAL] ${v.sku || ''} - ${p.name} - $${v.replacement_cost || p.replacement_cost || 0}`
+                          display_name: `[GLOBAL] ${v.sku || ''} - ${p.name} - $${v.replacement_cost || p.replacement_cost || 0}`,
+                          available_packagings: pPacks
                       });
                   });
               }
@@ -418,35 +436,64 @@ export default function OrderDetailsPage() {
       setCreatingProduct(false);
   };
 
+  const handlePresentationChange = (rowIndex: number, newPackId: number | null) => {
+      setLines(prev => {
+          const updatedLines = [...prev];
+          if(!updatedLines[rowIndex]) return updatedLines;
+          const row = { ...updatedLines[rowIndex] };
+          
+          const pack = (row.available_packagings || []).find((p: any) => p.id === newPackId)
+              || { id: null, name: 'Und. Base', qty_per_unit: 1 };
+          const factor = Number(pack.qty_per_unit) || 1;
+          
+          row.pack_id = newPackId;
+          row.pack_name = pack.name || 'Und. Base';
+          row.qty_per_pack = factor;
+          
+          row.expected_base_qty = (row.qty_ordered || 1) * factor;
+          row.pack_cost = Number(((row.unit_cost || 0) * factor).toFixed(4));
+          const gross = row.expected_base_qty * (row.unit_cost || 0);
+          row.subtotal = calcDiscountCascade(gross, row.line_discount_str);
+          
+          updatedLines[rowIndex] = row;
+          return updatedLines;
+      });
+  };
+
   const handleAddProductLine = () => {
       if (!selectedProduct) return;
       
-      if (lines.some(l => l.variant_id === selectedProduct.variant_id && l.pack_id === selectedProduct.pack_id)) {
-          toast.current?.show({ severity: 'warn', summary: 'Aviso', detail: 'Este producto ya está en la orden.' });
+      const chosenPack = (selectedProduct.available_packagings || []).find((p: any) => p.id === selectedPackId) 
+          || { id: null, name: 'Und. Base', qty_per_unit: 1, label: 'Unidad Base (x1)' };
+
+      if (lines.some(l => l.variant_id === selectedProduct.variant_id && l.pack_id === chosenPack.id)) {
+          toast.current?.show({ severity: 'warn', summary: 'Aviso', detail: 'Este insumo con esta presentación ya está en la orden.' });
           return;
       }
       
-      const qty_per_unit = selectedProduct.qty_per_unit || selectedProduct.qty_per_pack || 1;
+      const qty_per_unit = Number(chosenPack.qty_per_unit) || 1;
       const initial_qty = 1;
-      const replacement_cost = selectedProduct.replacement_cost || 0;
+      const replacement_cost = parseFloat(selectedProduct.replacement_cost) || 0;
       
       const newLine = {
           id: null,
           variant_id: selectedProduct.variant_id,
           sku: selectedProduct.variant_sku || 'N/A',
           product_name: selectedProduct.product_name,
-          pack_id: selectedProduct.pack_id,
-          pack_name: selectedProduct.pack_name || 'Und. Base',
+          pack_id: chosenPack.id,
+          pack_name: chosenPack.name || 'Und. Base',
           qty_per_pack: qty_per_unit,
           qty_ordered: initial_qty,
           expected_base_qty: initial_qty * qty_per_unit,
           unit_cost: replacement_cost,
           pack_cost: Number((replacement_cost * qty_per_unit).toFixed(4)),
           line_discount_str: '',
-          subtotal: initial_qty * qty_per_unit * replacement_cost
+          subtotal: initial_qty * qty_per_unit * replacement_cost,
+          available_packagings: selectedProduct.available_packagings || [chosenPack]
       };
       setLines(prev => [...prev, newLine]);
       setSelectedProduct(null);
+      setSelectedPackId(null);
       toast.current?.show({ severity: 'success', summary: 'Agregado', detail: 'Producto añadido al borrador de la orden.' });
   };
 
@@ -856,7 +903,10 @@ export default function OrderDetailsPage() {
                  <Dropdown 
                     value={selectedProduct} 
                     options={searchMode === 'CATALOG' ? catalog : globalVariants} 
-                    onChange={(e) => setSelectedProduct(e.value)} 
+                    onChange={(e) => {
+                       setSelectedProduct(e.value);
+                       setSelectedPackId(null);
+                    }} 
                     optionLabel="display_name" 
                     filter 
                     onFilter={handleDropdownFilter}
@@ -865,6 +915,22 @@ export default function OrderDetailsPage() {
                     className="w-full text-xs border-slate-200" 
                  />
               </div>
+
+              {selectedProduct && selectedProduct.available_packagings && selectedProduct.available_packagings.length > 1 && (
+                 <div className="flex items-center gap-2 shrink-0 bg-indigo-50/70 px-3 py-1.5 rounded-xl border border-indigo-200">
+                    <span className="text-xs font-bold text-indigo-700 uppercase">Presentación:</span>
+                    <Dropdown
+                       value={selectedPackId}
+                       onChange={(e) => setSelectedPackId(e.value)}
+                       options={selectedProduct.available_packagings}
+                       optionLabel="label"
+                       optionValue="id"
+                       placeholder="Presentación"
+                       className="w-44 p-inputtext-sm text-xs font-bold border-indigo-300 bg-white text-indigo-900 rounded-lg shadow-sm"
+                    />
+                 </div>
+              )}
+
               <Button 
                  label="Añadir a Orden" 
                  icon="pi pi-plus-circle" 
@@ -917,25 +983,47 @@ export default function OrderDetailsPage() {
              </div>
           )} />
           
-          <Column header="Unidad de Compra" body={(r, options) => (
-             <div className="flex justify-end items-center gap-2">
-                 <span className="text-xs font-bold text-slate-500 bg-slate-50 px-2 py-1.5 rounded border border-slate-200 uppercase tracking-wide">
-                    {r.pack_name || 'UND. BASE'} {r.qty_per_pack && r.qty_per_pack > 1 ? `(x${r.qty_per_pack})` : '(x1)'} <i className="pi pi-box ml-1 text-slate-400 text-[10px]"></i>
-                 </span>
-                 {isDraft && r.pack_id && (
-                     <Button 
-                        icon="pi pi-pencil" 
-                        rounded 
-                        text 
-                        severity="secondary" 
-                        size="small" 
-                        onClick={() => handleOpenEditPack(r, options.rowIndex)} 
-                        tooltip="Editar unidades por empaque" 
-                        className="p-button-sm !p-1 text-slate-400 hover:text-slate-600"
-                     />
-                 )}
-             </div>
-          )} align="right" />
+           <Column header="Unidad de Compra" body={(r, options) => {
+              if (!isDraft) {
+                  return (
+                      <div className="flex justify-end items-center gap-2">
+                          <span className="text-xs font-bold text-slate-500 bg-slate-50 px-2 py-1.5 rounded border border-slate-200 uppercase tracking-wide">
+                             {r.pack_name || 'UND. BASE'} {r.qty_per_pack && r.qty_per_pack > 1 ? `(x${r.qty_per_pack})` : '(x1)'} <i className="pi pi-box ml-1 text-slate-400 text-[10px]"></i>
+                          </span>
+                      </div>
+                  );
+              }
+              return (
+                  <div className="flex justify-end items-center gap-2">
+                      {r.available_packagings && r.available_packagings.length > 1 ? (
+                          <Dropdown 
+                             value={r.pack_id ?? null}
+                             options={r.available_packagings}
+                             optionLabel="label"
+                             optionValue="id"
+                             onChange={(e) => handlePresentationChange(options.rowIndex, e.value)}
+                             className="p-inputtext-sm text-xs font-bold border-indigo-200 bg-indigo-50/40 text-indigo-800 rounded-lg shadow-sm"
+                          />
+                      ) : (
+                          <span className="text-xs font-bold text-slate-500 bg-slate-50 px-2 py-1.5 rounded border border-slate-200 uppercase tracking-wide">
+                             {r.pack_name || 'UND. BASE'} {r.qty_per_pack && r.qty_per_pack > 1 ? `(x${r.qty_per_pack})` : '(x1)'} <i className="pi pi-box ml-1 text-slate-400 text-[10px]"></i>
+                          </span>
+                      )}
+                      {r.pack_id && (
+                          <Button 
+                             icon="pi pi-pencil" 
+                             rounded 
+                             text 
+                             severity="secondary" 
+                             size="small" 
+                             onClick={() => handleOpenEditPack(r, options.rowIndex)} 
+                             tooltip="Editar unidades por empaque" 
+                             className="p-button-sm !p-1 text-slate-400 hover:text-slate-600"
+                          />
+                      )}
+                  </div>
+              );
+           }} align="right" />
           
           <Column header="Cant. a Facturar" body={(r, options) => {
              const isPack = r.qty_per_pack > 1;
@@ -967,7 +1055,12 @@ export default function OrderDetailsPage() {
            <Column header="Costo x Bulto" body={(r, options) => {
                const sym = currencies.find(c => c.id === currencyId)?.symbol || '$';
                const dec = currencies.find(c => c.id === currencyId)?.decimal_places ?? 2;
+               const isPack = r.qty_per_pack > 1;
                const packCostVal = r.pack_cost != null ? Number(r.pack_cost) : Number(((Number(r.unit_cost) || 0) * (r.qty_per_pack || 1)).toFixed(dec));
+               
+               if (!isPack) {
+                   return <div className="flex justify-end pr-2"><span className="text-xs text-slate-400 font-semibold italic">N/A (Unidad)</span></div>;
+               }
                
                if (!isDraft) {
                    return <span className="text-slate-700 font-semibold">{sym}{packCostVal.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})}</span>;

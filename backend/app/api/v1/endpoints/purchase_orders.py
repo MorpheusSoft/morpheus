@@ -204,6 +204,16 @@ def read_purchase_order_details(
             "received_base_qty": line.received_base_qty,
             "sales_price": variant.sales_price if variant else 0,
             "subtotal": line.expected_base_qty * line.unit_cost,
+            "packagings": [
+                {
+                    "id": pk.id,
+                    "name": pk.name,
+                    "qty_per_unit": float(pk.qty_per_unit),
+                    "weight_kg": float(pk.weight_kg or 0),
+                    "volume_m3": float(pk.volume_m3 or 0)
+                }
+                for pk in (prod.packagings or [])
+            ] if prod else [],
             "ai_analysis": {
                 "stock_qty": float(stock_qty),
                 "daily_sales_avg": round(run_rate, 4),
@@ -372,6 +382,7 @@ def update_purchase_order(
         
         if l_up.id and l_up.id in line_map:
             db_line = line_map[l_up.id]
+            db_line.pack_id = l_up.pack_id
             db_line.qty_ordered = qty
             db_line.expected_base_qty = base_qty
             db_line.unit_cost = cost

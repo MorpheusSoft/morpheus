@@ -159,6 +159,16 @@ def get_supplier_catalog(supplier_id: int, category_id: int = None, db: Session 
     
     catalog = []
     for sp, pv, p, pack in results:
+        packagings_data = [
+            {
+                "id": pk.id,
+                "name": pk.name,
+                "qty_per_unit": float(pk.qty_per_unit),
+                "weight_kg": float(pk.weight_kg or 0),
+                "volume_m3": float(pk.volume_m3 or 0)
+            }
+            for pk in (p.packagings or [])
+        ]
         catalog.append({
             "id": sp.id,
             "supplier_id": sp.supplier_id,
@@ -173,7 +183,8 @@ def get_supplier_catalog(supplier_id: int, category_id: int = None, db: Session 
             "product_name": p.name,
             "variant_sku": pv.sku,
             "pack_name": pack.name if pack else "Und.",
-            "qty_per_unit": pack.qty_per_unit if pack else 1
+            "qty_per_unit": pack.qty_per_unit if pack else 1,
+            "packagings": packagings_data
         })
         
     return catalog
