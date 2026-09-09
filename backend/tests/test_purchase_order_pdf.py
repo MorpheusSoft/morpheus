@@ -713,5 +713,45 @@ class TestPurchaseOrderPDF(unittest.TestCase):
         text_no_addr = reader_no_addr.pages[0].extract_text()
         self.assertIn("DESPACHAR A / DESTINO: Almacén La Yaguara (ALM-YAG)", text_no_addr)
 
+        # Sub-test 4: Facility with long address (>200 chars) not prematurely truncated at 180 chars
+        mock_fac.address = "Av. Intercomunal Don Julio Centeno, Centro Comercial El Remanso, Nivel Mezzanina, Local M-12, al lado del Banco Mercantil, San Diego, Carabobo, Zona Postal 2006"
+        pdf_bytes_long = generate_purchase_order_pdf(5001, db)
+        reader_long = pypdf.PdfReader(io.BytesIO(pdf_bytes_long))
+        text_long = reader_long.pages[0].extract_text()
+        # Verifies the full address appears including the end part that was previously truncated
+        self.assertIn("San Diego, Carabobo, Zona Postal 2006", text_long)
+
+        # Sub-test 5: PO without dest_facility_id resolves issuer address from company facility rather than fake address
+        mock_po.dest_facility_id = None
+        mock_comp = MagicMock(spec=Company)
+        mock_comp.name = "Catania C.A."
+        mock_comp.tax_id = "J-99999999-9"
+        mock_comp_fac = MagicMock(spec=Facility)
+        mock_comp_fac.address = "Sede Principal Catania, Valencia"
+
+        def query_side_effect_comp_fac(model):
+            q = MagicMock()
+            if model == PurchaseOrder:
+                q.filter.return_value.first.return_value = mock_po
+            elif model == Supplier:
+                q.filter.return_value.first.return_value = mock_supp
+            elif model == Currency:
+                q.filter.return_value.first.return_value = mock_curr
+            elif model == Facility:
+                q.filter.return_value.first.return_value = mock_comp_fac
+            elif model == Company:
+                q.filter.return_value.first.return_value = mock_comp
+            else:
+                q.filter.return_value.first.return_value = None
+            return q
+
+        db.query.side_effect = query_side_effect_comp_fac
+        pdf_bytes_fallback = generate_purchase_order_pdf(5001, db)
+        reader_fallback = pypdf.PdfReader(io.BytesIO(pdf_bytes_fallback))
+        text_fallback = reader_fallback.pages[0].extract_text()
+        self.assertIn("DESPACHAR A / DESTINO: General (Libre)", text_fallback)
+        self.assertIn("Sede Principal Catania, Valencia", text_fallback)
+        self.assertNotIn("Calle La Planta", text_fallback)
+
 if __name__ == "__main__":
     unittest.main()

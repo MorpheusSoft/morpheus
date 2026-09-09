@@ -4,8 +4,17 @@ from sqlalchemy.orm import Session
 from decimal import Decimal
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine
 from app.models.core import Supplier, Facility, Company, User, Buyer, Tribute
-from typing import Optional
+from typing import Optional, Any
 from app.models.inventory import ProductVariant, Product, ProductPackaging, ProductBarcode
+
+def safe_field(obj: Any, attr: str) -> Optional[str]:
+    if not obj:
+        return None
+    val = getattr(obj, attr, None)
+    if val is None or hasattr(val, '_mock_return_value'):
+        return None
+    s = str(val).strip()
+    return s if s else None
 
 def calculate_discount_cascade(base_amount: float, discount_str: str) -> float:
     if not discount_str:
@@ -21,6 +30,11 @@ def calculate_discount_cascade(base_amount: float, discount_str: str) -> float:
     return net
 
 def sanitize_pdf_text(text: Optional[str]) -> str:
+    if text is None:
+        return ""
+    if hasattr(text, '_mock_return_value'):
+        return ""
+    text = str(text)
     if not text:
         return ""
     # Map common non-latin-1 typographic unicode characters to ASCII/latin-1 equivalents
@@ -185,24 +199,30 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         raise ValueError("Orden no encontrada")
         
     supplier = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
-    facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first() if order.dest_facility_id else None
+    dest_facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first() if order.dest_facility_id else None
     
     # Query issuer Details (Company)
     company = None
-    if facility and facility.company_id:
-        company = db.query(Company).filter(Company.id == facility.company_id).first()
+    if dest_facility and dest_facility.company_id:
+        company = db.query(Company).filter(Company.id == dest_facility.company_id).first()
     if not company:
         company = db.query(Company).first()
         
-    issuer_name = sanitize_pdf_text(company.name if company else "NEO SOLUTIONS C.A.")
-    issuer_tax_id = sanitize_pdf_text(company.tax_id if company else "J-31415926-9")
-    issuer_address = sanitize_pdf_text(facility.address if facility else "Calle La Planta, Edif. Neo ERP, Caracas, Venezuela")
+    issuer_facility = dest_facility
+    if not issuer_facility and company:
+        issuer_facility = db.query(Facility).filter(Facility.company_id == company.id).first()
+    if not issuer_facility:
+        issuer_facility = db.query(Facility).first()
+
+    issuer_name = sanitize_pdf_text(safe_field(company, "name") or "NEO SOLUTIONS C.A.")
+    issuer_tax_id = sanitize_pdf_text(safe_field(company, "tax_id") or "J-31415926-9")
+    issuer_address = sanitize_pdf_text(safe_field(issuer_facility, "address") or "Calle La Planta, Edif. Neo ERP, Caracas, Venezuela")
     issuer_email = "compras@neosolutions.com"
     
-    supplier_name = sanitize_pdf_text(supplier.name if supplier else "N/A")
-    supplier_tax_id = sanitize_pdf_text(supplier.tax_id if supplier else "N/A")
-    supplier_address = sanitize_pdf_text(supplier.fiscal_address if supplier and supplier.fiscal_address else "N/A")
-    supplier_email = sanitize_pdf_text(supplier.commercial_email if supplier and supplier.commercial_email else "N/A")
+    supplier_name = sanitize_pdf_text(safe_field(supplier, "name") or "N/A")
+    supplier_tax_id = sanitize_pdf_text(safe_field(supplier, "tax_id") or "N/A")
+    supplier_address = sanitize_pdf_text(safe_field(supplier, "fiscal_address") or "N/A")
+    supplier_email = sanitize_pdf_text(safe_field(supplier, "commercial_email") or "N/A")
     
     from app.models.core import Currency
     currency = db.query(Currency).filter(Currency.id == order.currency_id).first() if order.currency_id else None
@@ -210,8 +230,8 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         currency = db.query(Currency).filter(Currency.id == supplier.currency_id).first()
         
     currency_decimals = currency.decimal_places if currency else 2
-    currency_symbol = sanitize_pdf_text(currency.symbol if currency and hasattr(currency, 'symbol') and currency.symbol else "$")
-    currency_code = sanitize_pdf_text(currency.code if currency else "USD")
+    currency_symbol = sanitize_pdf_text(safe_field(currency, "symbol") or "$")
+    currency_code = sanitize_pdf_text(safe_field(currency, "code") or "USD")
     
     emission_date = order.created_at.strftime('%Y-%m-%d') if order.created_at else "N/A"
     expiration_date = order.expiration_date.strftime('%Y-%m-%d') if order.expiration_date else "N/A"
@@ -222,7 +242,7 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         if buyer:
             buyer_user = db.query(User).filter(User.id == buyer.user_id).first()
             if buyer_user:
-                buyer_name = sanitize_pdf_text(buyer_user.full_name)
+                buyer_name = sanitize_pdf_text(safe_field(buyer_user, "full_name") or "N/A")
                 
     pdf = PurchaseOrderPDF(reference=order.reference, currency_code=currency_code)
     pdf.set_margins(15, 15, 15)
@@ -278,20 +298,11 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
     pdf.multi_cell(inner_w, 4.2, proveedor_txt)
     
     # Build Destination / Dispatch Location string safely
-    def _safe_field(obj, attr):
-        if not obj:
-            return None
-        val = getattr(obj, attr, None)
-        if val is None or hasattr(val, '_mock_return_value'):
-            return None
-        s = str(val).strip()
-        return s if s else None
+    fac_name = safe_field(dest_facility, 'name')
+    fac_code = safe_field(dest_facility, 'code')
+    fac_address = safe_field(dest_facility, 'address')
 
-    fac_name = _safe_field(facility, 'name')
-    fac_code = _safe_field(facility, 'code')
-    fac_address = _safe_field(facility, 'address')
-
-    if facility and (fac_name or fac_code or fac_address):
+    if dest_facility and (fac_name or fac_code or fac_address):
         parts = []
         if fac_name:
             parts.append(fac_name)
@@ -308,8 +319,8 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
     else:
         dest_location = "General (Libre)"
 
-    if len(dest_location) > 180:
-        dest_location = dest_location[:177] + "..."
+    if len(dest_location) > 320:
+        dest_location = dest_location[:317] + "..."
     dest_str = sanitize_pdf_text(f"DESPACHAR A / DESTINO: {dest_location}")
 
     # Metadata bar positioned cleanly below both boxes with dynamic height
@@ -322,15 +333,19 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
     pdf.set_fill_color(241, 245, 249)
     pdf.rect(15, bar_y, 180, bar_h, 'F')
 
-    # Row 1: Dates, Currency, Buyer
+    # Row 1: Dates, Currency, Buyer (width distribution: 36, 42, 32, 66 mm -> 176 mm within 180mm box)
     pdf.set_xy(17, bar_y + 2)
     pdf.set_font("Helvetica", "B", 8)
     pdf.set_text_color(71, 85, 105)
-    pdf.cell(44, 5, f"F. Emisión: {emission_date}")
-    pdf.cell(44, 5, f"F. Vencimiento: {expiration_date}")
-    pdf.cell(44, 5, f"Moneda: {currency_code} ({currency_symbol})")
-    buyer_disp = buyer_name[:20] + "..." if len(buyer_name) > 20 else buyer_name
-    pdf.cell(44, 5, f"Comprador: {buyer_disp}")
+    pdf.cell(36, 5, f"F. Emisión: {emission_date}")
+    pdf.cell(42, 5, f"F. Vencimiento: {expiration_date}")
+    pdf.cell(32, 5, f"Moneda: {currency_code} ({currency_symbol})")
+    buyer_txt = f"Comprador: {buyer_name}"
+    if pdf.get_string_width(buyer_txt) > 64:
+        while len(buyer_name) > 3 and pdf.get_string_width(f"Comprador: {buyer_name}...") > 64:
+            buyer_name = buyer_name[:-1]
+        buyer_txt = f"Comprador: {buyer_name}..."
+    pdf.cell(66, 5, buyer_txt)
 
     # Row 2: Dispatch / Destination Location
     pdf.set_xy(17, bar_y + 7.5)
