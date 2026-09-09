@@ -144,11 +144,18 @@ export default function UsersPage() {
               {users.map((u) => (
                 <tr key={u.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
-                     <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${u.is_superuser ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'bg-slate-100 text-slate-500'}`}>
-                        {u.full_name?.substring(0,2)?.toUpperCase() || 'US'}
+                     <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${u.user_type === 'DIGITAL_WORKER' ? 'bg-gradient-to-tr from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-500/20' : u.is_superuser ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'bg-slate-100 text-slate-500'}`}>
+                        {u.user_type === 'DIGITAL_WORKER' ? <i className="pi pi-android text-xs"></i> : (u.full_name?.substring(0,2)?.toUpperCase() || 'US')}
                      </div>
                      <div>
-                        <div>{u.full_name}</div>
+                        <div className="flex items-center gap-2">
+                           <span>{u.full_name}</span>
+                           {u.user_type === 'DIGITAL_WORKER' && (
+                              <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full text-[10px] font-bold border border-purple-200 inline-flex items-center gap-1">
+                                 <i className="pi pi-android text-[10px]"></i> Empleado Digital
+                              </span>
+                           )}
+                        </div>
                         {u.is_superuser && <span className="text-[10px] text-indigo-500 uppercase tracking-widest block">Root Admin</span>}
                      </div>
                   </td>

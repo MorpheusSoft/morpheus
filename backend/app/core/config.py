@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     
     GEMINI_API_KEY: Optional[str] = None
     GOOGLE_API_KEY: Optional[str] = None
+
+    # WHATSAPP CLOUD API
+    WHATSAPP_VERIFY_TOKEN: str = "morpheus_wa_verify_2026"
+    WHATSAPP_APP_SECRET: Optional[str] = "morpheus_wa_secret_2026"
+    WHATSAPP_PHONE_NUMBER_ID: Optional[str] = None
+    WHATSAPP_ACCESS_TOKEN: Optional[str] = None
     
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:

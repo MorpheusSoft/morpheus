@@ -71,6 +71,17 @@ def init_bot_log_db():
     except Exception as e:
         print(f"[DATABASE ERROR] Failed to initialize tables: {e}")
 
+async def run_digital_workers_scheduler():
+    from app.services.digital_worker_service import poll_and_run_due_workers
+    import asyncio
+    print("[DIGITAL WORKERS SCHEDULER] Iniciando daemon de usuarios digitales...")
+    while True:
+        try:
+            poll_and_run_due_workers()
+        except Exception as e:
+            print(f"[DIGITAL WORKERS SCHEDULER ERROR] {e}")
+        await asyncio.sleep(60)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Auto-initialize database tables for bot log and direct adjustments
@@ -78,9 +89,11 @@ async def lifespan(app: FastAPI):
     # Initiate the polling daemon and bot scheduler
     daemon_task = asyncio.create_task(run_background_poller())
     bot_scheduler_task = asyncio.create_task(run_mrp_bot_scheduler())
+    digital_workers_task = asyncio.create_task(run_digital_workers_scheduler())
     yield
     daemon_task.cancel()
     bot_scheduler_task.cancel()
+    digital_workers_task.cancel()
 
 
 app = FastAPI(

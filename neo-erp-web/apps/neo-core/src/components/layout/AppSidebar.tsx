@@ -38,6 +38,7 @@ export function AppSidebar() {
 
   const securityItems = [
     { label: 'Usuarios del Sistema', icon: 'pi pi-users', href: '/dashboard/users' },
+    { label: 'Usuarios Digitales (IA)', icon: 'pi pi-android', href: '/dashboard/digital-workers' },
     { label: 'Roles y Privilegios', icon: 'pi pi-id-card', href: '/dashboard/roles' },
   ];
 

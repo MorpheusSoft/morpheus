@@ -36,6 +36,11 @@ class User(Base):
     full_name = Column(String, index=True)
     is_active = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
+    user_type = Column(String(30), default='HUMAN')
+    phone_number = Column(String(30))
+    is_phone_verified = Column(Boolean, default=False)
+    pairing_pin = Column(String(10))
+    avatar_url = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     roles = relationship("Role", secondary="core.user_roles", backref="users")

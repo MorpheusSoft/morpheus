@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.api import deps
-from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, inventory_session, suppliers, buyers, mrp, purchase_orders, reconciliation, currencies, wms, wms_transfers, jobs, dashboard, facilities, pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b, labels, import_legacy, print_templates, promotions, sales_report, returns
+from app.api.v1.endpoints import login, products, catalog, stock, inventory, reports, utils, customers, inventory_bulk, inventory_session, suppliers, buyers, mrp, purchase_orders, reconciliation, currencies, wms, wms_transfers, jobs, dashboard, facilities, pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b, labels, import_legacy, print_templates, promotions, sales_report, returns, digital_workers, whatsapp
 
 from app.api.v1.endpoints import public_orders
 
@@ -41,6 +41,8 @@ api_router.include_router(users.router, prefix="/users", tags=["users"], depende
 api_router.include_router(inventory_valuation.router, prefix="/inventory-valuation", tags=["inventory valuation"], dependencies=secure_dependencies)
 api_router.include_router(labels.router, prefix="/labels", tags=["labels"], dependencies=secure_dependencies)
 api_router.include_router(print_templates.router, prefix="/print-templates", tags=["print templates"], dependencies=secure_dependencies)
+api_router.include_router(digital_workers.router, prefix="/digital-workers", tags=["digital workers"], dependencies=secure_dependencies)
+api_router.include_router(whatsapp.router, prefix="/whatsapp", tags=["whatsapp"])
 api_router.include_router(b2b.router, prefix="/b2b", tags=["b2b"])
 api_router.include_router(sync.router, prefix="/sync", tags=["sync"]) # Sin auth temporal para pruebas
 api_router.include_router(import_legacy.router, prefix="/import", tags=["import legacy"])
