@@ -629,9 +629,9 @@ def create_vendor_swap(
     swap_number = f"SWAP-{timestamp_str}"
 
     # Ubicaciones para movimiento de cuarentena
-    quarantine_loc = db.query(Location).filter(Location.usage == "INVENTORY", Location.code == "QUARANTINE").first()
+    quarantine_loc = db.query(Location).filter(Location.code == "QUARANTINE").first()
     if not quarantine_loc:
-        quarantine_loc = Location(name="Zona de Cuarentena / Calidad", code="QUARANTINE", location_type="SHELF", usage="INVENTORY")
+        quarantine_loc = Location(name="Zona de Cuarentena / Calidad", code="QUARANTINE", location_type="SHELF", usage="INTERNAL", is_blocked=True)
         db.add(quarantine_loc)
         db.flush()
 
@@ -722,9 +722,9 @@ def execute_vendor_swap(
         raise HTTPException(status_code=400, detail=f"La cantidad ({payload.qty}) supera el saldo pendiente de canjear ({remaining}).")
 
     # Ubicaciones
-    quarantine_loc = db.query(Location).filter(Location.usage == "INVENTORY", Location.code == "QUARANTINE").first()
+    quarantine_loc = db.query(Location).filter(Location.code == "QUARANTINE").first()
     if not quarantine_loc:
-        quarantine_loc = Location(name="Zona de Cuarentena / Calidad", code="QUARANTINE", location_type="SHELF", usage="INVENTORY")
+        quarantine_loc = Location(name="Zona de Cuarentena / Calidad", code="QUARANTINE", location_type="SHELF", usage="INTERNAL", is_blocked=True)
         db.add(quarantine_loc)
         db.flush()
 
