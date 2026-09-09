@@ -142,8 +142,43 @@ export default function OrderDetailsPage() {
     }
   }, [order]);
 
+  const filterTimeoutRef = useRef<any>(null);
+  const handleDropdownFilter = (e: any) => {
+      const filterText = e.filter || '';
+      if (searchMode === 'GLOBAL') {
+          if (filterTimeoutRef.current) clearTimeout(filterTimeoutRef.current);
+          filterTimeoutRef.current = setTimeout(() => {
+              const query = filterText.trim();
+              const url = query.length >= 2 ? `/products/?q=${encodeURIComponent(query)}&limit=50` : '/products/?limit=50';
+              api.get(url)
+                  .then(res => {
+                      const variants: any[] = [];
+                      const productsList = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
+                      productsList.forEach((p: any) => {
+                          if (p.variants) {
+                              p.variants.forEach((v: any) => {
+                                  variants.push({
+                                      variant_id: v.id,
+                                      variant_sku: v.sku,
+                                      product_name: p.name,
+                                      pack_id: null,
+                                      pack_name: 'Und. Base',
+                                      qty_per_unit: 1,
+                                      replacement_cost: v.replacement_cost || p.replacement_cost || 0,
+                                      display_name: `[GLOBAL] ${v.sku || ''} - ${p.name} - $${v.replacement_cost || p.replacement_cost || 0}`
+                                  });
+                              });
+                          }
+                      });
+                      setGlobalVariants(variants);
+                  })
+                  .catch(err => console.error(err));
+          }, 300);
+      }
+  };
+
   useEffect(() => {
-    api.get('/products/?limit=5000')
+    api.get('/products/?limit=50')
       .then(res => {
           const variants: any[] = [];
           const productsList = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
@@ -775,6 +810,7 @@ export default function OrderDetailsPage() {
                     onChange={(e) => setSelectedProduct(e.value)} 
                     optionLabel="display_name" 
                     filter 
+                    onFilter={handleDropdownFilter}
                     filterBy="display_name"
                     placeholder={searchMode === 'CATALOG' ? "Buscar en catálogo del proveedor..." : "Buscar en maestro global de productos..."} 
                     className="w-full text-xs border-slate-200" 
