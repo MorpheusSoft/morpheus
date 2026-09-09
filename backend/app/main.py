@@ -74,10 +74,12 @@ def init_bot_log_db():
 async def run_digital_workers_scheduler():
     from app.services.digital_worker_service import poll_and_run_due_workers
     import asyncio
+    # Esperar a que FastAPI termine de iniciar y levantar sockets
+    await asyncio.sleep(5)
     print("[DIGITAL WORKERS SCHEDULER] Iniciando daemon de usuarios digitales...")
     while True:
         try:
-            poll_and_run_due_workers()
+            await asyncio.to_thread(poll_and_run_due_workers)
         except Exception as e:
             print(f"[DIGITAL WORKERS SCHEDULER ERROR] {e}")
         await asyncio.sleep(60)
