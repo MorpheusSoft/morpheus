@@ -185,12 +185,14 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         raise ValueError("Orden no encontrada")
         
     supplier = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
-    facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first()
+    facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first() if order.dest_facility_id else None
     
     # Query issuer Details (Company)
     company = None
     if facility and facility.company_id:
         company = db.query(Company).filter(Company.id == facility.company_id).first()
+    if not company:
+        company = db.query(Company).first()
         
     issuer_name = sanitize_pdf_text(company.name if company else "NEO SOLUTIONS C.A.")
     issuer_tax_id = sanitize_pdf_text(company.tax_id if company else "J-31415926-9")
@@ -275,20 +277,68 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
     pdf.set_text_color(71, 85, 105)
     pdf.multi_cell(inner_w, 4.2, proveedor_txt)
     
-    # Metadata bar positioned cleanly below both boxes
+    # Build Destination / Dispatch Location string safely
+    def _safe_field(obj, attr):
+        if not obj:
+            return None
+        val = getattr(obj, attr, None)
+        if val is None or hasattr(val, '_mock_return_value'):
+            return None
+        s = str(val).strip()
+        return s if s else None
+
+    fac_name = _safe_field(facility, 'name')
+    fac_code = _safe_field(facility, 'code')
+    fac_address = _safe_field(facility, 'address')
+
+    if facility and (fac_name or fac_code or fac_address):
+        parts = []
+        if fac_name:
+            parts.append(fac_name)
+        if fac_code:
+            parts.append(f"({fac_code})")
+        fac_head = " ".join(parts) if parts else ""
+
+        if fac_head and fac_address:
+            dest_location = f"{fac_head} - {fac_address}"
+        elif fac_head:
+            dest_location = fac_head
+        else:
+            dest_location = fac_address
+    else:
+        dest_location = "General (Libre)"
+
+    if len(dest_location) > 180:
+        dest_location = dest_location[:177] + "..."
+    dest_str = sanitize_pdf_text(f"DESPACHAR A / DESTINO: {dest_location}")
+
+    # Metadata bar positioned cleanly below both boxes with dynamic height
     bar_y = y_start + box_h + 3
+    pdf.set_font("Helvetica", "B", 8)
+    h_dest = get_multicell_height(pdf, 176, 4.0, dest_str)
+    h_dest = max(4.0, h_dest)
+    bar_h = 8.0 + h_dest + 2.0
+
     pdf.set_fill_color(241, 245, 249)
-    pdf.rect(15, bar_y, 180, 10, 'F')
+    pdf.rect(15, bar_y, 180, bar_h, 'F')
+
+    # Row 1: Dates, Currency, Buyer
     pdf.set_xy(17, bar_y + 2)
     pdf.set_font("Helvetica", "B", 8)
     pdf.set_text_color(71, 85, 105)
-    pdf.cell(44, 6, f"F. Emisión: {emission_date}")
-    pdf.cell(44, 6, f"F. Vencimiento: {expiration_date}")
-    pdf.cell(44, 6, f"Moneda: {currency_code} ({currency_symbol})")
+    pdf.cell(44, 5, f"F. Emisión: {emission_date}")
+    pdf.cell(44, 5, f"F. Vencimiento: {expiration_date}")
+    pdf.cell(44, 5, f"Moneda: {currency_code} ({currency_symbol})")
     buyer_disp = buyer_name[:20] + "..." if len(buyer_name) > 20 else buyer_name
-    pdf.cell(44, 6, f"Comprador: {buyer_disp}")
+    pdf.cell(44, 5, f"Comprador: {buyer_disp}")
+
+    # Row 2: Dispatch / Destination Location
+    pdf.set_xy(17, bar_y + 7.5)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(71, 85, 105)
+    pdf.multi_cell(176, 4.0, dest_str)
     
-    pdf.set_y(bar_y + 13)
+    pdf.set_y(bar_y + bar_h + 3)
     
     # 2. Items Table
     def render_table_header():

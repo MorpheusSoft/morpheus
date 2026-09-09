@@ -173,6 +173,12 @@ class TestPurchaseOrderPDF(unittest.TestCase):
             # Line item 1 in PO 1063 has packaging pack_id 6511 (qty_per_unit=12), matching pack barcode 50065
             self.assertIn("50065", text_bc)
             self.assertIn("PRD-116013", text_sku)
+
+            # Destination facility verification
+            self.assertIn("DESPACHAR A / DESTINO:", text_bc)
+            self.assertIn("PATIO TRIGAL (CAT-11) - Pto Cabello", text_bc)
+            self.assertIn("DESPACHAR A / DESTINO:", text_sku)
+            self.assertIn("PATIO TRIGAL (CAT-11) - Pto Cabello", text_sku)
             
             # Header layout verification: verify coordinates of EMISOR vs PROVEEDOR
             positions = []
@@ -602,6 +608,102 @@ class TestPurchaseOrderPDF(unittest.TestCase):
                 self.assertEqual(code_sku, "PRD-114577")
         finally:
             db.close()
+
+    def test_destination_facility_display_variants(self):
+        from app.models.purchasing import PurchaseOrder
+        from app.models.core import Supplier, Facility, Company, Currency
+        from datetime import datetime
+
+        # Sub-test 1: Facility is None -> "DESPACHAR A / DESTINO: General (Libre)"
+        db = MagicMock()
+        mock_po = MagicMock(spec=PurchaseOrder)
+        mock_po.id = 5001
+        mock_po.reference = "ODC-NO-FAC"
+        mock_po.supplier_id = 1
+        mock_po.dest_facility_id = None
+        mock_po.currency_id = 1
+        mock_po.created_at = datetime(2026, 9, 9)
+        mock_po.expiration_date = datetime(2026, 9, 30)
+        mock_po.buyer_id = None
+        mock_po.notes = None
+        mock_po.invoice_discount_str = ""
+        mock_po.condition_discount_str = ""
+        mock_po.exchange_rate = Decimal("1.0")
+        mock_po.lines = []
+
+        mock_supp = MagicMock(spec=Supplier)
+        mock_supp.id = 1
+        mock_supp.name = "Test Supplier"
+        mock_supp.tax_id = "J-12345678-9"
+        mock_supp.fiscal_address = "Caracas"
+        mock_supp.commercial_email = "supp@test.com"
+        mock_supp.currency_id = 1
+
+        mock_curr = MagicMock(spec=Currency)
+        mock_curr.id = 1
+        mock_curr.code = "USD"
+        mock_curr.symbol = "$"
+        mock_curr.decimal_places = 2
+
+        def query_side_effect(model):
+            q = MagicMock()
+            if model == PurchaseOrder:
+                q.filter.return_value.first.return_value = mock_po
+            elif model == Supplier:
+                q.filter.return_value.first.return_value = mock_supp
+            elif model == Currency:
+                q.filter.return_value.first.return_value = mock_curr
+            elif model == Facility:
+                q.filter.return_value.first.return_value = None
+            elif model == Company:
+                q.filter.return_value.first.return_value = None
+            else:
+                q.filter.return_value.first.return_value = None
+            return q
+
+        db.query.side_effect = query_side_effect
+        pdf_bytes = generate_purchase_order_pdf(5001, db)
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        text = reader.pages[0].extract_text()
+        self.assertIn("DESPACHAR A / DESTINO: General (Libre)", text)
+
+        # Sub-test 2: Facility with name, code, address
+        mock_po.dest_facility_id = 10
+        mock_fac = MagicMock(spec=Facility)
+        mock_fac.id = 10
+        mock_fac.name = "Almacén La Yaguara"
+        mock_fac.code = "ALM-YAG"
+        mock_fac.address = "Calle 3, Galpón 4"
+        mock_fac.company_id = 1
+
+        def query_side_effect_fac(model):
+            q = MagicMock()
+            if model == PurchaseOrder:
+                q.filter.return_value.first.return_value = mock_po
+            elif model == Supplier:
+                q.filter.return_value.first.return_value = mock_supp
+            elif model == Currency:
+                q.filter.return_value.first.return_value = mock_curr
+            elif model == Facility:
+                q.filter.return_value.first.return_value = mock_fac
+            elif model == Company:
+                q.filter.return_value.first.return_value = None
+            else:
+                q.filter.return_value.first.return_value = None
+            return q
+
+        db.query.side_effect = query_side_effect_fac
+        pdf_bytes_fac = generate_purchase_order_pdf(5001, db)
+        reader_fac = pypdf.PdfReader(io.BytesIO(pdf_bytes_fac))
+        text_fac = reader_fac.pages[0].extract_text()
+        self.assertIn("DESPACHAR A / DESTINO: Almacén La Yaguara (ALM-YAG) - Calle 3, Galpón 4", text_fac)
+
+        # Sub-test 3: Facility with name and code, no address
+        mock_fac.address = None
+        pdf_bytes_no_addr = generate_purchase_order_pdf(5001, db)
+        reader_no_addr = pypdf.PdfReader(io.BytesIO(pdf_bytes_no_addr))
+        text_no_addr = reader_no_addr.pages[0].extract_text()
+        self.assertIn("DESPACHAR A / DESTINO: Almacén La Yaguara (ALM-YAG)", text_no_addr)
 
 if __name__ == "__main__":
     unittest.main()
