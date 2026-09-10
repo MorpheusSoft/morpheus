@@ -135,12 +135,16 @@ class InventoryService:
                 dest = adj_type.default_location_dest_id
                 qty = abs(diff)
                 
+            uom = "UND"
+            if hasattr(line, 'variant') and line.variant and getattr(line.variant, 'product', None):
+                uom = line.variant.product.uom_base or "UND"
+
             moves_to_create.append(StockMoveCreate(
                 product_id=line.product_variant_id,
                 location_src_id=src,
                 location_dest_id=dest,
                 quantity_demand=qty,
-                uom_id="PZA" # Todo: fetch from product
+                uom_id=uom
             ))
 
         if moves_to_create:

@@ -74,9 +74,9 @@ public class ProductBarcodesExtractorWorker : BackgroundService
         
         string query = config.ExportMode switch
         {
-            ExportMode.OnlyWithStock => "select p.c_Codigo, c.c_Codigo as c_CodAlterno, c.n_Cantidad from MA_PRODUCTOS p WITH (NOLOCK) inner join MA_CODIGOS c WITH (NOLOCK) on p.c_Codigo=c.c_CodNasa inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD WITH (NOLOCK) group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>0",
-            ExportMode.StockZeroAndAbove => "select p.c_Codigo, c.c_Codigo as c_CodAlterno, c.n_Cantidad from MA_PRODUCTOS p WITH (NOLOCK) inner join MA_CODIGOS c WITH (NOLOCK) on p.c_Codigo=c.c_CodNasa inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD WITH (NOLOCK) group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>=0",
-            ExportMode.AllMaster => "select p.c_Codigo, c.c_Codigo as c_CodAlterno, c.n_Cantidad from MA_PRODUCTOS p WITH (NOLOCK) inner join MA_CODIGOS c WITH (NOLOCK) on p.c_Codigo=c.c_CodNasa",
+            ExportMode.OnlyWithStock => "select p.c_Codigo, c.c_Codigo as c_CodAlterno, c.n_Cantidad from MA_PRODUCTOS p WITH (NOLOCK) inner join MA_CODIGOS c WITH (NOLOCK) on p.c_Codigo=c.c_CodNasa inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD WITH (NOLOCK) group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>0 and ISNULL(p.n_tipopeso, 0) NOT IN (3, 4, 5)",
+            ExportMode.StockZeroAndAbove => "select p.c_Codigo, c.c_Codigo as c_CodAlterno, c.n_Cantidad from MA_PRODUCTOS p WITH (NOLOCK) inner join MA_CODIGOS c WITH (NOLOCK) on p.c_Codigo=c.c_CodNasa inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD WITH (NOLOCK) group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>=0 and ISNULL(p.n_tipopeso, 0) NOT IN (3, 4, 5)",
+            ExportMode.AllMaster => "select p.c_Codigo, c.c_Codigo as c_CodAlterno, c.n_Cantidad from MA_PRODUCTOS p WITH (NOLOCK) inner join MA_CODIGOS c WITH (NOLOCK) on p.c_Codigo=c.c_CodNasa where ISNULL(p.n_tipopeso, 0) NOT IN (3, 4, 5)",
             _ => throw new NotImplementedException()
         };
 

@@ -257,7 +257,7 @@ def get_reconciliation_order_detail(
             variant_id=line.variant_id,
             sku=variant.sku if variant else "N/A",
             product_name=prod.name if prod else "N/A",
-            uom_base=prod.uom_base if prod else "PZA",
+            uom_base=prod.uom_base if prod else "UND",
             pack_name=pack.name if pack else "Und. Base",
             qty_per_pack=Decimal(str(pack.qty_per_unit or 1)) if pack else Decimal(1),
             qty_ordered=q_ord,

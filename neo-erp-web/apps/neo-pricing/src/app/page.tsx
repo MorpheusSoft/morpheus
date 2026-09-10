@@ -50,7 +50,7 @@ export default function MetricsDashboardPage() {
             const productData = await ProductService.getProductById(variantData.product_id);
             if (productData) {
                description = productData.description || '';
-               const uomBase = productData.uom_base || 'PZA';
+               const uomBase = productData.uom_base || 'UND';
                const catData = await ProductService.getCategories();
                const categoryList = catData?.data || catData || [];
                const matchedCat = categoryList.find((c: any) => c.id === productData.category_id);
@@ -70,7 +70,7 @@ export default function MetricsDashboardPage() {
                  name: productName,
                  categoryName,
                  description,
-                 uom_base: 'PZA'
+                 uom_base: 'UND'
                });
             }
          } catch (e) {
@@ -80,7 +80,7 @@ export default function MetricsDashboardPage() {
               name: productName,
               categoryName,
               description,
-              uom_base: 'PZA'
+              uom_base: 'UND'
             });
          }
       } else {
@@ -89,7 +89,7 @@ export default function MetricsDashboardPage() {
            name: productName,
            categoryName,
            description: '',
-           uom_base: 'PZA'
+           uom_base: 'UND'
          });
       }
 
@@ -531,7 +531,8 @@ export default function MetricsDashboardPage() {
                        <span className="text-slate-500">Stock Consolidado</span>
                        {(() => {
                          const stock = Number(detailProductInfo.total_stock || 0);
-                         const uom = (detailProductInfo.uom_base || 'PZA').toUpperCase();
+                         let uom = (detailProductInfo.uom_base || 'UND').toUpperCase();
+                         if (uom === 'PZA' || uom === 'PIEZA' || uom === 'PIEZAS') uom = 'UND';
                          const isWeight = ['KG', 'KILOGRAMO', 'KILOGRAMOS', 'LBS', 'LIBRA', 'LIBRAS', 'G', 'GRAMOS', 'GRAMO', 'L', 'LT', 'M', 'MT', 'MTS'].includes(uom);
                          const formattedStock = isWeight ? stock.toFixed(3) : Math.round(stock).toString();
                          return (

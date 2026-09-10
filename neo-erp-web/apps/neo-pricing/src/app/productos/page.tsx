@@ -341,7 +341,8 @@ export default function ProductConsultationPage() {
               header="STOCK"
               body={(r) => {
                 const stock = Number(r.total_stock || 0);
-                const uom = (r.uom_base || 'PZA').toUpperCase();
+                let uom = (r.uom_base || 'UND').toUpperCase();
+                if (uom === 'PZA' || uom === 'PIEZA' || uom === 'PIEZAS') uom = 'UND';
                 const isWeight = ['KG', 'KILOGRAMO', 'KILOGRAMOS', 'LBS', 'LIBRA', 'LIBRAS', 'G', 'GRAMOS', 'GRAMO', 'L', 'LT', 'M', 'MT', 'MTS'].includes(uom);
                 const formattedStock = isWeight ? stock.toFixed(3) : Math.round(stock).toString();
                 return (
@@ -481,7 +482,8 @@ export default function ProductConsultationPage() {
                       <span className="font-semibold text-slate-700">
                         {(() => {
                           const stock = Number(selectedVariant.total_stock || 0);
-                          const uom = (selectedProduct.uom_base || 'PZA').toUpperCase();
+                          let uom = (selectedProduct.uom_base || 'UND').toUpperCase();
+                          if (uom === 'PZA' || uom === 'PIEZA' || uom === 'PIEZAS') uom = 'UND';
                           const isWeight = ['KG', 'KILOGRAMO', 'KILOGRAMOS', 'LBS', 'LIBRA', 'LIBRAS', 'G', 'GRAMOS', 'GRAMO', 'L', 'LT', 'M', 'MT', 'MTS'].includes(uom);
                           const formattedStock = isWeight ? stock.toFixed(3) : Math.round(stock).toString();
                           return `${formattedStock} ${uom.toLowerCase()}`;
@@ -533,7 +535,8 @@ export default function ProductConsultationPage() {
                         <Column
                           header="STOCK"
                           body={(r) => {
-                            const uom = (selectedProduct.uom_base || 'PZA').toUpperCase();
+                            const uomRaw = (selectedProduct.uom_base || 'UND').toUpperCase();
+                            const uom = (uomRaw === 'PZA' || uomRaw === 'PIEZA' || uomRaw === 'PIEZAS') ? 'UND' : uomRaw;
                             const isWeight = ['KG', 'KILOGRAMO', 'KILOGRAMOS', 'LBS', 'LIBRA', 'LIBRAS', 'G', 'GRAMOS', 'GRAMO', 'L', 'LT', 'M', 'MT', 'MTS'].includes(uom);
                             const formattedStock = isWeight ? r.stock.toFixed(3) : Math.round(r.stock).toString();
                             return (

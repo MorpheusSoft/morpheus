@@ -75,14 +75,15 @@ public class ProductMasterExtractorWorker : BackgroundService
         var syncState = SyncStateManager.LoadState();
         var lastSync = syncState.LastProductSync;
         
-        string baseSelect = "select p.c_Codigo, c_Descri, c_Departamento, n_CostoAct, n_precio1, n_Impuesto1, case when c_CodMoneda='0000000001' then 'VES' else 'USD' end moneda, c_Marca, null imagen from MA_PRODUCTOS p WITH (NOLOCK)";
+        string baseSelect = "select p.c_Codigo, c_Descri, c_Departamento, n_CostoAct, n_precio1, n_Impuesto1, case when c_CodMoneda='0000000001' then 'VES' else 'USD' end moneda, c_Marca, null imagen, ISNULL(p.n_tipopeso, 0) as n_tipopeso from MA_PRODUCTOS p WITH (NOLOCK)";
         string dateFilter = " (p.Update_Date > @LastSync OR p.Add_Date > @LastSync)";
+        string typeFilter = " ISNULL(p.n_tipopeso, 0) NOT IN (3, 4, 5)";
         
         string query = config.ExportMode switch
         {
-            ExportMode.OnlyWithStock => $"{baseSelect} inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD WITH (NOLOCK) group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>0 AND {dateFilter} order by 1",
-            ExportMode.StockZeroAndAbove => $"{baseSelect} inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD WITH (NOLOCK) group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>=0 AND {dateFilter} order by 1",
-            ExportMode.AllMaster => $"{baseSelect} where {dateFilter} order by 1",
+            ExportMode.OnlyWithStock => $"{baseSelect} inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD WITH (NOLOCK) group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>0 AND {dateFilter} AND {typeFilter} order by 1",
+            ExportMode.StockZeroAndAbove => $"{baseSelect} inner join (select c_codarticulo, sum(n_cantidad) cant from MA_DEPOPROD WITH (NOLOCK) group by c_codarticulo) i on p.c_Codigo=i.c_codarticulo where i.cant>=0 AND {dateFilter} AND {typeFilter} order by 1",
+            ExportMode.AllMaster => $"{baseSelect} where {dateFilter} AND {typeFilter} order by 1",
             _ => throw new NotImplementedException()
         };
 

@@ -70,7 +70,7 @@ def sync_transactions(
                 
             prod = db.query(Product).filter(Product.name == 'SYNC_PROD').first()
             if not prod:
-                prod = Product(name='SYNC_PROD', category_id=cat.id, product_type='STOCKED', uom_base='PZA')
+                prod = Product(name='SYNC_PROD', category_id=cat.id, product_type='STOCKED', uom_base='UND')
                 db.add(prod)
                 db.flush()
                 

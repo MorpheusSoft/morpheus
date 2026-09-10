@@ -200,7 +200,7 @@ class ProductService:
                     product_variant_id=variant.id,
                     barcode=bc['barcode'],
                     code_type=bc.get('code_type', 'BARCODE'),
-                    uom=bc.get('uom', 'PZA'),
+                    uom=bc.get('uom', product.uom_base if product else 'UND'),
                     conversion_factor=bc.get('conversion_factor', 1),
                     weight=bc.get('weight', 0)
                 )

@@ -30,7 +30,7 @@ const schema = yup.object().shape({
   sell_on_web: yup.boolean().default(false),
   shrinkage_percent: yup.number().default(0),
   description: yup.string().nullable(),
-  uom_base: yup.string().default('PZA'),
+  uom_base: yup.string().default('UND'),
   tax_id: yup.number().nullable(),
   origin: yup.string().default('NACIONAL'),
   image_main: yup.string().nullable(),
@@ -148,7 +148,7 @@ function ProductFormContent() {
       has_variants: false,
       sell_on_web: false,
       shrinkage_percent: 0,
-      uom_base: 'PZA',
+      uom_base: 'UND',
       origin: 'NACIONAL',
       image_main: '',
       images: [],
@@ -340,7 +340,7 @@ function ProductFormContent() {
           setValue('track_batches', p.track_batches || false);
           setValue('has_variants', p.has_variants || false);
           setValue('shrinkage_percent', p.shrinkage_percent || 0);
-          setValue('uom_base', p.uom_base || 'PZA');
+          setValue('uom_base', p.uom_base || 'UND');
           setValue('origin', p.origin || 'NACIONAL');
           setValue('image_main', p.image_main || '');
           setValue('images', p.images || []);
@@ -592,7 +592,7 @@ function ProductFormContent() {
                     <Dropdown 
                       value={field.value} 
                       onChange={(e) => field.onChange(e.value)} 
-                      options={[{label: 'PZA (Pieza)', value: 'PZA'}, {label: 'PAR (Pares)', value: 'PAR'}, {label: 'KG (Kilogramo)', value: 'KG'}]}
+                      options={[{label: 'UND (Unidad)', value: 'UND'}, {label: 'KG (Kilogramo)', value: 'KG'}, {label: 'PAR (Pares)', value: 'PAR'}, {label: 'LT (Litro)', value: 'LT'}, {label: 'MT (Metro)', value: 'MT'}]}
                       optionLabel="label" 
                       optionValue="value" 
                       className="w-full !rounded-xl !border-slate-200 !bg-slate-50 hover:!bg-white focus:!bg-white shadow-none"
@@ -1046,7 +1046,7 @@ function ProductFormContent() {
                       <h3 className="text-lg font-bold text-slate-800">Lecturas de Punto de Venta / WMS</h3>
                       <p className="text-slate-500 text-sm">Escanea cada código EAN y atalo al nivel logístico correcto.</p>
                     </div>
-                    <Button type="button" label="Pistolear Código" icon="pi pi-window-maximize" onClick={() => appendBarcode({ barcode: '', code_type: 'EAN', uom: 'PZA', conversion_factor: 1 })} className="!bg-indigo-50 !text-indigo-700 hover:!bg-indigo-100 !border-indigo-200 !rounded-xl !px-4 !py-2 !shadow-none font-bold text-sm" />
+                    <Button type="button" label="Pistolear Código" icon="pi pi-window-maximize" onClick={() => appendBarcode({ barcode: '', code_type: 'EAN', uom: 'UND', conversion_factor: 1 })} className="!bg-indigo-50 !text-indigo-700 hover:!bg-indigo-100 !border-indigo-200 !rounded-xl !px-4 !py-2 !shadow-none font-bold text-sm" />
                   </div>
                   <div className="bg-white border text-sm border-slate-200 rounded-2xl overflow-hidden">
                     <DataTable value={barcodesFields} responsiveLayout="scroll" emptyMessage={<span className="text-slate-400 p-6 block text-center font-medium">No se han registrado códigos alternativos.</span>}>
@@ -1063,7 +1063,7 @@ function ProductFormContent() {
                       <Column header="TIPO DE CONTENIDO AL ESCANEAR" body={(rowData, options) => (
                         <div className="flex gap-2 items-center">
                           <Controller name={`barcodes.${options.rowIndex}.uom`} control={control} render={({ field }) => (
-                            <Dropdown value={field.value} onChange={(e) => field.onChange(e.value)} options={[{label: 'PZA (Pieza)', value: 'PZA'}, {label: 'CAJA', value: 'CAJA'}]} className="w-full p-inputtext-sm !rounded-lg border-slate-200" />
+                            <Dropdown value={field.value} onChange={(e) => field.onChange(e.value)} options={[{label: 'UND (Unidad)', value: 'UND'}, {label: 'KG (Kilogramo)', value: 'KG'}, {label: 'CAJA', value: 'CAJA'}, {label: 'PAQUETE', value: 'PAQUETE'}]} className="w-full p-inputtext-sm !rounded-lg border-slate-200" />
                           )} />
                           <i className="pi pi-arrow-right text-slate-300 text-xs"></i>
                           <Controller name={`barcodes.${options.rowIndex}.conversion_factor`} control={control} render={({ field }) => (

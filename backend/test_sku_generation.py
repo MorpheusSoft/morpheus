@@ -18,7 +18,7 @@ def verify_sku_generation():
             category_id=1,
             description="Testing SKU generator",
             product_type="STOCKED",
-            uom_base="PZA",
+            uom_base="UND",
             has_variants=False,
             is_active=True
         )

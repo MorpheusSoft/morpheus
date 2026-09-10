@@ -411,7 +411,7 @@ def get_product_by_code(
             (ProductVariant.sku == code_clean) | (ProductVariant.barcode == code_clean)
         ).first()
         if variant:
-            uom = variant.product.uom_base if variant.product else "PZA"
+            uom = variant.product.uom_base if variant.product else "UND"
             matched_barcode = variant.barcode or variant.sku
 
     if not variant:
@@ -509,7 +509,7 @@ def get_product_by_code(
         "barcode": matched_barcode,
         "name": product.name,
         "brand": product.brand or "",
-        "uom": uom or "PZA",
+        "uom": uom or "UND",
         "costs": {
             "standard_cost": float(variant.standard_cost or 0),
             "replacement_cost": replacement_cost,

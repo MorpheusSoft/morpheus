@@ -1401,7 +1401,7 @@ def create_product_from_line(
         name=desc,
         brand=payload.brand or "PROVEEDOR",
         product_type='STOCKED',
-        uom_base='PZA',
+        uom_base='UND',
         is_liquor=True,
         has_variants=False,
         is_active=True
@@ -1428,7 +1428,7 @@ def create_product_from_line(
             product_variant_id=new_variant.id,
             barcode=barcode,
             code_type='BARCODE',
-            uom='PZA',
+            uom='UND',
             conversion_factor=1.0
         )
         db.add(db_barcode)

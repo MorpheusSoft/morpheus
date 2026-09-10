@@ -97,7 +97,7 @@ def import_products():
                     tax_id=tax_id,
                     brand=brand,
                     product_type='STOCKED',
-                    uom_base='PZA',
+                    uom_base='UND',
                     origin='NACIONAL',
                     is_active=True,
                     has_variants=False,

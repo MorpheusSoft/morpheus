@@ -1938,13 +1938,17 @@ def approve_inventory_adjustment(
             src_id = target_loc_id
             dest_id = virtual_loss_loc.id
 
+        uom_id = 'UND'
+        if hasattr(line, 'variant') and line.variant and line.variant.product:
+            uom_id = line.variant.product.uom_base or 'UND'
+
         move = StockMove(
             product_id=line.product_variant_id,
             location_src_id=src_id,
             location_dest_id=dest_id,
             quantity_demand=qty,
             quantity_done=qty,
-            uom_id='PZA',
+            uom_id=uom_id,
             state='DONE',
             notes=f"Ajuste Directo {adj.number} [{adj.reason.name if adj.reason else ''}]",
             batch_id=line.batch_id,

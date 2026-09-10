@@ -194,7 +194,7 @@ def read_purchase_order_details(
             "pack_id": line.pack_id,
             "sku": variant.sku if variant else "N/A",
             "product_name": prod.name if prod else "N/A",
-            "uom_base": prod.uom_base if prod else "PZA",
+            "uom_base": prod.uom_base if prod else "UND",
             "pack_name": pack.name if pack else "Und. Base",
             "qty_per_pack": pack.qty_per_unit if pack else 1,
             "qty_ordered": line.qty_ordered,

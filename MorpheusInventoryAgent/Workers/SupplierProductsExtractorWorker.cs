@@ -89,7 +89,7 @@ public class SupplierProductsExtractorWorker : BackgroundService
                 where d_fecha > @LastSync
             ) x
             inner join MA_PRODUCTOS p WITH (NOLOCK) on x.c_codigo=p.c_Codigo
-            where ln=1
+            where ln=1 and ISNULL(p.n_tipopeso, 0) NOT IN (3, 4, 5)
             order by d_fecha desc";
 
         Console.WriteLine($"  Consultando cruces de costos en SQL Server (posteriores a {lastSync:yyyy-MM-dd})...");

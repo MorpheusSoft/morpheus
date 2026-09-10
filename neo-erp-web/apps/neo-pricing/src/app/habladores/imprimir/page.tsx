@@ -148,6 +148,17 @@ export default function PrintHabladoresPage() {
     }
   });
 
+  const formatDisplayUom = (uom?: string | null) => {
+    const clean = (uom || '').toUpperCase().trim();
+    if (!clean || clean === 'PZA' || clean === 'PIEZA' || clean === 'PIEZAS' || clean === 'UND' || clean === 'UNIDAD') {
+      return 'UNIDAD';
+    }
+    if (clean === 'KG' || clean === 'KILOGRAMO' || clean === 'KILOGRAMOS' || clean === 'KGS') {
+      return 'KG';
+    }
+    return clean;
+  };
+
   const getBlockValue = (key: string, item: PrintItem) => {
     const block = layout_config?.[key];
     const cleanCurrency = (text: string) => {
@@ -164,7 +175,7 @@ export default function PrintHabladoresPage() {
       result = result.replace(/{{sku}}/g, item.sku || '');
       result = result.replace(/{{modelo}}/g, item.model || '');
       result = result.replace(/{{marca}}/g, item.brand || '');
-      result = result.replace(/{{uom}}/g, item.uom || '');
+      result = result.replace(/{{uom}}/g, formatDisplayUom(item.uom));
       result = result.replace(/{{precio_usd}}/g, `${item.price_usd.toFixed(2)}`);
       result = result.replace(/{{precio_ves}}/g, `${item.price_ves.toFixed(2)}`);
       result = result.replace(/{{precio_usd_iva}}/g, `${priceUsdIva.toFixed(2)}`);
@@ -192,7 +203,7 @@ export default function PrintHabladoresPage() {
     if (key === 'sku') return prefix + (item.sku || '');
     if (key === 'name') return prefix + (item.name || '');
     if (key === 'model') return prefix + (item.model || '');
-    if (key === 'uom') return prefix + (item.uom || '');
+    if (key === 'uom') return prefix + formatDisplayUom(item.uom);
     if (key === 'price_usd') return prefix + `${item.price_usd.toFixed(2)}`;
     if (key === 'price_ves') return prefix + `${item.price_ves.toFixed(2)}`;
     
@@ -358,7 +369,7 @@ export default function PrintHabladoresPage() {
         {/* UoM Row */}
         {show_uom && (
           <div className="text-[0.75em] font-medium text-gray-600 mb-0.5">
-            Uni: <span className="text-black font-bold uppercase">{item.uom}</span>
+            Uni: <span className="text-black font-bold uppercase">{formatDisplayUom(item.uom)}</span>
           </div>
         )}
 
