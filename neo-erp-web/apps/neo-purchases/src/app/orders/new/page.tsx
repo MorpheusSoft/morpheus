@@ -64,7 +64,9 @@ export default function NewOrderPage() {
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [batchSearchText, setBatchSearchText] = useState('');
   const [batchCategoryFilter, setBatchCategoryFilter] = useState<string | null>(null);
-  const [batchState, setBatchState] = useState<Record<number, { selected: boolean; qty: number; pack_id: number | null }>>({});
+  const [batchState, setBatchState] = useState<Record<number, { selected: boolean; qty: number | string; pack_id: number | null }>>({});
+  const [batchSortField, setBatchSortField] = useState<string>('product_name');
+  const [batchSortOrder, setBatchSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // Pegado desde Excel / Portapapeles
   const [showPasteModal, setShowPasteModal] = useState(false);
@@ -376,7 +378,7 @@ export default function NewOrderPage() {
       toast.current?.show({ severity: 'warn', summary: 'Aviso', detail: 'Seleccione primero un proveedor con catálogo disponible.' });
       return;
     }
-    const initialBatch: Record<number, { selected: boolean; qty: number; pack_id: number | null }> = {};
+    const initialBatch: Record<number, { selected: boolean; qty: number | string; pack_id: number | null }> = {};
     catalog.forEach(item => {
       const existingLine = lines.find(l => l.variant_id === item.variant_id);
       if (existingLine) {
@@ -388,7 +390,7 @@ export default function NewOrderPage() {
       } else {
         initialBatch[item.variant_id] = {
           selected: false,
-          qty: 0,
+          qty: '',
           pack_id: item.pack_id || null
         };
       }
@@ -396,8 +398,24 @@ export default function NewOrderPage() {
     setBatchState(initialBatch);
     setBatchSearchText('');
     setBatchCategoryFilter(null);
+    setBatchSortField('product_name');
+    setBatchSortOrder('asc');
     setShowBatchModal(true);
   };
+
+  // Auto-enfocar el primer renglón al abrir el modal para digitación 100% por teclado
+  useEffect(() => {
+    if (showBatchModal) {
+      const timer = setTimeout(() => {
+        const firstInput = document.getElementById('batch-qty-0');
+        if (firstInput) {
+          firstInput.focus();
+          (firstInput as HTMLInputElement).select?.();
+        }
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [showBatchModal]);
 
   const catalogCategories = useMemo(() => {
     const catsMap = new Map<string, { label: string; value: string | null }>();
@@ -428,31 +446,86 @@ export default function NewOrderPage() {
     });
   }, [catalog, batchCategoryFilter, batchSearchText]);
 
-  const toggleBatchSelect = (item: any, checked: boolean | undefined) => {
-    const isChecked = !!checked;
-    setBatchState(prev => {
-      const current = prev[item.variant_id] || { selected: false, qty: 0, pack_id: item.pack_id || null };
-      return {
-        ...prev,
-        [item.variant_id]: {
-          ...current,
-          selected: isChecked,
-          qty: isChecked && (current.qty <= 0) ? 1 : current.qty
+  const sortedAndFilteredCatalog = useMemo(() => {
+    let list = filteredCatalog.slice();
+    if (batchSortField) {
+      list.sort((a, b) => {
+        let valA: any = a[batchSortField] ?? '';
+        let valB: any = b[batchSortField] ?? '';
+
+        if (batchSortField === 'replacement_cost') {
+          valA = parseFloat(valA) || 0;
+          valB = parseFloat(valB) || 0;
+        } else if (typeof valA === 'string') {
+          valA = valA.toLowerCase();
+          valB = (valB || '').toString().toLowerCase();
         }
-      };
-    });
+
+        if (valA < valB) return batchSortOrder === 'asc' ? -1 : 1;
+        if (valA > valB) return batchSortOrder === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    return list;
+  }, [filteredCatalog, batchSortField, batchSortOrder]);
+
+  const handleBatchSort = (field: string) => {
+    if (batchSortField === field) {
+      setBatchSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setBatchSortField(field);
+      setBatchSortOrder('asc');
+    }
   };
 
-  const updateBatchQty = (item: any, newQty: number) => {
-    const val = isNaN(newQty) || newQty < 0 ? 0 : newQty;
+  const toggleBatchSelect = (item: any, checked: boolean, rowIndex?: number) => {
     setBatchState(prev => {
-      const current = prev[item.variant_id] || { selected: false, qty: 0, pack_id: item.pack_id || null };
+      const current = prev[item.variant_id] || { selected: false, qty: '', pack_id: item.pack_id || null };
+      if (checked) {
+        const currentQtyNum = parseFloat(String(current.qty)) || 0;
+        return {
+          ...prev,
+          [item.variant_id]: {
+            ...current,
+            selected: true,
+            qty: currentQtyNum > 0 ? current.qty : 1
+          }
+        };
+      } else {
+        return {
+          ...prev,
+          [item.variant_id]: {
+            ...current,
+            selected: false,
+            qty: ''
+          }
+        };
+      }
+    });
+
+    if (checked && rowIndex !== undefined) {
+      setTimeout(() => {
+        const input = document.getElementById(`batch-qty-${rowIndex}`);
+        if (input) {
+          input.focus();
+          (input as HTMLInputElement).select?.();
+        }
+      }, 50);
+    }
+  };
+
+  const updateBatchQty = (item: any, rawVal: string) => {
+    const num = parseFloat(rawVal);
+    const isValidPositive = !isNaN(num) && num > 0;
+
+    setBatchState(prev => {
+      const current = prev[item.variant_id] || { selected: false, qty: '', pack_id: item.pack_id || null };
       return {
         ...prev,
         [item.variant_id]: {
           ...current,
-          qty: val,
-          selected: val > 0 ? true : current.selected
+          qty: rawVal,
+          selected: isValidPositive
         }
       };
     });
@@ -460,7 +533,7 @@ export default function NewOrderPage() {
 
   const updateBatchPack = (variantId: number, packId: number | null) => {
     setBatchState(prev => {
-      const current = prev[variantId] || { selected: false, qty: 0, pack_id: null };
+      const current = prev[variantId] || { selected: false, qty: '', pack_id: null };
       return {
         ...prev,
         [variantId]: {
@@ -474,12 +547,13 @@ export default function NewOrderPage() {
   const handleSelectAllFiltered = (markAll: boolean) => {
     setBatchState(prev => {
       const updated = { ...prev };
-      filteredCatalog.forEach(item => {
-        const current = updated[item.variant_id] || { selected: false, qty: 0, pack_id: item.pack_id || null };
+      sortedAndFilteredCatalog.forEach(item => {
+        const current = updated[item.variant_id] || { selected: false, qty: '', pack_id: item.pack_id || null };
+        const currentQty = parseFloat(String(current.qty)) || 0;
         updated[item.variant_id] = {
           ...current,
           selected: markAll,
-          qty: markAll && current.qty <= 0 ? 1 : (markAll ? current.qty : 0)
+          qty: markAll ? (currentQty > 0 ? current.qty : 1) : ''
         };
       });
       return updated;
@@ -511,11 +585,12 @@ export default function NewOrderPage() {
 
     catalog.forEach(item => {
       const state = batchState[item.variant_id];
-      if (state && state.selected && state.qty > 0) {
+      const qtyNum = parseFloat(String(state?.qty)) || 0;
+      if (state && state.selected && qtyNum > 0) {
         count++;
         const pk = (item.available_packagings || []).find((p: any) => p.id === state.pack_id) || { qty_per_unit: 1 };
         const factor = Number(pk.qty_per_unit) || 1;
-        const lineUnits = state.qty * factor;
+        const lineUnits = qtyNum * factor;
         units += lineUnits;
         estimatedTotal += lineUnits * (parseFloat(item.replacement_cost) || 0);
       }
@@ -527,7 +602,8 @@ export default function NewOrderPage() {
   const applyBatchToOrder = () => {
     const selectedItems = catalog.filter(item => {
       const state = batchState[item.variant_id];
-      return state && state.selected && state.qty > 0;
+      const qtyNum = parseFloat(String(state?.qty)) || 0;
+      return state && state.selected && qtyNum > 0;
     });
 
     if (selectedItems.length === 0) {
@@ -547,7 +623,7 @@ export default function NewOrderPage() {
           || { id: null, name: 'Und. Base', qty_per_unit: 1, label: 'Unidad Base (x1)' };
         const key = `${item.variant_id}_${chosenPack.id}`;
         const qty_per_unit = Number(chosenPack.qty_per_unit) || 1;
-        const qty = Number(state.qty) || 1;
+        const qtyNum = parseFloat(String(state.qty)) || 1;
         const replacement_cost = parseFloat(item.replacement_cost) || 0;
         const pack_cost = Number((replacement_cost * qty_per_unit).toFixed(4));
 
@@ -559,11 +635,11 @@ export default function NewOrderPage() {
           pack_id: chosenPack.id,
           pack_name: chosenPack.name || 'Und. Base',
           qty_per_pack: qty_per_unit,
-          qty_ordered: qty,
+          qty_ordered: qtyNum,
           unit_cost: replacement_cost,
           pack_cost: pack_cost,
-          expected_base_qty: qty_per_unit * qty,
-          subtotal: replacement_cost * qty_per_unit * qty,
+          expected_base_qty: qty_per_unit * qtyNum,
+          subtotal: replacement_cost * qty_per_unit * qtyNum,
           available_packagings: item.available_packagings || [chosenPack]
         });
       });
@@ -574,7 +650,7 @@ export default function NewOrderPage() {
     toast.current?.show({ 
       severity: 'success', 
       summary: 'Productos Incorporados', 
-      detail: `Se añadieron ${selectedItems.length} productos a la orden.` 
+      detail: `Se añadieron o actualizaron ${selectedItems.length} productos a la orden.` 
     });
     setShowBatchModal(false);
   };
@@ -1045,158 +1121,251 @@ export default function NewOrderPage() {
                </div>
             </div>
 
-            {/* Tabla de Catálogo */}
-            <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white">
-               <DataTable
-                  value={filteredCatalog}
-                  scrollable
-                  scrollHeight="52vh"
-                  dataKey="variant_id"
-                  size="small"
-                  stripedRows
-                  rowHover
-                  emptyMessage="No hay productos que coincidan con la búsqueda."
-                  className="text-xs"
-               >
-                  <Column
-                     header={
-                        <div className="flex items-center justify-center">
-                           <Checkbox
-                              checked={filteredCatalog.length > 0 && filteredCatalog.every(i => batchState[i.variant_id]?.selected)}
-                              onChange={(e) => handleSelectAllFiltered(!!e.checked)}
-                              tooltip="Marcar / Desmarcar todos los visibles"
-                           />
-                        </div>
-                     }
-                     body={(r) => (
-                        <div className="flex items-center justify-center">
-                           <Checkbox
-                              checked={!!batchState[r.variant_id]?.selected}
-                              onChange={(e) => toggleBatchSelect(r, e.checked)}
-                           />
-                        </div>
-                     )}
-                     style={{ width: '45px', textAlign: 'center' }}
-                  />
+            {/* Tabla de Catálogo - Alto rendimiento con DOM estable y navegación ágil por teclado */}
+            <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-xs">
+               <div className="overflow-y-auto max-h-[52vh] relative">
+                  <table className="w-full text-xs text-left border-collapse">
+                     <thead className="sticky top-0 bg-slate-100/95 backdrop-blur-xs text-slate-600 border-b border-slate-200 z-10 select-none shadow-xs">
+                        <tr>
+                           <th className="py-2.5 px-3 w-12 text-center">
+                              <div className="flex items-center justify-center">
+                                 <button
+                                    type="button"
+                                    onClick={() => handleSelectAllFiltered(!(sortedAndFilteredCatalog.length > 0 && sortedAndFilteredCatalog.every(i => !!batchState[i.variant_id]?.selected)))}
+                                    title="Marcar / Desmarcar todos los visibles"
+                                    className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all cursor-pointer ${
+                                       sortedAndFilteredCatalog.length > 0 && sortedAndFilteredCatalog.every(i => !!batchState[i.variant_id]?.selected)
+                                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs ring-2 ring-indigo-200'
+                                          : 'border-slate-300 bg-white hover:border-indigo-400'
+                                    }`}
+                                 >
+                                    {sortedAndFilteredCatalog.length > 0 && sortedAndFilteredCatalog.every(i => !!batchState[i.variant_id]?.selected) && (
+                                       <i className="pi pi-check text-[10px] font-black text-white"></i>
+                                    )}
+                                 </button>
+                              </div>
+                           </th>
 
-                  <Column
-                     field="variant_sku"
-                     header="SKU"
-                     sortable
-                     style={{ width: '110px' }}
-                     body={(r) => (
-                        <span className="font-mono text-[11px] font-bold bg-slate-100 text-slate-700 px-2 py-1 rounded">
-                           {r.variant_sku}
-                        </span>
-                     )}
-                  />
+                           <th
+                              onClick={() => handleBatchSort('variant_sku')}
+                              className="py-2.5 px-3 font-black text-slate-600 hover:text-indigo-600 cursor-pointer transition-colors w-28 whitespace-nowrap"
+                           >
+                              <div className="flex items-center gap-1.5">
+                                 <span>SKU</span>
+                                 <i className={`text-[10px] ${
+                                    batchSortField === 'variant_sku'
+                                       ? (batchSortOrder === 'asc' ? 'pi pi-sort-amount-up text-indigo-600' : 'pi pi-sort-amount-down text-indigo-600')
+                                       : 'pi pi-sort-alt text-slate-300'
+                                 }`}></i>
+                              </div>
+                           </th>
 
-                  <Column
-                     field="product_name"
-                     header="DESCRIPCIÓN / INSUMO"
-                     sortable
-                     style={{ minWidth: '240px' }}
-                     body={(r) => (
-                        <div>
-                           <div className="font-bold text-slate-800 text-xs sm:text-sm">{r.product_name}</div>
-                           <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
-                              {r.brand && <span className="bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200 text-slate-500 font-semibold">{r.brand}</span>}
-                              {r.barcode && <span><i className="pi pi-barcode mr-1 text-[10px]"></i>{r.barcode}</span>}
-                           </div>
-                        </div>
-                     )}
-                  />
+                           <th
+                              onClick={() => handleBatchSort('product_name')}
+                              className="py-2.5 px-3 font-black text-slate-600 hover:text-indigo-600 cursor-pointer transition-colors min-w-[240px]"
+                           >
+                              <div className="flex items-center gap-1.5">
+                                 <span>DESCRIPCIÓN / INSUMO</span>
+                                 <i className={`text-[10px] ${
+                                    batchSortField === 'product_name'
+                                       ? (batchSortOrder === 'asc' ? 'pi pi-sort-amount-up text-indigo-600' : 'pi pi-sort-amount-down text-indigo-600')
+                                       : 'pi pi-sort-alt text-slate-300'
+                                 }`}></i>
+                              </div>
+                           </th>
 
-                  <Column
-                     field="category_name"
-                     header="CATEGORÍA"
-                     sortable
-                     style={{ width: '140px' }}
-                     body={(r) => (
-                        <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded border border-slate-200 whitespace-nowrap">
-                           {r.category_name || 'General'}
-                        </span>
-                     )}
-                  />
+                           <th
+                              onClick={() => handleBatchSort('category_name')}
+                              className="py-2.5 px-3 font-black text-slate-600 hover:text-indigo-600 cursor-pointer transition-colors w-36 whitespace-nowrap"
+                           >
+                              <div className="flex items-center gap-1.5">
+                                 <span>CATEGORÍA</span>
+                                 <i className={`text-[10px] ${
+                                    batchSortField === 'category_name'
+                                       ? (batchSortOrder === 'asc' ? 'pi pi-sort-amount-up text-indigo-600' : 'pi pi-sort-amount-down text-indigo-600')
+                                       : 'pi pi-sort-alt text-slate-300'
+                                 }`}></i>
+                              </div>
+                           </th>
 
-                  <Column
-                     header="PRESENTACIÓN"
-                     style={{ width: '160px' }}
-                     body={(r) => (
-                        <div>
-                           {r.available_packagings && r.available_packagings.length > 1 ? (
-                              <Dropdown
-                                 value={batchState[r.variant_id]?.pack_id ?? null}
-                                 options={r.available_packagings}
-                                 optionLabel="label"
-                                 optionValue="id"
-                                 onChange={(e) => updateBatchPack(r.variant_id, e.value)}
-                                 className="w-full p-inputtext-sm text-[11px] font-bold border-indigo-200 bg-indigo-50/40 text-indigo-900 rounded-lg"
-                              />
-                           ) : (
-                              <span className="text-[11px] font-semibold text-slate-500">
-                                 {r.pack_name || 'Und. Base'} (x{r.qty_per_unit || 1})
-                              </span>
-                           )}
-                        </div>
-                     )}
-                  />
+                           <th className="py-2.5 px-3 font-black text-slate-600 w-44 whitespace-nowrap">
+                              PRESENTACIÓN
+                           </th>
 
-                  <Column
-                     field="replacement_cost"
-                     header="COSTO UNIT"
-                     sortable
-                     style={{ width: '100px', textAlign: 'right' }}
-                     body={(r) => (
-                        <span className="font-semibold text-slate-700">
-                           ${parseFloat(r.replacement_cost || 0).toFixed(2)}
-                        </span>
-                     )}
-                  />
+                           <th
+                              onClick={() => handleBatchSort('replacement_cost')}
+                              className="py-2.5 px-3 font-black text-slate-600 hover:text-indigo-600 cursor-pointer transition-colors w-28 text-right whitespace-nowrap"
+                           >
+                              <div className="flex items-center justify-end gap-1.5">
+                                 <span>COSTO UNIT</span>
+                                 <i className={`text-[10px] ${
+                                    batchSortField === 'replacement_cost'
+                                       ? (batchSortOrder === 'asc' ? 'pi pi-sort-amount-up text-indigo-600' : 'pi pi-sort-amount-down text-indigo-600')
+                                       : 'pi pi-sort-alt text-slate-300'
+                                 }`}></i>
+                              </div>
+                           </th>
 
-                  <Column
-                     header="CANTIDAD"
-                     style={{ width: '110px', textAlign: 'center' }}
-                     body={(r, opt) => {
-                        const isSelected = !!batchState[r.variant_id]?.selected;
-                        const qtyVal = batchState[r.variant_id]?.qty;
-                        return (
-                           <input
-                              id={`batch-qty-${opt.rowIndex}`}
-                              type="number"
-                              min="0"
-                              step="1"
-                              value={qtyVal === 0 ? '' : (qtyVal ?? '')}
-                              placeholder="0"
-                              onChange={(e) => updateBatchQty(r, parseFloat(e.target.value))}
-                              onKeyDown={(e) => handleBatchKeyDown(e, opt.rowIndex)}
-                              className={`w-20 text-center font-black p-1.5 text-xs rounded-lg border-2 outline-none transition-all ${
-                                 isSelected
-                                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700 shadow-inner'
-                                    : 'border-slate-200 bg-white text-slate-600 focus:border-indigo-400'
-                              }`}
-                           />
-                        );
-                     }}
-                  />
+                           <th className="py-2.5 px-3 font-black text-slate-600 w-28 text-center whitespace-nowrap">
+                              CANTIDAD
+                           </th>
 
-                  <Column
-                     header="SUBTOTAL"
-                     style={{ width: '110px', textAlign: 'right' }}
-                     body={(r) => {
-                        const state = batchState[r.variant_id];
-                        const q = state?.qty || 0;
-                        const pk = (r.available_packagings || []).find((p: any) => p.id === state?.pack_id);
-                        const factor = Number(pk?.qty_per_unit) || 1;
-                        const sub = q * factor * Number(r.replacement_cost || 0);
-                        return (
-                           <span className={`font-black ${sub > 0 ? 'text-emerald-700 text-xs' : 'text-slate-300 text-xs'}`}>
-                              ${sub.toFixed(2)}
-                           </span>
-                        );
-                     }}
-                  />
-               </DataTable>
+                           <th
+                              onClick={() => handleBatchSort('subtotal')}
+                              className="py-2.5 px-3 font-black text-slate-600 hover:text-indigo-600 cursor-pointer transition-colors w-28 text-right whitespace-nowrap"
+                           >
+                              <div className="flex items-center justify-end gap-1.5">
+                                 <span>SUBTOTAL</span>
+                                 <i className={`text-[10px] ${
+                                    batchSortField === 'subtotal'
+                                       ? (batchSortOrder === 'asc' ? 'pi pi-sort-amount-up text-indigo-600' : 'pi pi-sort-amount-down text-indigo-600')
+                                       : 'pi pi-sort-alt text-slate-300'
+                                 }`}></i>
+                              </div>
+                           </th>
+                        </tr>
+                     </thead>
+                     <tbody className="divide-y divide-slate-100 bg-white">
+                        {sortedAndFilteredCatalog.length === 0 ? (
+                           <tr>
+                              <td colSpan={8} className="py-12 text-center text-slate-400 font-medium">
+                                 <i className="pi pi-search text-2xl block mb-2 text-slate-300"></i>
+                                 No hay productos que coincidan con la búsqueda.
+                              </td>
+                           </tr>
+                        ) : (
+                           sortedAndFilteredCatalog.map((r, idx) => {
+                              const state = batchState[r.variant_id];
+                              const isSelected = !!state?.selected;
+                              const qtyVal = state?.qty ?? '';
+                              const qtyNum = parseFloat(String(qtyVal)) || 0;
+                              const chosenPack = (r.available_packagings || []).find((p: any) => p.id === state?.pack_id);
+                              const factor = Number(chosenPack?.qty_per_unit) || 1;
+                              const subtotal = qtyNum * factor * Number(r.replacement_cost || 0);
+
+                              return (
+                                 <tr
+                                    key={r.variant_id}
+                                    className={`transition-colors ${
+                                       isSelected
+                                          ? 'bg-indigo-50/75 hover:bg-indigo-100/60 font-medium'
+                                          : idx % 2 === 0
+                                            ? 'bg-white hover:bg-slate-50/80'
+                                            : 'bg-slate-50/40 hover:bg-slate-100/80'
+                                    }`}
+                                 >
+                                    {/* Checkbox */}
+                                    <td className="py-2 px-3 text-center">
+                                       <div className="flex items-center justify-center">
+                                          <button
+                                             type="button"
+                                             onClick={() => toggleBatchSelect(r, !isSelected, idx)}
+                                             className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all cursor-pointer ${
+                                                isSelected
+                                                   ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs ring-2 ring-indigo-200'
+                                                   : 'border-slate-300 bg-white hover:border-indigo-400'
+                                             }`}
+                                          >
+                                             {isSelected && <i className="pi pi-check text-[10px] font-black text-white"></i>}
+                                          </button>
+                                       </div>
+                                    </td>
+
+                                    {/* SKU */}
+                                    <td className="py-2 px-3">
+                                       <span className="font-mono text-[11px] font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200/60">
+                                          {r.variant_sku}
+                                       </span>
+                                    </td>
+
+                                    {/* DESCRIPCIÓN */}
+                                    <td className="py-2 px-3">
+                                       <div>
+                                          <div className="font-bold text-slate-800 text-xs">{r.product_name}</div>
+                                          <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                                             {r.brand && (
+                                                <span className="bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200 text-slate-600 font-semibold">
+                                                   {r.brand}
+                                                </span>
+                                             )}
+                                             {r.barcode && (
+                                                <span className="font-mono text-slate-500">
+                                                   <i className="pi pi-barcode mr-1 text-[10px]"></i>
+                                                   {r.barcode}
+                                                </span>
+                                             )}
+                                          </div>
+                                       </div>
+                                    </td>
+
+                                    {/* CATEGORÍA */}
+                                    <td className="py-2 px-3">
+                                       <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200/60 whitespace-nowrap">
+                                          {r.category_name || 'General'}
+                                       </span>
+                                    </td>
+
+                                    {/* PRESENTACIÓN */}
+                                    <td className="py-2 px-3">
+                                       {r.available_packagings && r.available_packagings.length > 1 ? (
+                                          <select
+                                             value={state?.pack_id ?? (r.pack_id || '')}
+                                             onChange={(e) => updateBatchPack(r.variant_id, e.target.value ? Number(e.target.value) : null)}
+                                             className="w-full text-[11px] font-bold border border-indigo-200 bg-indigo-50/40 text-indigo-900 rounded-lg p-1 outline-none focus:ring-1 focus:ring-indigo-500"
+                                          >
+                                             {r.available_packagings.map((pkg: any) => (
+                                                <option key={pkg.id ?? 'base'} value={pkg.id ?? ''}>
+                                                   {pkg.name || pkg.label} {pkg.qty_per_unit > 1 ? `(x${pkg.qty_per_unit})` : ''}
+                                                </option>
+                                             ))}
+                                          </select>
+                                       ) : (
+                                          <span className="text-[11px] font-semibold text-slate-500">
+                                             {r.pack_name || 'Und. Base'} (x{r.qty_per_unit || 1})
+                                          </span>
+                                       )}
+                                    </td>
+
+                                    {/* COSTO UNIT */}
+                                    <td className="py-2 px-3 text-right">
+                                       <span className="font-semibold text-slate-700">
+                                          ${parseFloat(r.replacement_cost || 0).toFixed(2)}
+                                       </span>
+                                    </td>
+
+                                    {/* CANTIDAD - Entrada ágil por teclado */}
+                                    <td className="py-2 px-3 text-center">
+                                       <input
+                                          id={`batch-qty-${idx}`}
+                                          type="number"
+                                          min="0"
+                                          step="any"
+                                          value={qtyVal}
+                                          placeholder="0"
+                                          onFocus={(e) => e.target.select()}
+                                          onChange={(e) => updateBatchQty(r, e.target.value)}
+                                          onKeyDown={(e) => handleBatchKeyDown(e, idx)}
+                                          className={`w-20 text-center font-black p-1 text-xs rounded-lg border-2 outline-none transition-all ${
+                                             isSelected
+                                                ? 'border-indigo-500 bg-white text-indigo-800 shadow-xs ring-2 ring-indigo-100'
+                                                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 focus:border-indigo-400'
+                                          }`}
+                                       />
+                                    </td>
+
+                                    {/* SUBTOTAL */}
+                                    <td className="py-2 px-3 text-right">
+                                       <span className={`font-black text-xs ${subtotal > 0 ? 'text-emerald-700' : 'text-slate-300'}`}>
+                                          ${subtotal.toFixed(2)}
+                                       </span>
+                                    </td>
+                                 </tr>
+                              );
+                           })
+                        )}
+                     </tbody>
+                  </table>
+               </div>
             </div>
 
             {/* Footer Modal con Totales y Acción */}
