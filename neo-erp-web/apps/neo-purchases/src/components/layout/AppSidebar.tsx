@@ -33,7 +33,7 @@ function AppSidebarContent() {
 
   const analyticsItems = [
     { label: 'Visión General', icon: 'pi pi-chart-pie', href: '/' },
-    { label: 'Sugeridos de Reposición', icon: 'pi pi-shopping-bag', href: '/suggestions' },
+    { label: 'Consola Clara (Diagnóstico)', icon: 'pi pi-sparkles', href: '/settings/bot' },
   ];
 
   const operationsItems = [
@@ -50,7 +50,6 @@ function AppSidebarContent() {
 
   const settingsItems = [
     { label: 'Equipo de Compradores', icon: 'pi pi-id-card', href: '/buyers' },
-    { label: 'Asistente Clara (Diagnóstico)', icon: 'pi pi-sparkles', href: '/settings/bot' },
   ];
 
   const isActivePath = (href: string) => {
