@@ -137,28 +137,27 @@ def update_supplier(*, db: Session = Depends(get_db), supplier_id: int, supplier
 def get_supplier_catalog(supplier_id: int, category_id: int = None, db: Session = Depends(get_db)) -> Any:
     from app.models.inventory import ProductVariant, Product, Category, ProductPackaging
     
-    query = db.query(SupplierProduct, ProductVariant, Product, ProductPackaging)\
+    query = db.query(SupplierProduct, ProductVariant, Product, ProductPackaging, Category)\
         .join(ProductVariant, SupplierProduct.variant_id == ProductVariant.id)\
         .join(Product, ProductVariant.product_id == Product.id)\
         .outerjoin(ProductPackaging, SupplierProduct.pack_id == ProductPackaging.id)\
+        .outerjoin(Category, Product.category_id == Category.id)\
         .filter(SupplierProduct.supplier_id == supplier_id)
         
     if category_id:
         cat = db.query(Category).filter(Category.id == category_id).first()
         if cat and cat.path:
-            query = query.join(Category, Product.category_id == Category.id).filter(
+            query = query.filter(
                 (Category.id == category_id) | 
                 (Category.path.like(f"{cat.path}/%"))
             )
         else:
-            query = query.join(Category, Product.category_id == Category.id).filter(
-                Category.id == category_id
-            )
+            query = query.filter(Category.id == category_id)
         
     results = query.all()
     
     catalog = []
-    for sp, pv, p, pack in results:
+    for sp, pv, p, pack, cat in results:
         packagings_data = [
             {
                 "id": pk.id,
@@ -182,6 +181,10 @@ def get_supplier_catalog(supplier_id: int, category_id: int = None, db: Session 
             "is_primary": sp.is_primary,
             "product_name": p.name,
             "variant_sku": pv.sku,
+            "barcode": pv.barcode,
+            "brand": p.brand or "Genérica",
+            "category_id": p.category_id,
+            "category_name": cat.name if cat else "Sin Categoría",
             "pack_name": pack.name if pack else "Und.",
             "qty_per_unit": pack.qty_per_unit if pack else 1,
             "packagings": packagings_data

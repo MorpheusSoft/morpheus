@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Dropdown } from 'primereact/dropdown';
 import { DataTable } from 'primereact/datatable';
@@ -9,6 +9,9 @@ import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
 import { Dialog } from 'primereact/dialog';
 import { InputText } from 'primereact/inputtext';
+import { InputTextarea } from 'primereact/inputtextarea';
+import { Checkbox } from 'primereact/checkbox';
+import { Tag } from 'primereact/tag';
 import { SelectButton } from 'primereact/selectbutton';
 import api from '@/lib/api';
 
@@ -56,6 +59,20 @@ export default function NewOrderPage() {
   
   const [lines, setLines] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
+
+  // Selección Masiva de Catálogo Privado
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [batchSearchText, setBatchSearchText] = useState('');
+  const [batchCategoryFilter, setBatchCategoryFilter] = useState<string | null>(null);
+  const [batchState, setBatchState] = useState<Record<number, { selected: boolean; qty: number; pack_id: number | null }>>({});
+
+  // Pegado desde Excel / Portapapeles
+  const [showPasteModal, setShowPasteModal] = useState(false);
+  const [pasteRawText, setPasteRawText] = useState('');
+  const [pasteResults, setPasteResults] = useState<{ matched: any[]; unmatched: string[] } | null>(null);
+
+  // Filtro en vivo en la matriz de la orden
+  const [filterLinesText, setFilterLinesText] = useState('');
 
   useEffect(() => {
     api.get('/suppliers/?limit=5000')
@@ -154,6 +171,7 @@ export default function NewOrderPage() {
            console.error(e);
        }
    };
+
   const filterTimeoutRef = useRef<any>(null);
   const handleDropdownFilter = (e: any) => {
       const filterText = e.filter || '';
@@ -198,7 +216,6 @@ export default function NewOrderPage() {
       }
       setCreatingProduct(true);
       try {
-          // 1. Crear Producto Raíz (Sin variantes anidadas formales para forzar Default)
           const productPayload = {
               name: newProductForm.name,
               category_id: newProductForm.category_id,
@@ -215,7 +232,6 @@ export default function NewOrderPage() {
               throw new Error("No se generó la variante por defecto.");
           }
 
-          // 2. Vincular al Catálogo del Proveedor
           const suppPayload = {
               supplier_id: selectedSupplierId,
               variant_id: defaultVariant.id,
@@ -224,15 +240,11 @@ export default function NewOrderPage() {
               min_order_qty: 1,
               is_active: true
           };
-          // endpoint post de catalog individual
           await api.post(`/suppliers/${selectedSupplierId}/catalog`, suppPayload);
 
           toast.current?.show({ severity: 'success', summary: 'Magia', detail: 'Insumo creado y enlazado al proveedor.' });
           
-          // 3. Recargar Catálogo
           const updatedCatalog = await reloadCatalog();
-          
-          // 4. Seleccionar el nuevo inmediatamente
           if (updatedCatalog) {
               const matched = updatedCatalog.find((c: any) => c.variant_id === defaultVariant.id);
               if (matched) setSelectedProduct(matched);
@@ -252,7 +264,6 @@ export default function NewOrderPage() {
     const chosenPack = (selectedProduct.available_packagings || []).find((p: any) => p.id === selectedPackId) 
         || { id: null, name: 'Und. Base', qty_per_unit: 1, label: 'Unidad Base (x1)' };
         
-    // Check if already in lines with this packaging
     if (lines.some(l => l.variant_id === selectedProduct.variant_id && l.pack_id === chosenPack.id)) {
         toast.current?.show({ severity: 'warn', summary: 'Aviso', detail: 'Este insumo con esta presentación ya está en la orden.' });
         return;
@@ -284,102 +295,457 @@ export default function NewOrderPage() {
     setSelectedPackId(null);
   };
 
-  const handlePresentationChange = (rowIndex: number, newPackId: number | null) => {
-      setLines(prev => {
-          const updatedLines = [...prev];
-          if(!updatedLines[rowIndex]) return updatedLines;
-          const row = { ...updatedLines[rowIndex] };
-          
+  const handlePresentationChange = (internalId: string, newPackId: number | null) => {
+      setLines(prev => prev.map(row => {
+          if (row.internal_id !== internalId) return row;
           const pack = (row.available_packagings || []).find((p: any) => p.id === newPackId)
               || { id: null, name: 'Und. Base', qty_per_unit: 1 };
           const factor = Number(pack.qty_per_unit) || 1;
-          
-          row.pack_id = newPackId;
-          row.pack_name = pack.name || 'Und. Base';
-          row.qty_per_pack = factor;
-          
-          row.expected_base_qty = (row.qty_ordered || 1) * factor;
-          row.pack_cost = Number(((row.unit_cost || 0) * factor).toFixed(4));
-          row.subtotal = (row.expected_base_qty || 0) * (row.unit_cost || 0);
-          
-          updatedLines[rowIndex] = row;
-          return updatedLines;
-      });
+          const expected_base = (row.qty_ordered || 1) * factor;
+          const pack_cost = Number(((row.unit_cost || 0) * factor).toFixed(4));
+          return {
+              ...row,
+              pack_id: newPackId,
+              pack_name: pack.name || 'Und. Base',
+              qty_per_pack: factor,
+              expected_base_qty: expected_base,
+              pack_cost: pack_cost,
+              subtotal: expected_base * (row.unit_cost || 0)
+          };
+      }));
   };
 
-  const removeLine = (rowIndex: number) => {
-      setLines(prev => {
-          const updated = [...prev];
-          updated.splice(rowIndex, 1);
-          return updated;
-      });
+  const removeLine = (internalId: string) => {
+      setLines(prev => prev.filter(row => row.internal_id !== internalId));
   };
 
-  const handleQtyChange = (rowIndex: number, newQty: number) => {
-      setLines(prev => {
-          const updatedLines = [...prev];
-          if(!updatedLines[rowIndex]) return updatedLines;
-          const row = { ...updatedLines[rowIndex] };
-          
+  const handleQtyChange = (internalId: string, newQty: number) => {
+      setLines(prev => prev.map(row => {
+          if (row.internal_id !== internalId) return row;
           const qty = isNaN(newQty) || newQty < 0 ? 0 : newQty;
           const factor = (row.qty_per_pack && row.qty_per_pack > 0) ? row.qty_per_pack : 1;
-          
-          row.qty_ordered = qty;
-          row.expected_base_qty = qty * factor;
-          row.subtotal = row.expected_base_qty * (row.unit_cost || 0);
-          
-          updatedLines[rowIndex] = row;
-          return updatedLines;
-      });
+          const expected_base = qty * factor;
+          return {
+              ...row,
+              qty_ordered: qty,
+              expected_base_qty: expected_base,
+              subtotal: expected_base * (row.unit_cost || 0)
+          };
+      }));
   };
   
-  const handlePackCostChange = (rowIndex: number, newPackCost: number) => {
-      setLines(prev => {
-          const updatedLines = [...prev];
-          if(!updatedLines[rowIndex]) return updatedLines;
-          const row = { ...updatedLines[rowIndex] };
-          
+  const handlePackCostChange = (internalId: string, newPackCost: number) => {
+      setLines(prev => prev.map(row => {
+          if (row.internal_id !== internalId) return row;
           const pCost = isNaN(newPackCost) || newPackCost < 0 ? 0 : newPackCost;
           const factor = (row.qty_per_pack && row.qty_per_pack > 0) ? row.qty_per_pack : 1;
-          
-          row.pack_cost = pCost;
-          row.unit_cost = pCost / factor;
-          row.subtotal = (row.expected_base_qty || (row.qty_ordered * factor)) * row.unit_cost;
-          
-          updatedLines[rowIndex] = row;
-          return updatedLines;
-      });
+          const uCost = pCost / factor;
+          const expected_base = row.expected_base_qty || (row.qty_ordered * factor);
+          return {
+              ...row,
+              pack_cost: pCost,
+              unit_cost: uCost,
+              subtotal: expected_base * uCost
+          };
+      }));
   };
 
-  const handleUnitCostChange = (rowIndex: number, newUnitCost: number) => {
-      setLines(prev => {
-          const updatedLines = [...prev];
-          if(!updatedLines[rowIndex]) return updatedLines;
-          const row = { ...updatedLines[rowIndex] };
-          
+  const handleUnitCostChange = (internalId: string, newUnitCost: number) => {
+      setLines(prev => prev.map(row => {
+          if (row.internal_id !== internalId) return row;
           const uCost = isNaN(newUnitCost) || newUnitCost < 0 ? 0 : newUnitCost;
           const factor = (row.qty_per_pack && row.qty_per_pack > 0) ? row.qty_per_pack : 1;
-          
-          row.unit_cost = uCost;
-          row.pack_cost = uCost * factor;
-          row.subtotal = (row.expected_base_qty || (row.qty_ordered * factor)) * uCost;
-          
-          updatedLines[rowIndex] = row;
-          return updatedLines;
-      });
+          const expected_base = row.expected_base_qty || (row.qty_ordered * factor);
+          return {
+              ...row,
+              unit_cost: uCost,
+              pack_cost: uCost * factor,
+              subtotal: expected_base * uCost
+          };
+      }));
   };
 
   const calculateTotal = () => {
       return lines.reduce((acc, row) => acc + parseFloat(row.subtotal || 0), 0);
   };
 
+  // --- LÓGICA DE SELECCIÓN MASIVA (MODAL DE CATÁLOGO) ---
+
+  const openBatchModal = () => {
+    if (!selectedSupplierId || catalog.length === 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Aviso', detail: 'Seleccione primero un proveedor con catálogo disponible.' });
+      return;
+    }
+    const initialBatch: Record<number, { selected: boolean; qty: number; pack_id: number | null }> = {};
+    catalog.forEach(item => {
+      const existingLine = lines.find(l => l.variant_id === item.variant_id);
+      if (existingLine) {
+        initialBatch[item.variant_id] = {
+          selected: true,
+          qty: existingLine.qty_ordered,
+          pack_id: existingLine.pack_id
+        };
+      } else {
+        initialBatch[item.variant_id] = {
+          selected: false,
+          qty: 0,
+          pack_id: item.pack_id || null
+        };
+      }
+    });
+    setBatchState(initialBatch);
+    setBatchSearchText('');
+    setBatchCategoryFilter(null);
+    setShowBatchModal(true);
+  };
+
+  const catalogCategories = useMemo(() => {
+    const catsMap = new Map<string, { label: string; value: string | null }>();
+    catsMap.set('ALL', { label: 'Todas las Categorías', value: null });
+    catalog.forEach(item => {
+      const cat = item.category_name || 'Sin Categoría';
+      if (!catsMap.has(cat)) {
+        catsMap.set(cat, { label: cat, value: cat });
+      }
+    });
+    return Array.from(catsMap.values());
+  }, [catalog]);
+
+  const filteredCatalog = useMemo(() => {
+    return catalog.filter(item => {
+      if (batchCategoryFilter && item.category_name !== batchCategoryFilter) {
+        return false;
+      }
+      if (!batchSearchText.trim()) return true;
+      const q = batchSearchText.toLowerCase();
+      return (
+        (item.variant_sku && item.variant_sku.toLowerCase().includes(q)) ||
+        (item.product_name && item.product_name.toLowerCase().includes(q)) ||
+        (item.barcode && item.barcode.toLowerCase().includes(q)) ||
+        (item.brand && item.brand.toLowerCase().includes(q)) ||
+        (item.category_name && item.category_name.toLowerCase().includes(q))
+      );
+    });
+  }, [catalog, batchCategoryFilter, batchSearchText]);
+
+  const toggleBatchSelect = (item: any, checked: boolean | undefined) => {
+    const isChecked = !!checked;
+    setBatchState(prev => {
+      const current = prev[item.variant_id] || { selected: false, qty: 0, pack_id: item.pack_id || null };
+      return {
+        ...prev,
+        [item.variant_id]: {
+          ...current,
+          selected: isChecked,
+          qty: isChecked && (current.qty <= 0) ? 1 : current.qty
+        }
+      };
+    });
+  };
+
+  const updateBatchQty = (item: any, newQty: number) => {
+    const val = isNaN(newQty) || newQty < 0 ? 0 : newQty;
+    setBatchState(prev => {
+      const current = prev[item.variant_id] || { selected: false, qty: 0, pack_id: item.pack_id || null };
+      return {
+        ...prev,
+        [item.variant_id]: {
+          ...current,
+          qty: val,
+          selected: val > 0 ? true : current.selected
+        }
+      };
+    });
+  };
+
+  const updateBatchPack = (variantId: number, packId: number | null) => {
+    setBatchState(prev => {
+      const current = prev[variantId] || { selected: false, qty: 0, pack_id: null };
+      return {
+        ...prev,
+        [variantId]: {
+          ...current,
+          pack_id: packId
+        }
+      };
+    });
+  };
+
+  const handleSelectAllFiltered = (markAll: boolean) => {
+    setBatchState(prev => {
+      const updated = { ...prev };
+      filteredCatalog.forEach(item => {
+        const current = updated[item.variant_id] || { selected: false, qty: 0, pack_id: item.pack_id || null };
+        updated[item.variant_id] = {
+          ...current,
+          selected: markAll,
+          qty: markAll && current.qty <= 0 ? 1 : (markAll ? current.qty : 0)
+        };
+      });
+      return updated;
+    });
+  };
+
+  const handleBatchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, rowIndex: number) => {
+    if (e.key === 'Enter' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const nextInput = document.getElementById(`batch-qty-${rowIndex + 1}`);
+      if (nextInput) {
+        nextInput.focus();
+        (nextInput as HTMLInputElement).select?.();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prevInput = document.getElementById(`batch-qty-${rowIndex - 1}`);
+      if (prevInput) {
+        prevInput.focus();
+        (prevInput as HTMLInputElement).select?.();
+      }
+    }
+  };
+
+  const batchSelectedSummary = useMemo(() => {
+    let count = 0;
+    let units = 0;
+    let estimatedTotal = 0;
+
+    catalog.forEach(item => {
+      const state = batchState[item.variant_id];
+      if (state && state.selected && state.qty > 0) {
+        count++;
+        const pk = (item.available_packagings || []).find((p: any) => p.id === state.pack_id) || { qty_per_unit: 1 };
+        const factor = Number(pk.qty_per_unit) || 1;
+        const lineUnits = state.qty * factor;
+        units += lineUnits;
+        estimatedTotal += lineUnits * (parseFloat(item.replacement_cost) || 0);
+      }
+    });
+
+    return { count, units, estimatedTotal };
+  }, [catalog, batchState]);
+
+  const applyBatchToOrder = () => {
+    const selectedItems = catalog.filter(item => {
+      const state = batchState[item.variant_id];
+      return state && state.selected && state.qty > 0;
+    });
+
+    if (selectedItems.length === 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Sin Selección', detail: 'Debe seleccionar productos con cantidad mayor a 0.' });
+      return;
+    }
+
+    setLines(prevLines => {
+      const newLinesMap = new Map<string, any>();
+      prevLines.forEach(l => {
+        newLinesMap.set(`${l.variant_id}_${l.pack_id}`, l);
+      });
+
+      selectedItems.forEach(item => {
+        const state = batchState[item.variant_id];
+        const chosenPack = (item.available_packagings || []).find((p: any) => p.id === state.pack_id)
+          || { id: null, name: 'Und. Base', qty_per_unit: 1, label: 'Unidad Base (x1)' };
+        const key = `${item.variant_id}_${chosenPack.id}`;
+        const qty_per_unit = Number(chosenPack.qty_per_unit) || 1;
+        const qty = Number(state.qty) || 1;
+        const replacement_cost = parseFloat(item.replacement_cost) || 0;
+        const pack_cost = Number((replacement_cost * qty_per_unit).toFixed(4));
+
+        newLinesMap.set(key, {
+          internal_id: newLinesMap.get(key)?.internal_id || Math.random().toString(),
+          variant_id: item.variant_id,
+          sku: item.variant_sku || 'N/A',
+          product_name: item.product_name,
+          pack_id: chosenPack.id,
+          pack_name: chosenPack.name || 'Und. Base',
+          qty_per_pack: qty_per_unit,
+          qty_ordered: qty,
+          unit_cost: replacement_cost,
+          pack_cost: pack_cost,
+          expected_base_qty: qty_per_unit * qty,
+          subtotal: replacement_cost * qty_per_unit * qty,
+          available_packagings: item.available_packagings || [chosenPack]
+        });
+      });
+
+      return Array.from(newLinesMap.values());
+    });
+
+    toast.current?.show({ 
+      severity: 'success', 
+      summary: 'Productos Incorporados', 
+      detail: `Se añadieron ${selectedItems.length} productos a la orden.` 
+    });
+    setShowBatchModal(false);
+  };
+
+  // --- CARGAR TODO EL CATÁLOGO ---
+  const handleLoadEntireCatalog = () => {
+    if (!selectedSupplierId || catalog.length === 0) return;
+    if (lines.length > 0) {
+      if (!confirm(`¿Desea cargar los ${catalog.length} productos del catálogo a la orden? Los renglones ya existentes se mantendrán.`)) {
+        return;
+      }
+    }
+    setLines(prevLines => {
+      const newLinesMap = new Map<string, any>();
+      prevLines.forEach(l => {
+        newLinesMap.set(`${l.variant_id}_${l.pack_id}`, l);
+      });
+
+      catalog.forEach(item => {
+        const pack = (item.available_packagings || [])[0] || { id: null, name: 'Und. Base', qty_per_unit: 1 };
+        const key = `${item.variant_id}_${pack.id}`;
+        if (!newLinesMap.has(key)) {
+          const qty_per_unit = Number(pack.qty_per_unit) || 1;
+          const replacement_cost = parseFloat(item.replacement_cost) || 0;
+          newLinesMap.set(key, {
+            internal_id: Math.random().toString(),
+            variant_id: item.variant_id,
+            sku: item.variant_sku || 'N/A',
+            product_name: item.product_name,
+            pack_id: pack.id,
+            pack_name: pack.name || 'Und. Base',
+            qty_per_pack: qty_per_unit,
+            qty_ordered: 0,
+            unit_cost: replacement_cost,
+            pack_cost: Number((replacement_cost * qty_per_unit).toFixed(4)),
+            expected_base_qty: 0,
+            subtotal: 0,
+            available_packagings: item.available_packagings || [pack]
+          });
+        }
+      });
+
+      return Array.from(newLinesMap.values());
+    });
+
+    toast.current?.show({
+      severity: 'info',
+      summary: 'Catálogo Completo Cargado',
+      detail: `Se cargaron los ${catalog.length} productos con cantidad 0 para tipeo directo.`
+    });
+  };
+
+  // --- LIMPIAR LÍNEAS EN CERO ---
+  const handlePruneZeroLines = () => {
+    const beforeCount = lines.length;
+    const active = lines.filter(l => (Number(l.qty_ordered) || 0) > 0);
+    const removedCount = beforeCount - active.length;
+    setLines(active);
+    toast.current?.show({
+      severity: 'info',
+      summary: 'Líneas Depuradas',
+      detail: `Se descartaron ${removedCount} renglones con cantidad 0.`
+    });
+  };
+
+  const handleClearAllLines = () => {
+    if (confirm('¿Está seguro de vaciar todos los renglones de la orden actual?')) {
+      setLines([]);
+    }
+  };
+
+  // --- PEGADO DESDE EXCEL / PORTAPAPELES ---
+  const handleProcessPasteText = () => {
+    if (!pasteRawText.trim()) return;
+    const rawLines = pasteRawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const matched: any[] = [];
+    const unmatched: string[] = [];
+
+    rawLines.forEach(rawLine => {
+      const parts = rawLine.split(/\t|;|,|\s{2,}/).map(p => p.trim()).filter(Boolean);
+      if (parts.length === 0) return;
+      const code = parts[0];
+      const rawQty = parts.length > 1 ? parts[parts.length - 1] : "1";
+      const qty = parseFloat(rawQty.replace(',', '.')) || 1;
+
+      const found = catalog.find(item => 
+        (item.variant_sku && item.variant_sku.toLowerCase() === code.toLowerCase()) ||
+        (item.barcode && item.barcode.toLowerCase() === code.toLowerCase()) ||
+        (item.supplier_sku && item.supplier_sku.toLowerCase() === code.toLowerCase())
+      );
+
+      if (found) {
+        const pack = (found.available_packagings || [])[0] || { id: null, name: 'Und. Base', qty_per_unit: 1 };
+        const qty_per_unit = Number(pack.qty_per_unit) || 1;
+        const replacement_cost = parseFloat(found.replacement_cost) || 0;
+        matched.push({
+          item: found,
+          pack: pack,
+          qty: qty,
+          qty_per_unit: qty_per_unit,
+          replacement_cost: replacement_cost,
+          subtotal: replacement_cost * qty_per_unit * qty
+        });
+      } else {
+        unmatched.push(rawLine);
+      }
+    });
+
+    setPasteResults({ matched, unmatched });
+  };
+
+  const handleApplyPasteToOrder = () => {
+    if (!pasteResults || pasteResults.matched.length === 0) return;
+    setLines(prevLines => {
+      const newLinesMap = new Map<string, any>();
+      prevLines.forEach(l => {
+        newLinesMap.set(`${l.variant_id}_${l.pack_id}`, l);
+      });
+
+      pasteResults.matched.forEach(({ item, pack, qty, qty_per_unit, replacement_cost }) => {
+        const key = `${item.variant_id}_${pack.id}`;
+        newLinesMap.set(key, {
+          internal_id: newLinesMap.get(key)?.internal_id || Math.random().toString(),
+          variant_id: item.variant_id,
+          sku: item.variant_sku || 'N/A',
+          product_name: item.product_name,
+          pack_id: pack.id,
+          pack_name: pack.name || 'Und. Base',
+          qty_per_pack: qty_per_unit,
+          qty_ordered: qty,
+          unit_cost: replacement_cost,
+          pack_cost: Number((replacement_cost * qty_per_unit).toFixed(4)),
+          expected_base_qty: qty_per_unit * qty,
+          subtotal: replacement_cost * qty_per_unit * qty,
+          available_packagings: item.available_packagings || [pack]
+        });
+      });
+
+      return Array.from(newLinesMap.values());
+    });
+
+    toast.current?.show({
+      severity: 'success',
+      summary: 'Importación Exitosa',
+      detail: `Se incorporaron ${pasteResults.matched.length} productos desde el portapapeles.`
+    });
+    setShowPasteModal(false);
+    setPasteRawText('');
+    setPasteResults(null);
+  };
+
+  // --- LÍNEAS VISIBLES EN LA MATRIZ PRINCIPAL (CON FILTRO EN VIVO) ---
+  const visibleLines = useMemo(() => {
+    if (!filterLinesText.trim()) return lines;
+    const q = filterLinesText.toLowerCase();
+    return lines.filter(l =>
+      (l.sku && l.sku.toLowerCase().includes(q)) ||
+      (l.product_name && l.product_name.toLowerCase().includes(q)) ||
+      (l.pack_name && l.pack_name.toLowerCase().includes(q))
+    );
+  }, [lines, filterLinesText]);
+
+  // --- GUARDAR ORDEN (DRAFT) ---
   const createDraft = async () => {
       if (!selectedSupplierId) {
           toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Debe seleccionar un proveedor.' });
           return;
       }
-      if (lines.length === 0) {
-          toast.current?.show({ severity: 'error', summary: 'Error', detail: 'La orden debe tener al menos un renglón.' });
+      const validLines = lines.filter(l => (Number(l.qty_ordered) || 0) > 0);
+      if (validLines.length === 0) {
+          toast.current?.show({ severity: 'error', summary: 'Error', detail: 'La orden debe tener al menos un renglón con cantidad mayor a 0.' });
           return;
       }
       
@@ -388,7 +754,7 @@ export default function NewOrderPage() {
           const payload = {
               supplier_id: selectedSupplierId,
               dest_facility_id: selectedFacilityId,
-              lines: lines.map(l => ({
+              lines: validLines.map(l => ({
                   variant_id: l.variant_id,
                   pack_id: l.pack_id,
                   qty_ordered: l.qty_ordered,
@@ -466,7 +832,48 @@ export default function NewOrderPage() {
           </div>
       </div>
 
-      {/* Selector de Catálogo */}
+      {/* Barra de Herramientas de Productividad Comercial para Catálogo Privado */}
+      {searchMode === 'CATALOG' && selectedSupplierId && (
+        <div className="bg-gradient-to-r from-indigo-50/90 via-blue-50/70 to-slate-50 p-4 rounded-2xl shadow-sm border border-indigo-100 mb-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+             <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-indigo-500/20">
+                <i className="pi pi-box text-lg"></i>
+             </div>
+             <div>
+                <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider block">Catálogo del Proveedor</span>
+                <span className="text-sm text-slate-600">
+                  <strong>{catalog.length}</strong> productos disponibles para transcripción rápida
+                </span>
+             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+             <Button 
+                label="Selección Masiva" 
+                icon="pi pi-th-large" 
+                onClick={openBatchModal}
+                disabled={catalog.length === 0}
+                className="font-bold bg-indigo-600 hover:bg-indigo-700 text-white border-none rounded-xl px-4 py-2.5 text-xs shadow-md shadow-indigo-500/20"
+             />
+             <Button 
+                label="Pegar desde Excel" 
+                icon="pi pi-file-excel" 
+                onClick={() => { setPasteRawText(''); setPasteResults(null); setShowPasteModal(true); }}
+                disabled={catalog.length === 0}
+                className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white border-none rounded-xl px-4 py-2.5 text-xs shadow-md shadow-emerald-500/20"
+             />
+             <Button 
+                label="Cargar Catálogo Completo" 
+                icon="pi pi-download" 
+                onClick={handleLoadEntireCatalog}
+                disabled={catalog.length === 0}
+                className="font-bold bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl px-4 py-2.5 text-xs shadow-sm"
+             />
+          </div>
+        </div>
+      )}
+
+      {/* Selector de Catálogo Individual / Maestro Global */}
       <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 mb-6 flex flex-col items-start gap-4">
           <div className="w-full overflow-x-auto pb-1">
              <SelectButton value={searchMode} onChange={(e) => { if(e.value) setSearchMode(e.value) }} options={searchModeOptions} optionLabel="label" />
@@ -484,8 +891,8 @@ export default function NewOrderPage() {
                   optionLabel="display_name"
                   placeholder={
                       searchMode === 'CATALOG' 
-                      ? (selectedSupplierId ? "Buscar en catálogo privado..." : "Seleccione primero un proveedor") 
-                      : "Buscar en todo el Maestro de Inventario..."
+                      ? (selectedSupplierId ? "Buscar producto puntual en catálogo privado..." : "Seleccione primero un proveedor") 
+                      : "Buscar en todo el Maestro Global de Inventario..."
                   }
                   filter
                   onFilter={handleDropdownFilter}
@@ -527,6 +934,7 @@ export default function NewOrderPage() {
           </div>
       </div>
 
+      {/* DIALOG 1: CREADOR FAST-TRACK */}
       <Dialog 
          header={<div className="flex items-center gap-2 text-xl font-black text-slate-800"><i className="pi pi-bolt text-emerald-500"></i> Creador Fast-Track</div>} 
          visible={showProductModal} 
@@ -570,13 +978,439 @@ export default function NewOrderPage() {
          </div>
       </Dialog>
 
-      {/* MATRIZ DE EDICIÓN */}
+      {/* DIALOG 2: SELECCIÓN MASIVA DE CATÁLOGO PRIVADO */}
+      <Dialog
+         header={
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full pr-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                   <i className="pi pi-th-large text-lg"></i>
+                </div>
+                <div>
+                   <h2 className="text-lg sm:text-xl font-black text-slate-800 leading-tight">Catálogo Privado - Selección y Captura Masiva</h2>
+                   <p className="text-slate-500 text-xs mt-0.5">
+                     Tilde productos o tipee la cantidad directamente con teclado (teclas <strong className="text-indigo-600">Enter</strong> o <strong className="text-indigo-600">↓</strong> para avanzar).
+                   </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                 <Tag severity="info" value={`${filteredCatalog.length} disponibles`} className="font-bold px-2.5 py-1 text-xs" />
+                 <Tag severity={batchSelectedSummary.count > 0 ? "success" : "warning"} value={`${batchSelectedSummary.count} marcados`} className="font-bold px-2.5 py-1 text-xs" />
+              </div>
+            </div>
+         }
+         visible={showBatchModal}
+         style={{ width: '88vw', maxWidth: '1450px' }}
+         breakpoints={{ '1200px': '92vw', '960px': '95vw', '640px': '98vw' }}
+         onHide={() => setShowBatchModal(false)}
+         className="rounded-3xl overflow-hidden shadow-2xl"
+      >
+         <div className="flex flex-col gap-3 pt-2">
+            {/* Barra de Filtros Rápidos */}
+            <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
+               <div className="flex-1 flex flex-col sm:flex-row items-center gap-2">
+                  <div className="relative w-full sm:w-80">
+                     <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                     <InputText
+                        value={batchSearchText}
+                        onChange={(e) => setBatchSearchText(e.target.value)}
+                        placeholder="Filtrar por SKU, nombre, barras, marca..."
+                        className="w-full pl-9 pr-3 py-2 text-xs border rounded-xl"
+                     />
+                  </div>
+                  <Dropdown
+                     value={batchCategoryFilter}
+                     onChange={(e) => setBatchCategoryFilter(e.value)}
+                     options={catalogCategories}
+                     optionLabel="label"
+                     optionValue="value"
+                     placeholder="Todas las Categorías"
+                     className="w-full sm:w-60 p-inputtext-sm text-xs border rounded-xl"
+                  />
+               </div>
+
+               <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                     label="Marcar Filtrados"
+                     icon="pi pi-check-square"
+                     onClick={() => handleSelectAllFiltered(true)}
+                     className="p-button-sm font-bold bg-indigo-100 text-indigo-700 hover:bg-indigo-200 border-none rounded-xl px-3 py-2 text-xs"
+                  />
+                  <Button
+                     label="Desmarcar Todos"
+                     icon="pi pi-times-circle"
+                     onClick={() => handleSelectAllFiltered(false)}
+                     className="p-button-sm font-bold bg-slate-200 text-slate-600 hover:bg-slate-300 border-none rounded-xl px-3 py-2 text-xs"
+                  />
+               </div>
+            </div>
+
+            {/* Tabla de Catálogo */}
+            <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white">
+               <DataTable
+                  value={filteredCatalog}
+                  scrollable
+                  scrollHeight="52vh"
+                  dataKey="variant_id"
+                  size="small"
+                  stripedRows
+                  rowHover
+                  emptyMessage="No hay productos que coincidan con la búsqueda."
+                  className="text-xs"
+               >
+                  <Column
+                     header={
+                        <div className="flex items-center justify-center">
+                           <Checkbox
+                              checked={filteredCatalog.length > 0 && filteredCatalog.every(i => batchState[i.variant_id]?.selected)}
+                              onChange={(e) => handleSelectAllFiltered(!!e.checked)}
+                              tooltip="Marcar / Desmarcar todos los visibles"
+                           />
+                        </div>
+                     }
+                     body={(r) => (
+                        <div className="flex items-center justify-center">
+                           <Checkbox
+                              checked={!!batchState[r.variant_id]?.selected}
+                              onChange={(e) => toggleBatchSelect(r, e.checked)}
+                           />
+                        </div>
+                     )}
+                     style={{ width: '45px', textAlign: 'center' }}
+                  />
+
+                  <Column
+                     field="variant_sku"
+                     header="SKU"
+                     sortable
+                     style={{ width: '110px' }}
+                     body={(r) => (
+                        <span className="font-mono text-[11px] font-bold bg-slate-100 text-slate-700 px-2 py-1 rounded">
+                           {r.variant_sku}
+                        </span>
+                     )}
+                  />
+
+                  <Column
+                     field="product_name"
+                     header="DESCRIPCIÓN / INSUMO"
+                     sortable
+                     style={{ minWidth: '240px' }}
+                     body={(r) => (
+                        <div>
+                           <div className="font-bold text-slate-800 text-xs sm:text-sm">{r.product_name}</div>
+                           <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                              {r.brand && <span className="bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200 text-slate-500 font-semibold">{r.brand}</span>}
+                              {r.barcode && <span><i className="pi pi-barcode mr-1 text-[10px]"></i>{r.barcode}</span>}
+                           </div>
+                        </div>
+                     )}
+                  />
+
+                  <Column
+                     field="category_name"
+                     header="CATEGORÍA"
+                     sortable
+                     style={{ width: '140px' }}
+                     body={(r) => (
+                        <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded border border-slate-200 whitespace-nowrap">
+                           {r.category_name || 'General'}
+                        </span>
+                     )}
+                  />
+
+                  <Column
+                     header="PRESENTACIÓN"
+                     style={{ width: '160px' }}
+                     body={(r) => (
+                        <div>
+                           {r.available_packagings && r.available_packagings.length > 1 ? (
+                              <Dropdown
+                                 value={batchState[r.variant_id]?.pack_id ?? null}
+                                 options={r.available_packagings}
+                                 optionLabel="label"
+                                 optionValue="id"
+                                 onChange={(e) => updateBatchPack(r.variant_id, e.value)}
+                                 className="w-full p-inputtext-sm text-[11px] font-bold border-indigo-200 bg-indigo-50/40 text-indigo-900 rounded-lg"
+                              />
+                           ) : (
+                              <span className="text-[11px] font-semibold text-slate-500">
+                                 {r.pack_name || 'Und. Base'} (x{r.qty_per_unit || 1})
+                              </span>
+                           )}
+                        </div>
+                     )}
+                  />
+
+                  <Column
+                     field="replacement_cost"
+                     header="COSTO UNIT"
+                     sortable
+                     style={{ width: '100px', textAlign: 'right' }}
+                     body={(r) => (
+                        <span className="font-semibold text-slate-700">
+                           ${parseFloat(r.replacement_cost || 0).toFixed(2)}
+                        </span>
+                     )}
+                  />
+
+                  <Column
+                     header="CANTIDAD"
+                     style={{ width: '110px', textAlign: 'center' }}
+                     body={(r, opt) => {
+                        const isSelected = !!batchState[r.variant_id]?.selected;
+                        const qtyVal = batchState[r.variant_id]?.qty;
+                        return (
+                           <input
+                              id={`batch-qty-${opt.rowIndex}`}
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={qtyVal === 0 ? '' : (qtyVal ?? '')}
+                              placeholder="0"
+                              onChange={(e) => updateBatchQty(r, parseFloat(e.target.value))}
+                              onKeyDown={(e) => handleBatchKeyDown(e, opt.rowIndex)}
+                              className={`w-20 text-center font-black p-1.5 text-xs rounded-lg border-2 outline-none transition-all ${
+                                 isSelected
+                                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700 shadow-inner'
+                                    : 'border-slate-200 bg-white text-slate-600 focus:border-indigo-400'
+                              }`}
+                           />
+                        );
+                     }}
+                  />
+
+                  <Column
+                     header="SUBTOTAL"
+                     style={{ width: '110px', textAlign: 'right' }}
+                     body={(r) => {
+                        const state = batchState[r.variant_id];
+                        const q = state?.qty || 0;
+                        const pk = (r.available_packagings || []).find((p: any) => p.id === state?.pack_id);
+                        const factor = Number(pk?.qty_per_unit) || 1;
+                        const sub = q * factor * Number(r.replacement_cost || 0);
+                        return (
+                           <span className={`font-black ${sub > 0 ? 'text-emerald-700 text-xs' : 'text-slate-300 text-xs'}`}>
+                              ${sub.toFixed(2)}
+                           </span>
+                        );
+                     }}
+                  />
+               </DataTable>
+            </div>
+
+            {/* Footer Modal con Totales y Acción */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200 mt-1">
+               <div className="flex flex-wrap items-center gap-4 text-xs">
+                  <div>
+                     <span className="text-slate-400 block font-semibold">SKUs Seleccionados</span>
+                     <span className="text-base font-black text-slate-800">{batchSelectedSummary.count} productos</span>
+                  </div>
+                  <div className="h-7 w-px bg-slate-200"></div>
+                  <div>
+                     <span className="text-slate-400 block font-semibold">Total Unidades Base</span>
+                     <span className="text-base font-black text-indigo-600">{batchSelectedSummary.units.toLocaleString()} unds</span>
+                  </div>
+                  <div className="h-7 w-px bg-slate-200"></div>
+                  <div>
+                     <span className="text-slate-400 block font-semibold">Subtotal Estimado</span>
+                     <span className="text-base font-black text-emerald-700">
+                        ${batchSelectedSummary.estimatedTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                     </span>
+                  </div>
+               </div>
+
+               <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                  <Button
+                     label="Cancelar"
+                     icon="pi pi-times"
+                     onClick={() => setShowBatchModal(false)}
+                     className="p-button-text text-slate-500 font-bold text-xs"
+                  />
+                  <Button
+                     label={`Añadir a la Orden (${batchSelectedSummary.count} ítems)`}
+                     icon="pi pi-check"
+                     onClick={applyBatchToOrder}
+                     disabled={batchSelectedSummary.count === 0}
+                     className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl px-6 py-2.5 text-xs shadow-lg shadow-indigo-500/20 border-none"
+                  />
+               </div>
+            </div>
+         </div>
+      </Dialog>
+
+      {/* DIALOG 3: PEGAR DESDE EXCEL / PORTAPAPELES */}
+      <Dialog
+         header={
+            <div className="flex items-center gap-3">
+               <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                  <i className="pi pi-file-excel text-lg"></i>
+               </div>
+               <div>
+                  <h2 className="text-lg font-black text-slate-800 leading-tight">Pegar desde Excel / Portapapeles</h2>
+                  <p className="text-slate-500 text-xs">Copia columnas de tu hoja de cálculo o WhatsApp y pégalas aquí.</p>
+               </div>
+            </div>
+         }
+         visible={showPasteModal}
+         style={{ width: '55vw', minWidth: '320px' }}
+         breakpoints={{ '1200px': '70vw', '960px': '85vw', '640px': '95vw' }}
+         onHide={() => setShowPasteModal(false)}
+         className="rounded-3xl overflow-hidden shadow-2xl"
+      >
+         <div className="flex flex-col gap-4 pt-2">
+            <div className="bg-emerald-50/70 p-3.5 rounded-xl border border-emerald-200 text-xs text-emerald-900 leading-relaxed">
+               <strong className="block font-black mb-1"><i className="pi pi-info-circle mr-1"></i> Formato sugerido:</strong>
+               Copie 2 columnas desde Excel (la primera con el <strong>Código / SKU / Código de Barras</strong> y la segunda con la <strong>Cantidad</strong>). El sistema identificará automáticamente los productos en el catálogo del proveedor.
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+               <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Pega aquí el contenido copiado:</label>
+               <InputTextarea
+                  value={pasteRawText}
+                  onChange={(e) => setPasteRawText(e.target.value)}
+                  rows={8}
+                  placeholder={`Ejemplo:
+PRD-4295	10
+PRD-4296	25
+PRD-4297	5`}
+                  className="w-full font-mono text-xs p-3 border-2 rounded-xl"
+               />
+            </div>
+
+            <div className="flex justify-end">
+               <Button
+                  label="Procesar y Cruzar con Catálogo"
+                  icon="pi pi-sync"
+                  onClick={handleProcessPasteText}
+                  disabled={!pasteRawText.trim()}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl px-4 py-2 border-none shadow-md"
+               />
+            </div>
+
+            {/* Resultados del Procesamiento */}
+            {pasteResults && (
+               <div className="flex flex-col gap-3 mt-2 border-t pt-3">
+                  <div className="flex items-center justify-between">
+                     <span className="text-xs font-bold text-slate-700">Resultado del cruce:</span>
+                     <div className="flex items-center gap-2">
+                        <Tag severity="success" value={`${pasteResults.matched.length} reconocidos`} className="font-bold text-xs" />
+                        {pasteResults.unmatched.length > 0 && (
+                           <Tag severity="warning" value={`${pasteResults.unmatched.length} no encontrados`} className="font-bold text-xs" />
+                        )}
+                     </div>
+                  </div>
+
+                  {/* Previsualización de ítems reconocidos */}
+                  {pasteResults.matched.length > 0 && (
+                     <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl bg-white text-xs">
+                        <table className="w-full text-left">
+                           <thead className="bg-slate-50 text-slate-500 font-bold sticky top-0 border-b">
+                              <tr>
+                                 <th className="p-2">SKU</th>
+                                 <th className="p-2">Producto</th>
+                                 <th className="p-2 text-center">Cantidad</th>
+                                 <th className="p-2 text-right">Subtotal</th>
+                              </tr>
+                           </thead>
+                           <tbody className="divide-y divide-slate-100">
+                              {pasteResults.matched.map((m, idx) => (
+                                 <tr key={idx} className="hover:bg-slate-50">
+                                    <td className="p-2 font-mono text-[11px] font-bold text-slate-700">{m.item.variant_sku}</td>
+                                    <td className="p-2 font-semibold text-slate-800">{m.item.product_name}</td>
+                                    <td className="p-2 text-center font-black text-indigo-600">{m.qty}</td>
+                                    <td className="p-2 text-right font-bold text-emerald-700">${m.subtotal.toFixed(2)}</td>
+                                 </tr>
+                              ))}
+                           </tbody>
+                        </table>
+                     </div>
+                  )}
+
+                  {/* Advertencia de no encontrados */}
+                  {pasteResults.unmatched.length > 0 && (
+                     <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200 text-[11px] text-amber-800 max-h-24 overflow-y-auto">
+                        <strong>Líneas no localizadas en el catálogo del proveedor:</strong>
+                        <ul className="list-disc list-inside mt-1 font-mono">
+                           {pasteResults.unmatched.map((u, i) => <li key={i}>{u}</li>)}
+                        </ul>
+                     </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 mt-2">
+                     <Button
+                        label="Cancelar"
+                        icon="pi pi-times"
+                        onClick={() => setShowPasteModal(false)}
+                        className="p-button-text text-slate-500 font-bold text-xs"
+                     />
+                     <Button
+                        label={`Incorporar ${pasteResults.matched.length} Productos a la Orden`}
+                        icon="pi pi-check"
+                        onClick={handleApplyPasteToOrder}
+                        disabled={pasteResults.matched.length === 0}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl px-5 py-2.5 border-none shadow-md"
+                     />
+                  </div>
+               </div>
+            )}
+         </div>
+      </Dialog>
+
+      {/* MATRIZ DE EDICIÓN DE LÍNEAS DE LA ORDEN */}
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden mb-6">
+        {/* Cabecera de la Matriz con Buscador y Filtros */}
+        <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-50/50">
+           <div className="flex items-center gap-3">
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                 Renglones en la Orden ({lines.length})
+              </span>
+              {lines.length > 0 && (
+                 <span className="text-xs text-slate-400">
+                    Mostrando {visibleLines.length} de {lines.length}
+                 </span>
+              )}
+           </div>
+
+           <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-full sm:w-64">
+                 <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                 <InputText
+                    value={filterLinesText}
+                    onChange={(e) => setFilterLinesText(e.target.value)}
+                    placeholder="Filtrar en orden..."
+                    className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border"
+                 />
+              </div>
+
+              {lines.some(l => (Number(l.qty_ordered) || 0) === 0) && (
+                 <Button
+                    label="Descartar Ceros"
+                    icon="pi pi-filter-slash"
+                    onClick={handlePruneZeroLines}
+                    className="p-button-sm font-bold bg-amber-100 hover:bg-amber-200 text-amber-800 border-none rounded-lg px-2.5 py-1.5 text-xs"
+                    tooltip="Elimina renglones con cantidad 0"
+                    tooltipOptions={{ position: 'top' }}
+                 />
+              )}
+
+              {lines.length > 0 && (
+                 <Button
+                    icon="pi pi-trash"
+                    onClick={handleClearAllLines}
+                    className="p-button-sm p-button-text p-button-danger rounded-lg text-xs"
+                    tooltip="Vaciar todos los renglones"
+                    tooltipOptions={{ position: 'top' }}
+                 />
+              )}
+           </div>
+        </div>
+
         <div className="overflow-x-auto w-full">
           <DataTable 
             dataKey="internal_id" 
-            value={lines} 
-            emptyMessage="No has añadido productos a esta orden." 
+            value={visibleLines} 
+            emptyMessage={lines.length > 0 ? "No hay renglones que coincidan con el filtro." : "No has añadido productos a esta orden."} 
             size="small" 
             stripedRows 
             rowHover 
@@ -587,7 +1421,7 @@ export default function NewOrderPage() {
           
           <Column header="Nomenclatura" field="product_name" style={{ minWidth: '160px' }} body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
           
-          <Column header="Presentación" style={{ minWidth: '160px' }} body={(r, options) => (
+          <Column header="Presentación" style={{ minWidth: '160px' }} body={(r) => (
              <div className="flex items-center justify-center">
                 {r.available_packagings && r.available_packagings.length > 1 ? (
                     <Dropdown
@@ -595,7 +1429,7 @@ export default function NewOrderPage() {
                        options={r.available_packagings}
                        optionLabel="label"
                        optionValue="id"
-                       onChange={(e) => handlePresentationChange(options.rowIndex, e.value)}
+                       onChange={(e) => handlePresentationChange(r.internal_id, e.value)}
                        className="p-inputtext-sm text-xs font-bold border-indigo-200 bg-indigo-50/50 text-indigo-800 rounded-lg shadow-sm"
                     />
                 ) : (
@@ -607,16 +1441,20 @@ export default function NewOrderPage() {
              </div>
           )} align="center" />
           
-          <Column header="Cant. a Comprar" style={{ minWidth: '120px' }} body={(r, options) => {
+          <Column header="Cant. a Comprar" style={{ minWidth: '120px' }} body={(r) => {
              const isPack = r.qty_per_pack > 1;
              return (
                  <div className="flex flex-col items-center gap-1">
                      <input 
                         type="number" 
                         value={r.qty_ordered} 
-                        min="1"
-                        onChange={(e) => handleQtyChange(options.rowIndex, parseFloat(e.target.value))}
-                        className="w-20 text-center text-base font-black p-1.5 rounded-lg border-2 border-indigo-200 outline-none focus:border-indigo-500 bg-indigo-50/70 text-indigo-700 shadow-inner" 
+                        min="0"
+                        onChange={(e) => handleQtyChange(r.internal_id, parseFloat(e.target.value))}
+                        className={`w-20 text-center text-base font-black p-1.5 rounded-lg border-2 outline-none shadow-inner ${
+                           r.qty_ordered === 0 
+                              ? 'border-amber-200 bg-amber-50 text-amber-700' 
+                              : 'border-indigo-200 bg-indigo-50/70 text-indigo-700 focus:border-indigo-500'
+                        }`} 
                      />
                      {isPack ? (
                          <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
@@ -631,7 +1469,7 @@ export default function NewOrderPage() {
              );
           }} align="center" />
           
-          <Column header="Costo x Bulto" style={{ minWidth: '130px' }} body={(r, options) => {
+          <Column header="Costo x Bulto" style={{ minWidth: '130px' }} body={(r) => {
              const isPack = r.qty_per_pack > 1;
              const packCostVal = r.pack_cost != null ? Number(r.pack_cost) : Number(((Number(r.unit_cost) || 0) * (r.qty_per_pack || 1)).toFixed(2));
              
@@ -650,7 +1488,7 @@ export default function NewOrderPage() {
                         type="number" 
                         value={packCostVal} 
                         step="0.01"
-                        onChange={(e) => handlePackCostChange(options.rowIndex, parseFloat(e.target.value))}
+                        onChange={(e) => handlePackCostChange(r.internal_id, parseFloat(e.target.value))}
                         className="w-24 text-right font-bold p-1.5 text-sm rounded-lg border-2 border-sky-200 outline-none focus:border-sky-500 bg-sky-50/50 text-sky-900 shadow-inner" 
                         placeholder="0.00"
                      />
@@ -658,14 +1496,14 @@ export default function NewOrderPage() {
              );
           }} align="right" />
 
-          <Column header="Costo x Unidad" style={{ minWidth: '130px' }} body={(r, options) => (
+          <Column header="Costo x Unidad" style={{ minWidth: '130px' }} body={(r) => (
              <div className="flex justify-end items-center gap-1">
                  <span className="font-bold text-slate-400 text-xs">$</span>
                  <input 
                     type="number" 
                     value={r.unit_cost != null ? Number(Number(r.unit_cost).toFixed(4)) : 0} 
                     step="0.0001"
-                    onChange={(e) => handleUnitCostChange(options.rowIndex, parseFloat(e.target.value))}
+                    onChange={(e) => handleUnitCostChange(r.internal_id, parseFloat(e.target.value))}
                     className="w-24 text-right font-bold p-1.5 text-sm rounded-lg border-2 border-slate-200 outline-none focus:border-emerald-500 bg-slate-50 text-slate-700" 
                     placeholder="0.00"
                  />
@@ -674,8 +1512,8 @@ export default function NewOrderPage() {
           
           <Column header="Subtotal" style={{ minWidth: '110px' }} body={r => <span className="font-black text-emerald-700 text-base">${parseFloat(r.subtotal).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>} align="right" />
           
-          <Column style={{ width: '60px', minWidth: '60px' }} body={(r, options) => (
-             <Button type="button" icon="pi pi-trash" rounded text severity="danger" onClick={() => removeLine(options.rowIndex)} aria-label="Eliminar" />
+          <Column style={{ width: '60px', minWidth: '60px' }} body={(r) => (
+             <Button type="button" icon="pi pi-trash" rounded text severity="danger" onClick={() => removeLine(r.internal_id)} aria-label="Eliminar" />
           )} align="center" />
           </DataTable>
         </div>
@@ -683,7 +1521,7 @@ export default function NewOrderPage() {
 
       {/* CONSOLA DE ACCIONES */}
       <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-         <span className="text-slate-400 text-sm"><i className="pi pi-info-circle mr-2"></i>La orden creada iniciará como Borrador (Draft)</span>
+         <span className="text-slate-400 text-sm"><i className="pi pi-info-circle mr-2"></i>La orden creada iniciará como Borrador (Draft). Los renglones con cantidad 0 serán omitidos automáticamente.</span>
          <Button label="Crear Borrador" icon="pi pi-arrow-right" iconPos="right" onClick={createDraft} disabled={saving || lines.length === 0} className="w-full sm:w-auto font-bold px-8 shadow-lg hover:shadow-xl transition-all shadow-indigo-500/30 text-lg bg-indigo-600 border-none text-white justify-center" />
       </div>
 

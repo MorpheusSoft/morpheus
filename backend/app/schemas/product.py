@@ -138,7 +138,7 @@ class ProductBase(BaseModel):
     brand: Optional[str] = None
     model: Optional[str] = None
     product_type: str = "STOCKED"
-    uom_base: str = "PZA"
+    uom_base: str = "UND"
     is_liquor: Optional[bool] = False
     track_batches: Optional[bool] = False
     tax_id: Optional[int] = None

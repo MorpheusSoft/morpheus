@@ -11,7 +11,7 @@ class MRPSimulatorLine(BaseModel):
     supplier_id: int
     supplier_name: str
     supplier_default_facility_id: Optional[int] = None
-    uom_base: str = 'PZA'
+    uom_base: str = 'UND'
     
     # MRP Core Variables
     run_rate: Decimal

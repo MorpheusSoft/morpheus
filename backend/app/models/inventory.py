@@ -72,7 +72,7 @@ class Product(Base):
     sell_on_web = Column(Boolean, default=False)
     
     product_type = Column(String, default='STOCKED', nullable=False)
-    uom_base = Column(String, default='PZA', nullable=False)
+    uom_base = Column(String, default='UND', nullable=False)
     shrinkage_percent = Column(Numeric(5, 2), default=0)
     is_liquor = Column(Boolean, default=False)
     has_variants = Column(Boolean, default=False)
@@ -236,7 +236,7 @@ class StockMove(Base):
     
     quantity_demand = Column(Numeric(19, 4), default=0)
     quantity_done = Column(Numeric(19, 4), default=0)
-    uom_id = Column(String, default='PZA')
+    uom_id = Column(String, default='UND')
     state = Column(String, default='DRAFT')
     notes = Column(Text, nullable=True)
     batch_id = Column(Integer, ForeignKey("inv.batches.id"))

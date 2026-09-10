@@ -127,7 +127,7 @@ def upload_inventory_bulk(
                 name=name,
                 category_id=default_cat.id,
                 product_type="STOCKED",
-                uom_base="PZA",
+                uom_base="UND",
                 has_variants=False,
                 is_active=True
             )
@@ -169,7 +169,7 @@ def upload_inventory_bulk(
                      location_src_id=src,
                      location_dest_id=dest,
                      quantity_demand=qty,
-                     uom_id="PZA"
+                    uom_id=(variant.product.uom_base if getattr(variant, 'product', None) else "UND")
                  ))
 
     # Commit Products

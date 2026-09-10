@@ -17,7 +17,7 @@ class StockMoveBase(BaseModel):
     quantity_demand: float
     location_src_id: int
     location_dest_id: int
-    uom_id: str = "PZA"
+    uom_id: str = "UND"
 
 class StockMoveCreate(StockMoveBase):
     pass

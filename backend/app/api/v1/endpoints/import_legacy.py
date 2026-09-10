@@ -21,6 +21,7 @@ class LegacyProduct(BaseModel):
     moneda: Optional[str] = "USD"
     c_Marca: Optional[str] = None
     imagen: Optional[str] = None
+    n_tipopeso: Optional[int] = 0
 
 @router.get("/facilities")
 def get_legacy_facilities(session: Session = Depends(deps.get_db)):
@@ -81,6 +82,12 @@ def import_products_legacy(
         legacy_stellar_code = p.c_Codigo.strip()
         if legacy_stellar_code.lower() in ('codigo', 'sku'): continue
         
+        # Validar tipo de producto (n_tipopeso): 0 = Unidad (UND), 1 y 2 = Volumen/Pesado (KG), 3, 4 y 5 = Omitir
+        tipopeso = int(p.n_tipopeso) if p.n_tipopeso is not None else 0
+        if tipopeso in (3, 4, 5):
+            continue
+        uom_base = 'KG' if tipopeso in (1, 2) else 'UND'
+        
         name = p.c_Descri.strip()
         cat_code = str(p.c_Departamento).strip() if p.c_Departamento else ""
         
@@ -118,12 +125,17 @@ def import_products_legacy(
             existing_product.tax_id = tax_id
             existing_product.brand = brand
             existing_product.currency_id = curr_id
+            existing_product.uom_base = uom_base
             if img:
                 existing_product.image_main = img
                 
             existing_variant.average_cost = cost
             existing_variant.last_cost = cost
             existing_variant.sales_price = price
+            
+            for bc in existing_variant.barcodes:
+                if bc.code_type == 'STELLAR_CODE' or (bc.conversion_factor and float(bc.conversion_factor) == 1.0):
+                    bc.uom = uom_base
             
             # Update facility price
             if existing_variant.facility_prices:
@@ -139,7 +151,7 @@ def import_products_legacy(
                 tax_id=tax_id,
                 brand=brand,
                 product_type='STOCKED',
-                uom_base='PZA',
+                uom_base=uom_base,
                 origin='NACIONAL',
                 is_active=True,
                 has_variants=False,
@@ -164,7 +176,7 @@ def import_products_legacy(
                 product_variant_id=variant.id,
                 barcode=legacy_stellar_code,
                 code_type='STELLAR_CODE',
-                uom="UND",
+                uom=uom_base,
                 conversion_factor=1.0
             )
             session.add(stellar_barcode)
@@ -363,6 +375,10 @@ def import_inventory_movements(
     # Pre-cache variants based on STELLAR_CODE
     stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
     variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
+    variant_uom_map = {
+        bc.product_variant_id: (bc.variant.product.uom_base if (bc.variant and bc.variant.product) else 'UND')
+        for bc in stellar_codes_db
+    }
     
     count = 0
     not_found = 0
@@ -447,6 +463,7 @@ def import_inventory_movements(
                 product_id=variant_id,
                 quantity_demand=qty,
                 quantity_done=qty,
+                uom_id=variant_uom_map.get(variant_id, 'UND'),
                 location_src_id=loc_src_id,
                 location_dest_id=loc_dest_id,
                 state='DONE',
@@ -487,6 +504,10 @@ def import_sales_legacy(
     # Pre-cache variants based on STELLAR_CODE
     stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
     variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
+    variant_uom_map = {
+        bc.product_variant_id: (bc.variant.product.uom_base if (bc.variant and bc.variant.product) else 'UND')
+        for bc in stellar_codes_db
+    }
     
     # Ensure generic customer exists
     generic_customer = session.query(Customer).filter_by(id=1).first()
@@ -597,6 +618,7 @@ def import_sales_legacy(
             product_id=variant_id,
             quantity_demand=abs(s.Cantidad),
             quantity_done=abs(s.Cantidad),
+            uom_id=variant_uom_map.get(variant_id, 'UND'),
             location_src_id=loc_src_id,
             location_dest_id=1,
             state='DONE',
