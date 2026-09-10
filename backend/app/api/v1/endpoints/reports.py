@@ -2,7 +2,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case, text, or_
+from sqlalchemy import func, case, text, or_, desc
 from datetime import datetime, timedelta
 import os
 import urllib.request
@@ -1321,48 +1321,93 @@ def ai_chat_assistant(
                 "products_count": prod_count
             }
 
-    # Intent-specific contextual queries
+    # Intent-specific and keyword-based contextual queries
     intent = resolved_entities.get("intent", "general")
-    if intent == "pricing_margin" and resolved_product:
-        # Fetch units sold last 30 days
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-        qty_sold = db.query(func.sum(DocumentLine.quantity)).join(
-            Document, Document.id == DocumentLine.document_id
-        ).filter(
-            DocumentLine.variant_id == resolved_product.id,
-            Document.type == 'INVOICE',
-            Document.state != 'CANCELLED',
-            Document.created_at >= thirty_days_ago
-        ).scalar() or 0
-        db_context["sales_30_days"] = float(qty_sold)
-        
-    elif intent == "inventory_levels":
-        # Query stock by location/warehouse for this product
-        if resolved_product:
-            from app.models.inventory import InventorySnapshot
-            snaps = db.query(InventorySnapshot, Facility).join(Facility).filter(
-                InventorySnapshot.variant_id == resolved_product.id
-            ).all()
-            db_context["stock_by_facility"] = [
-                {"facility": fac.name, "qty": float(snap.stock_qty or 0)} for snap, fac in snaps
-            ]
-            
-    elif intent == "purchases_orders":
-        # Query recent purchase orders
-        pos = db.query(PurchaseOrder, Supplier).join(Supplier).order_by(PurchaseOrder.created_at.desc()).limit(5).all()
-        db_context["recent_purchase_orders"] = [
-            {"ref": po.reference, "supplier": sup.name, "amount": float(po.total_amount), "status": po.status}
+    msg_lower = payload.message.lower()
+
+    # 1. Diagnóstico de Quiebres y Reposición (Clara Compras)
+    if any(k in msg_lower for k in ["quiebre", "stockout", "agotad", "reposic", "falta de stock", "critico", "crítico", "sugerid"]) or intent == "stockout_diagnosis":
+        from app.services.mrp_bot_service import diagnose_stockouts
+        fac_id = resolved_facility["id"] if resolved_facility else 1
+        try:
+            diag = diagnose_stockouts(db, facility_id=fac_id)
+            critical_sups = [s for s in diag.get("suppliers", []) if s.get("urgency") == "CRITICAL"]
+            warning_sups = [s for s in diag.get("suppliers", []) if s.get("urgency") == "WARNING"]
+
+            db_context["diagnostico_quiebres_clara"] = {
+                "sucursal_id": fac_id,
+                "total_proveedores_auditados": diag.get("total_suppliers_evaluated", 0),
+                "total_articulos_auditados": diag.get("total_items_evaluated", 0),
+                "proveedores_quiebre_critico_count": diag.get("critical_suppliers_count", 0),
+                "proveedores_en_riesgo_count": diag.get("warning_suppliers_count", 0),
+                "inversion_total_requerida_usd": diag.get("total_capital_required", 0),
+                "top_proveedores_criticos": [
+                    {
+                        "proveedor": s["supplier_name"],
+                        "skus_en_quiebre": s["critical_skus_count"],
+                        "costo_estimado_usd": s["estimated_total_cost"],
+                        "productos_criticos": [
+                            {
+                                "sku": it["sku"],
+                                "producto": it["product_name"],
+                                "stock_actual": it["stock_qty"],
+                                "dias_stock": it["days_of_stock"],
+                                "cajas_sugeridas": it["boxes_needed"],
+                                "empaque": it["pack_name"],
+                                "subtotal_usd": it["estimated_subtotal"]
+                            }
+                            for it in s.get("items", [])[:4]
+                        ]
+                    }
+                    for s in critical_sups[:8]
+                ]
+            }
+        except Exception as ex:
+            print(f"Error executing diagnose_stockouts in chat: {ex}")
+
+    # 2. Compras del mes actual / Volumen financiero
+    if any(k in msg_lower for k in ["mes", "comprado", "monto", "volumen", "gasto", "inversion", "inversión"]):
+        now = datetime.utcnow()
+        start_of_month = datetime(now.year, now.month, 1)
+        orders_month = db.query(PurchaseOrder).filter(PurchaseOrder.created_at >= start_of_month).all()
+        total_usd = sum(float(po.total_amount or 0) for po in orders_month)
+        approved_usd = sum(float(po.total_amount or 0) for po in orders_month if po.status in ['approved', 'sent', 'viewed', 'received'])
+        draft_usd = sum(float(po.total_amount or 0) for po in orders_month if po.status in ['draft', 'pending_approval'])
+        db_context["compras_mes_actual"] = {
+            "mes": now.strftime("%m/%Y"),
+            "total_ordenes_creadas": len(orders_month),
+            "total_monto_usd": round(total_usd, 2),
+            "monto_autorizado_usd": round(approved_usd, 2),
+            "monto_en_borrador_usd": round(draft_usd, 2)
+        }
+
+    # 3. Órdenes de compra recientes
+    if any(k in msg_lower for k in ["ultimas", "últimas", "orden", "ordenes", "órdenes", "recientes"]) or intent == "purchases_orders":
+        pos = db.query(PurchaseOrder, Supplier).join(Supplier).order_by(desc(PurchaseOrder.id)).limit(8).all()
+        db_context["ultimas_ordenes"] = [
+            {
+                "referencia": po.reference or f"ODC-{po.id}",
+                "proveedor": sup.name,
+                "total_usd": float(po.total_amount or 0),
+                "estatus": po.status,
+                "fecha": po.created_at.strftime("%d/%m/%Y") if po.created_at else ""
+            }
             for po, sup in pos
         ]
 
     # Step 3: Analysis & Formatting Response using Gemini
     final_prompt = (
-        "Eres el Asistente Analítico Experto de Inteligencia Artificial para Morpheus ERP.\n"
-        "Tu objetivo es dar una respuesta clara, profesional, y enriquecida con análisis estadísticos de inventarios, compras y ventas sobre la base de datos real del ERP.\n"
-        "Te proveemos el contexto de datos exactos obtenidos de la base de datos para responder a la consulta del usuario. Utiliza EXCLUSIVAMENTE estos números y nombres en tus análisis. Si no hay datos disponibles, indícalo de forma constructiva.\n\n"
+        "Eres Clara, la Especialista Digital de Compras de Morpheus ERP.\n"
+        "Eres profesional, proactiva, analítica y amigable. Tu labor es asesorar al equipo de compras con datos exactos y en tiempo real.\n"
+        "Te proporcionamos los datos reales del ERP para responder a la consulta del usuario. Utiliza estos datos para dar una respuesta completa y ejecutiva.\n\n"
+        "INSTRUCCIONES CLAVE:\n"
+        "1. Si el usuario pregunta por quiebres o proveedores críticos, presenta el resumen del semáforo (🔴 Críticos, 🟡 En Riesgo), menciona los proveedores más urgentes con sus SKUs y costos, y sugiere generar el borrador de orden en la Consola de Clara o pedirte a ti que lo prepares.\n"
+        "2. Rellena 'data_table' con los datos relevantes (ej. tabla de proveedores críticos con columnas 'Proveedor', 'SKUs en Quiebre', 'Costo Estimado USD') para que la interfaz web pinte la tabla automáticamente.\n"
+        "3. Si hay datos numéricos comparables (por ejemplo, los costos estimados de los proveedores críticos o estados de compras), genera un objeto 'chart' tipo 'bar' para que la interfaz muestre el gráfico visual.\n"
+        "4. Responde con formato Markdown claro y profesional (títulos, negritas, viñetas).\n\n"
         "Debes estructurar tu respuesta en un formato JSON plano, con exactamente las siguientes claves:\n"
         "{\n"
-        "  \"text_response\": \"Explicación analítica en español, profesional y detallada, usando formato Markdown (títulos, negritas, viñetas, tablas markdown).\",\n"
+        "  \"text_response\": \"Explicación analítica en español, profesional y detallada, usando formato Markdown.\",\n"
         "  \"data_table\": [ \n"
         "     { \"columna1\": \"valor\", \"columna2\": \"valor\" } \n"
         "  ],\n"
@@ -1372,11 +1417,11 @@ def ai_chat_assistant(
         "     \"datasets\": [\n"
         "        { \"label\": \"Título de la métrica\", \"data\": [10.0, 20.0] }\n"
         "     ]\n"
-        "  } o null si no aplica o no se requiere un gráfico\n"
+        "  } o null si no aplica\n"
         "}\n\n"
         f"Datos del ERP: {json.dumps(db_context)}\n"
         f"Pregunta del usuario: \"{payload.message}\"\n\n"
-        "Genera el objeto JSON limpio. No uses formato markdown de bloques de código en el texto devuelto (escribe directamente el JSON)."
+        "Genera el objeto JSON limpio. No uses bloques markdown envolventes de código (```json)."
     )
 
     try:
@@ -1391,7 +1436,7 @@ def ai_chat_assistant(
             headers={"Content-Type": "application/json"},
             method="POST"
         )
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=20) as response:
             res_data = json.loads(response.read().decode('utf-8'))
             text_content = res_data['candidates'][0]['content']['parts'][0]['text']
             return json.loads(text_content.strip())
