@@ -1,11 +1,14 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, text, or_
 from datetime import datetime, timedelta
 import os
 import urllib.request
 import json
+import io
+from fpdf import FPDF
 from pydantic import BaseModel
 
 from app.api import deps
@@ -307,29 +310,31 @@ def get_advanced_kardex(
 
     return results
 
-@router.get("/pricing-margin")
-def get_pricing_margin_report(
-    db: Session = Depends(deps.get_db),
-    supplier_ids: Optional[List[int]] = Query(None),
-    category_ids: Optional[List[int]] = Query(None),
-    brands: Optional[List[str]] = Query(None),
-    models: Optional[List[str]] = Query(None),
+def _build_pricing_margin_query(
+    db: Session,
+    supplier_ids: Optional[List[int]] = None,
+    category_ids: Optional[List[int]] = None,
+    brands: Optional[List[str]] = None,
+    models: Optional[List[str]] = None,
     attribute_key: Optional[str] = None,
     attribute_value: Optional[str] = None,
     search_term: Optional[str] = None,
-    cost_type: str = "STANDARD",
-    skip: int = 0,
-    limit: int = 100
 ):
-    print("API RECEIVED FILTERS:", {
-        "supplier_ids": supplier_ids,
-        "category_ids": category_ids,
-        "brands": brands,
-        "models": models,
-        "attribute_key": attribute_key,
-        "attribute_value": attribute_value,
-        "search_term": search_term
-    })
+    if hasattr(supplier_ids, 'default'):
+        supplier_ids = None
+    if hasattr(category_ids, 'default'):
+        category_ids = None
+    if hasattr(brands, 'default'):
+        brands = None
+    if hasattr(models, 'default'):
+        models = None
+    if hasattr(attribute_key, 'default'):
+        attribute_key = None
+    if hasattr(attribute_value, 'default'):
+        attribute_value = None
+    if hasattr(search_term, 'default'):
+        search_term = None
+
     # 30-day sales subquery
     thirty_days_ago = datetime.utcnow() - timedelta(days=30)
     sold_sub = db.query(
@@ -417,6 +422,203 @@ def get_pricing_margin_report(
     if supplier_ids:
         query = query.distinct()
 
+    return query
+
+
+def sanitize_pdf_text(text: Optional[str]) -> str:
+    if text is None:
+        return ""
+    text = str(text)
+    replacements = {
+        '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
+        '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u2022': '*',
+        '\u00a0': ' ', '\u200b': '', '\u20ac': 'EUR', '–': '-', '—': '-',
+        '“': '"', '”': '"', '‘': "'", '’': "'"
+    }
+    for orig, rep in replacements.items():
+        text = text.replace(orig, rep)
+    return text.encode('latin-1', 'replace').decode('latin-1')
+
+
+def fit_pdf_text(pdf: FPDF, text: Optional[str], max_w: float) -> str:
+    sanitized = sanitize_pdf_text(text)
+    if pdf.get_string_width(sanitized) <= max_w:
+        return sanitized
+    while len(sanitized) > 0 and pdf.get_string_width(sanitized + "...") > max_w:
+        sanitized = sanitized[:-1]
+    return sanitized + "..."
+
+
+class PricingMarginPDF(FPDF):
+    def __init__(self, filter_info: dict, kpis: dict, emission_date: str, *args, **kwargs):
+        super().__init__(orientation='L', unit='mm', format='Letter', *args, **kwargs)
+        self.set_auto_page_break(auto=True, margin=15)
+        self.set_margins(10, 10, 10)
+        self.alias_nb_pages()
+        self.filter_info = filter_info
+        self.kpis = kpis
+        self.table_started = False
+        self.emission_date = emission_date
+
+    def header(self):
+        if self.page_no() == 1:
+            # Top accent bar (Emerald green)
+            self.set_fill_color(16, 185, 129)
+            self.rect(0, 0, 279.4, 3.5, 'F')
+        elif self.table_started:
+            # Compact header on subsequent pages
+            self.set_font('Helvetica', 'B', 8)
+            self.set_text_color(15, 23, 42)
+            self.cell(140, 5, sanitize_pdf_text('NEO PRICING - Reporte de Precios y Márgenes'), ln=0, align='L')
+            self.set_font('Helvetica', '', 7.5)
+            self.set_text_color(100, 116, 139)
+            self.cell(119, 5, sanitize_pdf_text(f'Emisión: {self.emission_date} | {self.filter_info.get("cost_label", "Costo Estándar")}'), ln=1, align='R')
+            self.ln(1)
+            self.draw_table_header()
+
+    def footer(self):
+        self.set_y(-12)
+        self.set_font('Helvetica', 'I', 7.5)
+        self.set_text_color(148, 163, 184)
+        self.cell(130, 6, sanitize_pdf_text('Neo ERP - Módulo de Pricing y Análisis de Rentabilidad'), border=0, align='L')
+        self.cell(129, 6, sanitize_pdf_text(f'Página {self.page_no()} de {{nb}}'), border=0, align='R')
+
+    def draw_table_header(self):
+        self.set_fill_color(30, 41, 59)  # Slate 800
+        self.set_text_color(255, 255, 255)
+        self.set_draw_color(30, 41, 59)
+        self.set_font('Helvetica', 'B', 7.5)
+        
+        cols = [
+            ('CÓDIGO (SKU)', 32, 'L'),
+            ('PRODUCTO', 92, 'L'),
+            ('COSTO S/IVA', 23, 'R'),
+            ('COSTO C/IVA', 23, 'R'),
+            ('MARGEN %', 21, 'R'),
+            ('PRECIO', 23, 'R'),
+            ('PVP', 23, 'R'),
+            ('VENTAS 30D', 22, 'R')
+        ]
+        for name, w, align in cols:
+            self.cell(w, 6.5, sanitize_pdf_text(name), border=1, ln=0, align=align, fill=True)
+        self.ln(6.5)
+
+    def draw_page1_summary(self):
+        # Header title
+        self.set_xy(10, 8)
+        self.set_font('Helvetica', 'B', 15)
+        self.set_text_color(15, 23, 42)  # Slate 900
+        self.cell(150, 7, sanitize_pdf_text('NEO PRICING - Reporte de Precios y Márgenes'), ln=0, align='L')
+        
+        self.set_font('Helvetica', '', 8)
+        self.set_text_color(100, 116, 139)  # Slate 500
+        self.cell(109, 7, sanitize_pdf_text(f'Fecha/Hora Emisión: {self.emission_date}'), ln=1, align='R')
+        
+        self.set_font('Helvetica', '', 8.5)
+        self.set_text_color(71, 85, 105)
+        self.cell(0, 4.5, sanitize_pdf_text('Auditoría comercial y financiera: márgenes brutos, costos ajustados con IVA y rotación a 30 días.'), ln=1)
+        
+        # Filters box
+        self.ln(2)
+        fy = self.get_y()
+        self.set_fill_color(248, 250, 252)
+        self.set_draw_color(226, 232, 240)
+        self.rect(10, fy, 259, 13, 'DF')
+        
+        self.set_xy(13, fy + 1.5)
+        self.set_font('Helvetica', 'B', 7.5)
+        self.set_text_color(51, 65, 85)
+        self.cell(18, 4.5, 'FILTROS:', ln=0)
+        self.set_font('Helvetica', '', 7.5)
+        self.set_text_color(71, 85, 105)
+        
+        filt1 = f'Costo: {self.filter_info.get("cost_label", "Estándar")}   |   Proveedores: {self.filter_info.get("suppliers", "Todos")}   |   Categorías: {self.filter_info.get("categories", "Todas")}'
+        self.cell(0, 4.5, sanitize_pdf_text(filt1), ln=1)
+        
+        self.set_x(31)
+        filt2 = f'Marcas: {self.filter_info.get("brands", "Todas")}   |   Modelos: {self.filter_info.get("models", "Todos")}   |   Atributos: {self.filter_info.get("attributes", "Ninguno")}   |   Búsqueda: {self.filter_info.get("search", "Ninguna")}'
+        self.cell(0, 4.5, sanitize_pdf_text(filt2), ln=1)
+        
+        # KPI Cards
+        self.set_y(fy + 16)
+        ky = self.get_y()
+        card_w = 83
+        card_h = 16
+        
+        # Card 1: Total productos
+        self.set_fill_color(241, 245, 249)  # Slate 100
+        self.set_draw_color(203, 213, 225)
+        self.rect(10, ky, card_w, card_h, 'DF')
+        self.set_xy(13, ky + 2)
+        self.set_font('Helvetica', 'B', 7)
+        self.set_text_color(100, 116, 139)
+        self.cell(card_w - 6, 3.5, sanitize_pdf_text('TOTAL PRODUCTOS ANALIZADOS'), ln=1)
+        self.set_x(13)
+        self.set_font('Helvetica', 'B', 12)
+        self.set_text_color(15, 23, 42)
+        self.cell(card_w - 6, 7, f'{self.kpis.get("total_products", 0):,}', ln=1)
+        
+        # Card 2: Margen Promedio
+        self.set_fill_color(236, 253, 245)  # Emerald 50
+        self.set_draw_color(167, 243, 208)
+        self.rect(98, ky, card_w, card_h, 'DF')
+        self.set_xy(101, ky + 2)
+        self.set_font('Helvetica', 'B', 7)
+        self.set_text_color(4, 120, 87)
+        self.cell(card_w - 6, 3.5, sanitize_pdf_text('MARGEN PROMEDIO GENERAL'), ln=1)
+        self.set_x(101)
+        self.set_font('Helvetica', 'B', 12)
+        self.set_text_color(6, 95, 70)
+        self.cell(card_w - 6, 7, f'{self.kpis.get("avg_margin", 0):.2f}%', ln=1)
+        
+        # Card 3: Ventas 30d
+        self.set_fill_color(245, 243, 255)  # Purple 50
+        self.set_draw_color(221, 214, 254)
+        self.rect(186, ky, card_w, card_h, 'DF')
+        self.set_xy(189, ky + 2)
+        self.set_font('Helvetica', 'B', 7)
+        self.set_text_color(109, 40, 217)
+        self.cell(card_w - 6, 3.5, sanitize_pdf_text('VENTAS 30 DÍAS ACUMULADAS'), ln=1)
+        self.set_x(189)
+        self.set_font('Helvetica', 'B', 12)
+        self.set_text_color(91, 33, 182)
+        self.cell(card_w - 6, 7, f'{self.kpis.get("total_sold", 0):,.0f} uds', ln=1)
+        
+        self.set_y(ky + card_h + 4)
+
+
+@router.get("/pricing-margin")
+def get_pricing_margin_report(
+    db: Session = Depends(deps.get_db),
+    supplier_ids: Optional[List[int]] = Query(None),
+    category_ids: Optional[List[int]] = Query(None),
+    brands: Optional[List[str]] = Query(None),
+    models: Optional[List[str]] = Query(None),
+    attribute_key: Optional[str] = None,
+    attribute_value: Optional[str] = None,
+    search_term: Optional[str] = None,
+    cost_type: str = "STANDARD",
+    skip: int = 0,
+    limit: int = 100
+):
+    if hasattr(supplier_ids, 'default'): supplier_ids = None
+    if hasattr(category_ids, 'default'): category_ids = None
+    if hasattr(brands, 'default'): brands = None
+    if hasattr(models, 'default'): models = None
+    if hasattr(attribute_key, 'default'): attribute_key = None
+    if hasattr(attribute_value, 'default'): attribute_value = None
+    if hasattr(search_term, 'default'): search_term = None
+
+    query = _build_pricing_margin_query(
+        db=db,
+        supplier_ids=supplier_ids,
+        category_ids=category_ids,
+        brands=brands,
+        models=models,
+        attribute_key=attribute_key,
+        attribute_value=attribute_value,
+        search_term=search_term,
+    )
     query = query.order_by(ProductVariant.id.desc())
 
     total = query.count()
@@ -450,6 +652,184 @@ def get_pricing_margin_report(
         })
 
     return {"data": data, "total": total}
+
+
+@router.get("/pricing-margin/pdf")
+def get_pricing_margin_pdf(
+    db: Session = Depends(deps.get_db),
+    supplier_ids: Optional[List[int]] = Query(None),
+    category_ids: Optional[List[int]] = Query(None),
+    brands: Optional[List[str]] = Query(None),
+    models: Optional[List[str]] = Query(None),
+    attribute_key: Optional[str] = None,
+    attribute_value: Optional[str] = None,
+    search_term: Optional[str] = None,
+    cost_type: str = "STANDARD",
+    limit: int = 5000,
+):
+    if hasattr(supplier_ids, 'default'): supplier_ids = None
+    if hasattr(category_ids, 'default'): category_ids = None
+    if hasattr(brands, 'default'): brands = None
+    if hasattr(models, 'default'): models = None
+    if hasattr(attribute_key, 'default'): attribute_key = None
+    if hasattr(attribute_value, 'default'): attribute_value = None
+    if hasattr(search_term, 'default'): search_term = None
+    query = _build_pricing_margin_query(
+        db=db,
+        supplier_ids=supplier_ids,
+        category_ids=category_ids,
+        brands=brands,
+        models=models,
+        attribute_key=attribute_key,
+        attribute_value=attribute_value,
+        search_term=search_term,
+    )
+    query = query.order_by(ProductVariant.id.desc())
+    results = query.limit(limit).all()
+
+    cost_labels = {
+        "STANDARD": "Costo Estándar",
+        "AVERAGE": "Costo Promedio",
+        "REPLACEMENT": "Costo de Reposición",
+        "LAST": "Último Costo"
+    }
+    cost_label = cost_labels.get(cost_type, "Costo Estándar")
+
+    rows_data = []
+    total_margin = 0.0
+    total_sold = 0.0
+
+    for variant, product, tribute, qty_sold in results:
+        if cost_type == "AVERAGE":
+            cost_sin_iva = float(variant.average_cost or 0)
+        elif cost_type == "REPLACEMENT":
+            cost_sin_iva = float(variant.replacement_cost or 0)
+        elif cost_type == "LAST":
+            cost_sin_iva = float(variant.last_cost or 0)
+        else:
+            cost_sin_iva = float(variant.standard_cost or 0)
+
+        tax_rate = float(tribute.rate or 0) if tribute else 0.0
+        cost_con_iva = cost_sin_iva * (1.0 + tax_rate / 100.0)
+        precio_venta = float(variant.sales_price or 0)
+        margin = ((precio_venta - cost_sin_iva) / precio_venta * 100.0) if precio_venta > 0 else 0.0
+        pvp = precio_venta * (1.0 + (tax_rate / 100.0 if tribute and tribute.rate is not None else 0.16))
+        qty_num = float(qty_sold or 0)
+
+        total_margin += margin
+        total_sold += qty_num
+
+        rows_data.append({
+            "sku": variant.sku or f"VR-{variant.id}",
+            "producto": product.name or "Sin nombre",
+            "costo_sin_iva": cost_sin_iva,
+            "costo_con_iva": cost_con_iva,
+            "margen": margin,
+            "precio_venta": precio_venta,
+            "pvp": pvp,
+            "qty_sold": qty_num
+        })
+
+    count_rows = len(rows_data)
+    avg_margin = (total_margin / count_rows) if count_rows > 0 else 0.0
+
+    # Human-readable filter descriptions
+    supplier_desc = "Todos"
+    if supplier_ids:
+        if isinstance(supplier_ids, (int, str)):
+            supplier_ids = [int(supplier_ids)]
+        sups = db.query(Supplier.name).filter(Supplier.id.in_(supplier_ids)).all()
+        s_names = [s[0] for s in sups if s[0]]
+        if s_names:
+            supplier_desc = ", ".join(s_names[:3]) + (f" (+{len(s_names)-3})" if len(s_names) > 3 else "")
+
+    category_desc = "Todas"
+    if category_ids:
+        if isinstance(category_ids, (int, str)):
+            category_ids = [int(category_ids)]
+        cats = db.query(Category.name).filter(Category.id.in_(category_ids)).all()
+        c_names = [c[0] for c in cats if c[0]]
+        if c_names:
+            category_desc = ", ".join(c_names[:3]) + (f" (+{len(c_names)-3})" if len(c_names) > 3 else "")
+
+    brands_desc = ", ".join(brands[:3]) if brands else "Todas"
+    models_desc = ", ".join(models[:3]) if models else "Todos"
+    attr_desc = f"{attribute_key}: {attribute_value}" if (attribute_key and attribute_value) else "Ninguno"
+    search_desc = search_term if search_term else "Ninguna"
+
+    filter_info = {
+        "cost_label": cost_label,
+        "suppliers": supplier_desc,
+        "categories": category_desc,
+        "brands": brands_desc,
+        "models": models_desc,
+        "attributes": attr_desc,
+        "search": search_desc
+    }
+    kpis = {
+        "total_products": count_rows,
+        "avg_margin": avg_margin,
+        "total_sold": total_sold
+    }
+
+    emission_date = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    pdf = PricingMarginPDF(filter_info, kpis, emission_date)
+    pdf.add_page()
+    pdf.draw_page1_summary()
+    pdf.table_started = True
+    pdf.draw_table_header()
+
+    if not rows_data:
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_text_color(100, 116, 139)
+        pdf.cell(259, 10, sanitize_pdf_text("No se encontraron productos con los filtros seleccionados."), border='B', align='C')
+    else:
+        for idx, r in enumerate(rows_data):
+            fill = (idx % 2 == 1)
+            if fill:
+                pdf.set_fill_color(248, 250, 252)  # Slate 50
+            else:
+                pdf.set_fill_color(255, 255, 255)
+            pdf.set_text_color(30, 41, 59)
+            pdf.set_draw_color(226, 232, 240)
+            pdf.set_font("Helvetica", "", 7.5)
+
+            sku_str = fit_pdf_text(pdf, r["sku"], 30)
+            prod_str = fit_pdf_text(pdf, r["producto"], 90)
+
+            pdf.cell(32, 5.5, sku_str, border='B', fill=True)
+            pdf.cell(92, 5.5, prod_str, border='B', fill=True)
+            pdf.cell(23, 5.5, f"${r['costo_sin_iva']:,.2f}", border='B', align='R', fill=True)
+            pdf.cell(23, 5.5, f"${r['costo_con_iva']:,.2f}", border='B', align='R', fill=True)
+
+            if r["margen"] >= 25.0:
+                pdf.set_text_color(4, 120, 87)
+            elif r["margen"] < 15.0:
+                pdf.set_text_color(190, 18, 60)
+            else:
+                pdf.set_text_color(30, 41, 59)
+            pdf.cell(21, 5.5, f"{r['margen']:.2f}%", border='B', align='R', fill=True)
+
+            pdf.set_text_color(30, 41, 59)
+            pdf.cell(23, 5.5, f"${r['precio_venta']:,.2f}", border='B', align='R', fill=True)
+            pdf.cell(23, 5.5, f"${r['pvp']:,.2f}", border='B', align='R', fill=True)
+            pdf.cell(22, 5.5, f"{r['qty_sold']:,.0f}", border='B', align='R', fill=True)
+            pdf.ln(5.5)
+
+    pdf_bytes = pdf.output(dest='S')
+    if isinstance(pdf_bytes, str):
+        pdf_bytes = pdf_bytes.encode('latin-1', 'replace')
+    else:
+        pdf_bytes = bytes(pdf_bytes)
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "attachment; filename=reporte_precios_margenes.pdf"
+        }
+    )
+
 
 @router.post("/ai-chat")
 def ai_chat_assistant(

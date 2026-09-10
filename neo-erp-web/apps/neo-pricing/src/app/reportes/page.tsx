@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
+import * as XLSX from 'xlsx';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { Button } from 'primereact/button';
@@ -12,6 +13,8 @@ import { ReportService } from '@/services/report.service';
 
 export default function PricingMarginReportPage() {
   const [loading, setLoading] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [data, setData] = useState<any[]>([]);
   const [totalRecords, setTotalRecords] = useState(0);
   
@@ -121,6 +124,112 @@ export default function PricingMarginReportPage() {
     setLazyParams(event);
   };
 
+  const handleExportExcel = async () => {
+    try {
+      setExportingExcel(true);
+      const brandArray = brands ? brands.split(',').map(b => b.trim()).filter(Boolean) : undefined;
+      const modelArray = models ? models.split(',').map(m => m.trim()).filter(Boolean) : undefined;
+
+      const res = await ReportService.getPricingMarginReport({
+        supplier_ids: suppliers,
+        category_ids: categories,
+        brands: brandArray,
+        models: modelArray,
+        attribute_key: attrKey || undefined,
+        attribute_value: attrValue || undefined,
+        search_term: searchTerm || undefined,
+        cost_type: costType,
+        skip: 0,
+        limit: 10000
+      });
+
+      const exportData = res?.data || [];
+      if (exportData.length === 0) {
+        alert('No hay datos para exportar.');
+        return;
+      }
+
+      // Format clean data with real numeric types (not plain strings)
+      const excelRows = exportData.map((item: any) => {
+        const costSinIva = Number(item.costo_sin_iva || 0);
+        const costConIva = Number(item.costo_con_iva || 0);
+        const margen = Number(item.margen || 0);
+        const precio = Number(item.precio_venta || 0);
+        const pvp = precio * 1.16;
+        const ventas = Number(item.unidades_vendidas || 0);
+
+        return {
+          'Código (SKU)': String(item.codigo || ''),
+          'Producto': String(item.producto || ''),
+          'Costo sin IVA': Math.round(costSinIva * 100) / 100,
+          'Costo con IVA': Math.round(costConIva * 100) / 100,
+          'Margen %': Math.round(margen * 100) / 100,
+          'Precio': Math.round(precio * 100) / 100,
+          'PVP': Math.round(pvp * 100) / 100,
+          'Ventas (30 días)': Math.round(ventas * 100) / 100,
+        };
+      });
+
+      const worksheet = XLSX.utils.json_to_sheet(excelRows);
+      
+      // Auto-fit column widths
+      worksheet['!cols'] = [
+        { wch: 16 }, // Código (SKU)
+        { wch: 45 }, // Producto
+        { wch: 15 }, // Costo sin IVA
+        { wch: 15 }, // Costo con IVA
+        { wch: 12 }, // Margen %
+        { wch: 14 }, // Precio
+        { wch: 14 }, // PVP
+        { wch: 18 }, // Ventas (30 días)
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Precios y Márgenes');
+
+      const fileName = `reporte_precios_margenes_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      XLSX.writeFile(workbook, fileName);
+    } catch (err) {
+      console.error('Error exportando a Excel:', err);
+      alert('Error al exportar a Excel. Por favor intente nuevamente.');
+    } finally {
+      setExportingExcel(false);
+    }
+  };
+
+  const handleExportPDF = async () => {
+    try {
+      setExportingPdf(true);
+      const brandArray = brands ? brands.split(',').map(b => b.trim()).filter(Boolean) : undefined;
+      const modelArray = models ? models.split(',').map(m => m.trim()).filter(Boolean) : undefined;
+
+      const blob = await ReportService.getPricingMarginReportPdf({
+        supplier_ids: suppliers,
+        category_ids: categories,
+        brands: brandArray,
+        models: modelArray,
+        attribute_key: attrKey || undefined,
+        attribute_value: attrValue || undefined,
+        search_term: searchTerm || undefined,
+        cost_type: costType,
+      });
+
+      const url = window.URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `reporte_precios_margenes_${new Date().toISOString().slice(0, 10)}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error exportando a PDF:', err);
+      alert('Error al exportar a PDF. Por favor intente nuevamente.');
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
   const handleExportCSV = async () => {
     try {
       setLoading(true);
@@ -186,13 +295,33 @@ export default function PricingMarginReportPage() {
           </h1>
           <p className="text-slate-500 mt-1 font-medium">Auditoría en tiempo real de márgenes de ganancia, costos ajustados con IVA y volúmenes de venta de los últimos 30 días.</p>
         </div>
-        <Button
-          label="Exportar CSV"
-          icon="pi pi-file-excel"
-          onClick={handleExportCSV}
-          disabled={data.length === 0 || loading}
-          className="!bg-emerald-600 hover:!bg-emerald-700 border-none px-5 py-2.5 rounded-xl font-bold shadow-md shadow-emerald-100 transition-all"
-        />
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            label={exportingExcel ? 'Exportando...' : 'Exportar Excel (.xlsx)'}
+            icon="pi pi-file-excel"
+            loading={exportingExcel}
+            onClick={handleExportExcel}
+            disabled={totalRecords === 0 || loading || exportingExcel || exportingPdf}
+            className="!bg-emerald-600 hover:!bg-emerald-700 text-white border-none px-4 py-2.5 rounded-xl font-bold shadow-md shadow-emerald-100 transition-all text-xs sm:text-sm"
+          />
+          <Button
+            label={exportingPdf ? 'Generando PDF...' : 'Exportar PDF'}
+            icon="pi pi-file-pdf"
+            loading={exportingPdf}
+            onClick={handleExportPDF}
+            disabled={totalRecords === 0 || loading || exportingExcel || exportingPdf}
+            className="!bg-rose-600 hover:!bg-rose-700 text-white border-none px-4 py-2.5 rounded-xl font-bold shadow-md shadow-rose-100 transition-all text-xs sm:text-sm"
+          />
+          <Button
+            label="Exportar CSV"
+            icon="pi pi-file"
+            onClick={handleExportCSV}
+            disabled={totalRecords === 0 || loading || exportingExcel || exportingPdf}
+            outlined
+            severity="secondary"
+            className="border border-slate-300 text-slate-700 hover:bg-slate-100 px-3 py-2.5 rounded-xl font-semibold transition-all text-xs sm:text-sm"
+          />
+        </div>
       </div>
 
       {/* KPI Stats Cards */}
