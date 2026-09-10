@@ -2,6 +2,7 @@
 import { usePathname } from 'next/navigation';
 import { AppSidebar } from './AppSidebar';
 import { AppTopbar } from './AppTopbar';
+import { ClaraCopilot } from '../clara/ClaraCopilot';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -18,7 +19,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-50 font-sans text-slate-800 selection:bg-blue-200">
+    <div className="flex min-h-screen bg-slate-50 font-sans text-slate-800 selection:bg-blue-200 relative">
       <AppSidebar />
       <div className="flex-1 flex flex-col min-w-0 transition-all duration-300">
         <AppTopbar />
@@ -26,6 +27,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+      <ClaraCopilot />
     </div>
   );
 }

@@ -8,6 +8,19 @@ export function AppTopbar() {
 
 
       <div className="flex items-center gap-3 ml-auto">
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent('toggle-digital-copilot'))}
+          className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 hover:bg-emerald-100/80 border border-emerald-200/70 text-xs font-bold transition-all duration-200 shadow-2xs hover:shadow-xs group active:scale-95 cursor-pointer"
+          title="Abrir Asistente Clara (Alt + C)"
+        >
+          <div className="relative flex items-center justify-center">
+            <i className="pi pi-sparkles text-emerald-600 text-xs group-hover:rotate-12 transition-transform"></i>
+            <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></span>
+          </div>
+          <span className="tracking-wide">Clara Copilot</span>
+        </button>
+
         <AppSwitcher />
         <button className="relative w-10 h-10 flex items-center justify-center text-gray-500 hover:bg-blue-50 hover:text-blue-600 rounded-full transition-all duration-200 active:scale-95">
           <i className="pi pi-bell text-xl"></i>

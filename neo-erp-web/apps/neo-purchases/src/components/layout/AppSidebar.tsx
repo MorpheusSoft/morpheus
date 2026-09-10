@@ -34,9 +34,6 @@ function AppSidebarContent() {
   const analyticsItems = [
     { label: 'Visión General', icon: 'pi pi-chart-pie', href: '/' },
     { label: 'Sugeridos de Reposición', icon: 'pi pi-shopping-bag', href: '/suggestions' },
-    { label: 'Ventas Perdidas por Quiebre', icon: 'pi pi-exclamation-triangle', href: '/analytics/lost-sales' },
-    { label: 'Reportes de Compras', icon: 'pi pi-chart-bar', href: '/reports' },
-    { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
   ];
 
   const operationsItems = [
