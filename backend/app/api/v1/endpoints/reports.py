@@ -1328,7 +1328,7 @@ def ai_chat_assistant(
     # 1. Diagnóstico de Quiebres y Reposición (Clara Compras)
     if any(k in msg_lower for k in ["quiebre", "stockout", "agotad", "reposic", "falta de stock", "critico", "crítico", "sugerid"]) or intent == "stockout_diagnosis":
         from app.services.mrp_bot_service import diagnose_stockouts
-        fac_id = resolved_facility["id"] if resolved_facility else 1
+        fac_id = resolved_facility["id"] if resolved_facility else None
         try:
             diag = diagnose_stockouts(db, facility_id=fac_id)
             critical_sups = [s for s in diag.get("suppliers", []) if s.get("urgency") == "CRITICAL"]

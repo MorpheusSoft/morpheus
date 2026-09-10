@@ -48,7 +48,7 @@ export default function PurchasesDashboardPage() {
     try {
       const [ceoRes, diagRes, ordersRes] = await Promise.allSettled([
         api.get('/dashboard/ceo-inbox'),
-        api.get('/mrp/diagnosis?facility_id=1'),
+        api.get('/mrp/diagnosis'),
         api.get('/purchase-orders/?limit=8'),
       ]);
 
