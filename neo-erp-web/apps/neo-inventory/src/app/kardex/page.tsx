@@ -160,61 +160,94 @@ export default function KardexPage() {
     return <span>{rowData.type}</span>;
   };
 
+  const formatQty = (value: number | undefined | null, isDecimal: boolean) => {
+    if (value === undefined || value === null) return '0';
+    const num = Number(value);
+    if (isNaN(num)) return '0';
+    if (!isDecimal) {
+      return Math.round(num).toLocaleString('es-VE');
+    }
+    return new Intl.NumberFormat('es-VE', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 3,
+    }).format(Math.round(num * 1000) / 1000);
+  };
+
+  const exportProductCSV = (result: any) => {
+    const rows: string[] = [
+      "SUCURSAL,ALMACEN,FECHA,DOCUMENTO,TIPO,DETALLE_MOVIMIENTO,ENTRADAS,SALIDAS,SALDO,UNIDAD,COSTO"
+    ];
+    if (result.facilities && result.facilities.length > 0) {
+      result.facilities.forEach((fac: any) => {
+        fac.warehouses.forEach((wh: any) => {
+          wh.history.forEach((h: any) => {
+            rows.push(
+              `"${fac.facility_name}","${wh.warehouse_name}","${h.date}","${h.reference}","${h.type}","${h.flow_display || ''}",${h.qty_in},${h.qty_out},${h.balance},"${result.uom || 'UND'}",${h.cost}`
+            );
+          });
+        });
+      });
+    } else if (result.history) {
+      result.history.forEach((h: any) => {
+        rows.push(
+          `"${h.facility_name || ''}","${h.src_warehouse || h.dest_warehouse || ''}","${h.date}","${h.reference}","${h.type}","${h.flow_display || ''}",${h.qty_in},${h.qty_out},${h.balance},"${result.uom || 'UND'}",${h.cost}`
+        );
+      });
+    }
+    const csvContent = "data:text/csv;charset=utf-8," + rows.join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `kardex_${result.sku}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const flowLocationTemplate = (rowData: any) => {
     if (rowData.flow_type === 'INITIAL' || rowData.type === 'INITIAL') {
       return (
-        <div className="flex flex-col">
-          <span className="font-semibold text-slate-700 text-xs flex items-center gap-1.5">
-            <i className="pi pi-bookmark text-slate-400 text-xs"></i>
-            Saldo Inicial
-          </span>
-          <span className="text-[10px] text-slate-400">Consolidado al inicio</span>
-        </div>
+        <span className="font-semibold text-slate-500 text-xs flex items-center gap-1.5">
+          <i className="pi pi-bookmark text-slate-400 text-xs"></i>
+          Saldo Inicial
+        </span>
       );
     }
 
     const isIn = rowData.flow_type === 'IN';
     const isOut = rowData.flow_type === 'OUT';
-    const isTransfer = rowData.flow_type === 'TRANSFER';
+    const isInternal = rowData.flow_type === 'INTERNAL';
 
     return (
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-0.5">
         <div className="flex items-center gap-1.5 flex-wrap">
           {isIn && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-              <i className="pi pi-arrow-down-left text-[10px] text-emerald-600"></i>
-              Entrada a: <strong className="text-emerald-900">{rowData.dest_warehouse || rowData.location_name || 'Almacén'}</strong>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <i className="pi pi-arrow-down-left text-[10px]"></i>
+              {rowData.flow_display}
             </span>
           )}
           {isOut && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
-              <i className="pi pi-arrow-up-right text-[10px] text-rose-600"></i>
-              Salida de: <strong className="text-rose-900">{rowData.src_warehouse || rowData.location_name || 'Almacén'}</strong>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+              <i className="pi pi-arrow-up-right text-[10px]"></i>
+              {rowData.flow_display}
             </span>
           )}
-          {isTransfer && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-              <i className="pi pi-arrows-h text-[10px] text-blue-600"></i>
-              {rowData.src_warehouse || 'Origen'} <span className="text-blue-400">➔</span> {rowData.dest_warehouse || 'Destino'}
+          {isInternal && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+              <i className="pi pi-arrows-h text-[10px]"></i>
+              {rowData.flow_display}
             </span>
           )}
-          {!isIn && !isOut && !isTransfer && (
-            <span className="text-xs text-slate-700 font-medium">{rowData.location_name || 'N/A'}</span>
+          {!isIn && !isOut && !isInternal && (
+            <span className="text-xs text-slate-700 font-medium">{rowData.flow_display || rowData.location_name || 'N/A'}</span>
           )}
         </div>
-        <div className="flex items-center gap-1.5 text-[11px] text-slate-500 font-medium pl-0.5">
-          {rowData.facility_name && (
-            <span className="text-slate-500 flex items-center gap-1">
-              <i className="pi pi-building text-[10px] text-slate-400"></i>
-              {rowData.facility_name}
-            </span>
-          )}
-          {(rowData.dest_location || rowData.src_location) && (
-            <span className="text-slate-400">
-              • Ubic: {rowData.dest_location || rowData.src_location}
-            </span>
-          )}
-        </div>
+        {(rowData.dest_location || rowData.src_location) && (
+          <span className="text-[11px] text-slate-400 pl-0.5">
+            Ubicación: {rowData.dest_location || rowData.src_location}
+          </span>
+        )}
       </div>
     );
   };
@@ -225,7 +258,7 @@ export default function KardexPage() {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <h2 className="text-2xl font-extrabold text-slate-900 m-0 tracking-tight">Reporte Kardex</h2>
-            <p className="text-slate-500 text-sm mt-1 font-medium">Trazabilidad de Entradas, Salidas y Saldos por Producto</p>
+            <p className="text-slate-500 text-sm mt-1 font-medium">Trazabilidad segmentada por Localidad y Almacén</p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <Button icon="pi pi-filter-slash" rounded text severity="secondary" onClick={clearFilters} tooltip="Limpiar Filtros" />
@@ -315,7 +348,7 @@ export default function KardexPage() {
 
           <style dangerouslySetInnerHTML={{__html: `
             .kardex-datatable .p-datatable-wrapper {
-              border-radius: 1rem;
+              border-radius: 0.75rem;
               overflow-x: auto;
             }
             .kardex-datatable .p-datatable-thead > tr > th {
@@ -326,12 +359,12 @@ export default function KardexPage() {
               text-transform: uppercase;
               font-size: 0.65rem;
               letter-spacing: 0.05em;
-              padding: 0.75rem 0.5rem !important;
+              padding: 0.65rem 0.5rem !important;
             }
             .kardex-datatable .p-datatable-tbody > tr > td {
               border-bottom: 1px solid #f1f5f9 !important;
-              padding: 0.75rem 0.5rem !important;
-              font-size: 0.85rem;
+              padding: 0.65rem 0.5rem !important;
+              font-size: 0.82rem;
             }
           `}} />
 
@@ -341,45 +374,134 @@ export default function KardexPage() {
               <p className="font-medium text-lg">Selecciona al menos un producto y presiona Generar Kardex.</p>
             </div>
           ) : (
-            <div className="flex flex-col gap-8">
-              {kardexResults.map((result: any, idx: number) => (
-                <div key={result.product_id} className="border border-slate-200 rounded-[1.5rem] p-4 bg-slate-50/30">
-                  <div className="flex justify-between items-center mb-4 px-2">
+            <div className="flex flex-col gap-10">
+              {kardexResults.map((result: any) => (
+                <div key={result.product_id} className="border border-slate-200 rounded-[2rem] p-5 md:p-6 bg-slate-50/50 flex flex-col gap-6 shadow-sm">
+                  {/* Product Header Card */}
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
                     <div>
-                      <h3 className="font-extrabold text-lg text-slate-800 m-0">[{result.sku}] {result.product_name}</h3>
-                      <p className="text-xs text-slate-500 font-medium">Saldo Inicial: <span className="text-blue-600 font-bold">{result.initial_balance} U</span> | Saldo Final: <span className="text-blue-600 font-bold">{result.final_balance} U</span></p>
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <h3 className="font-extrabold text-xl text-slate-900 m-0 tracking-tight">
+                          [{result.sku}] {result.product_name}
+                        </h3>
+                        <span className={`px-2.5 py-0.5 rounded-lg text-xs font-black border ${result.is_decimal ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-blue-50 text-blue-800 border-blue-200'}`}>
+                          {result.uom || 'UND'} {result.is_decimal ? '(Medida Ponderable)' : '(Por Unidad)'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 md:gap-4 text-xs font-semibold text-slate-500 mt-2.5 flex-wrap">
+                        <span>Saldo Inicial Consolidado: <strong className="text-slate-700">{formatQty(result.total_initial_balance, result.is_decimal)} {result.uom}</strong></span>
+                        <span className="text-slate-300">•</span>
+                        <span>Total Entradas: <strong className="text-emerald-600">+{formatQty(result.total_in, result.is_decimal)}</strong></span>
+                        <span className="text-slate-300">•</span>
+                        <span>Total Salidas: <strong className="text-rose-600">-{formatQty(result.total_out, result.is_decimal)}</strong></span>
+                        <span className="text-slate-300">•</span>
+                        <span>Saldo Final Consolidado: <strong className="text-blue-700 font-black">{formatQty(result.total_final_balance, result.is_decimal)} {result.uom}</strong></span>
+                      </div>
                     </div>
-                    <Button icon="pi pi-file-excel" severity="success" text rounded tooltip="Exportar CSV" onClick={() => {
-                        const csvContent = "data:text/csv;charset=utf-8," 
-                          + "FECHA,DOCUMENTO,TIPO,FLUJO,SUCURSAL,ALMACEN_ORIGEN,ALMACEN_DESTINO,ENTRADAS,SALIDAS,SALDO,COSTO\n"
-                          + result.history.map((e: any) => `"${e.date}","${e.reference}","${e.type}","${e.flow_display || ''}","${e.facility_name || ''}","${e.src_warehouse || ''}","${e.dest_warehouse || ''}",${e.qty_in},${e.qty_out},${e.balance},${e.cost}`).join("\n");
-                        const encodedUri = encodeURI(csvContent);
-                        const link = document.createElement("a");
-                        link.setAttribute("href", encodedUri);
-                        link.setAttribute("download", `kardex_${result.sku}.csv`);
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                    }} />
+                    
+                    <Button
+                      icon="pi pi-file-excel"
+                      label="Exportar CSV"
+                      severity="success"
+                      size="small"
+                      rounded
+                      onClick={() => exportProductCSV(result)}
+                    />
                   </div>
-                  
-                  <DataTable
-                    value={result.history}
-                    loading={loading}
-                    paginator
-                    rows={20}
-                    className="kardex-datatable bg-white rounded-xl shadow-sm border border-slate-100"
-                    emptyMessage="No hay movimientos en este rango de fechas."
-                  >
-                    <Column field="date" header="FECHA" body={(r) => formatDate(r.date)} style={{ width: '11%' }}></Column>
-                    <Column field="reference" header="DOCUMENTO" style={{ width: '13%' }}></Column>
-                    <Column field="type" header="TIPO" body={typeTemplate} style={{ width: '9%' }}></Column>
-                    <Column field="flow_display" header="FLUJO / ALMACÉN" body={flowLocationTemplate} style={{ width: '25%' }}></Column>
-                    <Column field="qty_in" header="ENTRADAS" className="font-bold text-emerald-600 tabular-nums" style={{ width: '10%' }}></Column>
-                    <Column field="qty_out" header="SALIDAS" className="font-bold text-rose-600 tabular-nums" style={{ width: '10%' }}></Column>
-                    <Column field="balance" header="SALDO" className="font-black text-blue-700 tabular-nums" style={{ width: '10%' }}></Column>
-                    <Column field="cost" header="COSTO UNIT" body={(r) => formatCurrency(r.cost)} className="text-slate-500 text-xs" style={{ width: '12%' }}></Column>
-                  </DataTable>
+
+                  {/* Segmented by Facility and Warehouse */}
+                  {(!result.facilities || result.facilities.length === 0) ? (
+                    <div className="bg-white rounded-2xl p-8 text-center text-slate-400 border border-dashed border-slate-200">
+                      <i className="pi pi-inbox text-3xl mb-2 opacity-50"></i>
+                      <p className="font-medium text-sm m-0">No se registraron movimientos ni saldos para este producto en los filtros seleccionados.</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-6">
+                      {result.facilities.map((fac: any) => (
+                        <div key={fac.facility_id} className="flex flex-col gap-3">
+                          {/* Facility Title */}
+                          <div className="flex items-center gap-2.5 px-2 pt-1">
+                            <div className="w-8 h-8 rounded-xl bg-slate-800 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                              <i className="pi pi-building text-xs"></i>
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-black text-slate-800 m-0 uppercase tracking-wider">
+                                SUCURSAL: {fac.facility_name}
+                              </h4>
+                              <span className="text-[11px] text-slate-400 font-medium">
+                                {fac.warehouses.length} {fac.warehouses.length === 1 ? 'almacén con actividad' : 'almacenes con actividad'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Warehouses inside this facility */}
+                          <div className="flex flex-col gap-5 pl-2 md:pl-4 border-l-2 border-slate-200/70 ml-3">
+                            {fac.warehouses.map((wh: any) => (
+                              <div key={wh.warehouse_id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                {/* Warehouse Subheader */}
+                                <div className="bg-slate-50/80 border-b border-slate-200 px-5 py-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <i className="pi pi-box text-cyan-600 font-bold text-base"></i>
+                                    <span className="font-black text-sm text-slate-800">
+                                      {wh.warehouse_name}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-3 text-xs font-semibold flex-wrap">
+                                    <span className="text-slate-500">Saldo Inicial: <strong className="text-slate-700">{formatQty(wh.initial_balance, result.is_decimal)} {result.uom}</strong></span>
+                                    <span className="text-emerald-600 font-bold">+{formatQty(wh.total_in, result.is_decimal)}</span>
+                                    <span className="text-rose-600 font-bold">-{formatQty(wh.total_out, result.is_decimal)}</span>
+                                    <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-0.5 rounded-md font-black">
+                                      Saldo Final: {formatQty(wh.final_balance, result.is_decimal)} {result.uom}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Table of Movements for this Warehouse */}
+                                <DataTable
+                                  value={wh.history}
+                                  loading={loading}
+                                  paginator
+                                  rows={15}
+                                  className="kardex-datatable"
+                                  emptyMessage="No hay movimientos registrados para este almacén."
+                                >
+                                  <Column field="date" header="FECHA" body={(r) => formatDate(r.date)} style={{ width: '13%' }}></Column>
+                                  <Column field="reference" header="DOCUMENTO" style={{ width: '15%' }}></Column>
+                                  <Column field="type" header="TIPO" body={typeTemplate} style={{ width: '10%' }}></Column>
+                                  <Column field="flow_display" header="DETALLE / MOVIMIENTO" body={flowLocationTemplate} style={{ width: '26%' }}></Column>
+                                  <Column
+                                    field="qty_in"
+                                    header="ENTRADAS"
+                                    body={(r) => r.qty_in > 0 ? <span className="font-bold text-emerald-600 tabular-nums">+{formatQty(r.qty_in, result.is_decimal)}</span> : <span className="text-slate-300">-</span>}
+                                    style={{ width: '10%' }}
+                                  ></Column>
+                                  <Column
+                                    field="qty_out"
+                                    header="SALIDAS"
+                                    body={(r) => r.qty_out > 0 ? <span className="font-bold text-rose-600 tabular-nums">-{formatQty(r.qty_out, result.is_decimal)}</span> : <span className="text-slate-300">-</span>}
+                                    style={{ width: '10%' }}
+                                  ></Column>
+                                  <Column
+                                    field="balance"
+                                    header="SALDO"
+                                    body={(r) => <span className="font-black text-blue-700 tabular-nums">{formatQty(r.balance, result.is_decimal)}</span>}
+                                    style={{ width: '10%' }}
+                                  ></Column>
+                                  <Column
+                                    field="cost"
+                                    header="COSTO UNIT"
+                                    body={(r) => formatCurrency(r.cost)}
+                                    className="text-slate-500 text-xs tabular-nums"
+                                    style={{ width: '10%' }}
+                                  ></Column>
+                                </DataTable>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

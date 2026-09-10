@@ -212,15 +212,15 @@ def get_advanced_kardex(
                 d.facility_id as src_facility_id,
                 NULL as dest_facility_id,
                 f.name as src_facility_name,
-                'CLIENTE' as dest_facility_name,
+                NULL as dest_facility_name,
                 w_def.id as src_warehouse_id,
                 NULL as dest_warehouse_id,
                 COALESCE(w_def.name, f.name || ' - VENTAS') as src_warehouse_name,
-                'CLIENTE FINAL' as dest_warehouse_name,
+                NULL as dest_warehouse_name,
                 'MOSTRADOR' as src_location_name,
                 'CLIENTE' as dest_location_name,
                 f.name || ' - VENTAS' as src_name,
-                'CLIENTE - DESTINO' as dest_name
+                'CLIENTE FINAL' as dest_name
             FROM sales.document_lines dl
             JOIN sales.documents d ON d.id = dl.document_id
             JOIN core.facilities f ON f.id = d.facility_id
@@ -234,31 +234,74 @@ def get_advanced_kardex(
     if target_warehouse_ids:
         t_wh_ids_str = ",".join(map(str, target_warehouse_ids))
         scope_condition = f"(src_warehouse_id IN ({t_wh_ids_str}) OR dest_warehouse_id IN ({t_wh_ids_str}))"
-        initial_in_cond = f"dest_warehouse_id IN ({t_wh_ids_str}) AND (src_warehouse_id IS NULL OR src_warehouse_id NOT IN ({t_wh_ids_str}))"
-        initial_out_cond = f"src_warehouse_id IN ({t_wh_ids_str}) AND (dest_warehouse_id IS NULL OR dest_warehouse_id NOT IN ({t_wh_ids_str}))"
     else:
         scope_condition = f"(src_facility_id IN ({tf_ids_str}) OR dest_facility_id IN ({tf_ids_str}))"
-        initial_in_cond = f"dest_facility_id IN ({tf_ids_str}) AND (src_facility_id IS NULL OR src_facility_id NOT IN ({tf_ids_str}))"
-        initial_out_cond = f"src_facility_id IN ({tf_ids_str}) AND (dest_facility_id IS NULL OR dest_facility_id NOT IN ({tf_ids_str}))"
 
-    initial_balances = {p_id: 0.0 for p_id in filters.product_ids}
+    # Warehouses in scope
+    wh_query = db.query(Warehouse, Facility).join(Facility, Warehouse.facility_id == Facility.id)
+    if target_warehouse_ids:
+        wh_query = wh_query.filter(Warehouse.id.in_(target_warehouse_ids))
+    elif target_facility_ids:
+        wh_query = wh_query.filter(Warehouse.facility_id.in_(target_facility_ids))
 
+    wh_fac_list = wh_query.order_by(Facility.name.asc(), Warehouse.name.asc()).all()
+    warehouse_info = {}
+    facility_order = []
+    facility_warehouses = {}
+    facility_names = {}
+
+    for w, f in wh_fac_list:
+        warehouse_info[w.id] = {
+            "id": w.id,
+            "name": w.name,
+            "facility_id": f.id,
+            "facility_name": f.name
+        }
+        if f.id not in facility_order:
+            facility_order.append(f.id)
+            facility_warehouses[f.id] = []
+            facility_names[f.id] = f.name
+        facility_warehouses[f.id].append(w.id)
+
+    # Initial balances per (product_id, warehouse_id)
+    initial_balances = {}
     if filters.date_from:
         sql_initial = text(base_cte + f"""
             SELECT 
                 product_id,
-                SUM(CASE WHEN {initial_in_cond} THEN qty_done ELSE 0 END) as qty_in,
-                SUM(CASE WHEN {initial_out_cond} THEN qty_done ELSE 0 END) as qty_out
-            FROM combined_moves
-            WHERE product_id IN ({p_ids_str})
-              AND date < :date_from
-            GROUP BY product_id
+                wh_id,
+                SUM(qty_in) as total_in,
+                SUM(qty_out) as total_out
+            FROM (
+                SELECT 
+                    product_id,
+                    dest_warehouse_id as wh_id,
+                    qty_done as qty_in,
+                    0.0 as qty_out
+                FROM combined_moves
+                WHERE product_id IN ({p_ids_str})
+                  AND dest_warehouse_id IS NOT NULL
+                  AND (src_warehouse_id IS NULL OR src_warehouse_id != dest_warehouse_id)
+                  AND date < :date_from
+                
+                UNION ALL
+                
+                SELECT 
+                    product_id,
+                    src_warehouse_id as wh_id,
+                    0.0 as qty_in,
+                    qty_done as qty_out
+                FROM combined_moves
+                WHERE product_id IN ({p_ids_str})
+                  AND src_warehouse_id IS NOT NULL
+                  AND (dest_warehouse_id IS NULL OR dest_warehouse_id != src_warehouse_id)
+                  AND date < :date_from
+            ) in_out
+            GROUP BY product_id, wh_id
         """)
         init_res = db.execute(sql_initial, {"date_from": filters.date_from}).fetchall()
         for row in init_res:
-            qty_in = float(row.qty_in or 0)
-            qty_out = float(row.qty_out or 0)
-            initial_balances[row.product_id] = qty_in - qty_out
+            initial_balances[(row.product_id, row.wh_id)] = float(row.total_in or 0) - float(row.total_out or 0)
 
     date_filters = ""
     params = {}
@@ -277,12 +320,22 @@ def get_advanced_kardex(
           {date_filters}
         ORDER BY date ASC
     """)
-    
     moves_res = db.execute(sql_moves, params).fetchall()
 
-    moves_by_product = {p_id: [] for p_id in filters.product_ids}
-    for m in moves_res:
-        moves_by_product[m.product_id].append(m)
+    def detect_product_uom(product_name: str, uom_base: str, sample_quantities: List[float]) -> tuple[str, bool]:
+        uom_clean = (uom_base or "").strip().upper()
+        name_upper = (product_name or "").upper()
+        has_fractional = any(abs(q - round(q)) > 1e-4 for q in sample_quantities if q is not None)
+        if uom_clean in ["KG", "KGS", "KILOGRAMO", "LT", "LTS", "LITRO", "LITROS", "GR", "GRAMO", "GRAMOS", "MT", "METRO"]:
+            display_uom = "KG" if "KG" in uom_clean else ("LT" if "LT" in uom_clean else uom_clean)
+            return display_uom, True
+        import re
+        is_bulk = bool(re.search(r'\b(A GRANEL|AL PESO|POR PESO|PESADO|POR KILO|POR KG)\b', name_upper))
+        if has_fractional or is_bulk:
+            if "LT" in name_upper or "LITRO" in name_upper:
+                return "LT", True
+            return "KG", True
+        return "UND", False
 
     results = []
 
@@ -292,95 +345,208 @@ def get_advanced_kardex(
             continue
             
         variant, product = product_info
-        
-        current_balance = initial_balances[product_id]
-        product_history = []
+        prod_moves = [m for m in moves_res if m.product_id == product_id]
+        sample_qtys = [float(m.qty_done or 0) for m in prod_moves]
+        uom, is_decimal = detect_product_uom(product.name, product.uom_base, sample_qtys)
 
-        if filters.date_from:
-            product_history.append({
-                "date": filters.date_from,
-                "reference": "SALDO INICIAL",
-                "type": "INITIAL",
-                "source_type": "INITIAL",
-                "flow_type": "INITIAL",
-                "flow_display": "Saldo Inicial Consolidado",
-                "facility_name": "Todas",
-                "src_warehouse": None,
-                "dest_warehouse": None,
-                "location_name": "Saldo Inicial Consolidado",
-                "qty_in": 0.0,
-                "qty_out": 0.0,
-                "balance": current_balance,
-                "cost": 0.0
-            })
+        wh_moves_map = {w_id: [] for w_id in warehouse_info}
 
-        for m in moves_by_product[product_id]:
-            if target_warehouse_ids:
-                is_in = m.dest_warehouse_id in target_warehouse_ids
-                is_out = m.src_warehouse_id in target_warehouse_ids
-            else:
-                is_in = m.dest_facility_id in target_facility_ids
-                is_out = m.src_facility_id in target_facility_ids
-
+        for m in prod_moves:
             qty = float(m.qty_done or 0)
             cost = float(m.unit_cost or 0)
+            src_wh_id = m.src_warehouse_id
+            dest_wh_id = m.dest_warehouse_id
 
-            src_wh = m.src_warehouse_name
-            dest_wh = m.dest_warehouse_name
-            fac_name = m.dest_facility_name or m.src_facility_name or "General"
+            # Inter-warehouse transfer between two warehouses
+            if src_wh_id and dest_wh_id and src_wh_id != dest_wh_id:
+                if src_wh_id in wh_moves_map:
+                    wh_moves_map[src_wh_id].append({
+                        "date": m.date,
+                        "reference": m.reference,
+                        "type": m.source_type,
+                        "source_type": m.source_type,
+                        "flow_type": "OUT",
+                        "flow_display": f"Transferencia (Salida hacia {m.dest_warehouse_name or 'Destino'})",
+                        "facility_name": m.src_facility_name or warehouse_info[src_wh_id]["facility_name"],
+                        "src_warehouse": m.src_warehouse_name,
+                        "dest_warehouse": m.dest_warehouse_name,
+                        "src_location": m.src_location_name,
+                        "dest_location": m.dest_location_name,
+                        "qty_in": 0.0,
+                        "qty_out": round(qty, 3 if is_decimal else 0),
+                        "cost": cost
+                    })
+                if dest_wh_id in wh_moves_map:
+                    wh_moves_map[dest_wh_id].append({
+                        "date": m.date,
+                        "reference": m.reference,
+                        "type": m.source_type,
+                        "source_type": m.source_type,
+                        "flow_type": "IN",
+                        "flow_display": f"Transferencia (Entrada desde {m.src_warehouse_name or 'Origen'})",
+                        "facility_name": m.dest_facility_name or warehouse_info[dest_wh_id]["facility_name"],
+                        "src_warehouse": m.src_warehouse_name,
+                        "dest_warehouse": m.dest_warehouse_name,
+                        "src_location": m.src_location_name,
+                        "dest_location": m.dest_location_name,
+                        "qty_in": round(qty, 3 if is_decimal else 0),
+                        "qty_out": 0.0,
+                        "cost": cost
+                    })
+            elif src_wh_id and (not dest_wh_id or src_wh_id != dest_wh_id):
+                if src_wh_id in wh_moves_map:
+                    flow_disp = f"Salida ({m.source_type})"
+                    if m.source_type == 'VENTA':
+                        flow_disp = "Venta a Cliente"
+                    elif m.dest_name and m.dest_name != 'N/A':
+                        flow_disp = f"Salida hacia {m.dest_name}"
+                    wh_moves_map[src_wh_id].append({
+                        "date": m.date,
+                        "reference": m.reference,
+                        "type": m.source_type,
+                        "source_type": m.source_type,
+                        "flow_type": "OUT",
+                        "flow_display": flow_disp,
+                        "facility_name": m.src_facility_name or warehouse_info[src_wh_id]["facility_name"],
+                        "src_warehouse": m.src_warehouse_name,
+                        "dest_warehouse": None,
+                        "src_location": m.src_location_name,
+                        "dest_location": m.dest_location_name,
+                        "qty_in": 0.0,
+                        "qty_out": round(qty, 3 if is_decimal else 0),
+                        "cost": cost
+                    })
+            elif dest_wh_id and (not src_wh_id or src_wh_id != dest_wh_id):
+                if dest_wh_id in wh_moves_map:
+                    flow_disp = f"Entrada ({m.source_type})"
+                    if m.source_type == 'RECEPCIÓN':
+                        flow_disp = "Recepción de Proveedor"
+                    elif m.src_name and m.src_name != 'N/A':
+                        flow_disp = f"Entrada desde {m.src_name}"
+                    wh_moves_map[dest_wh_id].append({
+                        "date": m.date,
+                        "reference": m.reference,
+                        "type": m.source_type,
+                        "source_type": m.source_type,
+                        "flow_type": "IN",
+                        "flow_display": flow_disp,
+                        "facility_name": m.dest_facility_name or warehouse_info[dest_wh_id]["facility_name"],
+                        "src_warehouse": None,
+                        "dest_warehouse": m.dest_warehouse_name,
+                        "src_location": m.src_location_name,
+                        "dest_location": m.dest_location_name,
+                        "qty_in": round(qty, 3 if is_decimal else 0),
+                        "qty_out": 0.0,
+                        "cost": cost
+                    })
+            elif src_wh_id and dest_wh_id and src_wh_id == dest_wh_id:
+                if src_wh_id in wh_moves_map:
+                    wh_moves_map[src_wh_id].append({
+                        "date": m.date,
+                        "reference": m.reference,
+                        "type": m.source_type,
+                        "source_type": m.source_type,
+                        "flow_type": "INTERNAL",
+                        "flow_display": f"Reubicación: {m.src_location_name or 'N/A'} ➔ {m.dest_location_name or 'N/A'}",
+                        "facility_name": m.src_facility_name or warehouse_info[src_wh_id]["facility_name"],
+                        "src_warehouse": m.src_warehouse_name,
+                        "dest_warehouse": m.dest_warehouse_name,
+                        "src_location": m.src_location_name,
+                        "dest_location": m.dest_location_name,
+                        "qty_in": 0.0,
+                        "qty_out": 0.0,
+                        "cost": cost
+                    })
 
-            if is_in and is_out:
-                flow_type = "TRANSFER"
-                flow_display = f"Transferencia: {src_wh or 'Origen'} ➔ {dest_wh or 'Destino'}"
-                location_name = f"{src_wh or 'Origen'} ➔ {dest_wh or 'Destino'}"
-                type_str = m.source_type
-                qty_in = 0.0
-                qty_out = 0.0
-            elif is_in:
-                flow_type = "IN"
-                flow_display = f"Entrada a: {dest_wh or 'Almacén'}"
-                location_name = m.dest_name or dest_wh or 'N/A'
-                type_str = m.source_type
-                current_balance += qty
-                qty_in = qty
-                qty_out = 0.0
-            elif is_out:
-                flow_type = "OUT"
-                flow_display = f"Salida de: {src_wh or 'Almacén'}"
-                location_name = m.src_name or src_wh or 'N/A'
-                type_str = m.source_type
-                current_balance -= qty
-                qty_in = 0.0
-                qty_out = qty
-            else:
-                continue
-                
-            product_history.append({
-                "date": m.date,
-                "reference": m.reference,
-                "type": type_str,
-                "source_type": m.source_type,
-                "flow_type": flow_type,
-                "flow_display": flow_display,
-                "facility_name": fac_name,
-                "src_warehouse": src_wh,
-                "dest_warehouse": dest_wh,
-                "src_location": m.src_location_name,
-                "dest_location": m.dest_location_name,
-                "location_name": location_name,
-                "qty_in": qty_in,
-                "qty_out": qty_out,
-                "balance": current_balance,
-                "cost": cost
-            })
+        facilities_list = []
+        consolidated_flat_history = []
+
+        for fac_id in facility_order:
+            fac_name = facility_names[fac_id]
+            warehouses_list = []
+
+            for w_id in facility_warehouses[fac_id]:
+                w_meta = warehouse_info[w_id]
+                raw_init = initial_balances.get((product_id, w_id), 0.0)
+                init_bal = round(raw_init, 3 if is_decimal else 0)
+                raw_moves = wh_moves_map.get(w_id, [])
+
+                # Skip warehouse if no initial balance and no moves in period
+                if abs(init_bal) < 1e-4 and len(raw_moves) == 0:
+                    continue
+
+                wh_history = []
+                running_bal = init_bal
+
+                if filters.date_from:
+                    wh_history.append({
+                        "date": filters.date_from,
+                        "reference": "SALDO INICIAL",
+                        "type": "INITIAL",
+                        "source_type": "INITIAL",
+                        "flow_type": "INITIAL",
+                        "flow_display": f"Saldo Inicial ({w_meta['name']})",
+                        "facility_name": fac_name,
+                        "src_warehouse": None,
+                        "dest_warehouse": None,
+                        "src_location": None,
+                        "dest_location": None,
+                        "qty_in": 0.0,
+                        "qty_out": 0.0,
+                        "balance": running_bal,
+                        "cost": 0.0
+                    })
+
+                sorted_moves = sorted(raw_moves, key=lambda x: x["date"])
+                for mv in sorted_moves:
+                    running_bal = round(running_bal + mv["qty_in"] - mv["qty_out"], 3 if is_decimal else 0)
+                    mv_copy = dict(mv)
+                    mv_copy["balance"] = running_bal
+                    wh_history.append(mv_copy)
+                    consolidated_flat_history.append(mv_copy)
+
+                final_bal = running_bal
+                wh_in = round(sum(h["qty_in"] for h in wh_history), 3 if is_decimal else 0)
+                wh_out = round(sum(h["qty_out"] for h in wh_history), 3 if is_decimal else 0)
+
+                warehouses_list.append({
+                    "warehouse_id": w_id,
+                    "warehouse_name": w_meta["name"],
+                    "facility_id": fac_id,
+                    "facility_name": fac_name,
+                    "initial_balance": init_bal,
+                    "final_balance": final_bal,
+                    "total_in": wh_in,
+                    "total_out": wh_out,
+                    "history": wh_history
+                })
+
+            if warehouses_list:
+                facilities_list.append({
+                    "facility_id": fac_id,
+                    "facility_name": fac_name,
+                    "warehouses": warehouses_list
+                })
+
+        total_init = round(sum(w["initial_balance"] for f in facilities_list for w in f["warehouses"]), 3 if is_decimal else 0)
+        total_final = round(sum(w["final_balance"] for f in facilities_list for w in f["warehouses"]), 3 if is_decimal else 0)
+        total_in = round(sum(w["total_in"] for f in facilities_list for w in f["warehouses"]), 3 if is_decimal else 0)
+        total_out = round(sum(w["total_out"] for f in facilities_list for w in f["warehouses"]), 3 if is_decimal else 0)
 
         results.append({
             "product_id": product_id,
             "product_name": product.name,
             "sku": variant.sku,
-            "initial_balance": initial_balances[product_id],
-            "final_balance": current_balance,
-            "history": product_history
+            "uom": uom,
+            "is_decimal": is_decimal,
+            "total_initial_balance": total_init,
+            "total_final_balance": total_final,
+            "total_in": total_in,
+            "total_out": total_out,
+            "facilities": facilities_list,
+            "initial_balance": total_init,
+            "final_balance": total_final,
+            "history": consolidated_flat_history
         })
 
     return results
