@@ -12,6 +12,19 @@ import { InputNumber } from 'primereact/inputnumber';
 import { InputText } from 'primereact/inputtext';
 import api from '@/lib/api';
 
+const extractErrorMessage = (e: any, fallback: string = 'Ha ocurrido un error inesperado'): string => {
+  const detail = e?.response?.data?.detail;
+  if (!detail) return e?.message || fallback;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((d: any) => (typeof d === 'object' ? (d.msg || JSON.stringify(d)) : String(d))).join(', ');
+  }
+  if (typeof detail === 'object') {
+    return detail.msg || JSON.stringify(detail);
+  }
+  return String(detail);
+};
+
 export default function WmsLocationsPage() {
   const [treeData, setTreeData] = useState<any[]>([]);
   const [occupancyData, setOccupancyData] = useState<any>({});
@@ -229,7 +242,7 @@ export default function WmsLocationsPage() {
       toast.current?.show({
         severity: 'error',
         summary: 'Error de Consulta',
-        detail: e.response?.data?.detail || 'No se pudo consultar el stock del almacén.'
+        detail: extractErrorMessage(e, 'No se pudo consultar el stock del almacén.')
       });
       setStockData(null);
     }
@@ -274,17 +287,17 @@ export default function WmsLocationsPage() {
     if (!wh) return;
     setSourceWarehouse(wh);
     setDestWarehouseId(wh.id);
-    setSourceLocationId(preselectedLocId);
+    setSourceLocationId(preselectedLocId ? Number(preselectedLocId) : 0);
     
     // Si el almacén tiene ubicaciones y preselectedLocId está definido, sugerir otra si existe
     const targetWhLocs = wh.locations || [];
     if (preselectedLocId && targetWhLocs.length > 1) {
       const otherLoc = targetWhLocs.find((l: any) => l.id !== preselectedLocId);
-      setDestLocationId(otherLoc ? otherLoc.id : null);
+      setDestLocationId(otherLoc ? otherLoc.id : (targetWhLocs[0]?.id || 0));
     } else if (targetWhLocs.length > 0) {
       setDestLocationId(targetWhLocs[0].id);
     } else {
-      setDestLocationId(null);
+      setDestLocationId(0);
     }
 
     setVariantId(preselectedVariantId);
@@ -299,8 +312,33 @@ export default function WmsLocationsPage() {
       return;
     }
 
-    if (sourceWarehouse.id === destWarehouseId && sourceLocationId && destLocationId && sourceLocationId === destLocationId) {
-      toast.current?.show({ severity: 'warn', summary: 'Ubicación Inválida', detail: 'La ubicación de origen y destino no pueden ser la misma.' });
+    const finalSrcLocId = (typeof sourceLocationId === 'object' && sourceLocationId !== null)
+      ? Number((sourceLocationId as any).value) || null
+      : (sourceLocationId && Number(sourceLocationId) > 0 ? Number(sourceLocationId) : null);
+
+    const finalDestLocId = (typeof destLocationId === 'object' && destLocationId !== null)
+      ? Number((destLocationId as any).value) || null
+      : (destLocationId && Number(destLocationId) > 0 ? Number(destLocationId) : null);
+
+    const targetDestWhId = (typeof destWarehouseId === 'object' && destWarehouseId !== null)
+      ? Number((destWarehouseId as any).value) || sourceWarehouse.id
+      : (destWarehouseId || sourceWarehouse.id);
+
+    if (sourceWarehouse.id === targetDestWhId && finalSrcLocId && finalDestLocId && finalSrcLocId === finalDestLocId) {
+      toast.current?.show({ 
+        severity: 'warn', 
+        summary: 'Ubicación Inválida', 
+        detail: 'La ubicación de origen y destino no pueden ser la misma en el mismo almacén.' 
+      });
+      return;
+    }
+
+    if (sourceWarehouse.id === targetDestWhId && !finalSrcLocId && !finalDestLocId && (sourceWarehouse.locations?.length || 0) > 1) {
+      toast.current?.show({ 
+        severity: 'warn', 
+        summary: 'Ubicación Inválida', 
+        detail: 'Para reubicar dentro del mismo almacén, debe seleccionar una ubicación de destino diferente a la de origen.' 
+      });
       return;
     }
 
@@ -308,9 +346,9 @@ export default function WmsLocationsPage() {
     try {
       await api.post('/wms/putaway', {
         source_warehouse_id: sourceWarehouse.id,
-        dest_warehouse_id: destWarehouseId || sourceWarehouse.id,
-        source_location_id: sourceLocationId || null,
-        dest_location_id: destLocationId || null,
+        dest_warehouse_id: targetDestWhId,
+        source_location_id: finalSrcLocId,
+        dest_location_id: finalDestLocId,
         variant_id: variantId,
         qty: putawayQty,
         batch_id: batchId || null
@@ -332,7 +370,7 @@ export default function WmsLocationsPage() {
       toast.current?.show({ 
         severity: 'error', 
         summary: 'Error de Reubicación', 
-        detail: e.response?.data?.detail || 'No se pudo realizar el movimiento.' 
+        detail: extractErrorMessage(e, 'No se pudo realizar el movimiento.') 
       });
     }
     setExecutingPutaway(false);
@@ -360,7 +398,7 @@ export default function WmsLocationsPage() {
       setNewWhCode('');
       fetchTreeAndOccupancy(selectedFacilityFilter);
     } catch (e: any) {
-      toast.current?.show({ severity: 'error', summary: 'Error al Crear', detail: e.response?.data?.detail || 'No se pudo registrar el almacén.' });
+      toast.current?.show({ severity: 'error', summary: 'Error al Crear', detail: extractErrorMessage(e, 'No se pudo registrar el almacén.') });
     }
     setCreatingWarehouse(false);
   };
@@ -388,7 +426,7 @@ export default function WmsLocationsPage() {
       setNewLocCapacity(100);
       fetchTreeAndOccupancy(selectedFacilityFilter);
     } catch (e: any) {
-      toast.current?.show({ severity: 'error', summary: 'Error al Crear', detail: e.response?.data?.detail || 'No se pudo registrar la ubicación.' });
+      toast.current?.show({ severity: 'error', summary: 'Error al Crear', detail: extractErrorMessage(e, 'No se pudo registrar la ubicación.') });
     }
     setCreatingLocation(false);
   };
@@ -448,10 +486,10 @@ export default function WmsLocationsPage() {
   // Opciones de Ubicación Origen
   const sourceLocationOptions = useMemo(() => {
     if (!sourceWarehouse || !Array.isArray(sourceWarehouse.locations) || sourceWarehouse.locations.length === 0) {
-      return [{ label: 'Muelle / Entrada General', value: null }];
+      return [{ label: 'Muelle / Entrada General', value: 0 }];
     }
     return [
-      { label: 'Cualquiera / Muelle de Descarga', value: null },
+      { label: 'Cualquiera / Muelle de Descarga', value: 0 },
       ...sourceWarehouse.locations.map((l: any) => ({
         label: `${l.name} (${l.code}) [${l.location_type || 'SHELF'}]`,
         value: l.id
@@ -465,8 +503,8 @@ export default function WmsLocationsPage() {
     const targetWh = treeData.find(wh => wh.id === destWarehouseId);
     if (!targetWh || !targetWh.locations || targetWh.locations.length === 0) {
       return [{
-        label: `✨ Ubicación General Predeterminada (${targetWh?.code || 'WH'}-STOCK)`,
-        value: null
+        label: `✨ Ubicación General (${targetWh?.code || 'WH'}-STOCK)`,
+        value: 0
       }];
     }
     return targetWh.locations.map((l: any) => ({
@@ -537,6 +575,8 @@ export default function WmsLocationsPage() {
             <Dropdown
               value={selectedFacilityFilter}
               options={facilityDropdownOptions}
+              optionLabel="label"
+              optionValue="value"
               onChange={(e) => handleFacilityFilterChange(e.value)}
               placeholder="Filtrar Sucursal..."
               className="w-64 text-xs font-bold shadow-none border-slate-300"
@@ -811,7 +851,7 @@ export default function WmsLocationsPage() {
               header="CANTIDAD"
               body={(item) => (
                 <span className="font-mono font-black text-emerald-700 text-sm">
-                  {item.quantity.toLocaleString()} <span className="text-[10px] font-normal text-slate-500">{item.uom}</span>
+                  {(item.quantity ?? 0).toLocaleString()} <span className="text-[10px] font-normal text-slate-500">{item.uom || 'UND'}</span>
                 </span>
               )}
               sortable
@@ -866,6 +906,8 @@ export default function WmsLocationsPage() {
             <Dropdown 
               value={variantId}
               options={productsList}
+              optionLabel="label"
+              optionValue="value"
               onChange={(e) => setVariantId(e.value)}
               placeholder="Seleccionar variante o SKU..."
               filter
@@ -889,6 +931,8 @@ export default function WmsLocationsPage() {
               <Dropdown 
                 value={sourceLocationId}
                 options={sourceLocationOptions}
+                optionLabel="label"
+                optionValue="value"
                 onChange={(e) => setSourceLocationId(e.value)}
                 placeholder="Muelle / Estante origen..."
                 className="w-full text-xs font-bold"
@@ -903,9 +947,17 @@ export default function WmsLocationsPage() {
               <Dropdown 
                 value={destWarehouseId}
                 options={destWarehouseOptions}
+                optionLabel="label"
+                optionValue="value"
                 onChange={(e) => {
-                  setDestWarehouseId(e.value);
-                  setDestLocationId(null);
+                  const newWhId = e.value;
+                  setDestWarehouseId(newWhId);
+                  const targetWh = treeData.find(w => w.id === newWhId);
+                  if (targetWh && targetWh.locations && targetWh.locations.length > 0) {
+                    setDestLocationId(targetWh.locations[0].id);
+                  } else {
+                    setDestLocationId(0);
+                  }
                 }}
                 placeholder="Seleccionar almacén destino..."
                 className="w-full text-xs font-bold"
@@ -917,6 +969,8 @@ export default function WmsLocationsPage() {
               <Dropdown 
                 value={destLocationId}
                 options={destLocationOptions}
+                optionLabel="label"
+                optionValue="value"
                 onChange={(e) => setDestLocationId(e.value)}
                 placeholder="Seleccionar posición destino..."
                 className="w-full text-xs font-bold"
@@ -967,6 +1021,8 @@ export default function WmsLocationsPage() {
             <Dropdown 
               value={newWhFacilityId}
               options={facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }))}
+              optionLabel="label"
+              optionValue="value"
               onChange={(e) => setNewWhFacilityId(e.value)}
               className="w-full text-xs font-bold"
             />
@@ -1025,6 +1081,8 @@ export default function WmsLocationsPage() {
               <Dropdown 
                 value={newLocFacilityId}
                 options={facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }))}
+                optionLabel="label"
+                optionValue="value"
                 onChange={(e) => {
                   setNewLocFacilityId(e.value);
                   const firstWh = treeData.find(wh => wh.facility_id === e.value);
@@ -1039,6 +1097,8 @@ export default function WmsLocationsPage() {
               <Dropdown 
                 value={newLocWarehouseId}
                 options={filteredWarehousesForNewLoc.map(wh => ({ label: `${wh.name} (${wh.code})`, value: wh.id }))}
+                optionLabel="label"
+                optionValue="value"
                 onChange={(e) => setNewLocWarehouseId(e.value)}
                 placeholder="Seleccionar Almacén..."
                 className="w-full text-xs font-bold"
@@ -1085,6 +1145,8 @@ export default function WmsLocationsPage() {
             <Dropdown 
               value={newLocType}
               options={locationTypeOptions}
+              optionLabel="label"
+              optionValue="value"
               onChange={(e) => setNewLocType(e.value)}
               className="w-full text-xs font-bold"
             />

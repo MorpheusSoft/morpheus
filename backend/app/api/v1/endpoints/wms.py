@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Any
 from datetime import date, datetime
 from app.api.deps import get_db, get_current_active_user
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine
@@ -23,8 +23,8 @@ class ReceiptLineInput(BaseModel):
     po_line_id: Optional[int] = None
     variant_id: int
     received_qty: float
+    unit_cost: Optional[float] = 0.0
     damaged_qty: Optional[float] = 0.0
-    reject_at_dock: Optional[bool] = True
     rejection_reason: Optional[str] = None
     lot_number: Optional[str] = None
     expiration_date: Optional[date] = None
@@ -35,8 +35,8 @@ class ReceiptPayload(BaseModel):
     receipt_date: Optional[date] = None
     lines: List[ReceiptLineInput]
 
-class DiscrepancyPayload(BaseModel):
-    variant_id: int
+class DirectDamageReportInput(BaseModel):
+    product_id: int
     warehouse_id: Optional[int] = None
     damaged_qty: float
     reason: str
@@ -46,9 +46,9 @@ class DiscrepancyPayload(BaseModel):
 class PutawayPayload(BaseModel):
     warehouse_id: Optional[int] = None
     source_warehouse_id: Optional[int] = None
-    source_location_id: Optional[int] = None
+    source_location_id: Optional[Any] = None
     dest_warehouse_id: Optional[int] = None
-    dest_location_id: Optional[int] = None
+    dest_location_id: Optional[Any] = None
     variant_id: int
     qty: float
     batch_id: Optional[int] = None
@@ -811,6 +811,42 @@ def toggle_batch_quarantine(
         "message": f"Lote {batch.batch_number} {state_str}. Asiento registrado en Kardex ({ref_label})."
     }
 
+def get_or_create_default_wh_location(wh: Warehouse, db: Session) -> Location:
+    # 1. Buscar ubicación interna o muelle existente
+    loc = db.query(Location).filter(
+        Location.warehouse_id == wh.id,
+        Location.usage == 'INTERNAL'
+    ).first()
+    if not loc:
+        loc = db.query(Location).filter(
+            Location.warehouse_id == wh.id,
+            Location.location_type == 'DOCK'
+        ).first()
+    if not loc:
+        loc = db.query(Location).filter(Location.warehouse_id == wh.id).first()
+    if not loc:
+        loc_code = f"{wh.code}-STOCK"
+        loc_barcode = f"LOC-WH{wh.id}-STOCK"
+        existing = db.query(Location).filter(
+            (Location.barcode == loc_barcode) | 
+            ((Location.warehouse_id == wh.id) & (Location.code == loc_code))
+        ).first()
+        if existing:
+            loc = existing
+        else:
+            loc = Location(
+                warehouse_id=wh.id,
+                name="Ubicación General",
+                code=loc_code,
+                barcode=loc_barcode,
+                location_type="SHELF",
+                usage="INTERNAL",
+                capacity_volume=100.0
+            )
+            db.add(loc)
+            db.flush()
+    return loc
+
 @router.get("/locations/tree")
 def get_locations_tree(facility_id: Optional[int] = None, db: Session = Depends(get_db)):
     warehouses_q = db.query(Warehouse)
@@ -824,6 +860,11 @@ def get_locations_tree(facility_id: Optional[int] = None, db: Session = Depends(
 
     for wh in warehouses:
         locs = db.query(Location).filter(Location.warehouse_id == wh.id).all()
+        if not locs:
+            default_loc = get_or_create_default_wh_location(wh, db)
+            db.commit()
+            locs = [default_loc]
+
         loc_data = []
         for l in locs:
             loc_data.append({
@@ -1019,72 +1060,41 @@ def execute_putaway(
     if payload.qty <= 0:
         raise HTTPException(status_code=400, detail="La cantidad a mover debe ser mayor a 0.")
 
+    def clean_loc_id(val):
+        if val is None:
+            return None
+        if isinstance(val, dict):
+            val = val.get("value")
+        try:
+            parsed = int(val)
+            return parsed if parsed > 0 else None
+        except (ValueError, TypeError):
+            return None
+
+    src_location_id = clean_loc_id(payload.source_location_id)
+    dest_location_id = clean_loc_id(payload.dest_location_id)
+
     # Ubicación Origen
-    if payload.source_location_id:
+    if src_location_id:
         src_loc = db.query(Location).filter(
-            Location.id == payload.source_location_id,
+            Location.id == src_location_id,
             Location.warehouse_id == source_wh.id
         ).first()
         if not src_loc:
             raise HTTPException(status_code=404, detail="Ubicación de origen no encontrada en el almacén de origen.")
     else:
-        src_loc = db.query(Location).filter(
-            Location.warehouse_id == source_wh.id,
-            Location.location_type == 'DOCK'
-        ).first()
-        if not src_loc:
-            src_loc = db.query(Location).filter(
-                Location.warehouse_id == source_wh.id,
-                Location.usage == 'INTERNAL'
-            ).first()
-        if not src_loc:
-            src_loc = db.query(Location).filter(Location.warehouse_id == source_wh.id).first()
-        if not src_loc:
-            loc_code = f"{source_wh.code}-STOCK"
-            existing_barcode = db.query(Location).filter(Location.barcode == loc_code).first()
-            loc_barcode = loc_code if not existing_barcode else f"{loc_code}-{source_wh.id}"
-            src_loc = Location(
-                warehouse_id=source_wh.id,
-                name="Ubicación General",
-                code=loc_code,
-                barcode=loc_barcode,
-                location_type="SHELF",
-                usage="INTERNAL",
-                capacity_volume=100.0
-            )
-            db.add(src_loc)
-            db.flush()
+        src_loc = get_or_create_default_wh_location(source_wh, db)
 
     # Ubicación Destino
-    if payload.dest_location_id:
+    if dest_location_id:
         dest_loc = db.query(Location).filter(
-            Location.id == payload.dest_location_id,
+            Location.id == dest_location_id,
             Location.warehouse_id == dest_wh.id
         ).first()
         if not dest_loc:
             raise HTTPException(status_code=404, detail="Ubicación de destino no encontrada en el almacén destino.")
     else:
-        dest_loc = db.query(Location).filter(
-            Location.warehouse_id == dest_wh.id,
-            Location.usage == 'INTERNAL'
-        ).first()
-        if not dest_loc:
-            dest_loc = db.query(Location).filter(Location.warehouse_id == dest_wh.id).first()
-        if not dest_loc:
-            loc_code = f"{dest_wh.code}-STOCK"
-            existing_barcode = db.query(Location).filter(Location.barcode == loc_code).first()
-            loc_barcode = loc_code if not existing_barcode else f"{loc_code}-{dest_wh.id}"
-            dest_loc = Location(
-                warehouse_id=dest_wh.id,
-                name="Ubicación General",
-                code=loc_code,
-                barcode=loc_barcode,
-                location_type="SHELF",
-                usage="INTERNAL",
-                capacity_volume=100.0
-            )
-            db.add(dest_loc)
-            db.flush()
+        dest_loc = get_or_create_default_wh_location(dest_wh, db)
 
     if src_loc.id == dest_loc.id:
         raise HTTPException(status_code=400, detail="La ubicación de origen y destino no pueden ser la misma.")
@@ -1503,7 +1513,7 @@ def get_locations_occupancy(
     """
     query = db.query(Location)
     if facility_id:
-        query = query.join(Warehouse).filter(Warehouse.facility_id == facility_id)
+        query = query.join(Warehouse, Location.warehouse_id == Warehouse.id).filter(Warehouse.facility_id == facility_id)
         
     locations = query.all()
     results = []
