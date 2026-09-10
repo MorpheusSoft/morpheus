@@ -35,6 +35,13 @@ class ReceiptPayload(BaseModel):
     receipt_date: Optional[date] = None
     lines: List[ReceiptLineInput]
 
+class DiscrepancyPayload(BaseModel):
+    variant_id: int
+    warehouse_id: Optional[int] = None
+    damaged_qty: float
+    reason: str
+    reject_at_dock: Optional[bool] = True
+
 class DirectDamageReportInput(BaseModel):
     product_id: int
     warehouse_id: Optional[int] = None
