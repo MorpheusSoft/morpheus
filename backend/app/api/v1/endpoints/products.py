@@ -2,7 +2,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.api import deps
-from app.models.inventory import Product, ProductVariant, Category
+from app.models.inventory import Product, ProductVariant, Category, ProductBarcode
 from app.models.purchasing import SupplierProduct
 from app.schemas import product as schemas
 from app.schemas.supplier import SupplierProductResponse, SupplierProductCreate
@@ -134,12 +134,21 @@ def read_products(
                 query = query.filter(or_(*cat_conditions))
 
         if q:
+            clean_q = q.strip()
+            barcode_prod_ids = db.query(ProductVariant.product_id)\
+                .join(ProductBarcode, ProductBarcode.product_variant_id == ProductVariant.id)\
+                .filter(ProductBarcode.barcode.ilike(f"%{clean_q}%"))\
+                .subquery()
+
             if not (supplier_ids and isinstance(supplier_ids, (list, tuple))):
                 query = query.outerjoin(ProductVariant)
             query = query.filter(
                 or_(
-                    Product.name.ilike(f"%{q}%"),
-                    ProductVariant.sku.ilike(f"%{q}%")
+                    Product.name.ilike(f"%{clean_q}%"),
+                    ProductVariant.sku.ilike(f"%{clean_q}%"),
+                    ProductVariant.barcode.ilike(f"%{clean_q}%"),
+                    ProductVariant.part_number.ilike(f"%{clean_q}%"),
+                    Product.id.in_(barcode_prod_ids)
                 )
             )
 

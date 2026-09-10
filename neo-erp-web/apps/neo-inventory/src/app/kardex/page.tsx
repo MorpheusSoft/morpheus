@@ -52,18 +52,15 @@ export default function KardexPage() {
   // Load warehouses when facilities change
   useEffect(() => {
     const loadWarehouses = async () => {
-      if (!selectedFacilities || selectedFacilities.length === 0) {
-        setWarehouses([]);
-        return;
-      }
       try {
-        // Load warehouses for all selected facilities
-        const allWhs = [];
-        for (const fac of selectedFacilities) {
-          const whs = await ValuationService.getWarehouses(fac);
-          allWhs.push(...whs);
+        const allWhs = await ValuationService.getWarehouses();
+        if (selectedFacilities && selectedFacilities.length > 0) {
+          const filtered = (allWhs || []).filter((w: any) => selectedFacilities.includes(w.facility_id));
+          setWarehouses(filtered);
+          setSelectedWarehouses(prev => prev.filter(whId => filtered.some((w: any) => w.id === whId)));
+        } else {
+          setWarehouses(allWhs || []);
         }
-        setWarehouses(allWhs);
       } catch (err) {
         console.error("Error cargando almacenes", err);
       }
@@ -73,16 +70,26 @@ export default function KardexPage() {
 
   const searchProducts = async (event: any) => {
     try {
-      // In Morpheus, getProducts returns items, we need their default variant id
-      // Since getProducts might return Product, and we need Variant IDs.
-      const res = await ProductService.getProducts(0, 20, event.query);
+      const res = await ProductService.getProducts(0, 25, event.query);
       if (res && res.data) {
-        // Extract variants
-        const variants = res.data.flatMap((p: any) => p.variants.map((v: any) => ({
+        const variants = res.data.flatMap((p: any) => (p.variants || []).map((v: any) => {
+          const barcodesList: string[] = [];
+          if (v.barcode) barcodesList.push(v.barcode);
+          if (Array.isArray(v.barcodes)) {
+            v.barcodes.forEach((b: any) => {
+              if (b?.barcode && !barcodesList.includes(b.barcode)) {
+                barcodesList.push(b.barcode);
+              }
+            });
+          }
+          const barcodeStr = barcodesList.length > 0 ? ` | Barras: ${barcodesList.join(', ')}` : '';
+          const partNumStr = v.part_number ? ` | Ref: ${v.part_number}` : '';
+          return {
             ...v,
             product_name: p.name,
-            display_name: `[${v.sku}] ${p.name}`
-        })));
+            display_name: `[${v.sku}] ${p.name}${barcodeStr}${partNumStr}`
+          };
+        }));
         setFilteredProducts(variants);
       }
     } catch (e) {
@@ -102,7 +109,7 @@ export default function KardexPage() {
       const payload = {
         product_ids: selectedProducts.map(p => p.id),
         facility_ids: selectedFacilities.length > 0 ? selectedFacilities : undefined,
-        location_ids: selectedWarehouses.length > 0 ? selectedWarehouses : undefined,
+        warehouse_ids: selectedWarehouses.length > 0 ? selectedWarehouses : undefined,
         date_from: startDate ? new Date(startDate).toISOString() : undefined,
         date_to: endDate ? new Date(endDate + 'T23:59:59Z').toISOString() : undefined
       };
@@ -153,6 +160,65 @@ export default function KardexPage() {
     return <span>{rowData.type}</span>;
   };
 
+  const flowLocationTemplate = (rowData: any) => {
+    if (rowData.flow_type === 'INITIAL' || rowData.type === 'INITIAL') {
+      return (
+        <div className="flex flex-col">
+          <span className="font-semibold text-slate-700 text-xs flex items-center gap-1.5">
+            <i className="pi pi-bookmark text-slate-400 text-xs"></i>
+            Saldo Inicial
+          </span>
+          <span className="text-[10px] text-slate-400">Consolidado al inicio</span>
+        </div>
+      );
+    }
+
+    const isIn = rowData.flow_type === 'IN';
+    const isOut = rowData.flow_type === 'OUT';
+    const isTransfer = rowData.flow_type === 'TRANSFER';
+
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {isIn && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <i className="pi pi-arrow-down-left text-[10px] text-emerald-600"></i>
+              Entrada a: <strong className="text-emerald-900">{rowData.dest_warehouse || rowData.location_name || 'Almacén'}</strong>
+            </span>
+          )}
+          {isOut && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+              <i className="pi pi-arrow-up-right text-[10px] text-rose-600"></i>
+              Salida de: <strong className="text-rose-900">{rowData.src_warehouse || rowData.location_name || 'Almacén'}</strong>
+            </span>
+          )}
+          {isTransfer && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+              <i className="pi pi-arrows-h text-[10px] text-blue-600"></i>
+              {rowData.src_warehouse || 'Origen'} <span className="text-blue-400">➔</span> {rowData.dest_warehouse || 'Destino'}
+            </span>
+          )}
+          {!isIn && !isOut && !isTransfer && (
+            <span className="text-xs text-slate-700 font-medium">{rowData.location_name || 'N/A'}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 text-[11px] text-slate-500 font-medium pl-0.5">
+          {rowData.facility_name && (
+            <span className="text-slate-500 flex items-center gap-1">
+              <i className="pi pi-building text-[10px] text-slate-400"></i>
+              {rowData.facility_name}
+            </span>
+          )}
+          {(rowData.dest_location || rowData.src_location) && (
+            <span className="text-slate-400">
+              • Ubic: {rowData.dest_location || rowData.src_location}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const renderHeader = () => {
     return (
       <div className="flex flex-col gap-4 mb-6">
@@ -168,7 +234,7 @@ export default function KardexPage() {
         </div>
 
         {/* Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 bg-slate-50/50 p-4 rounded-[1.5rem] border border-slate-100 backdrop-blur-md">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 bg-slate-50/50 p-4 rounded-[1.5rem] border border-slate-100 backdrop-blur-md">
           <div className="flex flex-col gap-1.5 lg:col-span-2">
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider pl-1">Productos (Máx 10) *</label>
             <AutoComplete
@@ -180,7 +246,7 @@ export default function KardexPage() {
               onChange={(e) => {
                  if (e.value.length <= 10) setSelectedProducts(e.value);
               }}
-              placeholder="Buscar por nombre o SKU..."
+              placeholder="Buscar por nombre, SKU o código de barras..."
               className="w-full"
               inputClassName="w-full !rounded-xl !bg-white border-slate-200 focus:!border-blue-400 focus:!ring-4 focus:!ring-blue-500/10 shadow-sm !py-2"
               pt={{ container: { className: '!rounded-xl border-slate-200 focus-within:!border-blue-400 focus-within:!ring-4 focus-within:!ring-blue-500/10 shadow-sm' } }}
@@ -196,6 +262,20 @@ export default function KardexPage() {
               optionValue="id"
               onChange={(e) => setSelectedFacilities(e.value)}
               placeholder="Todas"
+              display="chip"
+              className="w-full !rounded-xl !bg-white border-slate-200 focus:!border-blue-400 focus:!ring-4 focus:!ring-blue-500/10 shadow-sm"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider pl-1">Almacenes</label>
+            <MultiSelect
+              value={selectedWarehouses}
+              options={warehouses}
+              optionLabel="name"
+              optionValue="id"
+              onChange={(e) => setSelectedWarehouses(e.value)}
+              placeholder="Todos"
               display="chip"
               className="w-full !rounded-xl !bg-white border-slate-200 focus:!border-blue-400 focus:!ring-4 focus:!ring-blue-500/10 shadow-sm"
             />
@@ -269,10 +349,10 @@ export default function KardexPage() {
                       <h3 className="font-extrabold text-lg text-slate-800 m-0">[{result.sku}] {result.product_name}</h3>
                       <p className="text-xs text-slate-500 font-medium">Saldo Inicial: <span className="text-blue-600 font-bold">{result.initial_balance} U</span> | Saldo Final: <span className="text-blue-600 font-bold">{result.final_balance} U</span></p>
                     </div>
-                    <Button icon="pi pi-file-excel" severity="success" text rounded tooltip="Exportar Excel" onClick={() => {
+                    <Button icon="pi pi-file-excel" severity="success" text rounded tooltip="Exportar CSV" onClick={() => {
                         const csvContent = "data:text/csv;charset=utf-8," 
-                          + "FECHA,DOCUMENTO,TIPO,LOCALIDAD,ENTRADAS,SALIDAS,SALDO,COSTO\n"
-                          + result.history.map((e: any) => `${e.date},${e.reference},${e.type},${e.location_name},${e.qty_in},${e.qty_out},${e.balance},${e.cost}`).join("\n");
+                          + "FECHA,DOCUMENTO,TIPO,FLUJO,SUCURSAL,ALMACEN_ORIGEN,ALMACEN_DESTINO,ENTRADAS,SALIDAS,SALDO,COSTO\n"
+                          + result.history.map((e: any) => `"${e.date}","${e.reference}","${e.type}","${e.flow_display || ''}","${e.facility_name || ''}","${e.src_warehouse || ''}","${e.dest_warehouse || ''}",${e.qty_in},${e.qty_out},${e.balance},${e.cost}`).join("\n");
                         const encodedUri = encodeURI(csvContent);
                         const link = document.createElement("a");
                         link.setAttribute("href", encodedUri);
@@ -291,14 +371,14 @@ export default function KardexPage() {
                     className="kardex-datatable bg-white rounded-xl shadow-sm border border-slate-100"
                     emptyMessage="No hay movimientos en este rango de fechas."
                   >
-                    <Column field="date" header="FECHA" body={(r) => formatDate(r.date)} style={{ width: '12%' }}></Column>
-                    <Column field="reference" header="DOCUMENTO" style={{ width: '15%' }}></Column>
-                    <Column field="type" header="TIPO" body={typeTemplate} style={{ width: '10%' }}></Column>
-                    <Column field="location_name" header="LOCALIDAD" style={{ width: '20%' }}></Column>
+                    <Column field="date" header="FECHA" body={(r) => formatDate(r.date)} style={{ width: '11%' }}></Column>
+                    <Column field="reference" header="DOCUMENTO" style={{ width: '13%' }}></Column>
+                    <Column field="type" header="TIPO" body={typeTemplate} style={{ width: '9%' }}></Column>
+                    <Column field="flow_display" header="FLUJO / ALMACÉN" body={flowLocationTemplate} style={{ width: '25%' }}></Column>
                     <Column field="qty_in" header="ENTRADAS" className="font-bold text-emerald-600 tabular-nums" style={{ width: '10%' }}></Column>
                     <Column field="qty_out" header="SALIDAS" className="font-bold text-rose-600 tabular-nums" style={{ width: '10%' }}></Column>
                     <Column field="balance" header="SALDO" className="font-black text-blue-700 tabular-nums" style={{ width: '10%' }}></Column>
-                    <Column field="cost" header="COSTO UNIT" body={(r) => formatCurrency(r.cost)} className="text-slate-500 text-xs" style={{ width: '13%' }}></Column>
+                    <Column field="cost" header="COSTO UNIT" body={(r) => formatCurrency(r.cost)} className="text-slate-500 text-xs" style={{ width: '12%' }}></Column>
                   </DataTable>
                 </div>
               ))}

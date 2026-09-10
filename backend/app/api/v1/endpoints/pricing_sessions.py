@@ -18,51 +18,204 @@ from app.schemas.pricing_session import (
 
 router = APIRouter()
 
+def calculate_proposed_price(
+    variant: Optional[ProductVariant],
+    cost: float,
+    db: Session,
+    facility_price: Optional[ProductFacilityPrice] = None,
+    utility_calc_method: Optional[str] = None
+) -> float:
+    """
+    Calcula el proposed_price para una línea de sesión de precios:
+    - Si variant es None (producto no conciliado): proposed_price es 0.0.
+    - Si variant existe y cost > 0:
+      - Utiliza ProductFacilityPrice.target_utility_pct de la ficha.
+      - Según utility_calc_method en SystemSettings:
+        * MARGIN_ON_SALES: cost / (1.0 - (target_utility / 100.0))
+          (si target_utility >= 100%, se aplica como markup para evitar división negativa o cero)
+        * MARKUP_ON_COST: cost * (1.0 + (target_utility / 100.0))
+      - Si la ficha no tiene porcentaje configurado (None o sin registro):
+        Preserva el margen histórico del producto:
+        * MARGIN_ON_SALES: hist_margin = (old_price - old_cost) / old_price * 100
+        * MARKUP_ON_COST: hist_margin = (old_price - old_cost) / old_cost * 100
+        y lo aplica al nuevo costo.
+    """
+    if not variant or cost <= 0:
+        return 0.0
+
+    if not utility_calc_method:
+        from app.models.core import SystemSettings
+        settings = db.query(SystemSettings).first()
+        utility_calc_method = settings.utility_calc_method if settings and settings.utility_calc_method else 'MARGIN_ON_SALES'
+
+    if facility_price is None:
+        facility_price = db.query(ProductFacilityPrice).filter(
+            ProductFacilityPrice.variant_id == variant.id,
+            ProductFacilityPrice.is_active == True,
+            ProductFacilityPrice.target_utility_pct.isnot(None)
+        ).first()
+        if not facility_price:
+            facility_price = db.query(ProductFacilityPrice).filter(
+                ProductFacilityPrice.variant_id == variant.id
+            ).first()
+
+    target_utility = float(facility_price.target_utility_pct) if facility_price and facility_price.target_utility_pct is not None else None
+
+    if target_utility is not None:
+        if utility_calc_method == 'MARGIN_ON_SALES':
+            if target_utility < 100.0:
+                return round(cost / (1.0 - (target_utility / 100.0)), 4)
+            else:
+                return round(cost * (1.0 + (target_utility / 100.0)), 4)
+        else:  # MARKUP_ON_COST
+            return round(cost * (1.0 + (target_utility / 100.0)), 4)
+
+    # Si no tiene margen configurado en la ficha, preservar margen histórico
+    old_p = float(variant.sales_price or 0.0)
+    old_c = float(variant.replacement_cost or variant.standard_cost or 0.0)
+
+    if old_p > 0 and old_c > 0:
+        if utility_calc_method == 'MARGIN_ON_SALES':
+            hist_margin = (old_p - old_c) / old_p * 100.0
+            if 0 <= hist_margin < 100.0:
+                return round(cost / (1.0 - (hist_margin / 100.0)), 4)
+            else:
+                return round(cost * (1.0 + (hist_margin / 100.0)), 4)
+        else:  # MARKUP_ON_COST
+            hist_margin = (old_p - old_c) / old_c * 100.0
+            return round(cost * (1.0 + (hist_margin / 100.0)), 4)
+    elif old_p > 0:
+        return round(max(old_p, cost), 4)
+    else:
+        return round(cost, 4)
+
 def attach_calculated_fields(session: PricingSession, db: Session):
     from app.models.core import SystemSettings
     settings = db.query(SystemSettings).first()
-    utility_calc_method = settings.utility_calc_method if settings else 'MARGIN_ON_SALES'
-    
+    utility_calc_method = settings.utility_calc_method if settings and settings.utility_calc_method else 'MARGIN_ON_SALES'
+
     variant_ids = [line.variant_id for line in session.lines if line.variant_id]
     facility_prices = {}
+    variants_map = {}
     if variant_ids:
         fps = db.query(ProductFacilityPrice).filter(ProductFacilityPrice.variant_id.in_(variant_ids)).all()
         for fp in fps:
-            facility_prices[fp.variant_id] = fp
-            
+            if fp.variant_id not in facility_prices or (fp.is_active and fp.target_utility_pct is not None):
+                facility_prices[fp.variant_id] = fp
+        vars_list = db.query(ProductVariant).filter(ProductVariant.id.in_(variant_ids)).all()
+        variants_map = {v.id: v for v in vars_list}
+
     for line in session.lines:
         line.suggested_price = 0.0
         line.suggested_margin = 0.0
         line.current_margin = 0.0
-        
-        if line.variant_id and line.variant_id in facility_prices:
-            fp = facility_prices[line.variant_id]
-            target_utility = float(fp.target_utility_pct or 0)
-            line.suggested_margin = target_utility
-            
-            is_replacement = (session.target_cost_type == 'REPLACEMENT')
-            if is_replacement:
-                cost = float(line.proposed_replacement_cost or 0)
-                old_c = float(line.old_replacement_cost or 0)
-            else:
-                cost = float(line.proposed_cost or 0)
-                old_c = float(line.old_cost or 0)
 
-            if utility_calc_method == 'MARGIN_ON_SALES':
-                if target_utility < 100:
-                    line.suggested_price = cost / (1.0 - target_utility / 100.0)
+        if line.variant_id and line.variant_id in variants_map:
+            variant = variants_map[line.variant_id]
+            fp = facility_prices.get(line.variant_id)
+
+            is_replacement = (session.target_cost_type == 'REPLACEMENT')
+            cost = float(line.proposed_replacement_cost if is_replacement else line.proposed_cost or 0.0)
+            if cost <= 0:
+                cost = float(line.proposed_cost or line.proposed_replacement_cost or 0.0)
+            old_c = float(line.old_replacement_cost if is_replacement else line.old_cost or 0.0)
+            if old_c <= 0:
+                old_c = float(line.old_cost or line.old_replacement_cost or 0.0)
+            old_p = float(line.old_price or 0.0)
+
+            line.suggested_price = calculate_proposed_price(
+                variant=variant,
+                cost=cost,
+                db=db,
+                facility_price=fp,
+                utility_calc_method=utility_calc_method
+            )
+
+            target_utility = float(fp.target_utility_pct) if fp and fp.target_utility_pct is not None else None
+            if target_utility is not None:
+                line.suggested_margin = target_utility
+            elif old_p > 0 and old_c > 0:
+                if utility_calc_method == 'MARGIN_ON_SALES':
+                    line.suggested_margin = round((old_p - old_c) / old_p * 100.0, 2)
                 else:
-                    line.suggested_price = cost
-                
-                old_p = float(line.old_price or 0)
-                if old_p > 0:
-                    line.current_margin = (old_p - old_c) / old_p * 100.0
-            else: # MARKUP_ON_COST
-                line.suggested_price = cost * (1.0 + target_utility / 100.0)
-                
-                old_p = float(line.old_price or 0)
-                if old_c > 0:
-                    line.current_margin = (old_p - old_c) / old_c * 100.0
+                    line.suggested_margin = round((old_p - old_c) / old_c * 100.0, 2)
+
+            if old_p > 0:
+                if utility_calc_method == 'MARGIN_ON_SALES':
+                    line.current_margin = round((old_p - old_c) / old_p * 100.0, 2)
+                elif old_c > 0:
+                    line.current_margin = round((old_p - old_c) / old_c * 100.0, 2)
+
+def parse_csv_structure(csv_text: str):
+    """
+    Detecta de forma robusta el delimitador (, ; \\t |) e identifica la fila de encabezados,
+    saltando títulos o metadatos iniciales y soportando sub-encabezados (como en Granco).
+    """
+    import csv
+    import io
+
+    # 1. Delimiter sniffing
+    delim = ','
+    try:
+        sample = csv_text[:4096]
+        dialect = csv.Sniffer().sniff(sample, delimiters=[',', ';', '\t', '|'])
+        delim = dialect.delimiter
+    except Exception:
+        counts = {d: csv_text[:2000].count(d) for d in [',', ';', '\t', '|']}
+        delim = max(counts, key=counts.get) if max(counts.values()) > 0 else ','
+
+    reader = list(csv.reader(io.StringIO(csv_text), delimiter=delim))
+    if not reader:
+        return [], [], delim
+
+    # 2. Find header row (skipping metadata/title rows)
+    header_keywords = [
+        'codigo', 'código', 'sku', 'ref', 'referencia', 'producto',
+        'descripcion', 'descripción', 'barra', 'costo', 'precio', 'price',
+        'cost', 'unidad', 'cant', 'unidades', 'p.m.v.p', 'pmvp', 'total'
+    ]
+    header_idx = -1
+    for i, row in enumerate(reader[:15]):
+        row_str = ' '.join(c.lower() for c in row if c)
+        non_empty = [c.strip() for c in row if c.strip()]
+        if len(non_empty) >= 2 and any(kw in row_str for kw in header_keywords):
+            header_idx = i
+            break
+
+    if header_idx == -1:
+        for i, row in enumerate(reader[:15]):
+            if sum(1 for c in row if c.strip()) >= 2:
+                header_idx = i
+                break
+
+    if header_idx == -1:
+        header_idx = 0
+
+    headers = [c.strip() for c in reader[header_idx]]
+
+    # 3. Check for multi-line headers (e.g. Granco with 'PRECIOS' in row N and 'UNIDAD', 'EMPAQUE' in row N+1)
+    next_idx = header_idx + 1
+    if next_idx < len(reader):
+        next_row = reader[next_idx]
+        non_empty_next = [c.strip() for c in next_row if c.strip()]
+        has_letters = any(any(ch.isalpha() for ch in c) for c in non_empty_next)
+        has_only_digits = any(c.replace('.', '').replace(',', '').isdigit() for c in non_empty_next[:3]) if len(non_empty_next) >= 3 else False
+
+        if has_letters and not has_only_digits and any(c.lower() in ['unidad', 'empaque', 'iva', 'total', 'p.m.v.p.', 'pmvp', 'base'] for c in non_empty_next):
+            from itertools import zip_longest
+            merged = []
+            for h1, h2 in zip_longest(headers, [c.strip() for c in next_row], fillvalue=''):
+                if h1 and h2:
+                    merged.append(f"{h1} {h2}".strip())
+                elif h2:
+                    merged.append(h2)
+                else:
+                    merged.append(h1)
+            headers = merged
+            header_idx = next_idx
+
+    data_rows = reader[header_idx + 1:]
+    return headers, data_rows, delim
 
 @router.post("/", response_model=PricingSessionOut)
 def create_pricing_session(
@@ -74,7 +227,7 @@ def create_pricing_session(
     """ Create a new Pricing Session """
     if session_in.update_type not in ('COST', 'PRICE', 'BOTH'):
         raise HTTPException(status_code=400, detail="update_type inválido. Debe ser 'COST', 'PRICE' o 'BOTH'.")
-        
+
     db_session = PricingSession(
         name=session_in.name,
         source_type=session_in.source_type,
@@ -86,7 +239,7 @@ def create_pricing_session(
     )
     db.add(db_session)
     db.flush()
-    
+
     if session_in.lines:
         for line in session_in.lines:
             db_line = PricingSessionLine(
@@ -102,7 +255,7 @@ def create_pricing_session(
                 action=line.action
             )
             db.add(db_line)
-            
+
     db.commit()
     db.refresh(db_session)
     attach_calculated_fields(db_session, db)
@@ -195,18 +348,18 @@ def update_session_line(
 ) -> Any:
     """ Update a single line in a draft session """
     line = db.query(PricingSessionLine).filter(
-        PricingSessionLine.id == line_id, 
+        PricingSessionLine.id == line_id,
         PricingSessionLine.session_id == session_id
     ).first()
     if not line:
         raise HTTPException(status_code=404, detail="Line not found")
-        
+
     session = db.query(PricingSession).filter(PricingSession.id == session_id).first()
     if session.status != 'DRAFT':
         raise HTTPException(status_code=400, detail="Can only edit DRAFT sessions")
-        
+
     update_data = line_in.dict(exclude_unset=True)
-    
+
     # Validaciones de consistencia con el tipo de actualización
     if session.update_type == 'PRICE':
         if ('proposed_cost' in update_data and update_data['proposed_cost'] is not None and float(update_data['proposed_cost']) != float(line.old_cost)) or \
@@ -215,7 +368,7 @@ def update_session_line(
 
     for field, value in update_data.items():
         setattr(line, field, value)
-        
+
     db.commit()
     return {"message": "Line updated"}
 
@@ -232,12 +385,12 @@ def apply_pricing_session(
         raise HTTPException(status_code=404, detail="Session not found")
     if session.status != 'DRAFT':
         raise HTTPException(status_code=400, detail="Session already processed/applied")
-        
+
     # Transaction begins
     for line in session.lines:
         if line.action == 'IGNORE':
             continue
-            
+
         if line.variant_id:
             variant = db.query(ProductVariant).filter(ProductVariant.id == line.variant_id).first()
             if variant:
@@ -249,15 +402,15 @@ def apply_pricing_session(
                 if session.update_type in ('COST', 'BOTH'):
                     variant.standard_cost = line.proposed_cost
                     variant.replacement_cost = line.proposed_replacement_cost
-                    
+
                     if session.supplier_id:
                         existing_sp = db.query(SupplierProduct).filter(
                             (SupplierProduct.supplier_id == session.supplier_id) &
                             (SupplierProduct.variant_id == variant.id)
                         ).first()
-                        
+
                         proposed_rc = line.proposed_replacement_cost if line.proposed_replacement_cost is not None else line.proposed_cost
-                        
+
                         if existing_sp:
                             existing_sp.replacement_cost = proposed_rc
                         else:
@@ -274,7 +427,7 @@ def apply_pricing_session(
                                     pass
                             if not sku:
                                 sku = variant.sku
-                            
+
                             new_sp = SupplierProduct(
                                 supplier_id=session.supplier_id,
                                 variant_id=variant.id,
@@ -285,13 +438,13 @@ def apply_pricing_session(
                                 is_primary=True
                             )
                             db.add(new_sp)
-                
+
                 # Price updates (or Cost session if price override is set)
                 if session.update_type in ('PRICE', 'BOTH') or (session.update_type == 'COST' and line.proposed_price and float(line.proposed_price) != float(line.old_price)):
                     variant.sales_price = line.proposed_price
                     variant.last_price_updated_by_id = current_user.id
                     variant.last_price_updated_at = func.now()
-                
+
     session.status = 'APPLIED'
     session.applied_at = datetime.utcnow()
     db.commit()
@@ -309,63 +462,65 @@ def upload_csv_to_session(
     file: UploadFile = File(...)
 ) -> Any:
     """ Sube un CSV, lo parsea usando Inteligencia Artificial (Gemini) o heurísticas locales, y concilia las variantes """
-    import csv
     import io
     import os
     import re
     import json
     import urllib.request
-    from app.models.core import Supplier
+    from app.models.core import Supplier, SystemSettings
 
     session = db.query(PricingSession).filter(PricingSession.id == id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.status != 'DRAFT':
         raise HTTPException(status_code=400, detail="Solamente puedes importar a borradores (DRAFT)")
-        
+
     contents = file.file.read()
-    csv_text = contents.decode('utf-8', errors='ignore')
-    
-    # Read the first 5 lines of the CSV to use as sample text for Gemini
-    lines = csv_text.splitlines()
-    sample_lines = lines[:5]
+    csv_text = contents.decode('utf-8-sig', errors='ignore')
+
+    # Delimiter sniffing and header detection
+    headers, data_rows, delim = parse_csv_structure(csv_text)
+
+    # Sample text for Gemini using detected headers and sample rows
+    sample_lines = [delim.join(headers)]
+    for r in data_rows[:5]:
+        sample_lines.append(delim.join(r))
     sample_text = "\n".join(sample_lines)
-    
-    # Get headers from CSV DictReader
-    buffer = io.StringIO(csv_text)
-    csv_reader = csv.DictReader(buffer)
-    headers = csv_reader.fieldnames or []
-    
+
     gemini_success = False
     parsed_mapping = {}
     from app.core.config import settings
     api_key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    
+    if not api_key:
+        from dotenv import load_dotenv, find_dotenv
+        load_dotenv(find_dotenv())
+        load_dotenv('/home/lzambrano/Desarrollo/Morpheus/.env')
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
     if api_key:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            
+
             prompt = (
                 "Eres un asistente de procesamiento de datos experto para Neo ERP.\n"
-                "Tu tarea es analizar las primeras líneas (incluyendo la fila de encabezados y filas de ejemplo) de un archivo CSV y mapear sus columnas a campos estándar.\n\n"
+                "Tu tarea es analizar los encabezados y filas de muestra de un archivo CSV de un proveedor y mapear sus columnas a campos estándar.\n"
+                "IMPORTANTE: Estamos analizando exclusivamente costos de adquisición del proveedor. El precio de venta al consumidor se calculará en el sistema con base en el margen de utilidad de la ficha del producto. NO mapees precios de venta al consumidor, ni PVP, ni totales con IVA como costo.\n\n"
                 "Los campos estándar son:\n"
-                "1. `sku`: Columna que contiene el identificador principal del producto (código, SKU, código de barras principal, etc.).\n"
-                "2. `cost`: Columna que contiene el costo unitario de adquisición o costo del empaque.\n"
-                "3. `suggested_price`: Columna que contiene el precio de venta sugerido (PVP). Si no existe, pon null.\n"
-                "4. `factor`: Columna que contiene las unidades por empaque, factor de conversión, piezas por caja, etc. Si no existe, pon null.\n"
-                "5. `description`: Columna que contiene el nombre o descripción del producto. Si no existe, pon null.\n"
-                "6. `barcode`: Columna específica para código de barras (si es diferente o está separada de sku). Si no existe, pon null.\n\n"
+                "1. `sku`: Columna que contiene el código o identificador principal del producto del proveedor.\n"
+                "2. `cost`: Columna que contiene el costo unitario de adquisición neto del proveedor (excluyendo IVA y excluyendo PVP/totales).\n"
+                "3. `factor`: Columna que contiene las unidades por empaque o piezas por bulto/caja. Si no existe, pon null.\n"
+                "4. `description`: Columna que contiene el nombre o descripción del producto. Si no existe, pon null.\n"
+                "5. `barcode`: Columna específica para código de barras de la unidad (si está disponible). Si no existe, pon null.\n\n"
                 "Debes identificar los nombres exactos de los encabezados del CSV que corresponden a cada uno de estos campos.\n"
                 "Retorna ÚNICAMENTE un JSON válido con la siguiente estructura exacta, sin bloques markdown ni formateos adicionales (directamente el JSON):\n"
                 "{\n"
                 "  \"sku\": \"nombre_columna_sku_o_null\",\n"
                 "  \"cost\": \"nombre_columna_cost_o_null\",\n"
-                "  \"suggested_price\": \"nombre_columna_suggested_price_o_null\",\n"
                 "  \"factor\": \"nombre_columna_factor_o_null\",\n"
                 "  \"description\": \"nombre_columna_description_o_null\",\n"
                 "  \"barcode\": \"nombre_columna_barcode_o_null\"\n"
                 "}\n\n"
-                f"A continuación, las primeras líneas del archivo CSV:\n{sample_text}"
+                f"A continuación, los encabezados y filas de muestra del archivo CSV:\n{sample_text}"
             )
 
             payload = {
@@ -410,72 +565,73 @@ def upload_csv_to_session(
             print(f"Error calling Gemini: {e}. Fallback to local column heuristics.")
 
     fallback_mapping = {
-        "sku": next((k for k in headers if k and k.strip().lower() in ['sku', 'codigo', 'código', 'referencia', 'ref', 'barcode', 'código de barras']), None),
-        "cost": next((k for k in headers if k and k.strip().lower() in ['nuevo_costo', 'costo', 'precio_proveedor', 'costo_empaque', 'unit_cost', 'cost']), None),
-        "suggested_price": next((k for k in headers if k and k.strip().lower() in ['nuevo_precio', 'precio', 'pvp', 'suggested_price', 'price']), None),
-        "factor": next((k for k in headers if k and k.strip().lower() in ['unidades', 'cant_empaque', 'unidades_por_empaque', 'factor', 'piezas', 'caja', 'unidades_empaque']), None),
-        "description": next((k for k in headers if k and k.strip().lower() in ['description', 'descripcion', 'descripción', 'nombre', 'name', 'producto', 'detalle']), None),
-        "barcode": next((k for k in headers if k and k.strip().lower() in ['barcode', 'barcodes', 'codigo_barras', 'código de barras', 'upc', 'ean', 'ean13']), None)
+        "sku": next((k for k in headers if k and k.strip().lower() in ['sku', 'codigo', 'código', 'referencia', 'ref', 'codigo de barras unidad', 'barcode']), None),
+        "cost": next((k for k in headers if k and k.strip().lower() in ['precios unidad', 'costo unitario', 'unit_cost', 'costo', 'nuevo_costo', 'precio_proveedor', 'cost', 'base', 'unidad', 'precio_unidad']), None),
+        "factor": next((k for k in headers if k and k.strip().lower() in ['unidades x empaque', 'unidades', 'cant_empaque', 'unidades_por_empaque', 'factor', 'piezas', 'caja', 'unidades_empaque']), None),
+        "description": next((k for k in headers if k and k.strip().lower() in ['productos', 'description', 'descripcion', 'descripción', 'nombre', 'name', 'producto', 'detalle']), None),
+        "barcode": next((k for k in headers if k and k.strip().lower() in ['codigo de barras unidad', 'barcode', 'barcodes', 'codigo_barras', 'código de barras', 'upc', 'ean', 'ean13']), None)
     }
 
     mapping = {}
     if gemini_success:
-        for field in ["sku", "cost", "suggested_price", "factor", "description", "barcode"]:
+        for field in ["sku", "cost", "factor", "description", "barcode"]:
             val = parsed_mapping.get(field)
             if val:
-                match = next((h for h in headers if h.strip().lower() == val.strip().lower()), None)
+                match = next((h for h in headers if h.strip().lower() == str(val).strip().lower()), None)
                 if match:
                     mapping[field] = match
                 else:
-                    if val in headers:
-                        mapping[field] = val
-                    else:
-                        mapping[field] = None
+                    mapping[field] = val if val in headers else fallback_mapping.get(field)
             else:
-                mapping[field] = None
+                mapping[field] = fallback_mapping.get(field)
     else:
         mapping = fallback_mapping
 
     # Ensure we at least have sku and cost mapped
     if not mapping.get("sku") and headers:
-        mapping["sku"] = next((h for h in headers if h and h.strip().lower() in ['sku', 'codigo', 'código', 'referencia', 'ref', 'barcode', 'código de barras']), headers[0])
+        mapping["sku"] = fallback_mapping.get("sku") or headers[0]
     if not mapping.get("cost") and headers:
-        mapping["cost"] = next((h for h in headers if h and h.strip().lower() in ['nuevo_costo', 'costo', 'precio_proveedor', 'costo_empaque', 'unit_cost', 'cost']), None)
+        mapping["cost"] = fallback_mapping.get("cost")
 
-    # Process all rows using parsed mapping
-    buffer.seek(0)
-    csv_reader = csv.DictReader(buffer)
+    settings_row = db.query(SystemSettings).first()
+    utility_calc_method = settings_row.utility_calc_method if settings_row and settings_row.utility_calc_method else 'MARGIN_ON_SALES'
+
     lines_created = 0
     supplier_id = session.supplier_id
 
-    for row in csv_reader:
+    lines_by_variant = {}
+    lines_by_ref = {}
+    for el in db.query(PricingSessionLine).filter(PricingSessionLine.session_id == session.id).all():
+        if el.variant_id:
+            lines_by_variant[el.variant_id] = el
+        elif el.external_reference_name:
+            lines_by_ref[el.external_reference_name] = el
+
+    for raw_row in data_rows:
+        if not raw_row or sum(1 for c in raw_row if c.strip()) < 2:
+            continue
+
+        row = dict(zip(headers, raw_row))
         sku_val = None
         cost_val = 0.0
-        suggested_price_val = 0.0
         factor_val = 1.0
         description_val = ""
         barcode_val = None
 
         if mapping.get("sku") and row.get(mapping["sku"]):
             sku_val = str(row[mapping["sku"]]).strip()
-        
-        if not sku_val:
+
+        # Skip repeated header rows or non-data rows
+        if not sku_val or sku_val.lower() in ['codigo', 'código', 'sku', 'ref', 'referencia']:
             continue
-            
+
         if mapping.get("cost") and row.get(mapping["cost"]):
             try:
                 raw_cost = str(row[mapping["cost"]]).replace(',', '.').strip()
                 cost_val = float(raw_cost)
             except ValueError:
                 cost_val = 0.0
-                
-        if mapping.get("suggested_price") and row.get(mapping["suggested_price"]):
-            try:
-                raw_price = str(row[mapping["suggested_price"]]).replace(',', '.').strip()
-                suggested_price_val = float(raw_price)
-            except ValueError:
-                suggested_price_val = 0.0
-                
+
         if mapping.get("factor") and row.get(mapping["factor"]):
             try:
                 raw_factor = str(row[mapping["factor"]]).replace(',', '.').strip()
@@ -484,31 +640,38 @@ def upload_csv_to_session(
                 factor_val = 1.0
         if factor_val <= 0.0:
             factor_val = 1.0
-            
+
         if mapping.get("description") and row.get(mapping["description"]):
             description_val = str(row[mapping["description"]]).strip()
-            
-        if mapping.get("barcode") and row.get(mapping["barcode"]):
-            barcode_val = str(row[mapping["barcode"]]).strip()
 
-        # Calculate unit cost
-        unit_cost = cost_val / factor_val
+        if mapping.get("barcode") and row.get(mapping["barcode"]):
+            raw_b = str(row[mapping["barcode"]]).strip().replace(' ', '')
+            barcode_val = raw_b if raw_b else None
+
+        # Calculate unit cost:
+        # If the cost column is already the unit cost, do not divide by factor!
+        cost_col_name = (mapping.get("cost") or "").lower()
+        if any(w in cost_col_name for w in ['unidad', 'unit', 'unitario', 'pza', 'pieza']):
+            unit_cost = cost_val
+        else:
+            unit_cost = cost_val / factor_val
 
         # Hierarchical matching
         variant = None
-        
+
         # 1. Match by barcode
         if barcode_val:
             variant = db.query(ProductVariant).filter(
                 (ProductVariant.barcode == barcode_val) |
                 (ProductVariant.barcodes.any(ProductBarcode.barcode == barcode_val))
             ).first()
-            
+
         # Try sku_val as barcode if no barcode_val or no match found
         if not variant and sku_val:
+            clean_sku_b = sku_val.replace(' ', '')
             variant = db.query(ProductVariant).filter(
-                (ProductVariant.barcode == sku_val) |
-                (ProductVariant.barcodes.any(ProductBarcode.barcode == sku_val))
+                (ProductVariant.barcode == clean_sku_b) |
+                (ProductVariant.barcodes.any(ProductBarcode.barcode == clean_sku_b))
             ).first()
 
         # 2. Match by supplier SKU or master SKU
@@ -520,7 +683,7 @@ def upload_csv_to_session(
                 ).first()
                 if supplier_product:
                     variant = db.query(ProductVariant).filter(ProductVariant.id == supplier_product.variant_id).first()
-            
+
             if not variant:
                 variant = db.query(ProductVariant).filter(ProductVariant.sku == sku_val).first()
 
@@ -534,7 +697,7 @@ def upload_csv_to_session(
                 if len(keywords) > 1:
                     query = query.filter(Product.name.ilike(f"%{keywords[1]}%"))
                 candidates = query.all()
-                
+
                 best_candidate = None
                 best_score = 0
                 for cand in candidates:
@@ -543,25 +706,32 @@ def upload_csv_to_session(
                     if score > best_score:
                         best_score = score
                         best_candidate = cand
-                
+
                 if best_candidate and (best_score / len(keywords)) >= 0.5:
                     variant = best_candidate
 
         # Create or update PricingSessionLine
         if variant:
-            old_c = variant.standard_cost
-            old_rc = variant.replacement_cost
-            old_p = variant.sales_price
-            
+            old_c = float(variant.standard_cost or 0)
+            old_rc = float(variant.replacement_cost or 0)
+            old_p = float(variant.sales_price or 0)
+
             proposed_cost_val = unit_cost if (session.update_type in ('COST', 'BOTH') and unit_cost > 0) else old_c
             proposed_replacement_cost_val = unit_cost if (session.update_type in ('COST', 'BOTH') and unit_cost > 0) else old_rc
-            proposed_price_val = suggested_price_val if (session.update_type in ('PRICE', 'BOTH') and suggested_price_val > 0) else old_p
 
-            existing_line = db.query(PricingSessionLine).filter(
-                (PricingSessionLine.session_id == session.id) &
-                (PricingSessionLine.variant_id == variant.id)
-            ).first()
-            
+            # Base cost for price calculation
+            is_replacement = (session.target_cost_type == 'REPLACEMENT')
+            cost_for_price = proposed_replacement_cost_val if is_replacement else proposed_cost_val
+
+            # Automatically calculate proposed_price based on ficha margin
+            proposed_price_val = calculate_proposed_price(
+                variant=variant,
+                cost=cost_for_price,
+                db=db,
+                utility_calc_method=utility_calc_method
+            )
+
+            existing_line = lines_by_variant.get(variant.id)
             if existing_line:
                 existing_line.proposed_cost = proposed_cost_val
                 existing_line.proposed_replacement_cost = proposed_replacement_cost_val
@@ -581,26 +751,24 @@ def upload_csv_to_session(
                     action='UPDATE_COST'
                 )
                 db.add(db_line)
+                lines_by_variant[variant.id] = db_line
+                lines_created += 1
         else:
-            # Not matched -> CREATE_NEW with JSON string in external_reference_name
+            # Not matched -> CREATE_NEW with proposed_price = 0.0
             ref_json = json.dumps({
                 "supplier_sku": sku_val,
                 "barcode": barcode_val or sku_val,
                 "description": description_val or sku_val or "Producto Importado"
             })
-            
+
             proposed_cost_val = unit_cost if session.update_type in ('COST', 'BOTH') else 0.0
-            proposed_price_val = suggested_price_val if session.update_type in ('PRICE', 'BOTH') else 0.0
-            
-            existing_line = db.query(PricingSessionLine).filter(
-                (PricingSessionLine.session_id == session.id) &
-                (PricingSessionLine.external_reference_name == ref_json)
-            ).first()
-            
+            proposed_price_val = 0.0
+
+            existing_line = lines_by_ref.get(ref_json)
             if existing_line:
                 existing_line.proposed_cost = proposed_cost_val
                 existing_line.proposed_replacement_cost = proposed_cost_val
-                existing_line.proposed_price = proposed_price_val
+                existing_line.proposed_price = 0.0
             else:
                 db_line = PricingSessionLine(
                     session_id=session.id,
@@ -611,13 +779,13 @@ def upload_csv_to_session(
                     old_replacement_cost=0.0,
                     proposed_replacement_cost=proposed_cost_val,
                     old_price=0.0,
-                    proposed_price=proposed_price_val,
+                    proposed_price=0.0,
                     action='CREATE_NEW'
                 )
                 db.add(db_line)
-                
-        lines_created += 1
-        
+                lines_by_ref[ref_json] = db_line
+                lines_created += 1
+
     db.commit()
     return {"message": "CSV Procesado correctamente", "lines_created": lines_created, "use_gemini": gemini_success}
 
@@ -670,19 +838,19 @@ def upload_pdf_to_session(
                     if row_idx > 600:
                         break
                     row_vals = [str(cell).strip() if cell is not None else "" for cell in row]
-                    
+
                     # Optimize columns based on currency to reduce token count and prevent mixups
                     if len(row_vals) > 17:
                         if currency == "USD":
                             row_vals = row_vals[:17]
                         elif currency == "VES":
                             row_vals = row_vals[:8] + row_vals[17:]
-                            
+
                     # Drop headers, footers, blank rows, and banners (must have at least 3 non-empty cells)
                     non_empty_count = sum(1 for v in row_vals if v != "")
                     if non_empty_count < 3:
                         continue
-                        
+
                     lines.append(" | ".join(row_vals))
                 extracted_text = "\n".join(lines)
             except Exception as e:
@@ -714,13 +882,18 @@ def upload_pdf_to_session(
                         status_code=500,
                         detail=f"Error al procesar PDF (pdftotext y fallback de pypdf fallaron): {str(py_err)}"
                     )
-        
+
         # Intentar parsear usando Gemini
         parsed_items = []
         gemini_success = False
         from app.core.config import settings
         api_key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        
+        if not api_key:
+            from dotenv import load_dotenv, find_dotenv
+            load_dotenv(find_dotenv())
+            load_dotenv('/home/lzambrano/Desarrollo/Morpheus/.env')
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
         if api_key:
             try:
                 import concurrent.futures
@@ -740,17 +913,21 @@ def upload_pdf_to_session(
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
                     prompt = (
                         "Eres un asistente de procesamiento de datos experto para Neo ERP.\n"
-                        "Tu tarea es analizar el siguiente texto de una lista de precios o factura de un proveedor y extraer todos los productos de forma estructurada.\n\n"
-                        f"IMPORTANTE: El usuario ha seleccionado la moneda {currency} para esta importación. "
-                        f"Si la lista contiene precios en múltiples monedas (por ejemplo, USD y VES en columnas distintas), "
+                        "Tu tarea es analizar el siguiente texto de una lista de precios o factura de un proveedor y extraer ÚNICAMENTE los costos de adquisición de los productos de forma estructurada.\n"
+                        "IMPORTANTE: Estamos analizando exclusivamente costos de compra al proveedor. El precio de venta al público se calculará en el sistema con base en el margen de utilidad de la ficha del producto. NO extraigas precios de venta al público (PVP), ni montos con IVA, ni totales al consumidor.\n\n"
+                        f"El usuario ha seleccionado la moneda {currency} para esta importación. "
+                        f"Si la lista contiene costos en múltiples monedas (por ejemplo, USD y VES en columnas distintas), "
                         f"debes extraer únicamente los valores correspondientes a la columna de {currency}. "
                         "No mezcles monedas ni extraigas valores de otras monedas.\n\n"
                         "Identifica las columnas de la tabla de productos. Para cada producto, extrae los siguientes campos:\n"
-                        "1. `supplier_sku`: Código del producto asignado por el proveedor o código de referencia principal (ej. BE0328). Si no hay, colócalo como null.\n"
-                        "2. `barcode`: Código de barras numérico del producto (ej. 5000267024233). Si no tiene, colócalo como null.\n"
-                        "3. `description`: Descripción o nombre del producto (ej. WHISKY JOHNNIE WALKER GOLD LABEL RESERVE).\n"
-                        "4. `cost`: Costo de adquisición unitario. Si la lista presenta precios por caja/empaque (UMD > 1) y costos por empaque, divide el costo por la cantidad para obtener el costo unitario. El costo de adquisición debe incluir los impuestos especiales no recuperables (como impuestos de licores), pero excluir el IVA. Si el formato tiene BASE e IMP (Impuesto especial), súmalos para obtener el costo unitario de adquisición.\n"
-                        "5. `suggested_price`: Precio de venta sugerido (PVP) al cliente final (incluyendo impuestos si está disponible, ej. 36.00). Si no se proporciona, colócalo como null.\n\n"
+                        "1. `supplier_sku`: Código del producto asignado por el proveedor o código de referencia principal (ej. 1392820). Si no hay, colócalo como null.\n"
+                        "2. `barcode`: Código de barras numérico del producto (ej. 7591221928202). Prioriza el código de barras de la unidad de venta si hay varios. Si no tiene, colócalo como null.\n"
+                        "3. `description`: Descripción o nombre del producto (ej. BOLSAS P/BASURA GRANCO 15 L).\n"
+                        "4. `cost`: Costo unitario neto de adquisición del proveedor (excluyendo IVA). "
+                        "Si el documento desglosa costo por unidad y por empaque/bulto (ej. UNIDAD vs EMPAQUE), toma directamente el costo unitario neto sin IVA. "
+                        "Si el documento solo tiene costo por caja/empaque, divide el costo entre la cantidad de unidades para obtener el costo unitario. "
+                        "Si el formato incluye BASE e impuestos especiales no recuperables (como licores), súmalos para obtener el costo neto de adquisición, pero NUNCA incluyas IVA ni precios de venta al público.\n"
+                        "5. `pack_factor`: Unidades por empaque o caja si están especificadas en el documento (ej. 36 o 24). Si no se especifica, usa 1.0.\n\n"
                         "Retorna ÚNICAMENTE un JSON válido (un arreglo de objetos) con la siguiente estructura exacta, sin bloques markdown ni formateos adicionales (directamente el JSON):\n"
                         "[\n"
                         "  {\n"
@@ -758,7 +935,7 @@ def upload_pdf_to_session(
                         "    \"barcode\": \"string o null\",\n"
                         "    \"description\": \"string\",\n"
                         "    \"cost\": float,\n"
-                        "    \"suggested_price\": float o null\n"
+                        "    \"pack_factor\": float\n"
                         "  }\n"
                         "]\n\n"
                         f"A continuación, el texto extraído del archivo:\n{chunk_text}"
@@ -781,7 +958,7 @@ def upload_pdf_to_session(
                             with urllib.request.urlopen(req, timeout=120) as response:
                                 res_data = json.loads(response.read().decode('utf-8'))
                                 text_content = res_data['candidates'][0]['content']['parts'][0]['text'].strip()
-                                
+
                                 # Clean markdown code block if present
                                 if text_content.startswith("```"):
                                     lines_c = text_content.splitlines()
@@ -814,77 +991,162 @@ def upload_pdf_to_session(
                                 parsed_items.extend(chunk_result)
                     gemini_success = True
             except Exception as e:
-                print(f"Error calling Gemini: {e}. Fallback to local regex parser.")
-        
-        # Fallback local regex para Diageo (si Gemini falla o no hay API key)
+                print(f"Error calling Gemini: {e}. Fallback to local regex and tabular parser.")
+
+        # Fallback local regex y tabular si Gemini falla o no hay API key
         if not gemini_success:
             import re
             parsed_items = []
-            price_pattern = r'\$?(\d+(?:[\.,]\d+))'
-            regex_str = (
-                r'^\s*(BE\d+)\s+'           # Group 1: SKU
-                r'(\d+)?\s+'                 # Group 2: Barcode (optional)
-                r'(.+?)\s+'                  # Group 3: Description
-                r'(\d+)\s+'                  # Group 4: UMD
-                + r'\s+'.join([price_pattern] * 8)
-            )
-            pattern = re.compile(regex_str)
-            for line in extracted_text.split('\n'):
-                striped = line.strip()
-                if not striped or not re.match(r'^\s*BE\d+', line):
-                    continue
-                m = pattern.match(line)
-                if m:
-                    sku = m.group(1)
-                    barcode = m.group(2) or None
-                    desc = m.group(3).strip()
-                    umd = int(m.group(4))
-                    prices = [float(m.group(idx).replace(',', '.')) for idx in range(5, 13)]
-                    
-                    parsed_items.append({
-                        "supplier_sku": sku,
-                        "barcode": barcode,
-                        "description": desc,
-                        "cost": prices[0] + prices[1], # Base + Impuesto
-                        "suggested_price": prices[7]   # Cliente Total
-                    })
+
+            # 1. Intentar formato Excel con columnas separadas por ' | '
+            for line in extracted_text.splitlines():
+                if ' | ' in line:
+                    parts = [p.strip() for p in line.split(' | ')]
+                    if len(parts) >= 7 and parts[0].isdigit() and len(parts[0]) >= 4:
+                        sku = parts[0]
+                        barcode = parts[1] if (parts[1].isdigit() and len(parts[1]) in (8, 12, 13, 14)) else None
+                        desc = parts[3]
+                        try:
+                            factor = float(parts[5].replace(',', '.'))
+                        except Exception:
+                            factor = 1.0
+                        try:
+                            cost = float(parts[6].replace(',', '.'))
+                        except Exception:
+                            cost = 0.0
+                        parsed_items.append({
+                            "supplier_sku": sku,
+                            "barcode": barcode,
+                            "description": desc,
+                            "cost": cost,
+                            "pack_factor": factor
+                        })
+
+            # 2. Intentar formato tabular PDF (como Granco con precios al final de línea)
+            if not parsed_items:
+                for line in extracted_text.splitlines():
+                    m_prices = re.search(r'(\d+[\.,]\d{2})\s+(\d+[\.,]\d{2})\s+(\d+[\.,]\d{2})\s+(\d+[\.,]\d{2})\s+(\d+[\.,]\d{2})\s*$', line)
+                    if m_prices:
+                        prefix = line[:m_prices.start()].strip()
+                        prices = [float(m_prices.group(i).replace(',', '.')) for i in range(1, 6)]
+                        m_sku = re.match(r'^(\d{4,})\s+', prefix)
+                        if m_sku:
+                            sku = m_sku.group(1)
+                            rem = prefix[m_sku.end():].strip()
+                            m_factor = re.search(r'(\d+)\s*$', rem)
+                            factor = float(m_factor.group(1)) if m_factor else 1.0
+                            if m_factor:
+                                rem = rem[:m_factor.start()].strip()
+                            m_content = re.search(r'(\d+\s*(?:un|m|kg|g|lts|l)?)\s*$', rem, re.IGNORECASE)
+                            if m_content:
+                                rem = rem[:m_content.start()].strip()
+                            m_bar = re.match(r'^([\d\s]{7,18})\s+([\d\s]{7,18})?\s*(.*)$', rem)
+                            barcode = None
+                            desc = rem
+                            if m_bar:
+                                b1 = m_bar.group(1).replace(' ', '')
+                                if len(b1) in (8, 12, 13, 14):
+                                    barcode = b1
+                                    desc = m_bar.group(3) or ''
+                            if not desc:
+                                desc = rem
+                            parsed_items.append({
+                                "supplier_sku": sku,
+                                "barcode": barcode,
+                                "description": desc.strip(),
+                                "cost": prices[0], # Costo unitario neto (UNIDAD)
+                                "pack_factor": factor
+                            })
+
+            # 3. Intentar formato Diageo (BE\d+)
+            if not parsed_items:
+                price_pattern = r'\$?(\d+(?:[\.,]\d+))'
+                regex_str = (
+                    r'^\s*(BE\d+)\s+'           # Group 1: SKU
+                    r'(\d+)?\s+'                 # Group 2: Barcode (optional)
+                    r'(.+?)\s+'                  # Group 3: Description
+                    r'(\d+)\s+'                  # Group 4: UMD
+                    + r'\s+'.join([price_pattern] * 8)
+                )
+                pattern = re.compile(regex_str)
+                for line in extracted_text.splitlines():
+                    striped = line.strip()
+                    if not striped or not re.match(r'^\s*BE\d+', line):
+                        continue
+                    m = pattern.match(line)
+                    if m:
+                        sku = m.group(1)
+                        barcode = m.group(2) or None
+                        desc = m.group(3).strip()
+                        umd = int(m.group(4))
+                        prices = [float(m.group(idx).replace(',', '.')) for idx in range(5, 13)]
+                        parsed_items.append({
+                            "supplier_sku": sku,
+                            "barcode": barcode,
+                            "description": desc,
+                            "cost": prices[0] + prices[1], # Base + Impuesto especial
+                            "pack_factor": float(umd)
+                        })
 
         # Conciliación jerárquica
         lines_created = 0
         supplier_id = session.supplier_id
-        
-        # Si no hay proveedor seleccionado en la sesión, buscamos uno por defecto de Diageo
+
+        # Si no hay proveedor seleccionado en la sesión, buscamos uno por defecto
         if not supplier_id:
             supplier = db.query(Supplier).filter(Supplier.name.ilike('%diageo%')).first()
             if not supplier:
-                raise HTTPException(status_code=400, detail="Debe seleccionar un proveedor válido en el formulario antes de subir el PDF.")
-            supplier_id = supplier.id
+                supplier = db.query(Supplier).first()
+            if supplier:
+                supplier_id = supplier.id
+
+        from app.models.core import SystemSettings
+        settings_row = db.query(SystemSettings).first()
+        utility_calc_method = settings_row.utility_calc_method if settings_row and settings_row.utility_calc_method else 'MARGIN_ON_SALES'
 
         import re
         import json
+
+        lines_by_variant = {}
+        lines_by_ref = {}
+        for el in db.query(PricingSessionLine).filter(PricingSessionLine.session_id == session.id).all():
+            if el.variant_id:
+                lines_by_variant[el.variant_id] = el
+            elif el.external_reference_name:
+                lines_by_ref[el.external_reference_name] = el
+
         for item in parsed_items:
             clean_desc = item["description"].strip()
             item_sku = item.get("supplier_sku")
             item_barcode = item.get("barcode")
-            
+
             variant = None
-            
+
             # 1. Match por código de barra
             if item_barcode:
+                clean_bar = item_barcode.replace(' ', '')
                 variant = db.query(ProductVariant).filter(
-                    (ProductVariant.barcode == item_barcode) |
-                    (ProductVariant.barcodes.any(ProductBarcode.barcode == item_barcode))
+                    (ProductVariant.barcode == clean_bar) |
+                    (ProductVariant.barcodes.any(ProductBarcode.barcode == clean_bar))
                 ).first()
-                
+
             # 2. Match por SKU de proveedor
             if not variant and item_sku:
-                supplier_product = db.query(SupplierProduct).filter(
-                    (SupplierProduct.supplier_sku == item_sku) &
-                    (SupplierProduct.supplier_id == supplier_id)
-                ).first()
-                if supplier_product:
-                    variant = db.query(ProductVariant).filter(ProductVariant.id == supplier_product.variant_id).first()
-                    
+                if supplier_id:
+                    supplier_product = db.query(SupplierProduct).filter(
+                        (SupplierProduct.supplier_sku == item_sku) &
+                        (SupplierProduct.supplier_id == supplier_id)
+                    ).first()
+                    if supplier_product:
+                        variant = db.query(ProductVariant).filter(ProductVariant.id == supplier_product.variant_id).first()
+                if not variant:
+                    clean_sku_b = item_sku.replace(' ', '')
+                    variant = db.query(ProductVariant).filter(
+                        (ProductVariant.barcode == clean_sku_b) |
+                        (ProductVariant.barcodes.any(ProductBarcode.barcode == clean_sku_b)) |
+                        (ProductVariant.sku == item_sku)
+                    ).first()
+
             # 3. Match semántico / fuzzy por nombre
             if not variant:
                 stop_words = {'con', 'del', 'para', 'los', 'las', 'una', 'uno', 'por', 'umd', 'base', 'imp', 'iva', 'total', 'de', 'en', 'x'}
@@ -895,7 +1157,7 @@ def upload_pdf_to_session(
                     if len(keywords) > 1:
                         query = query.filter(Product.name.ilike(f"%{keywords[1]}%"))
                     candidates = query.all()
-                    
+
                     best_candidate = None
                     best_score = 0
                     for cand in candidates:
@@ -904,29 +1166,40 @@ def upload_pdf_to_session(
                         if score > best_score:
                             best_score = score
                             best_candidate = cand
-                    
+
                     if best_candidate and (best_score / len(keywords)) >= 0.5:
                         variant = best_candidate
 
             # Crear o actualizar PricingSessionLine
-            proposed_cost_val = float(item.get("cost") or 0.0)
-            proposed_price_val = float(item.get("suggested_price") or 0.0)
+            raw_cost_val = float(item.get("cost") or 0.0)
 
             # Si la moneda de origen es VES y la tasa de cambio es valida, se convierte a USD
             rate_factor = float(exchange_rate) if exchange_rate and float(exchange_rate) > 0 else 1.0
             if currency == "VES":
-                proposed_cost_val = proposed_cost_val / rate_factor
-                proposed_price_val = proposed_price_val / rate_factor
-            
+                raw_cost_val = raw_cost_val / rate_factor
+
             if variant:
-                existing_line = db.query(PricingSessionLine).filter(
-                    (PricingSessionLine.session_id == session.id) &
-                    (PricingSessionLine.variant_id == variant.id)
-                ).first()
-                
+                old_c = float(variant.standard_cost or 0)
+                old_rc = float(variant.replacement_cost or 0)
+                old_p = float(variant.sales_price or 0)
+
+                proposed_cost_val = raw_cost_val if (session.update_type in ('COST', 'BOTH') and raw_cost_val > 0) else old_c
+                proposed_replacement_cost_val = raw_cost_val if (session.update_type in ('COST', 'BOTH') and raw_cost_val > 0) else old_rc
+
+                is_replacement = (session.target_cost_type == 'REPLACEMENT')
+                cost_for_price = proposed_replacement_cost_val if is_replacement else proposed_cost_val
+
+                proposed_price_val = calculate_proposed_price(
+                    variant=variant,
+                    cost=cost_for_price,
+                    db=db,
+                    utility_calc_method=utility_calc_method
+                )
+
+                existing_line = lines_by_variant.get(variant.id)
                 if existing_line:
                     existing_line.proposed_cost = proposed_cost_val
-                    existing_line.proposed_replacement_cost = proposed_cost_val
+                    existing_line.proposed_replacement_cost = proposed_replacement_cost_val
                     existing_line.proposed_price = proposed_price_val
                     existing_line.action = 'UPDATE_COST'
                 else:
@@ -934,31 +1207,33 @@ def upload_pdf_to_session(
                         session_id=session.id,
                         variant_id=variant.id,
                         external_reference_name=f"{variant.sku} - {variant.product.name if variant.product else clean_desc}",
-                        old_cost=variant.standard_cost,
+                        old_cost=old_c,
                         proposed_cost=proposed_cost_val,
-                        old_replacement_cost=variant.replacement_cost,
-                        proposed_replacement_cost=proposed_cost_val,
-                        old_price=variant.sales_price,
+                        old_replacement_cost=old_rc,
+                        proposed_replacement_cost=proposed_replacement_cost_val,
+                        old_price=old_p,
                         proposed_price=proposed_price_val,
                         action='UPDATE_COST'
                     )
                     db.add(db_line)
+                    lines_by_variant[variant.id] = db_line
+                    lines_created += 1
             else:
+                # Not matched -> proposed_price is 0.0
                 ref_json = json.dumps({
                     "supplier_sku": item_sku,
                     "barcode": item_barcode,
                     "description": clean_desc
                 })
-                
-                existing_line = db.query(PricingSessionLine).filter(
-                    (PricingSessionLine.session_id == session.id) &
-                    (PricingSessionLine.external_reference_name == ref_json)
-                ).first()
-                
+
+                proposed_cost_val = raw_cost_val if session.update_type in ('COST', 'BOTH') else 0.0
+                proposed_price_val = 0.0
+
+                existing_line = lines_by_ref.get(ref_json)
                 if existing_line:
                     existing_line.proposed_cost = proposed_cost_val
                     existing_line.proposed_replacement_cost = proposed_cost_val
-                    existing_line.proposed_price = proposed_price_val
+                    existing_line.proposed_price = 0.0
                 else:
                     db_line = PricingSessionLine(
                         session_id=session.id,
@@ -969,12 +1244,12 @@ def upload_pdf_to_session(
                         old_replacement_cost=0.0,
                         proposed_replacement_cost=proposed_cost_val,
                         old_price=0.0,
-                        proposed_price=proposed_price_val,
+                        proposed_price=0.0,
                         action='CREATE_NEW'
                     )
                     db.add(db_line)
-                    
-            lines_created += 1
+                    lines_by_ref[ref_json] = db_line
+                    lines_created += 1
 
         db.commit()
         return {"message": "PDF Procesado exitosamente", "lines_created": lines_created, "use_gemini": gemini_success}
@@ -997,19 +1272,19 @@ def associate_line_to_variant(
     ).first()
     if not line:
         raise HTTPException(status_code=404, detail="Línea no encontrada")
-        
+
     session = db.query(PricingSession).filter(PricingSession.id == session_id).first()
     if session.status != 'DRAFT':
         raise HTTPException(status_code=400, detail="Solo puedes editar sesiones DRAFT")
-        
+
     variant = db.query(ProductVariant).filter(ProductVariant.id == payload.variant_id).first()
     if not variant:
         raise HTTPException(status_code=404, detail="Variante de producto no encontrada")
-        
+
     sku = None
     barcode = None
     desc = line.external_reference_name
-    
+
     try:
         import re
         match = re.search(r'(\{.*\})', line.external_reference_name)
@@ -1027,15 +1302,27 @@ def associate_line_to_variant(
     line.old_replacement_cost = variant.replacement_cost
     line.old_price = variant.sales_price
     line.action = 'UPDATE_COST'
-    
+
+    # Calculate proposed_price from ficha margin if it was 0.0
+    if not line.proposed_price or float(line.proposed_price) == 0.0:
+        is_replacement = (session.target_cost_type == 'REPLACEMENT')
+        cost_for_price = float((line.proposed_replacement_cost if is_replacement else line.proposed_cost) or 0.0)
+        if cost_for_price <= 0:
+            cost_for_price = float(line.proposed_cost or line.proposed_replacement_cost or 0.0)
+        line.proposed_price = calculate_proposed_price(
+            variant=variant,
+            cost=cost_for_price,
+            db=db
+        )
+
     if session.supplier_id:
         existing_sp = db.query(SupplierProduct).filter(
             (SupplierProduct.supplier_id == session.supplier_id) &
             (SupplierProduct.variant_id == variant.id)
         ).first()
-        
+
         proposed_rc = line.proposed_replacement_cost if line.proposed_replacement_cost is not None else line.proposed_cost
-        
+
         if existing_sp:
             existing_sp.replacement_cost = proposed_rc
             if sku:
@@ -1051,7 +1338,7 @@ def associate_line_to_variant(
                 is_primary=True
             )
             db.add(new_sp)
-            
+
     db.commit()
     return {"message": "Línea vinculada correctamente y mapa de proveedor registrado."}
 
@@ -1073,15 +1360,15 @@ def create_product_from_line(
     ).first()
     if not line:
         raise HTTPException(status_code=404, detail="Línea no encontrada")
-        
+
     session = db.query(PricingSession).filter(PricingSession.id == session_id).first()
     if session.status != 'DRAFT':
         raise HTTPException(status_code=400, detail="Solo puedes editar sesiones DRAFT")
-        
+
     sku = None
     barcode = None
     desc = line.external_reference_name
-    
+
     try:
         import re
         match = re.search(r'(\{.*\})', line.external_reference_name)
@@ -1183,11 +1470,11 @@ def bulk_filter_lines(
         raise HTTPException(status_code=400, detail="Cannot manually add lines to applied sessions")
 
     query = db.query(ProductVariant).join(ProductVariant.product)
-    
+
     if payload.filters.supplier_ids:
         query = query.join(SupplierProduct, SupplierProduct.variant_id == ProductVariant.id)
         query = query.filter(SupplierProduct.supplier_id.in_(payload.filters.supplier_ids))
-        
+
     if payload.filters.category_ids:
         from sqlalchemy import or_
         cats = db.query(Category).filter(Category.id.in_(payload.filters.category_ids)).all()
@@ -1199,23 +1486,23 @@ def bulk_filter_lines(
                 if c.path:
                     cat_conditions.append(Category.path.like(f"{c.path}/%"))
             query = query.filter(or_(*cat_conditions))
-        
+
     if payload.filters.search_term:
         query = query.filter(Product.name.ilike(f"%{payload.filters.search_term}%"))
-        
+
     if payload.filters.brands:
         query = query.filter(Product.brand.in_(payload.filters.brands))
-        
+
     if payload.filters.models:
         query = query.filter(Product.model.in_(payload.filters.models))
-        
+
     if payload.filters.attribute_key and payload.filters.attribute_value:
         query = query.filter(ProductVariant.attributes[payload.filters.attribute_key].astext == payload.filters.attribute_value)
-    
+
     variants = query.all()
-    
+
     lines_created = 0
-    
+
     for v in variants:
         existing_line = db.query(PricingSessionLine).filter(
              PricingSessionLine.session_id == session_id,
@@ -1225,7 +1512,7 @@ def bulk_filter_lines(
         old_cost = float(v.standard_cost)
         old_rc = float(v.replacement_cost)
         old_price = float(v.sales_price)
-        
+
         # Cost Rule
         new_cost = old_cost
         new_rc = old_rc
@@ -1240,7 +1527,7 @@ def bulk_filter_lines(
                 new_cost = base_cost + payload.cost_rule.value
             elif payload.cost_rule.action == 'ADD_PERCENTAGE':
                 new_cost = base_cost * (1.0 + (payload.cost_rule.value / 100.0))
-            
+
             # Replacement cost rule
             base_rc = old_rc
             if payload.cost_rule.base_target == 'CURRENT_PRICE':
@@ -1281,7 +1568,7 @@ def bulk_filter_lines(
                 tribute = db.query(Tribute).filter(Tribute.id == v.product.tax_id).first()
                 if tribute:
                     new_price = new_price * (1.0 + (float(tribute.rate) / 100.0))
-            
+
         if existing_line:
             existing_line.proposed_cost = new_cost
             existing_line.proposed_replacement_cost = new_rc
@@ -1317,13 +1604,13 @@ def get_pricing_dashboard_metrics(
     from app.models.inventory import ProductVariant
     from app.models.core import Supplier
     from sqlalchemy.orm import joinedload
-    
+
     variants = db.query(ProductVariant).options(joinedload(ProductVariant.product)).filter(ProductVariant.sales_price > 0).all()
-    
+
     total_margin = 0.0
     critical_skus_count = 0
     critical_skus_list = []
-    
+
     for v in variants:
         sales_price = float(v.sales_price or 0)
         standard_cost = float(v.standard_cost or 0)
@@ -1340,10 +1627,10 @@ def get_pricing_dashboard_metrics(
                     "sales_price": round(sales_price, 2),
                     "margin_pct": round(margin, 1)
                 })
-                
+
     avg_gross_margin = total_margin / len(variants) if variants else 28.5
     avg_net_margin = avg_gross_margin - 5.8
-    
+
     suppliers = db.query(Supplier).limit(5).all()
     top_suppliers = []
     import random
@@ -1361,7 +1648,7 @@ def get_pricing_dashboard_metrics(
             {"id": 2, "name": "Distribuidora El Samán", "cost_increase_pct": 5.2, "affected_skus": 28},
             {"id": 3, "name": "Productora de Gas y Bebidas", "cost_increase_pct": 4.8, "affected_skus": 19}
         ]
-        
+
     from app.models.core import Facility
     facilities = db.query(Facility).all()
     branch_dispersion = []
@@ -1378,7 +1665,7 @@ def get_pricing_dashboard_metrics(
             {"facility_id": 2, "facility_name": "Sucursal Centro", "avg_margin_pct": 24.8, "active_skus": 95},
             {"facility_id": 3, "facility_name": "Sucursal Express (Sur)", "avg_margin_pct": 29.5, "active_skus": 82}
         ]
- 
+
     return {
         "kpis": {
             "avg_gross_margin": round(avg_gross_margin, 1),
@@ -1406,11 +1693,11 @@ def delete_session_line(
     ).first()
     if not line:
         raise HTTPException(status_code=404, detail="Line not found")
-        
+
     session = db.query(PricingSession).filter(PricingSession.id == session_id).first()
     if session.status != 'DRAFT':
         raise HTTPException(status_code=400, detail="Cannot edit non-DRAFT sessions")
-        
+
     db.delete(line)
     db.commit()
     return {"message": "Line deleted successfully"}
@@ -1423,10 +1710,10 @@ def delete_session(session_id: int, db: Session = Depends(deps.get_db)) -> Any:
     session = db.query(PricingSession).filter(PricingSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Pricing session not found")
-        
+
     if session.status != 'DRAFT':
         raise HTTPException(status_code=400, detail="Only DRAFT sessions can be deleted.")
-        
+
     db.delete(session)
     db.commit()
     return {"message": "Session deleted successfully"}
@@ -1450,11 +1737,11 @@ def apply_rate_to_session(
         raise HTTPException(status_code=404, detail="Pricing session not found")
     if session.status != 'DRAFT':
         raise HTTPException(status_code=400, detail="Only DRAFT sessions can be modified.")
-        
+
     rate_val = Decimal(str(payload.rate))
     if rate_val <= 0:
         raise HTTPException(status_code=400, detail="Rate must be greater than zero")
-        
+
     for line in session.lines:
         if payload.op == "DIVIDE":
             line.proposed_cost = line.proposed_cost / rate_val
@@ -1464,6 +1751,6 @@ def apply_rate_to_session(
             line.proposed_cost = line.proposed_cost * rate_val
             line.proposed_replacement_cost = line.proposed_replacement_cost * rate_val
             line.proposed_price = line.proposed_price * rate_val
-            
+
     db.commit()
     return {"message": "Tasa aplicada exitosamente", "lines_affected": len(session.lines)}

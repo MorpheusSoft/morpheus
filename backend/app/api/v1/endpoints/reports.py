@@ -94,6 +94,7 @@ def get_stock_level(
 class KardexFilter(BaseModel):
     product_ids: List[int]
     facility_ids: Optional[List[int]] = []
+    warehouse_ids: Optional[List[int]] = []
     location_ids: Optional[List[int]] = []
     date_from: Optional[datetime] = None
     date_to: Optional[datetime] = None
@@ -105,7 +106,7 @@ def get_advanced_kardex(
 ):
     """
     Get detailed history of movements (Kardex) for up to 10 products.
-    Includes filtering by facilities, locations, and dates.
+    Includes filtering by facilities, warehouses, locations, and dates.
     Calculates running balance (saldo).
     Unifies StockMoves, Inventory Adjustments, and Sales.
     """
@@ -113,6 +114,14 @@ def get_advanced_kardex(
         raise HTTPException(status_code=400, detail="Debe seleccionar entre 1 y 10 productos para el Kardex.")
 
     target_facility_ids = set(filters.facility_ids or [])
+    target_warehouse_ids = set(filters.warehouse_ids or [])
+
+    if target_warehouse_ids:
+        wh_facs = db.query(Warehouse.facility_id).filter(Warehouse.id.in_(target_warehouse_ids)).all()
+        for f in wh_facs:
+            if f[0] is not None:
+                target_facility_ids.add(f[0])
+
     if filters.location_ids:
         loc_facs = db.query(Warehouse.facility_id).join(Location).filter(Location.id.in_(filters.location_ids)).all()
         target_facility_ids.update([f[0] for f in loc_facs if f[0] is not None])
@@ -142,6 +151,14 @@ def get_advanced_kardex(
                 sm.unit_cost as unit_cost,
                 w_src.facility_id as src_facility_id,
                 w_dest.facility_id as dest_facility_id,
+                f_src.name as src_facility_name,
+                f_dest.name as dest_facility_name,
+                w_src.id as src_warehouse_id,
+                w_dest.id as dest_warehouse_id,
+                w_src.name as src_warehouse_name,
+                w_dest.name as dest_warehouse_name,
+                l_src.name as src_location_name,
+                l_dest.name as dest_location_name,
                 COALESCE(w_src.name, 'N/A') || ' - ' || COALESCE(l_src.name, 'N/A') as src_name,
                 COALESCE(w_dest.name, 'N/A') || ' - ' || COALESCE(l_dest.name, 'N/A') as dest_name
             FROM inv.stock_moves sm
@@ -149,8 +166,10 @@ def get_advanced_kardex(
             LEFT JOIN inv.stock_picking_types pt ON pt.id = p.picking_type_id
             LEFT JOIN inv.locations l_src ON l_src.id = sm.location_src_id
             LEFT JOIN inv.warehouses w_src ON w_src.id = l_src.warehouse_id
+            LEFT JOIN core.facilities f_src ON f_src.id = w_src.facility_id
             LEFT JOIN inv.locations l_dest ON l_dest.id = sm.location_dest_id
             LEFT JOIN inv.warehouses w_dest ON w_dest.id = l_dest.warehouse_id
+            LEFT JOIN core.facilities f_dest ON f_dest.id = w_dest.facility_id
             WHERE sm.state = 'DONE'
             
             UNION ALL
@@ -164,6 +183,14 @@ def get_advanced_kardex(
                 0 as unit_cost, 
                 CASE WHEN il.difference_qty < 0 THEN iss.facility_id ELSE NULL END as src_facility_id,
                 CASE WHEN il.difference_qty > 0 THEN iss.facility_id ELSE NULL END as dest_facility_id,
+                CASE WHEN il.difference_qty < 0 THEN f.name ELSE NULL END as src_facility_name,
+                CASE WHEN il.difference_qty > 0 THEN f.name ELSE NULL END as dest_facility_name,
+                CASE WHEN il.difference_qty < 0 THEN w.id ELSE NULL END as src_warehouse_id,
+                CASE WHEN il.difference_qty > 0 THEN w.id ELSE NULL END as dest_warehouse_id,
+                CASE WHEN il.difference_qty < 0 THEN w.name ELSE NULL END as src_warehouse_name,
+                CASE WHEN il.difference_qty > 0 THEN w.name ELSE NULL END as dest_warehouse_name,
+                CASE WHEN il.difference_qty < 0 THEN l.name ELSE NULL END as src_location_name,
+                CASE WHEN il.difference_qty > 0 THEN l.name ELSE NULL END as dest_location_name,
                 CASE WHEN il.difference_qty < 0 THEN COALESCE(w.name || ' - ' || l.name, f.name || ' - AJUSTE') ELSE 'N/A' END as src_name,
                 CASE WHEN il.difference_qty > 0 THEN COALESCE(w.name || ' - ' || l.name, f.name || ' - AJUSTE') ELSE 'N/A' END as dest_name
             FROM inv.inventory_lines il
@@ -184,14 +211,35 @@ def get_advanced_kardex(
                 dl.unit_price as unit_cost,
                 d.facility_id as src_facility_id,
                 NULL as dest_facility_id,
+                f.name as src_facility_name,
+                'CLIENTE' as dest_facility_name,
+                w_def.id as src_warehouse_id,
+                NULL as dest_warehouse_id,
+                COALESCE(w_def.name, f.name || ' - VENTAS') as src_warehouse_name,
+                'CLIENTE FINAL' as dest_warehouse_name,
+                'MOSTRADOR' as src_location_name,
+                'CLIENTE' as dest_location_name,
                 f.name || ' - VENTAS' as src_name,
                 'CLIENTE - DESTINO' as dest_name
             FROM sales.document_lines dl
             JOIN sales.documents d ON d.id = dl.document_id
             JOIN core.facilities f ON f.id = d.facility_id
+            LEFT JOIN LATERAL (
+                SELECT id, name FROM inv.warehouses WHERE facility_id = d.facility_id ORDER BY id ASC LIMIT 1
+            ) w_def ON true
             WHERE d.type = 'INVOICE' AND d.state = 'CONFIRMED'
         )
     """
+
+    if target_warehouse_ids:
+        t_wh_ids_str = ",".join(map(str, target_warehouse_ids))
+        scope_condition = f"(src_warehouse_id IN ({t_wh_ids_str}) OR dest_warehouse_id IN ({t_wh_ids_str}))"
+        initial_in_cond = f"dest_warehouse_id IN ({t_wh_ids_str}) AND (src_warehouse_id IS NULL OR src_warehouse_id NOT IN ({t_wh_ids_str}))"
+        initial_out_cond = f"src_warehouse_id IN ({t_wh_ids_str}) AND (dest_warehouse_id IS NULL OR dest_warehouse_id NOT IN ({t_wh_ids_str}))"
+    else:
+        scope_condition = f"(src_facility_id IN ({tf_ids_str}) OR dest_facility_id IN ({tf_ids_str}))"
+        initial_in_cond = f"dest_facility_id IN ({tf_ids_str}) AND (src_facility_id IS NULL OR src_facility_id NOT IN ({tf_ids_str}))"
+        initial_out_cond = f"src_facility_id IN ({tf_ids_str}) AND (dest_facility_id IS NULL OR dest_facility_id NOT IN ({tf_ids_str}))"
 
     initial_balances = {p_id: 0.0 for p_id in filters.product_ids}
 
@@ -199,8 +247,8 @@ def get_advanced_kardex(
         sql_initial = text(base_cte + f"""
             SELECT 
                 product_id,
-                SUM(CASE WHEN dest_facility_id IN ({tf_ids_str}) AND (src_facility_id IS NULL OR src_facility_id NOT IN ({tf_ids_str})) THEN qty_done ELSE 0 END) as qty_in,
-                SUM(CASE WHEN src_facility_id IN ({tf_ids_str}) AND (dest_facility_id IS NULL OR dest_facility_id NOT IN ({tf_ids_str})) THEN qty_done ELSE 0 END) as qty_out
+                SUM(CASE WHEN {initial_in_cond} THEN qty_done ELSE 0 END) as qty_in,
+                SUM(CASE WHEN {initial_out_cond} THEN qty_done ELSE 0 END) as qty_out
             FROM combined_moves
             WHERE product_id IN ({p_ids_str})
               AND date < :date_from
@@ -225,7 +273,7 @@ def get_advanced_kardex(
         SELECT *
         FROM combined_moves
         WHERE product_id IN ({p_ids_str})
-          AND (src_facility_id IN ({tf_ids_str}) OR dest_facility_id IN ({tf_ids_str}))
+          AND {scope_condition}
           {date_filters}
         ORDER BY date ASC
     """)
@@ -254,7 +302,12 @@ def get_advanced_kardex(
                 "reference": "SALDO INICIAL",
                 "type": "INITIAL",
                 "source_type": "INITIAL",
-                "location_name": "N/A",
+                "flow_type": "INITIAL",
+                "flow_display": "Saldo Inicial Consolidado",
+                "facility_name": "Todas",
+                "src_warehouse": None,
+                "dest_warehouse": None,
+                "location_name": "Saldo Inicial Consolidado",
                 "qty_in": 0.0,
                 "qty_out": 0.0,
                 "balance": current_balance,
@@ -262,24 +315,39 @@ def get_advanced_kardex(
             })
 
         for m in moves_by_product[product_id]:
-            is_in = m.dest_facility_id in target_facility_ids
-            is_out = m.src_facility_id in target_facility_ids
+            if target_warehouse_ids:
+                is_in = m.dest_warehouse_id in target_warehouse_ids
+                is_out = m.src_warehouse_id in target_warehouse_ids
+            else:
+                is_in = m.dest_facility_id in target_facility_ids
+                is_out = m.src_facility_id in target_facility_ids
+
             qty = float(m.qty_done or 0)
             cost = float(m.unit_cost or 0)
 
+            src_wh = m.src_warehouse_name
+            dest_wh = m.dest_warehouse_name
+            fac_name = m.dest_facility_name or m.src_facility_name or "General"
+
             if is_in and is_out:
-                location_name = f"{m.src_name or 'N/A'} -> {m.dest_name or 'N/A'}"
+                flow_type = "TRANSFER"
+                flow_display = f"Transferencia: {src_wh or 'Origen'} ➔ {dest_wh or 'Destino'}"
+                location_name = f"{src_wh or 'Origen'} ➔ {dest_wh or 'Destino'}"
                 type_str = m.source_type
-                qty_in = qty
-                qty_out = qty
+                qty_in = 0.0
+                qty_out = 0.0
             elif is_in:
-                location_name = m.dest_name or 'N/A'
+                flow_type = "IN"
+                flow_display = f"Entrada a: {dest_wh or 'Almacén'}"
+                location_name = m.dest_name or dest_wh or 'N/A'
                 type_str = m.source_type
                 current_balance += qty
                 qty_in = qty
                 qty_out = 0.0
             elif is_out:
-                location_name = m.src_name or 'N/A'
+                flow_type = "OUT"
+                flow_display = f"Salida de: {src_wh or 'Almacén'}"
+                location_name = m.src_name or src_wh or 'N/A'
                 type_str = m.source_type
                 current_balance -= qty
                 qty_in = 0.0
@@ -292,6 +360,13 @@ def get_advanced_kardex(
                 "reference": m.reference,
                 "type": type_str,
                 "source_type": m.source_type,
+                "flow_type": flow_type,
+                "flow_display": flow_display,
+                "facility_name": fac_name,
+                "src_warehouse": src_wh,
+                "dest_warehouse": dest_wh,
+                "src_location": m.src_location_name,
+                "dest_location": m.dest_location_name,
                 "location_name": location_name,
                 "qty_in": qty_in,
                 "qty_out": qty_out,

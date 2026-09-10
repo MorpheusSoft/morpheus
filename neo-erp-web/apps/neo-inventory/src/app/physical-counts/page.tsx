@@ -264,7 +264,7 @@ export default function PhysicalCountsPage() {
     <div className="w-full max-w-[1800px] mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
       
       {/* Sessions list (col-4) */}
-      <div className="lg:col-4 flex flex-col gap-4">
+      <div className="col-span-12 lg:col-span-4 flex flex-col gap-4">
         <div className="bg-white rounded-[2rem] shadow-xl shadow-slate-200/40 border border-slate-100 p-5">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-black text-slate-800 m-0">Tomas de Inventario</h3>
@@ -295,7 +295,7 @@ export default function PhysicalCountsPage() {
       </div>
 
       {/* Detail panel (col-8) */}
-      <div className="lg:col-8">
+      <div className="col-span-12 lg:col-span-8">
         {selectedSession ? (
           <div className="bg-white rounded-[2rem] shadow-xl shadow-slate-200/40 border border-slate-100 overflow-hidden relative">
             <div className="h-1 w-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 opacity-90"></div>
