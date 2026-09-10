@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { Button } from 'primereact/button';
@@ -18,18 +18,31 @@ export default function WmsLocationsPage() {
   const [loading, setLoading] = useState(true);
   const toast = useRef<Toast>(null);
 
-  // Sucursales y Filtro Activo (0 = Todas las Sucursales)
+  // Usuario y Permisos RBAC
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isSuperUser, setIsSuperUser] = useState<boolean>(false);
   const [facilities, setFacilities] = useState<any[]>([]);
   const [selectedFacilityFilter, setSelectedFacilityFilter] = useState<number>(0);
 
   // Reubicación (Putaway) state
   const [putawayDialogVisible, setPutawayDialogVisible] = useState(false);
-  const [selectedWarehouse, setSelectedWarehouse] = useState<any>(null);
-  const [targetLocationId, setTargetLocationId] = useState<number | null>(null);
+  const [sourceWarehouse, setSourceWarehouse] = useState<any>(null);
+  const [sourceLocationId, setSourceLocationId] = useState<number | null>(null);
+  const [destWarehouseId, setDestWarehouseId] = useState<number | null>(null);
+  const [destLocationId, setDestLocationId] = useState<number | null>(null);
   const [variantId, setVariantId] = useState<number | null>(null);
-  const [productsList, setProductsList] = useState<any[]>([]);
+  const [batchId, setBatchId] = useState<number | null>(null);
   const [putawayQty, setPutawayQty] = useState<number>(1);
   const [executingPutaway, setExecutingPutaway] = useState(false);
+  const [productsList, setProductsList] = useState<any[]>([]);
+
+  // Consulta de Stock (Ubicación Quirúrgica o Almacén Global)
+  const [stockDialogVisible, setStockDialogVisible] = useState(false);
+  const [loadingStock, setLoadingStock] = useState(false);
+  const [stockData, setStockData] = useState<any>(null);
+  const [currentStockWarehouse, setCurrentStockWarehouse] = useState<any>(null);
+  const [currentStockLocation, setCurrentStockLocation] = useState<any>(null);
+  const [stockSearchQuery, setStockSearchQuery] = useState<string>('');
 
   // Nuevo Almacén / Depósito state
   const [newWhDialogVisible, setNewWhDialogVisible] = useState(false);
@@ -48,17 +61,68 @@ export default function WmsLocationsPage() {
   const [newLocType, setNewLocType] = useState<string>('SHELF');
   const [creatingLocation, setCreatingLocation] = useState(false);
 
-  const fetchFacilities = async () => {
+  // Inicialización de Usuario, Sucursales y Filtro Activo (RBAC)
+  const initUserAndFacilities = async () => {
     try {
-      const res = await api.get('/facilities/');
-      const facData = Array.isArray(res.data) ? res.data : (res.data?.items || res.data?.data || []);
-      setFacilities(facData);
-      if (facData && facData.length > 0) {
-        setNewWhFacilityId(facData[0].id);
-        setNewLocFacilityId(facData[0].id);
+      // 1. Obtener usuario autenticado
+      const userRes = await api.get('/users/me');
+      const user = userRes.data;
+      setCurrentUser(user);
+      const isSuper = !!user.is_superuser;
+      setIsSuperUser(isSuper);
+
+      let availableFacs: any[] = [];
+      if (isSuper) {
+        const facRes = await api.get('/facilities/').catch(() => ({ data: [] }));
+        availableFacs = Array.isArray(facRes.data) ? facRes.data : (facRes.data?.items || facRes.data?.data || []);
+      } else {
+        availableFacs = Array.isArray(user.facilities) ? user.facilities : [];
       }
+      setFacilities(availableFacs);
+
+      // 2. Determinar selección inicial con persistencia en localStorage
+      const savedFacility = typeof window !== 'undefined' ? localStorage.getItem('morpheus_wms_facility') : null;
+      let initialFacId = 0;
+
+      if (isSuper) {
+        if (savedFacility !== null && savedFacility !== undefined) {
+          const parsed = parseInt(savedFacility, 10);
+          if (parsed === 0 || availableFacs.some(f => f.id === parsed)) {
+            initialFacId = parsed;
+          } else {
+            initialFacId = availableFacs.length > 0 ? availableFacs[0].id : 0;
+          }
+        } else {
+          initialFacId = availableFacs.length > 0 ? availableFacs[0].id : 0;
+        }
+      } else {
+        // Usuario estándar: jamás puede seleccionar 0 ("Todas las sucursales")
+        if (savedFacility !== null && savedFacility !== undefined) {
+          const parsed = parseInt(savedFacility, 10);
+          if (availableFacs.some(f => f.id === parsed)) {
+            initialFacId = parsed;
+          } else {
+            initialFacId = availableFacs.length > 0 ? availableFacs[0].id : 0;
+          }
+        } else {
+          initialFacId = availableFacs.length > 0 ? availableFacs[0].id : 0;
+        }
+      }
+
+      setSelectedFacilityFilter(initialFacId);
+      if (typeof window !== 'undefined' && initialFacId) {
+        localStorage.setItem('morpheus_wms_facility', String(initialFacId));
+      }
+
+      if (availableFacs.length > 0) {
+        setNewWhFacilityId(initialFacId || availableFacs[0].id);
+        setNewLocFacilityId(initialFacId || availableFacs[0].id);
+      }
+
+      await fetchTreeAndOccupancy(initialFacId);
     } catch (e) {
-      console.error("Error cargando sucursales:", e);
+      console.error("Error inicializando autenticación y sucursales:", e);
+      toast.current?.show({ severity: 'error', summary: 'Error de Autenticación', detail: 'No se pudo validar el perfil de usuario.' });
     }
   };
 
@@ -120,53 +184,163 @@ export default function WmsLocationsPage() {
 
       setProductsList(formattedOptions);
     } catch (e) {
-      console.error(e);
+      console.error("Error cargando productos:", e);
     }
   };
 
   useEffect(() => {
-    fetchFacilities();
-    fetchTreeAndOccupancy(0);
+    initUserAndFacilities();
     fetchProducts();
   }, []);
 
   const handleFacilityFilterChange = (facId: number) => {
     setSelectedFacilityFilter(facId);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('morpheus_wms_facility', String(facId));
+    }
+    if (facId && facId !== 0) {
+      setNewWhFacilityId(facId);
+      setNewLocFacilityId(facId);
+    }
     fetchTreeAndOccupancy(facId);
   };
 
-  const openPutaway = (wh: any) => {
+  // =========================================================================
+  // CONSULTA DE INVENTARIO (DOBLE NIVEL: UBICACIÓN Y ALMACÉN)
+  // =========================================================================
+  const openStockDialog = async (wh: any, loc: any = null) => {
+    setCurrentStockWarehouse(wh);
+    setCurrentStockLocation(loc);
+    setStockSearchQuery('');
+    setStockDialogVisible(true);
+    await fetchWarehouseStock(wh.id, loc?.id || null);
+  };
+
+  const fetchWarehouseStock = async (warehouseId: number, locationId: number | null) => {
+    setLoadingStock(true);
+    try {
+      let url = `/wms/warehouses/${warehouseId}/stock`;
+      if (locationId) {
+        url += `?location_id=${locationId}`;
+      }
+      const res = await api.get(url);
+      setStockData(res.data);
+    } catch (e: any) {
+      toast.current?.show({
+        severity: 'error',
+        summary: 'Error de Consulta',
+        detail: e.response?.data?.detail || 'No se pudo consultar el stock del almacén.'
+      });
+      setStockData(null);
+    }
+    setLoadingStock(false);
+  };
+
+  const filteredStockItems = useMemo(() => {
+    if (!stockData || !Array.isArray(stockData.items)) return [];
+    if (!stockSearchQuery.trim()) return stockData.items;
+    const q = stockSearchQuery.toLowerCase().trim();
+    return stockData.items.filter((item: any) =>
+      (item.sku && item.sku.toLowerCase().includes(q)) ||
+      (item.barcode && item.barcode.toLowerCase().includes(q)) ||
+      (item.name && item.name.toLowerCase().includes(q)) ||
+      (item.location_name && item.location_name.toLowerCase().includes(q)) ||
+      (item.location_code && item.location_code.toLowerCase().includes(q)) ||
+      (item.lot_number && item.lot_number.toLowerCase().includes(q))
+    );
+  }, [stockData, stockSearchQuery]);
+
+  const handleReubicarFromStock = (item: any) => {
+    if (!currentStockWarehouse) return;
+    openPutaway(
+      currentStockWarehouse,
+      item.location_id || null,
+      item.variant_id,
+      item.batch_id || null,
+      item.quantity || 1
+    );
+  };
+
+  // =========================================================================
+  // REUBICACIÓN (PUTAWAY) INTRA E INTER ALMACÉN
+  // =========================================================================
+  const openPutaway = (
+    wh: any, 
+    preselectedLocId: number | null = null, 
+    preselectedVariantId: number | null = null,
+    preselectedBatchId: number | null = null,
+    preselectedQty: number = 1
+  ) => {
     if (!wh) return;
-    setSelectedWarehouse(wh);
-    setTargetLocationId(null);
-    setVariantId(null);
-    setPutawayQty(1);
+    setSourceWarehouse(wh);
+    setDestWarehouseId(wh.id);
+    setSourceLocationId(preselectedLocId);
+    
+    // Si el almacén tiene ubicaciones y preselectedLocId está definido, sugerir otra si existe
+    const targetWhLocs = wh.locations || [];
+    if (preselectedLocId && targetWhLocs.length > 1) {
+      const otherLoc = targetWhLocs.find((l: any) => l.id !== preselectedLocId);
+      setDestLocationId(otherLoc ? otherLoc.id : null);
+    } else if (targetWhLocs.length > 0) {
+      setDestLocationId(targetWhLocs[0].id);
+    } else {
+      setDestLocationId(null);
+    }
+
+    setVariantId(preselectedVariantId);
+    setBatchId(preselectedBatchId);
+    setPutawayQty(preselectedQty > 0 ? preselectedQty : 1);
     setPutawayDialogVisible(true);
   };
 
   const submitPutaway = async () => {
-    if (!selectedWarehouse || !targetLocationId || !variantId || putawayQty <= 0) {
-      toast.current?.show({ severity: 'warn', summary: 'Campos incompletos', detail: 'Complete todos los datos de reubicación.' });
+    if (!sourceWarehouse || !variantId || putawayQty <= 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Campos incompletos', detail: 'Complete el producto y la cantidad a reubicar.' });
+      return;
+    }
+
+    if (sourceWarehouse.id === destWarehouseId && sourceLocationId && destLocationId && sourceLocationId === destLocationId) {
+      toast.current?.show({ severity: 'warn', summary: 'Ubicación Inválida', detail: 'La ubicación de origen y destino no pueden ser la misma.' });
       return;
     }
 
     setExecutingPutaway(true);
     try {
       await api.post('/wms/putaway', {
-        warehouse_id: selectedWarehouse.id,
+        source_warehouse_id: sourceWarehouse.id,
+        dest_warehouse_id: destWarehouseId || sourceWarehouse.id,
+        source_location_id: sourceLocationId || null,
+        dest_location_id: destLocationId || null,
         variant_id: variantId,
         qty: putawayQty,
-        dest_location_id: targetLocationId
+        batch_id: batchId || null
       });
-      toast.current?.show({ severity: 'success', summary: 'Reubicación Exitosa', detail: 'Mercancía movida a la ubicación destino.' });
+
+      toast.current?.show({ 
+        severity: 'success', 
+        summary: 'Reubicación Exitosa', 
+        detail: 'Mercancía reubicada satisfactoriamente con trazabilidad completa.' 
+      });
       setPutawayDialogVisible(false);
       fetchTreeAndOccupancy(selectedFacilityFilter);
+
+      // Si la consulta de stock está abierta, actualizarla al instante
+      if (stockDialogVisible && currentStockWarehouse) {
+        fetchWarehouseStock(currentStockWarehouse.id, currentStockLocation?.id || null);
+      }
     } catch (e: any) {
-      toast.current?.show({ severity: 'error', summary: 'Error de Reubicación', detail: e.response?.data?.detail || 'No se pudo realizar el movimiento.' });
+      toast.current?.show({ 
+        severity: 'error', 
+        summary: 'Error de Reubicación', 
+        detail: e.response?.data?.detail || 'No se pudo realizar el movimiento.' 
+      });
     }
     setExecutingPutaway(false);
   };
 
+  // =========================================================================
+  // CREACIÓN DE ALMACENES Y UBICACIONES
+  // =========================================================================
   const handleCreateWarehouse = async () => {
     if (!newWhFacilityId || !newWhName.trim() || !newWhCode.trim()) {
       toast.current?.show({ severity: 'warn', summary: 'Campos Incompletos', detail: 'Por favor complete sucursal, nombre y código de almacén.' });
@@ -207,7 +381,7 @@ export default function WmsLocationsPage() {
         location_type: newLocType,
         usage: 'INTERNAL'
       });
-      toast.current?.show({ severity: 'success', summary: 'Ubicación Creada', detail: `Ubicación ${newLocName} registrada con capacidad de ${newLocCapacity} unidades.` });
+      toast.current?.show({ severity: 'success', summary: 'Ubicación Creada', detail: `Ubicación ${newLocName} registrada con capacidad de ${newLocCapacity} m³.` });
       setNewLocDialogVisible(false);
       setNewLocName('');
       setNewLocCode('');
@@ -260,26 +434,64 @@ export default function WmsLocationsPage() {
     );
   };
 
-  const locationOptions = React.useMemo(() => {
-    if (!selectedWarehouse || !Array.isArray(selectedWarehouse.locations)) return [];
-    return selectedWarehouse.locations.map((l: any) => ({
+  // Opciones de Almacén Destino (misma sucursal)
+  const destWarehouseOptions = useMemo(() => {
+    if (!sourceWarehouse) return [];
+    return treeData
+      .filter(wh => wh.facility_id === sourceWarehouse.facility_id)
+      .map(wh => ({
+        label: `${wh.name} (${wh.code})${wh.id === sourceWarehouse.id ? ' [Mismo Almacén]' : ''}`,
+        value: wh.id
+      }));
+  }, [treeData, sourceWarehouse]);
+
+  // Opciones de Ubicación Origen
+  const sourceLocationOptions = useMemo(() => {
+    if (!sourceWarehouse || !Array.isArray(sourceWarehouse.locations) || sourceWarehouse.locations.length === 0) {
+      return [{ label: 'Muelle / Entrada General', value: null }];
+    }
+    return [
+      { label: 'Cualquiera / Muelle de Descarga', value: null },
+      ...sourceWarehouse.locations.map((l: any) => ({
+        label: `${l.name} (${l.code}) [${l.location_type || 'SHELF'}]`,
+        value: l.id
+      }))
+    ];
+  }, [sourceWarehouse]);
+
+  // Opciones de Ubicación Destino dinámicas
+  const destLocationOptions = useMemo(() => {
+    if (!destWarehouseId) return [];
+    const targetWh = treeData.find(wh => wh.id === destWarehouseId);
+    if (!targetWh || !targetWh.locations || targetWh.locations.length === 0) {
+      return [{
+        label: `✨ Ubicación General Predeterminada (${targetWh?.code || 'WH'}-STOCK)`,
+        value: null
+      }];
+    }
+    return targetWh.locations.map((l: any) => ({
       label: `${l.name} (${l.code}) [${l.location_type || 'SHELF'}]`,
       value: l.id
     }));
-  }, [selectedWarehouse]);
+  }, [treeData, destWarehouseId]);
 
   // Almacenes filtrados para el modal de Nueva Ubicación
-  const filteredWarehousesForNewLoc = React.useMemo(() => {
+  const filteredWarehousesForNewLoc = useMemo(() => {
     if (!newLocFacilityId) return treeData;
     return treeData.filter(wh => wh.facility_id === newLocFacilityId);
   }, [treeData, newLocFacilityId]);
 
-  const facilityDropdownOptions = React.useMemo(() => {
-    return [
-      { label: '🌐 Todas las Sucursales', value: 0 },
-      ...facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }))
-    ];
-  }, [facilities]);
+  // Selector de Sucursales (RBAC)
+  const facilityDropdownOptions = useMemo(() => {
+    if (isSuperUser) {
+      return [
+        { label: '🌐 Todas las Sucursales', value: 0 },
+        ...facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }))
+      ];
+    }
+    // Usuario no superusuario: EXCLUSIVAMENTE sus sedes
+    return facilities.map(f => ({ label: `🏢 ${f.name}`, value: f.id }));
+  }, [facilities, isSuperUser]);
 
   const locationTypeOptions = [
     { label: 'Estante / Rack (SHELF)', value: 'SHELF' },
@@ -302,7 +514,7 @@ export default function WmsLocationsPage() {
             <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center">
               <i className="pi pi-sitemap text-emerald-500 mr-3"></i>Mapa Térmico de Almacenes y Reubicación
             </h1>
-            <p className="text-slate-500 text-sm mt-1">Estructura jerárquica por sucursales, depósitos y estantes con control volumétrico de espacio.</p>
+            <p className="text-slate-500 text-sm mt-1">Estructura jerárquica por sucursales, depósitos y estantes con auditoría y consulta de existencias en partida doble.</p>
           </div>
 
           <Button
@@ -317,7 +529,7 @@ export default function WmsLocationsPage() {
 
         {/* Fila 2: Barra Integrada de Filtros y Acciones Directas */}
         <div className="pt-4 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100 mt-2">
-          {/* Selector de Sucursal */}
+          {/* Selector de Sucursal (RBAC) */}
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-slate-600 whitespace-nowrap flex items-center">
               <i className="pi pi-building text-slate-400 mr-1.5 text-sm"></i>Sucursal:
@@ -382,6 +594,16 @@ export default function WmsLocationsPage() {
                   {wh.requires_dock_staging && (
                     <Tag value="CD (DOCK)" severity="warning" className="text-[10px] font-bold" />
                   )}
+                  {/* Botón de Consulta Global del Almacén */}
+                  <Button 
+                    label="Consultar Almacén" 
+                    icon="pi pi-box" 
+                    size="small" 
+                    outlined
+                    className="font-bold text-xs border-emerald-400 text-emerald-300 hover:bg-emerald-950" 
+                    onClick={() => openStockDialog(wh, null)} 
+                  />
+                  {/* Botón de Reubicación Directa */}
                   <Button 
                     label="Reubicar Mercancía" 
                     icon="pi pi-arrow-right-arrow-left" 
@@ -395,18 +617,337 @@ export default function WmsLocationsPage() {
 
               <div className="p-4 flex-1">
                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Ubicaciones y Pasillos ({wh.locations?.length || 0})</h4>
-                <DataTable value={wh.locations || []} size="small" className="p-datatable-sm text-slate-700 text-xs" stripedRows emptyMessage="No hay ubicaciones en este almacén. Use el botón superior para crear la primera.">
-                  <Column header="CÓDIGO" field="code" body={l => <span className="font-mono text-[11px] font-bold bg-slate-100 px-1.5 py-0.5 rounded text-slate-700">{l.code}</span>} sortable style={{ width: '18%' }} />
-                  <Column header="UBICACIÓN" field="name" body={l => <span className="font-bold text-slate-800 text-xs">{l.name}</span>} sortable style={{ width: '28%' }} />
+                <DataTable 
+                  value={wh.locations || []} 
+                  size="small" 
+                  className="p-datatable-sm text-slate-700 text-xs" 
+                  stripedRows 
+                  emptyMessage="No hay ubicaciones en este almacén. Use 'Consultar Almacén' para ver el inventario o cree la primera ubicación."
+                >
+                  <Column header="CÓDIGO" field="code" body={l => <span className="font-mono text-[11px] font-bold bg-slate-100 px-1.5 py-0.5 rounded text-slate-700">{l.code}</span>} sortable style={{ width: '16%' }} />
+                  <Column header="UBICACIÓN" field="name" body={l => <span className="font-bold text-slate-800 text-xs">{l.name}</span>} sortable style={{ width: '26%' }} />
                   <Column header="TIPO" body={l => <Tag severity={getLocationTypeSeverity(l.location_type)} value={l.location_type} className="text-[9px] font-bold px-1 py-0.5" />} sortable style={{ width: '14%' }} />
-                  <Column header="CAPACIDAD" body={l => <span className="font-mono text-xs text-slate-600 font-semibold">{l.capacity_volume || 10.0} m³</span>} sortable style={{ width: '16%' }} />
-                  <Column header="SATURACIÓN" body={occupancyTemplate} style={{ width: '24%' }} />
+                  <Column header="CAPACIDAD" body={l => <span className="font-mono text-xs text-slate-600 font-semibold">{l.capacity_volume || 10.0} m³</span>} sortable style={{ width: '14%' }} />
+                  <Column header="SATURACIÓN" body={occupancyTemplate} style={{ width: '18%' }} />
+                  {/* Botón Quirúrgico de Consulta por Ubicación */}
+                  <Column 
+                    header="STOCK" 
+                    body={l => (
+                      <Button 
+                        icon="pi pi-eye" 
+                        rounded 
+                        text 
+                        severity="info" 
+                        size="small"
+                        title="Consultar existencias de este estante"
+                        onClick={() => openStockDialog(wh, l)} 
+                      />
+                    )} 
+                    style={{ width: '12%', textAlign: 'center' }} 
+                  />
                 </DataTable>
               </div>
             </div>
           ))}
         </div>
       )}
+
+      {/* DIÁLOGO CONSULTA DE INVENTARIO (DOBLE NIVEL: UBICACIÓN Y ALMACÉN) */}
+      <Dialog
+        header={
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-600">
+              <i className={currentStockLocation ? "pi pi-eye text-xl" : "pi pi-box text-xl"}></i>
+            </div>
+            <div>
+              <h3 className="text-base font-black text-slate-800 tracking-tight leading-tight">
+                {currentStockLocation 
+                  ? `Existencias en Estante: ${currentStockLocation.name} (${currentStockLocation.code})`
+                  : `Inventario Consolidado: ${currentStockWarehouse?.name || 'Almacén'}`
+                }
+              </h3>
+              <p className="text-xs text-slate-500 font-medium mt-0.5">
+                {currentStockWarehouse?.name} • Sucursal: {currentStockWarehouse?.facility_name || 'General'}
+              </p>
+            </div>
+          </div>
+        }
+        visible={stockDialogVisible}
+        onHide={() => setStockDialogVisible(false)}
+        style={{ width: '92vw', maxWidth: '1100px' }}
+        className="rounded-2xl overflow-hidden"
+      >
+        <div className="flex flex-col gap-4 py-2">
+          {/* Tarjetas de KPIs */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">Total SKUs Únicos</p>
+                <h4 className="text-2xl font-black text-slate-800 mt-0.5">
+                  {stockData?.summary?.total_skus || 0}
+                </h4>
+              </div>
+              <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                <i className="pi pi-tags text-lg"></i>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">Total Unidades</p>
+                <h4 className="text-2xl font-black text-emerald-600 mt-0.5">
+                  {(stockData?.summary?.total_units || 0).toLocaleString()}
+                </h4>
+              </div>
+              <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <i className="pi pi-box text-lg"></i>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">Lotes Trazables</p>
+                <h4 className="text-2xl font-black text-purple-600 mt-0.5">
+                  {stockData?.summary?.total_lots || 0}
+                </h4>
+              </div>
+              <div className="w-10 h-10 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
+                <i className="pi pi-calendar text-lg"></i>
+              </div>
+            </div>
+          </div>
+
+          {/* Barra de Filtro en Vivo */}
+          <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+            <div className="relative flex-1">
+              <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+              <InputText
+                value={stockSearchQuery}
+                onChange={(e) => setStockSearchQuery(e.target.value)}
+                placeholder="Buscar por SKU, código de barras, nombre de producto, lote o ubicación..."
+                className="w-full pl-8 text-xs font-medium"
+              />
+            </div>
+            <Button
+              icon="pi pi-refresh"
+              outlined
+              size="small"
+              className="text-xs font-bold border-slate-300 text-slate-700"
+              label="Refrescar"
+              loading={loadingStock}
+              onClick={() => fetchWarehouseStock(currentStockWarehouse.id, currentStockLocation?.id || null)}
+            />
+          </div>
+
+          {/* Tabla de Existencias */}
+          <DataTable
+            value={filteredStockItems}
+            loading={loadingStock}
+            paginator
+            rows={8}
+            size="small"
+            className="p-datatable-sm text-xs"
+            stripedRows
+            emptyMessage="No se encontraron existencias en esta consulta con los filtros seleccionados."
+          >
+            <Column
+              header="SKU / CÓDIGO"
+              body={(item) => (
+                <div>
+                  <span className="font-mono font-bold text-slate-800">{item.sku}</span>
+                  {item.barcode && (
+                    <p className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
+                      <i className="pi pi-barcode text-[9px]"></i> {item.barcode}
+                    </p>
+                  )}
+                </div>
+              )}
+              sortable
+              field="sku"
+              style={{ width: '18%' }}
+            />
+            <Column
+              header="PRODUCTO"
+              body={(item) => (
+                <span className="font-bold text-slate-800 leading-tight block">{item.name}</span>
+              )}
+              sortable
+              field="name"
+              style={{ width: '28%' }}
+            />
+            <Column
+              header="UBICACIÓN"
+              body={(item) => (
+                <div className="flex flex-col">
+                  <span className="font-bold text-slate-700 text-[11px]">{item.location_name}</span>
+                  <span className="font-mono text-[10px] text-slate-500 bg-slate-100 px-1 py-0.5 rounded w-max">
+                    {item.location_code}
+                  </span>
+                </div>
+              )}
+              sortable
+              field="location_name"
+              style={{ width: '18%' }}
+            />
+            <Column
+              header="LOTE / VENC."
+              body={(item) => (
+                item.lot_number ? (
+                  <div className="flex flex-col gap-0.5">
+                    <Tag severity="info" value={`Lote: ${item.lot_number}`} className="text-[9px] font-bold px-1 py-0.5" />
+                    {item.expiration_date && (
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        Vence: {item.expiration_date}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-slate-400 italic text-[11px]">Sin lote</span>
+                )
+              )}
+              style={{ width: '14%' }}
+            />
+            <Column
+              header="CANTIDAD"
+              body={(item) => (
+                <span className="font-mono font-black text-emerald-700 text-sm">
+                  {item.quantity.toLocaleString()} <span className="text-[10px] font-normal text-slate-500">{item.uom}</span>
+                </span>
+              )}
+              sortable
+              field="quantity"
+              style={{ width: '12%', textAlign: 'right' }}
+            />
+            <Column
+              header="ACCIÓN"
+              body={(item) => (
+                <Button
+                  icon="pi pi-arrow-right-arrow-left"
+                  size="small"
+                  outlined
+                  severity="success"
+                  title="Reubicar este producto"
+                  label="Reubicar"
+                  className="text-[10px] font-bold py-1 px-2"
+                  onClick={() => handleReubicarFromStock(item)}
+                />
+              )}
+              style={{ width: '10%', textAlign: 'center' }}
+            />
+          </DataTable>
+
+          <div className="flex justify-end pt-2 border-t border-slate-100">
+            <Button
+              label="Cerrar"
+              text
+              severity="secondary"
+              onClick={() => setStockDialogVisible(false)}
+            />
+          </div>
+        </div>
+      </Dialog>
+
+      {/* DIÁLOGO REUBICACIÓN (PUTAWAY) INTRA E INTER-ALMACÉN */}
+      <Dialog 
+        header={`Reubicación de Mercancía (${sourceWarehouse?.name || ''})`} 
+        visible={putawayDialogVisible} 
+        onHide={() => setPutawayDialogVisible(false)} 
+        style={{ width: '540px' }}
+      >
+        <div className="flex flex-col gap-4 py-2">
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800 font-medium flex items-center">
+            <i className="pi pi-arrow-right-arrow-left text-blue-600 text-lg mr-2"></i>
+            <span>Reubique existencias entre estantes del mismo depósito o transfiera a otros almacenes de la <strong>misma sucursal</strong>.</span>
+          </div>
+
+          {/* Selector de Producto */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Producto a Reubicar:</label>
+            <Dropdown 
+              value={variantId}
+              options={productsList}
+              onChange={(e) => setVariantId(e.value)}
+              placeholder="Seleccionar variante o SKU..."
+              filter
+              showClear
+              className="w-full text-xs font-bold"
+            />
+          </div>
+
+          {/* Origen: Almacén y Ubicación */}
+          <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Almacén Origen:</label>
+              <div className="bg-white border border-slate-200 rounded-lg p-2 text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <i className="pi pi-building text-slate-400"></i>
+                <span className="truncate">{sourceWarehouse?.name || 'Origen'}</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Ubicación Origen:</label>
+              <Dropdown 
+                value={sourceLocationId}
+                options={sourceLocationOptions}
+                onChange={(e) => setSourceLocationId(e.value)}
+                placeholder="Muelle / Estante origen..."
+                className="w-full text-xs font-bold"
+              />
+            </div>
+          </div>
+
+          {/* Destino: Almacén y Ubicación */}
+          <div className="grid grid-cols-2 gap-3 bg-emerald-50/50 p-3 rounded-xl border border-emerald-200">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Almacén Destino:</label>
+              <Dropdown 
+                value={destWarehouseId}
+                options={destWarehouseOptions}
+                onChange={(e) => {
+                  setDestWarehouseId(e.value);
+                  setDestLocationId(null);
+                }}
+                placeholder="Seleccionar almacén destino..."
+                className="w-full text-xs font-bold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Ubicación Destino:</label>
+              <Dropdown 
+                value={destLocationId}
+                options={destLocationOptions}
+                onChange={(e) => setDestLocationId(e.value)}
+                placeholder="Seleccionar posición destino..."
+                className="w-full text-xs font-bold"
+              />
+            </div>
+          </div>
+
+          {/* Cantidad */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad a Mover:</label>
+            <InputNumber 
+              value={putawayQty}
+              onValueChange={(e) => setPutawayQty(e.value || 1)}
+              min={1}
+              className="w-full"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 mt-3">
+            <Button label="Cancelar" text severity="secondary" onClick={() => setPutawayDialogVisible(false)} />
+            <Button 
+              label="Confirmar Reubicación" 
+              icon="pi pi-check" 
+              severity="success" 
+              loading={executingPutaway}
+              onClick={submitPutaway} 
+              className="font-bold text-xs shadow-md" 
+            />
+          </div>
+        </div>
+      </Dialog>
 
       {/* DIÁLOGO NUEVO ALMACÉN / DEPÓSITO */}
       <Dialog 
@@ -436,7 +977,7 @@ export default function WmsLocationsPage() {
             <InputText 
               value={newWhName}
               onChange={(e) => setNewWhName(e.target.value)}
-              placeholder="Ej. Depósito Principal, Cámara Fría, Almacén B..."
+              placeholder="Ej. Depósito Principal, Cámara Fría, Almacén de Cambios..."
               className="w-full text-xs"
             />
           </div>
@@ -557,67 +1098,6 @@ export default function WmsLocationsPage() {
               severity="success" 
               loading={creatingLocation}
               onClick={handleCreateLocation} 
-              className="font-bold text-xs shadow-md" 
-            />
-          </div>
-        </div>
-      </Dialog>
-
-      {/* DIÁLOGO REUBICACIÓN (PUTAWAY) */}
-      <Dialog 
-        header={`Reubicación de Mercancía (${selectedWarehouse?.name || ''})`} 
-        visible={putawayDialogVisible} 
-        onHide={() => setPutawayDialogVisible(false)} 
-        style={{ width: '500px' }}
-      >
-        <div className="flex flex-col gap-4 py-2">
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800 font-medium flex items-center">
-            <i className="pi pi-arrow-right-arrow-left text-blue-600 text-lg mr-2"></i>
-            <span>Mueva mercancía de recepción a su posición o estante definitivo. El movimiento quedará <strong>auditado con su usuario</strong>.</span>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Producto a Reubicar:</label>
-            <Dropdown 
-              value={variantId}
-              options={productsList}
-              onChange={(e) => setVariantId(e.value)}
-              placeholder="Seleccionar variante o SKU..."
-              filter
-              showClear
-              className="w-full text-xs font-bold"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Ubicación Destino en Almacén:</label>
-            <Dropdown 
-              value={targetLocationId}
-              options={locationOptions}
-              onChange={(e) => setTargetLocationId(e.value)}
-              placeholder="Seleccionar estante/posicion..."
-              className="w-full text-xs font-bold"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad a Mover:</label>
-            <InputNumber 
-              value={putawayQty}
-              onValueChange={(e) => setPutawayQty(e.value || 1)}
-              min={1}
-              className="w-full"
-            />
-          </div>
-
-          <div className="flex justify-end gap-2 mt-3">
-            <Button label="Cancelar" text severity="secondary" onClick={() => setPutawayDialogVisible(false)} />
-            <Button 
-              label="Confirmar Reubicación" 
-              icon="pi pi-check" 
-              severity="success" 
-              loading={executingPutaway}
-              onClick={submitPutaway} 
               className="font-bold text-xs shadow-md" 
             />
           </div>

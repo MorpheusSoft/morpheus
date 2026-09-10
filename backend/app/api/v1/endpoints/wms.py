@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date, datetime
@@ -44,10 +44,13 @@ class DiscrepancyPayload(BaseModel):
     lot_number: Optional[str] = None
 
 class PutawayPayload(BaseModel):
-    warehouse_id: int
+    warehouse_id: Optional[int] = None
+    source_warehouse_id: Optional[int] = None
+    source_location_id: Optional[int] = None
+    dest_warehouse_id: Optional[int] = None
+    dest_location_id: Optional[int] = None
     variant_id: int
     qty: float
-    dest_location_id: int
     batch_id: Optional[int] = None
 
 class DirectReceiptLineInput(BaseModel):
@@ -848,38 +851,264 @@ def get_locations_tree(facility_id: Optional[int] = None, db: Session = Depends(
 
     return tree
 
+@router.get("/warehouses/{warehouse_id}/stock")
+def get_warehouse_stock(
+    warehouse_id: int,
+    location_id: Optional[int] = Query(None, description="Filtrar por ubicación específica dentro del almacén"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Obtiene el inventario real en partida doble (StockMove state='DONE') de las ubicaciones del almacén.
+    Si se pasa location_id, filtra exclusivamente esa ubicación; si se omite, calcula todo el almacén.
+    Agrupa por variante, ubicación física y lote. Filtra existencias netas > 0.
+    """
+    warehouse = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail="Almacén no encontrado.")
+
+    if not current_user.is_superuser:
+        user_fac_ids = [f.id for f in (current_user.facilities or [])]
+        if warehouse.facility_id and warehouse.facility_id not in user_fac_ids:
+            raise HTTPException(status_code=403, detail="No tiene permiso para consultar el inventario de esta sucursal.")
+
+    target_location = None
+    if location_id:
+        target_location = db.query(Location).filter(
+            Location.id == location_id,
+            Location.warehouse_id == warehouse.id
+        ).first()
+        if not target_location:
+            raise HTTPException(status_code=404, detail="La ubicación especificada no pertenece a este almacén.")
+
+    facility = db.query(Facility).filter(Facility.id == warehouse.facility_id).first() if warehouse.facility_id else None
+
+    sql_filter = "WHERE l.warehouse_id = :warehouse_id"
+    params = {"warehouse_id": warehouse_id}
+    if target_location:
+        sql_filter += " AND l.id = :location_id"
+        params["location_id"] = target_location.id
+
+    query = text(f"""
+        WITH move_lines AS (
+            SELECT 
+                product_id, 
+                location_dest_id AS location_id, 
+                batch_id,
+                quantity_done AS qty 
+            FROM inv.stock_moves 
+            WHERE state = 'DONE'
+            
+            UNION ALL
+            
+            SELECT 
+                product_id, 
+                location_src_id AS location_id, 
+                batch_id,
+                -quantity_done AS qty 
+            FROM inv.stock_moves 
+            WHERE state = 'DONE'
+        )
+        SELECT 
+            m.product_id AS variant_id,
+            v.sku,
+            COALESCE(v.barcode, pb.barcode, '') AS barcode,
+            p.name AS product_name,
+            COALESCE(p.uom_base, 'UND') AS uom,
+            l.id AS location_id,
+            l.code AS location_code,
+            l.name AS location_name,
+            m.batch_id,
+            b.batch_number AS lot_number,
+            b.expiry_date AS expiration_date,
+            ROUND(SUM(m.qty)::numeric, 4) AS quantity
+        FROM move_lines m
+        JOIN inv.locations l ON l.id = m.location_id
+        JOIN inv.product_variants v ON v.id = m.product_id
+        JOIN inv.products p ON p.id = v.product_id
+        LEFT JOIN inv.batches b ON b.id = m.batch_id
+        LEFT JOIN LATERAL (
+            SELECT barcode FROM inv.product_barcodes WHERE product_variant_id = v.id LIMIT 1
+        ) pb ON true
+        {sql_filter}
+        GROUP BY 
+            m.product_id, v.sku, v.barcode, pb.barcode, p.name, p.uom_base,
+            l.id, l.code, l.name,
+            m.batch_id, b.batch_number, b.expiry_date
+        HAVING SUM(m.qty) > 0.0001
+        ORDER BY l.name, p.name, v.sku
+    """)
+
+    rows = db.execute(query, params).fetchall()
+
+    items = []
+    for r in rows:
+        items.append({
+            "variant_id": r.variant_id,
+            "sku": r.sku,
+            "barcode": r.barcode or "",
+            "name": r.product_name,
+            "uom": r.uom,
+            "location_id": r.location_id,
+            "location_code": r.location_code,
+            "location_name": r.location_name,
+            "batch_id": r.batch_id,
+            "lot_number": r.lot_number,
+            "expiration_date": r.expiration_date.isoformat() if r.expiration_date else None,
+            "quantity": float(r.quantity)
+        })
+
+    total_skus = len(set(i["variant_id"] for i in items))
+    total_units = round(sum(i["quantity"] for i in items), 2)
+
+    return {
+        "warehouse": {
+            "id": warehouse.id,
+            "name": warehouse.name,
+            "code": warehouse.code,
+            "facility_id": warehouse.facility_id,
+            "facility_name": facility.name if facility else "General / Global"
+        },
+        "location": {
+            "id": target_location.id,
+            "name": target_location.name,
+            "code": target_location.code
+        } if target_location else None,
+        "items": items,
+        "summary": {
+            "total_skus": total_skus,
+            "total_units": total_units,
+            "total_lots": len(set(i["lot_number"] for i in items if i.get("lot_number")))
+        }
+    }
+
 @router.post("/putaway")
 def execute_putaway(
     payload: PutawayPayload, 
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    warehouse = db.query(Warehouse).filter(Warehouse.id == payload.warehouse_id).first()
-    if not warehouse:
-        raise HTTPException(status_code=404, detail="Almacén no encontrado.")
+    src_wh_id = payload.source_warehouse_id or payload.warehouse_id
+    if not src_wh_id:
+        raise HTTPException(status_code=400, detail="Debe indicar el almacén de origen.")
 
-    dock_loc = db.query(Location).filter(
-        Location.warehouse_id == warehouse.id,
-        Location.location_type == 'DOCK'
-    ).first()
+    source_wh = db.query(Warehouse).filter(Warehouse.id == src_wh_id).first()
+    if not source_wh:
+        raise HTTPException(status_code=404, detail="Almacén de origen no encontrado.")
 
-    dest_loc = db.query(Location).filter(Location.id == payload.dest_location_id).first()
-    if not dest_loc:
-        raise HTTPException(status_code=404, detail="Ubicación de destino no encontrada.")
+    dest_wh_id = payload.dest_warehouse_id or src_wh_id
+    dest_wh = db.query(Warehouse).filter(Warehouse.id == dest_wh_id).first()
+    if not dest_wh:
+        raise HTTPException(status_code=404, detail="Almacén de destino no encontrado.")
+
+    if source_wh.facility_id != dest_wh.facility_id:
+        raise HTTPException(
+            status_code=400,
+            detail="La reubicación directa sólo está permitida entre almacenes de la misma sucursal."
+        )
+
+    if not current_user.is_superuser:
+        user_fac_ids = [f.id for f in (current_user.facilities or [])]
+        if source_wh.facility_id and source_wh.facility_id not in user_fac_ids:
+            raise HTTPException(status_code=403, detail="No tiene permiso para operar en la sucursal de origen.")
+
+    variant = db.query(ProductVariant).filter(ProductVariant.id == payload.variant_id).first()
+    if not variant:
+        raise HTTPException(status_code=404, detail="Variante de producto no encontrada.")
+
+    if payload.qty <= 0:
+        raise HTTPException(status_code=400, detail="La cantidad a mover debe ser mayor a 0.")
+
+    # Ubicación Origen
+    if payload.source_location_id:
+        src_loc = db.query(Location).filter(
+            Location.id == payload.source_location_id,
+            Location.warehouse_id == source_wh.id
+        ).first()
+        if not src_loc:
+            raise HTTPException(status_code=404, detail="Ubicación de origen no encontrada en el almacén de origen.")
+    else:
+        src_loc = db.query(Location).filter(
+            Location.warehouse_id == source_wh.id,
+            Location.location_type == 'DOCK'
+        ).first()
+        if not src_loc:
+            src_loc = db.query(Location).filter(
+                Location.warehouse_id == source_wh.id,
+                Location.usage == 'INTERNAL'
+            ).first()
+        if not src_loc:
+            src_loc = db.query(Location).filter(Location.warehouse_id == source_wh.id).first()
+        if not src_loc:
+            loc_code = f"{source_wh.code}-STOCK"
+            existing_barcode = db.query(Location).filter(Location.barcode == loc_code).first()
+            loc_barcode = loc_code if not existing_barcode else f"{loc_code}-{source_wh.id}"
+            src_loc = Location(
+                warehouse_id=source_wh.id,
+                name="Ubicación General",
+                code=loc_code,
+                barcode=loc_barcode,
+                location_type="SHELF",
+                usage="INTERNAL",
+                capacity_volume=100.0
+            )
+            db.add(src_loc)
+            db.flush()
+
+    # Ubicación Destino
+    if payload.dest_location_id:
+        dest_loc = db.query(Location).filter(
+            Location.id == payload.dest_location_id,
+            Location.warehouse_id == dest_wh.id
+        ).first()
+        if not dest_loc:
+            raise HTTPException(status_code=404, detail="Ubicación de destino no encontrada en el almacén destino.")
+    else:
+        dest_loc = db.query(Location).filter(
+            Location.warehouse_id == dest_wh.id,
+            Location.usage == 'INTERNAL'
+        ).first()
+        if not dest_loc:
+            dest_loc = db.query(Location).filter(Location.warehouse_id == dest_wh.id).first()
+        if not dest_loc:
+            loc_code = f"{dest_wh.code}-STOCK"
+            existing_barcode = db.query(Location).filter(Location.barcode == loc_code).first()
+            loc_barcode = loc_code if not existing_barcode else f"{loc_code}-{dest_wh.id}"
+            dest_loc = Location(
+                warehouse_id=dest_wh.id,
+                name="Ubicación General",
+                code=loc_code,
+                barcode=loc_barcode,
+                location_type="SHELF",
+                usage="INTERNAL",
+                capacity_volume=100.0
+            )
+            db.add(dest_loc)
+            db.flush()
+
+    if src_loc.id == dest_loc.id:
+        raise HTTPException(status_code=400, detail="La ubicación de origen y destino no pueden ser la misma.")
 
     picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'INTERNAL').first()
+    if not picking_type:
+        picking_type = db.query(StockPickingType).filter(StockPickingType.name.ilike('%Transferencia Interna%')).first()
+    if not picking_type:
+        picking_type = db.query(StockPickingType).filter(StockPickingType.code.in_(['INT', 'TRANSFER'])).first()
     if not picking_type:
         picking_type = StockPickingType(name="Transferencia Interna", code="INTERNAL", sequence_prefix="INT")
         db.add(picking_type)
         db.flush()
 
     user_id_val = getattr(current_user, 'id', None)
+    is_inter_wh = (source_wh.id != dest_wh.id)
+    doc_ref = f"Reubicación Inter-Almacén {source_wh.name} -> {dest_wh.name}" if is_inter_wh else f"Reubicación Interna {source_wh.name}"
 
     picking = StockPicking(
         picking_type_id=picking_type.id,
-        name=f"REUBICACION-{warehouse.code}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-        origin_document=f"Reubicación Interna {warehouse.name}",
-        facility_id=warehouse.facility_id,
+        name=f"REUBICACION-{source_wh.code}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        origin_document=doc_ref,
+        facility_id=source_wh.facility_id,
+        dest_facility_id=dest_wh.facility_id,
         status='DONE',
         date_done=func.now(),
         created_by_id=user_id_val,
@@ -892,19 +1121,27 @@ def execute_putaway(
     move = StockMove(
         picking_id=picking.id,
         product_id=payload.variant_id,
-        location_src_id=dock_loc.id if dock_loc else dest_loc.id,
+        location_src_id=src_loc.id,
         location_dest_id=dest_loc.id,
         quantity_demand=payload.qty,
         quantity_done=payload.qty,
         state='DONE',
         batch_id=payload.batch_id,
-        reference=f"REUBICACION-{warehouse.code}",
+        reference=f"REUBICACION-{source_wh.code}->{dest_wh.code}" if is_inter_wh else f"REUBICACION-{source_wh.code}",
         created_by_id=user_id_val
     )
     db.add(move)
     db.commit()
 
-    return {"message": "Reubicación de mercancía realizada con éxito", "move_id": move.id}
+    return {
+        "message": "Reubicación de mercancía realizada con éxito", 
+        "move_id": move.id,
+        "picking_id": picking.id,
+        "source_warehouse_id": source_wh.id,
+        "dest_warehouse_id": dest_wh.id,
+        "source_location_id": src_loc.id,
+        "dest_location_id": dest_loc.id
+    }
 
 
 
