@@ -137,8 +137,7 @@ def read_products(
             clean_q = q.strip()
             barcode_prod_ids = db.query(ProductVariant.product_id)\
                 .join(ProductBarcode, ProductBarcode.product_variant_id == ProductVariant.id)\
-                .filter(ProductBarcode.barcode.ilike(f"%{clean_q}%"))\
-                .subquery()
+                .filter(ProductBarcode.barcode.ilike(f"%{clean_q}%"))
 
             if not (supplier_ids and isinstance(supplier_ids, (list, tuple))):
                 query = query.outerjoin(ProductVariant)
