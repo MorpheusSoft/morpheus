@@ -53,9 +53,47 @@ def read_ai_recommendations(
     """
     return MRPService.get_ai_recommendations(db, facility_id=facility_id)
 
-from app.services.mrp_bot_service import run_mrp_bot
+from app.services.mrp_bot_service import run_mrp_bot, diagnose_stockouts, generate_supplier_po_draft
 from app.models.purchasing import MRPBotLog
 from sqlalchemy import desc
+
+@router.get("/diagnosis", response_model=schemas.MRPDiagnosisSummary)
+def get_mrp_diagnosis(
+    db: Session = Depends(deps.get_db),
+    facility_id: Optional[int] = Query(None, description="Filtrar por sede específica"),
+    supplier_id: Optional[int] = Query(None, description="Filtrar por proveedor específico")
+) -> Any:
+    """
+    Diagnóstico Predictivo MRP en Memoria agrupado por proveedor y clasificado con semáforos de urgencia.
+    NO genera órdenes en base de datos.
+    """
+    try:
+        diagnosis = diagnose_stockouts(db, facility_id=facility_id, supplier_id=supplier_id)
+        return diagnosis
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error realizando diagnóstico MRP: {str(e)}")
+
+@router.post("/generate-supplier-order", response_model=schemas.GenerateSupplierOrderResponse)
+def generate_supplier_order(
+    payload: schemas.GenerateSupplierOrderRequest,
+    db: Session = Depends(deps.get_db)
+) -> Any:
+    """
+    Genera quirúrgicamente UNA SOLA orden de compra en estado borrador (draft) para el proveedor y sede especificados.
+    """
+    try:
+        result = generate_supplier_po_draft(
+            db=db,
+            supplier_id=payload.supplier_id,
+            facility_id=payload.facility_id,
+            buyer_id=payload.buyer_id,
+            notes=payload.notes
+        )
+        return result
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando orden para el proveedor: {str(e)}")
 
 @router.post("/bot/run", response_model=schemas.MRPBotLogResponse)
 async def run_bot(db: Session = Depends(deps.get_db)) -> Any:
@@ -79,4 +117,5 @@ def get_bot_logs(
     """
     logs = db.query(MRPBotLog).order_by(desc(MRPBotLog.executed_at)).offset(skip).limit(limit).all()
     return logs
+
 

@@ -8,11 +8,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 
 from app.core.config import settings
-from app.models.core import User, Facility
+from app.models.core import User, Facility, Supplier
 from app.models.inventory import Product, ProductVariant, InventorySnapshot, SupplierReturn
 from app.models.purchasing import PurchaseOrder
 from app.models.digital_workers import DigitalWorker, DigitalWorkerConversation, DigitalWorkerMessage
 from app.services.device_pairing_service import pair_device_by_pin, get_authenticated_user_by_phone
+from app.services.mrp_bot_service import diagnose_stockouts, generate_supplier_po_draft
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,95 @@ def process_incoming_whatsapp_message(sender_phone: str, message_text: str, db: 
     data_context = {}
     reply_text = ""
 
-    if any(w in lower_text for w in ["negativo", "negativa", "quiebre", "saldo negativo"]):
+    # Primera Sede autorizada o sede 1 por defecto
+    first_facility_id = user.facilities[0].id if user.facilities else 1
+
+    # Detección: Generación quirúrgica de ODC para un proveedor
+    is_create_po = (
+        any(w in lower_text for w in ["genera", "generar", "crea", "crear", "haz", "hacer", "prepara", "preparar"]) and
+        any(w in lower_text for w in ["odc", "orden", "borrador", "pedido de compra"])
+    )
+
+    # Detección: Diagnóstico de quiebres / reposición de compras
+    is_purchase_stockout = (
+        any(w in lower_text for w in ["falta comprar", "quiebre de proveedor", "quiebres de compra", "que comprar", "qué comprar", "diagnóstico de compras", "diagnostico", "reposicion", "reposición", "que falta", "qué falta"]) or
+        ("quiebre" in lower_text and any(w in lower_text for w in ["proveedor", "proveedores", "compra", "compras", "mrp", "sugerido"]))
+    )
+
+    if is_create_po:
+        tool_executed = "generate_supplier_order"
+        suppliers = db.query(Supplier).filter(Supplier.is_active == True).all()
+        matched_supplier = None
+        for s in suppliers:
+            s_name_lower = s.name.lower()
+            if s_name_lower in lower_text:
+                matched_supplier = s
+                break
+            # Palabras significativas del nombre (mínimo 4 letras)
+            words = [w for w in re.findall(r'\b[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}\b', s_name_lower)]
+            if any(w in lower_text for w in words):
+                matched_supplier = s
+                break
+
+        if matched_supplier:
+            try:
+                po_res = generate_supplier_po_draft(
+                    db=db,
+                    supplier_id=matched_supplier.id,
+                    facility_id=first_facility_id,
+                    notes=f"Generado vía WhatsApp por instrucción de {user.full_name}"
+                )
+                data_context = po_res
+                reply_text = (
+                    f"✅ *Orden de Compra Borrador Creada*\n\n"
+                    f"He generado la orden *{po_res['order_reference']}* para *{matched_supplier.name}* en *{po_res['facility_name']}*.\n\n"
+                    f"• Total Estimado: *${po_res['total_amount']:,.2f} USD*\n"
+                    f"• Renglones: *{po_res['lines_count']} ítems calculados*\n"
+                    f"• Estado: `DRAFT` (Borrador)\n\n"
+                    f"_Ya está disponible en Morpheus ERP para revisión y firma._"
+                )
+            except Exception as ex:
+                reply_text = f"⚠️ *No se pudo generar la orden*: {str(ex)}"
+        else:
+            reply_text = (
+                f"❓ No logré identificar al proveedor en tu instrucción.\n\n"
+                f"Por favor especifícalo con su nombre, por ejemplo:\n"
+                f"• *'Clara, genera la orden para Cervecería Polar'*\n"
+                f"• *'Prepara el borrador de Distribuidora Alimentos'*"
+            )
+
+    elif is_purchase_stockout:
+        tool_executed = "diagnose_stockouts"
+        diagnosis = diagnose_stockouts(db, facility_id=first_facility_id)
+        data_context = {
+            "critical_count": diagnosis.get("critical_suppliers_count", 0),
+            "warning_count": diagnosis.get("warning_suppliers_count", 0),
+            "total_capital": diagnosis.get("total_capital_required", 0),
+            "suppliers": [
+                {"name": s["supplier_name"], "urgency": s["urgency"], "cost": s["estimated_total_cost"], "skus": s["skus_in_breach"]}
+                for s in diagnosis.get("suppliers", []) if s["urgency"] in ("CRITICAL", "WARNING")
+            ][:6]
+        }
+
+        breach_suppliers = [s for s in diagnosis.get("suppliers", []) if s["urgency"] in ("CRITICAL", "WARNING")]
+        if not breach_suppliers:
+            reply_text = f"🟢 *Abastecimiento Saludable*: Ningún proveedor presenta quiebre crítico ni riesgo de agotamiento proyectado para los próximos días."
+        else:
+            blocks = []
+            for s in breach_suppliers[:5]:
+                badge = "🔴 *Quiebre Inmediato*" if s["urgency"] == "CRITICAL" else "🟡 *En Riesgo*"
+                blocks.append(f"{badge}: *{s['supplier_name']}*\n   └ {s['skus_in_breach']} SKUs en déficit | ~${s['estimated_total_cost']:,.2f} USD")
+
+            total_cap = diagnosis.get("total_capital_required", 0)
+            reply_text = (
+                f"📊 *Diagnóstico de Abastecimiento (Clara Compras)*\n\n"
+                f"Se detectaron *{len(breach_suppliers)} proveedores* que requieren reposición:\n\n"
+                + "\n\n".join(blocks) +
+                f"\n\n💰 *Inversión Total Requerida:* ${total_cap:,.2f} USD\n\n"
+                f"_💡 Para generar un borrador, indícame: 'Clara, genera la orden de [Nombre Proveedor]'_"
+            )
+
+    elif any(w in lower_text for w in ["negativo", "negativa", "saldo negativo", "existencia negativa", "existencias negativas", "quiebre"]):
         tool_executed = "audit_negative_stock"
         negatives = execute_negative_stock_lookup(db)
         data_context = {"negative_items": negatives, "count": len(negatives)}
@@ -298,10 +387,12 @@ def process_incoming_whatsapp_message(sender_phone: str, message_text: str, db: 
         reply_text = (
             f"👋 Hola *{user.full_name}*, soy *{worker.display_title}*.\n\n"
             f"Puedo apoyarte en tiempo real con:\n"
-            f"• 🚨 *Existencias negativas* en sucursales\n"
-            f"• 📦 *Consulta de stock* de cualquier SKU o producto\n"
-            f"• 📋 *Órdenes de compra* sin conciliar\n"
-            f"• 🔄 *Devoluciones* a proveedores y mermas\n\n"
+            f"• 📊 *Diagnóstico de quiebres*: '¿Qué proveedores están en quiebre?'\n"
+            f"• ⚡ *Generar ODC*: 'Clara, genera la orden para [Proveedor]'\n"
+            f"• 🚨 *Existencias negativas*: 'Revisa saldos negativos'\n"
+            f"• 📦 *Consulta de stock*: 'Stock de cerveza pilsen'\n"
+            f"• 📋 *Órdenes de compra*: 'Órdenes sin conciliar'\n"
+            f"• 🔄 *Devoluciones*: 'Devoluciones en muelle'\n\n"
             f"¿Qué deseas consultar?"
         )
 

@@ -9,351 +9,545 @@ import { Button } from 'primereact/button';
 import { Dialog } from 'primereact/dialog';
 import { InputText } from 'primereact/inputtext';
 import { Toast } from 'primereact/toast';
-import { InputSwitch } from 'primereact/inputswitch';
+import { Dropdown } from 'primereact/dropdown';
+import Link from 'next/link';
+import api from '@/lib/api';
 
-export default function MRPBotSettingsPage() {
-    const [logs, setLogs] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [running, setRunning] = useState(false);
-    const [selectedLog, setSelectedLog] = useState<any>(null);
-    const [showDetailDialog, setShowDetailDialog] = useState(false);
-    const [detailSearch, setDetailSearch] = useState('');
-    const [showOnlyPurchased, setShowOnlyPurchased] = useState(false);
-    const toast = useRef<Toast>(null);
+interface DiagnosisItem {
+  variant_id: number;
+  sku: string;
+  product_name: string;
+  facility_id: number;
+  facility_name: string;
+  stock_qty: number;
+  transit_qty: number;
+  available_qty: number;
+  run_rate: number;
+  days_of_stock: number;
+  critical_threshold: number;
+  urgency: 'CRITICAL' | 'WARNING' | 'HEALTHY';
+  boxes_needed: number;
+  suggested_base_qty: number;
+  pack_name?: string;
+  qty_per_pack: number;
+  moq: number;
+  unit_cost: number;
+  estimated_subtotal: number;
+}
 
-    // Dynamic configuration variables (Bot params mock)
-    const [botEnabled, setBotEnabled] = useState(true);
-    const [targetServiceLevel, setTargetServiceLevel] = useState(95);
+interface SupplierDiagnosis {
+  supplier_id: number;
+  supplier_name: string;
+  lead_time_days: number;
+  urgency: 'CRITICAL' | 'WARNING' | 'HEALTHY';
+  total_skus: number;
+  skus_in_breach: number;
+  critical_skus_count: number;
+  warning_skus_count: number;
+  estimated_total_cost: number;
+  existing_draft_po_id?: number | null;
+  existing_draft_po_reference?: string | null;
+  items: DiagnosisItem[];
+}
 
-    const fetchLogs = async () => {
-        setLoading(true);
-        try {
-            const { default: api } = await import('@/lib/api');
-            const res = await api.get('/mrp/bot/logs');
-            // Sort by executed_at desc
-            const sorted = (res.data || []).sort((a: any, b: any) => 
-                new Date(b.executed_at).getTime() - new Date(a.executed_at).getTime()
-            );
-            setLogs(sorted);
-        } catch (e) {
-            console.error(e);
-            toast.current?.show({ 
-                severity: 'error', 
-                summary: 'Error', 
-                detail: 'No se pudo cargar la bitácora del autómata' 
-            });
-        } finally {
-            setLoading(false);
-        }
-    };
+interface DiagnosisSummary {
+  evaluated_at: string;
+  total_suppliers_evaluated: number;
+  total_items_evaluated: number;
+  critical_suppliers_count: number;
+  warning_suppliers_count: number;
+  healthy_suppliers_count: number;
+  total_capital_required: number;
+  suppliers: SupplierDiagnosis[];
+}
 
-    useEffect(() => {
-        fetchLogs();
-    }, []);
+export default function ClaraComprasConsolePage() {
+  const [diagnosis, setDiagnosis] = useState<DiagnosisSummary | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [generatingSupplierId, setGeneratingSupplierId] = useState<number | null>(null);
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [urgencyFilter, setUrgencyFilter] = useState<string>('BREACH'); // 'BREACH', 'ALL', 'CRITICAL', 'WARNING'
+  const [expandedSuppliers, setExpandedSuppliers] = useState<Record<number, boolean>>({});
+  
+  // Modal de auditoría
+  const [showLogsDialog, setShowLogsDialog] = useState<boolean>(false);
+  const [logs, setLogs] = useState<any[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState<boolean>(false);
 
-    const handleRunBot = async () => {
-        const confirmed = window.confirm(
-            '¿Está seguro de que desea ejecutar el bot de reabastecimiento ahora?\n' +
-            'Esto analizará el stock de todos los productos y generará Órdenes de Compra (ODC) en borrador para aquellos que estén bajo el umbral crítico.'
-        );
-        if (!confirmed) return;
+  const toast = useRef<Toast>(null);
 
-        setRunning(true);
-        toast.current?.show({
-            severity: 'info',
-            summary: 'Procesando',
-            detail: 'El motor de inteligencia artificial de compras está analizando el stock...',
-            life: 5000
-        });
-
-        try {
-            const { default: api } = await import('@/lib/api');
-            const res = await api.post('/mrp/bot/run');
-            toast.current?.show({
-                severity: 'success',
-                summary: 'Ejecución exitosa',
-                detail: `El bot finalizó con éxito. Evaluó ${res.data.items_evaluated} ítems y generó ${res.data.orders_generated} Órdenes de Compra (ODC).`
-            });
-            fetchLogs();
-        } catch (e: any) {
-            console.error(e);
-            toast.current?.show({
-                severity: 'error',
-                summary: 'Fallo de ejecución',
-                detail: e.response?.data?.detail || 'Ocurrió un error inesperado al correr el bot.'
-            });
-        } finally {
-            setRunning(false);
-        }
-    };
-
-    const handleViewDetails = (log: any) => {
-        setSelectedLog(log);
-        setShowDetailDialog(true);
-    };
-
-    const statusBodyTemplate = (rowData: any) => {
-        const status = rowData.status?.toLowerCase();
-        if (status === 'success') {
-            return <Tag value="COMPLETO" severity="success" className="px-3 py-1 font-black text-xs rounded-full" />;
-        } else if (status === 'failed') {
-            return <Tag value="ERROR" severity="danger" className="px-3 py-1 font-black text-xs rounded-full" />;
-        } else {
-            return <Tag value="CORRIENDO" severity="info" className="px-3 py-1 font-black text-xs rounded-full" />;
-        }
-    };
-
-    const dateBodyTemplate = (rowData: any) => {
-        return (
-            <div className="flex flex-col">
-                <span className="font-bold text-slate-700">
-                    {new Date(rowData.executed_at).toLocaleDateString()}
-                </span>
-                <span className="text-xs text-slate-400 font-mono">
-                    {new Date(rowData.executed_at).toLocaleTimeString()}
-                </span>
-            </div>
-        );
-    };
-
-    const actionsBodyTemplate = (rowData: any) => {
-        return (
-            <Button
-                icon="pi pi-search-plus"
-                label="Auditar"
-                onClick={() => handleViewDetails(rowData)}
-                className="p-button-text p-button-sm text-indigo-600 hover:text-indigo-800 font-black"
-            />
-        );
-    };
-
-    // Parsing the details log JSON
-    let parsedDetails: any[] = [];
-    if (selectedLog && selectedLog.details) {
-        try {
-            const raw = typeof selectedLog.details === 'string' ? JSON.parse(selectedLog.details) : selectedLog.details;
-            parsedDetails = Array.isArray(raw) ? raw : [];
-        } catch (e) {
-            console.error("Error parsing details JSON", e);
-        }
+  const fetchDiagnosis = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get('/mrp/diagnosis');
+      setDiagnosis(res.data);
+      // Expandir por defecto los primeros 3 proveedores críticos
+      const initialExpanded: Record<number, boolean> = {};
+      (res.data?.suppliers || []).slice(0, 3).forEach((s: SupplierDiagnosis) => {
+        initialExpanded[s.supplier_id] = true;
+      });
+      setExpandedSuppliers(initialExpanded);
+    } catch (e: any) {
+      console.error('Error fetching MRP diagnosis:', e);
+      toast.current?.show({
+        severity: 'error',
+        summary: 'Error de Diagnóstico',
+        detail: e.response?.data?.detail || 'No se pudo cargar el diagnóstico predictivo de compras.'
+      });
+    } finally {
+      setLoading(false);
     }
+  };
 
-    // Apply client filters to the details datatable
-    const filteredDetails = parsedDetails.filter((item: any) => {
-        const matchesSearch = 
-            (item.sku || '').toLowerCase().includes(detailSearch.toLowerCase()) ||
-            (item.product_name || '').toLowerCase().includes(detailSearch.toLowerCase()) ||
-            (item.supplier_name || '').toLowerCase().includes(detailSearch.toLowerCase()) ||
-            (item.facility_name || '').toLowerCase().includes(detailSearch.toLowerCase());
-        
-        if (showOnlyPurchased) {
-            return matchesSearch && item.status === 'purchased';
-        }
-        return matchesSearch;
-    });
+  const fetchLogs = async () => {
+    setLoadingLogs(true);
+    try {
+      const res = await api.get('/mrp/bot/logs');
+      setLogs(res.data || []);
+    } catch (e) {
+      console.error('Error fetching logs:', e);
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
 
-    const detailStatusTemplate = (rowData: any) => {
-        const isPurchased = rowData.status === 'purchased';
-        return (
-            <span className={`px-2 py-1 rounded text-[10px] font-black uppercase tracking-wider ${
-                isPurchased ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-slate-100 text-slate-600 border border-slate-200'
-            }`}>
-                {isPurchased ? 'ORDENADO' : 'IGNORADO'}
-            </span>
-        );
-    };
+  useEffect(() => {
+    fetchDiagnosis();
+  }, []);
 
-    return (
-        <div className="p-6 sm:p-8 bg-slate-50 min-h-screen flex flex-col">
-            <Toast ref={toast} />
-            
-            {/* Header section */}
-            <div className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div>
-                    <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-                        <i className="pi pi-sparkles text-emerald-500 text-3xl"></i> Autómata de Compras (AI Bot)
-                    </h1>
-                    <p className="text-slate-500 font-medium mt-1">
-                        Controla el demonio de abastecimiento automatizado y audita cada cálculo predictivo del MRP.
-                    </p>
-                </div>
-                <div className="flex gap-3">
-                    <Button 
-                        label="Ejecutar Ahora" 
-                        icon="pi pi-play" 
-                        loading={running}
-                        onClick={handleRunBot}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold border-none px-5 py-3 rounded-xl shadow-md transition-all duration-300"
-                    />
-                    <Button 
-                        icon="pi pi-refresh" 
-                        outlined 
-                        onClick={fetchLogs} 
-                        className="border-slate-300 text-slate-600 hover:bg-slate-100 rounded-xl"
-                    />
-                </div>
+  const handleGenerateOrder = async (supplier: SupplierDiagnosis) => {
+    setGeneratingSupplierId(supplier.supplier_id);
+    try {
+      const res = await api.post('/mrp/generate-supplier-order', {
+        supplier_id: supplier.supplier_id,
+        facility_id: supplier.items[0]?.facility_id || 1,
+        notes: `Generado desde Consola Clara Compras para ${supplier.supplier_name}`
+      });
+
+      toast.current?.show({
+        severity: 'success',
+        summary: 'ODC Borrador Creada',
+        detail: `Se generó ${res.data.order_reference} para ${supplier.supplier_name} por $${res.data.total_amount?.toLocaleString()} USD (${res.data.lines_count} renglones).`,
+        life: 5000
+      });
+
+      // Actualizar el estado local para reflejar la orden creada
+      setDiagnosis(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          suppliers: prev.suppliers.map(s => {
+            if (s.supplier_id === supplier.supplier_id) {
+              return {
+                ...s,
+                existing_draft_po_id: res.data.order_id,
+                existing_draft_po_reference: res.data.order_reference
+              };
+            }
+            return s;
+          })
+        };
+      });
+    } catch (e: any) {
+      console.error('Error generating surgical order:', e);
+      toast.current?.show({
+        severity: 'error',
+        summary: 'Fallo al Crear Orden',
+        detail: e.response?.data?.detail || 'No se pudo generar la orden de compra.'
+      });
+    } finally {
+      setGeneratingSupplierId(null);
+    }
+  };
+
+  const toggleSupplierExpand = (id: number) => {
+    setExpandedSuppliers(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
+  // Filtrado de proveedores
+  const filteredSuppliers = (diagnosis?.suppliers || []).filter(s => {
+    const matchesSearch = s.supplier_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      s.items.some(i => i.sku.toLowerCase().includes(searchTerm.toLowerCase()) || i.product_name.toLowerCase().includes(searchTerm.toLowerCase()));
+
+    if (!matchesSearch) return false;
+
+    if (urgencyFilter === 'BREACH') return s.urgency === 'CRITICAL' || s.urgency === 'WARNING';
+    if (urgencyFilter === 'CRITICAL') return s.urgency === 'CRITICAL';
+    if (urgencyFilter === 'WARNING') return s.urgency === 'WARNING';
+    if (urgencyFilter === 'HEALTHY') return s.urgency === 'HEALTHY';
+    return true; // 'ALL'
+  });
+
+  return (
+    <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
+      <Toast ref={toast} />
+
+      {/* ENCABEZADO PRINCIPAL */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-6 rounded-2xl shadow-xl border border-indigo-500/20 text-white">
+        <div>
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-indigo-500/20 border border-indigo-400/30 rounded-xl text-indigo-400">
+              <i className="pi pi-sparkles text-2xl" />
             </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
-                {/* Configuration Panel */}
-                <Card className="lg:col-span-1 shadow-sm border border-slate-200 rounded-2xl bg-white">
-                    <h2 className="text-lg font-black text-slate-800 tracking-tight mb-6 flex items-center gap-2">
-                        <i className="pi pi-cog text-slate-500"></i> Parámetros de Operación
-                    </h2>
-                    
-                    <div className="flex flex-col gap-6">
-                        <div className="flex justify-between items-center bg-slate-50 p-4 rounded-xl border border-slate-200">
-                            <div className="flex flex-col">
-                                <span className="font-bold text-slate-700 text-sm">Ejecución Nocturna</span>
-                                <span className="text-xs text-slate-400">Trigger automático diario 3:00 AM</span>
-                            </div>
-                            <InputSwitch 
-                                checked={botEnabled} 
-                                onChange={(e) => {
-                                    setBotEnabled(e.value);
-                                    toast.current?.show({
-                                        severity: 'success',
-                                        summary: 'Configuración Guardada',
-                                        detail: `El bot nocturno ha sido ${e.value ? 'activado' : 'desactivado'}.`
-                                    });
-                                }} 
-                            />
-                        </div>
-
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-                            <span className="font-bold text-slate-700 text-sm block mb-1">Nivel de Servicio AI</span>
-                            <span className="text-xs text-slate-400 block mb-3">Z-Score para el cálculo de stock de seguridad</span>
-                            <div className="flex items-center justify-between">
-                                <span className="font-black text-slate-800 text-lg">{targetServiceLevel}% <span className="text-xs font-normal text-slate-500">(Z = 1.65)</span></span>
-                                <div className="flex gap-1">
-                                    <Button icon="pi pi-minus" className="p-button-sm p-button-outlined border-slate-300 text-slate-600 p-1" onClick={() => setTargetServiceLevel(Math.max(80, targetServiceLevel - 5))} />
-                                    <Button icon="pi pi-plus" className="p-button-sm p-button-outlined border-slate-300 text-slate-600 p-1" onClick={() => setTargetServiceLevel(Math.min(99, targetServiceLevel + 5))} />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-4 flex gap-3 text-xs leading-relaxed font-medium">
-                            <i className="pi pi-info-circle text-amber-600 text-lg flex-shrink-0 mt-0.5"></i>
-                            <div>
-                                <strong className="block mb-1">Cálculo Dinámico de Seguridad:</strong>
-                                La Inteligencia Artificial calcula el stock de seguridad dinámicamente usando la variabilidad de la demanda diaria y la confiabilidad en la puntualidad de cada proveedor.
-                            </div>
-                        </div>
-                    </div>
-                </Card>
-
-                {/* History Log grid */}
-                <Card className="lg:col-span-2 shadow-sm border border-slate-200 rounded-2xl bg-white flex flex-col">
-                    <h2 className="text-lg font-black text-slate-800 tracking-tight mb-6 flex items-center gap-2">
-                        <i className="pi pi-history text-slate-500"></i> Bitácora de Ejecuciones
-                    </h2>
-                    
-                    <DataTable
-                        value={logs}
-                        loading={loading}
-                        paginator
-                        rows={10}
-                        emptyMessage="No hay registros en la bitácora del bot."
-                        className="p-datatable-sm"
-                        responsiveLayout="scroll"
-                    >
-                        <Column body={dateBodyTemplate} header="Fecha y Hora" style={{ minWidth: '10rem' }} />
-                        <Column body={statusBodyTemplate} header="Estado" style={{ minWidth: '8rem' }} />
-                        <Column field="items_evaluated" header="Evaluados" sortable style={{ minWidth: '7rem' }} />
-                        <Column field="orders_generated" header="ODC Creadas" sortable style={{ minWidth: '8rem' }} />
-                        <Column body={actionsBodyTemplate} header="Acción" style={{ minWidth: '8rem' }} align="center" />
-                    </DataTable>
-                </Card>
+            <div>
+              <h1 className="text-2xl font-black tracking-tight">Consola Clara Compras</h1>
+              <p className="text-sm text-indigo-200/80">
+                Diagnóstico Predictivo de Quiebres y Reposición Asistida (Human-in-the-Loop)
+              </p>
             </div>
-
-            {/* Audit details Dialog */}
-            <Dialog
-                header={
-                    <div className="flex items-center gap-3">
-                        <i className="pi pi-file-edit text-indigo-500 text-2xl"></i>
-                        <div>
-                            <span className="font-black text-slate-800 text-xl block">
-                                Auditoría de Cálculos Predictivos
-                            </span>
-                            <span className="text-xs text-slate-400 font-medium block mt-0.5">
-                                Corrida del {selectedLog && new Date(selectedLog.executed_at).toLocaleString()} | ID #{selectedLog?.id}
-                            </span>
-                        </div>
-                    </div>
-                }
-                visible={showDetailDialog}
-                onHide={() => setShowDetailDialog(false)}
-                modal
-                className="w-full max-w-[1200px]"
-                contentClassName="p-6 bg-slate-50"
-            >
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col gap-4">
-                    {/* Filters header */}
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4 mb-2">
-                        <div className="relative flex-1 max-w-md flex items-center">
-                            <i className="pi pi-search absolute left-3 text-slate-400" />
-                            <InputText
-                                value={detailSearch}
-                                onChange={(e) => setDetailSearch(e.target.value)}
-                                placeholder="Filtrar por SKU, Producto, Proveedor o Tienda..."
-                                className="w-full !pl-10 rounded-lg"
-                            />
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <span className="text-sm font-bold text-slate-600">Mostrar solo compras generadas:</span>
-                            <InputSwitch
-                                checked={showOnlyPurchased}
-                                onChange={(e) => setShowOnlyPurchased(e.value)}
-                            />
-                        </div>
-                    </div>
-
-                    {/* Details table */}
-                    <DataTable
-                        value={filteredDetails}
-                        paginator
-                        rows={10}
-                        emptyMessage="No se encontraron registros de auditoría para esta búsqueda."
-                        className="p-datatable-sm text-sm"
-                        responsiveLayout="scroll"
-                    >
-                        <Column field="sku" header="SKU" sortable className="font-bold font-mono text-slate-700" style={{ minWidth: '7rem' }} />
-                        <Column field="product_name" header="Producto" sortable style={{ minWidth: '15rem' }} />
-                        <Column field="supplier_name" header="Proveedor" sortable style={{ minWidth: '10rem' }} />
-                        <Column field="facility_name" header="Tienda" sortable style={{ minWidth: '8rem' }} />
-                        <Column 
-                            header="Stock Total (Fis + Tran)" 
-                            body={(rowData) => (
-                                <div className="text-slate-600 font-medium">
-                                    {rowData.available_qty} <span className="text-[10px] text-slate-400">({rowData.stock_qty} + {rowData.transit_qty})</span>
-                                </div>
-                            )}
-                            style={{ minWidth: '11rem' }}
-                        />
-                        <Column 
-                            header="U. Crítico (Dem + Sec)" 
-                            body={(rowData) => (
-                                <div className="text-slate-600 font-medium">
-                                    {rowData.critical_threshold} <span className="text-[10px] text-slate-400">({rowData.predicted_demand} + {rowData.safety_stock})</span>
-                                </div>
-                            )}
-                            style={{ minWidth: '11rem' }}
-                        />
-                        <Column 
-                            header="Compra" 
-                            body={(rowData) => (
-                                <span className={`font-black ${rowData.purchase_qty > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
-                                    {rowData.purchase_qty > 0 ? `${rowData.purchase_qty} Unids.` : '0.0'}
-                                    {rowData.boxes_count > 0 && <span className="text-[10px] font-normal text-slate-500 block">({rowData.boxes_count} Cajas)</span>}
-                                </span>
-                            )}
-                            style={{ minWidth: '9rem' }} 
-                        />
-                        <Column body={detailStatusTemplate} header="Estado" align="center" style={{ minWidth: '8rem' }} />
-                        <Column field="reason" header="Explicación / Detalle de Decisión" style={{ minWidth: '18rem' }} />
-                    </DataTable>
-                </div>
-            </Dialog>
+          </div>
         </div>
-    );
+        <div className="flex items-center gap-3">
+          <Button
+            label="Auditoría y Bitácora"
+            icon="pi pi-history"
+            className="p-button-outlined p-button-sm border-indigo-400/40 text-indigo-200 hover:bg-indigo-900/40"
+            onClick={() => {
+              fetchLogs();
+              setShowLogsDialog(true);
+            }}
+          />
+          <Button
+            label={loading ? 'Analizando...' : 'Diagnosticar en Tiempo Real'}
+            icon={loading ? 'pi pi-spin pi-spinner' : 'pi pi-bolt'}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-button-sm px-4 shadow-lg shadow-indigo-600/30"
+            onClick={fetchDiagnosis}
+            disabled={loading}
+          />
+        </div>
+      </div>
+
+      {/* TARJETAS KPI */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Proveedores Críticos */}
+        <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-red-200 dark:border-red-900/40 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-xs font-bold text-red-600 dark:text-red-400 uppercase tracking-wider">
+              Quiebre Inmediato
+            </span>
+            <div className="text-3xl font-black text-slate-900 dark:text-white mt-1">
+              {loading ? '-' : diagnosis?.critical_suppliers_count || 0}
+            </div>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              Proveedores sin stock o cobertura &lt; Lead Time
+            </span>
+          </div>
+          <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center text-red-600 text-xl font-bold">
+            🔴
+          </div>
+        </div>
+
+        {/* Proveedores en Riesgo */}
+        <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-amber-200 dark:border-amber-900/40 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+              Quiebre Proyectado
+            </span>
+            <div className="text-3xl font-black text-slate-900 dark:text-white mt-1">
+              {loading ? '-' : diagnosis?.warning_suppliers_count || 0}
+            </div>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              Proveedores bajo stock de seguridad
+            </span>
+          </div>
+          <div className="w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center text-amber-600 text-xl font-bold">
+            🟡
+          </div>
+        </div>
+
+        {/* Capital Estimado Requerido */}
+        <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-indigo-200 dark:border-indigo-900/40 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+              Inversión Estimada
+            </span>
+            <div className="text-3xl font-black text-indigo-700 dark:text-indigo-400 mt-1">
+              {loading ? '-' : `$${(diagnosis?.total_capital_required || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
+            </div>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              USD total para cubrir umbral crítico
+            </span>
+          </div>
+          <div className="w-12 h-12 rounded-full bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center text-indigo-600 text-xl font-bold">
+            💵
+          </div>
+        </div>
+
+        {/* Proveedores Evaluados */}
+        <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              Catálogo Evaluado
+            </span>
+            <div className="text-3xl font-black text-slate-900 dark:text-white mt-1">
+              {loading ? '-' : diagnosis?.total_suppliers_evaluated || 0}
+            </div>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              Proveedores activos con rotación 90d
+            </span>
+          </div>
+          <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-600 text-xl font-bold">
+            🏢
+          </div>
+        </div>
+      </div>
+
+      {/* BARRA DE FILTROS */}
+      <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
+        <div className="flex-1 w-full md:w-auto relative">
+          <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <InputText
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Buscar por proveedor o SKU..."
+            className="w-full pl-9 pr-4 py-2 border rounded-lg text-sm bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700"
+          />
+        </div>
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          <Dropdown
+            value={urgencyFilter}
+            options={[
+              { label: '⚠️ Solo Quiebres y Alertas', value: 'BREACH' },
+              { label: '🔴 Solo Quiebre Inmediato', value: 'CRITICAL' },
+              { label: '🟡 Solo En Riesgo', value: 'WARNING' },
+              { label: '🟢 Solo Saludables', value: 'HEALTHY' },
+              { label: '🌐 Todos los Proveedores', value: 'ALL' },
+            ]}
+            onChange={(e) => setUrgencyFilter(e.value)}
+            className="w-full md:w-64 text-sm"
+          />
+        </div>
+      </div>
+
+      {/* LISTA DE PROVEEDORES DIAGNOSTICADOS */}
+      {loading ? (
+        <div className="text-center py-16 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+          <i className="pi pi-spin pi-spinner text-4xl text-indigo-600 mb-3" />
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white">Clara Compras está diagnosticando el inventario...</h3>
+          <p className="text-sm text-slate-500">Analizando consumo diario de 90 días, plazos de entrega y tránsitos abiertos.</p>
+        </div>
+      ) : filteredSuppliers.length === 0 ? (
+        <div className="text-center py-16 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+          <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 rounded-full flex items-center justify-center mx-auto text-3xl mb-4">
+            ✓
+          </div>
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white">No se encontraron proveedores para los filtros seleccionados</h3>
+          <p className="text-sm text-slate-500 mt-1">Los proveedores evaluados se encuentran abastecidos o no coinciden con la búsqueda.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {filteredSuppliers.map((supplier) => {
+            const isExpanded = !!expandedSuppliers[supplier.supplier_id];
+            const isCritical = supplier.urgency === 'CRITICAL';
+            const isWarning = supplier.urgency === 'WARNING';
+            const isGenerating = generatingSupplierId === supplier.supplier_id;
+
+            return (
+              <div
+                key={supplier.supplier_id}
+                className={`bg-white dark:bg-slate-800 rounded-2xl border transition-all duration-200 overflow-hidden shadow-sm hover:shadow-md ${
+                  isCritical 
+                    ? 'border-red-200 dark:border-red-900/40' 
+                    : isWarning 
+                    ? 'border-amber-200 dark:border-amber-900/40' 
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+              >
+                {/* CABECERA DE LA TARJETA DEL PROVEEDOR */}
+                <div className="p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                  <div className="flex items-start gap-3.5 flex-1">
+                    <button
+                      onClick={() => toggleSupplierExpand(supplier.supplier_id)}
+                      className="mt-1 w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 flex items-center justify-center text-slate-600 dark:text-slate-300 transition-colors"
+                    >
+                      <i className={`pi pi-chevron-${isExpanded ? 'up' : 'down'} text-xs font-bold`} />
+                    </button>
+                    <div>
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        {isCritical && (
+                          <span className="px-2.5 py-0.5 text-xs font-black rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 border border-red-200">
+                            🔴 QUIEBRE INMEDIATO
+                          </span>
+                        )}
+                        {isWarning && (
+                          <span className="px-2.5 py-0.5 text-xs font-black rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-200">
+                            🟡 EN RIESGO PROYECTADO
+                          </span>
+                        )}
+                        {!isCritical && !isWarning && (
+                          <span className="px-2.5 py-0.5 text-xs font-black rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 border border-emerald-200">
+                            🟢 ABASTECIDO
+                          </span>
+                        )}
+                        <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                          {supplier.supplier_name}
+                        </h2>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 mt-1.5 flex-wrap">
+                        <span>⏱️ Lead Time: <strong>{supplier.lead_time_days} días</strong></span>
+                        <span>•</span>
+                        <span>📦 <strong>{supplier.skus_in_breach}</strong> SKUs en déficit</span>
+                        <span>•</span>
+                        <span>💵 Inversión: <strong className="text-indigo-600 dark:text-indigo-400 font-bold">${supplier.estimated_total_cost.toLocaleString()} USD</strong></span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ACCIONES DEL PROVEEDOR */}
+                  <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+                    {supplier.existing_draft_po_id ? (
+                      <Link
+                        href={`/orders/${supplier.existing_draft_po_id}`}
+                        className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 rounded-lg text-xs font-black hover:bg-emerald-100 transition-colors"
+                      >
+                        <i className="pi pi-check-circle" />
+                        <span>Ver Borrador {supplier.existing_draft_po_reference || `ODC-${supplier.existing_draft_po_id}`}</span>
+                      </Link>
+                    ) : (
+                      <Button
+                        label={isGenerating ? 'Generando...' : 'Generar Borrador ODC'}
+                        icon={isGenerating ? 'pi pi-spin pi-spinner' : 'pi pi-bolt'}
+                        className={`p-button-sm text-xs font-bold px-4 rounded-lg shadow-sm ${
+                          isCritical
+                            ? 'bg-red-600 hover:bg-red-700 text-white'
+                            : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                        }`}
+                        onClick={() => handleGenerateOrder(supplier)}
+                        disabled={isGenerating || supplier.items.length === 0}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {/* DESGLOSE EXPANDIBLE DE PRODUCTOS */}
+                {isExpanded && (
+                  <div className="border-t border-slate-100 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/40 p-4">
+                    {supplier.items.length === 0 ? (
+                      <div className="text-center py-4 text-xs text-slate-400">
+                        Todos los productos de este proveedor se encuentran con stock óptimo.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="text-slate-400 uppercase font-bold border-b border-slate-200 dark:border-slate-700">
+                              <th className="py-2.5 px-3">SKU / Producto</th>
+                              <th className="py-2.5 px-3">Sede</th>
+                              <th className="py-2.5 px-3 text-right">Stock Físico</th>
+                              <th className="py-2.5 px-3 text-right">Tránsito</th>
+                              <th className="py-2.5 px-3 text-right">Venta/Día</th>
+                              <th className="py-2.5 px-3 text-right">Días Stock</th>
+                              <th className="py-2.5 px-3 text-right">Sugerido</th>
+                              <th className="py-2.5 px-3 text-right">Costo Unit.</th>
+                              <th className="py-2.5 px-3 text-right">Subtotal</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {supplier.items.map((item) => (
+                              <tr key={item.variant_id} className="hover:bg-white dark:hover:bg-slate-800/60 transition-colors">
+                                <td className="py-2.5 px-3">
+                                  <div className="font-bold text-slate-800 dark:text-slate-200">{item.product_name}</div>
+                                  <div className="text-[10px] text-slate-400 font-mono">{item.sku}</div>
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">{item.facility_name}</td>
+                                <td className="py-2.5 px-3 text-right font-medium text-slate-700 dark:text-slate-300">
+                                  {item.stock_qty.toLocaleString()}
+                                </td>
+                                <td className="py-2.5 px-3 text-right text-slate-500">
+                                  {item.transit_qty > 0 ? `+${item.transit_qty.toLocaleString()}` : '-'}
+                                </td>
+                                <td className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-400">
+                                  {item.run_rate.toFixed(1)} /d
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-bold">
+                                  <span className={item.days_of_stock <= supplier.lead_time_days ? 'text-red-600 font-black' : 'text-amber-600'}>
+                                    {item.days_of_stock.toFixed(1)} d
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-right">
+                                  <div className="font-black text-indigo-600 dark:text-indigo-400">
+                                    {item.boxes_needed} {item.pack_name || 'cajas'}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400">
+                                    ({item.suggested_base_qty.toLocaleString()} uds)
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-300 font-mono">
+                                  ${item.unit_cost.toFixed(2)}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-black text-slate-900 dark:text-white font-mono">
+                                  ${item.estimated_subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* DIÁLOGO DE BITÁCORA Y AUDITORÍA */}
+      <Dialog
+        header="Bitácora de Ejecuciones del Autómata MRP"
+        visible={showLogsDialog}
+        style={{ width: '80vw', maxWidth: '1000px' }}
+        onHide={() => setShowLogsDialog(false)}
+        className="rounded-2xl"
+      >
+        <DataTable
+          value={logs}
+          loading={loadingLogs}
+          paginator
+          rows={8}
+          emptyMessage="No hay registros históricos de ejecución."
+          className="text-xs"
+        >
+          <Column
+            field="executed_at"
+            header="Fecha y Hora"
+            body={(row) => (
+              <div>
+                <div className="font-bold text-slate-700">{new Date(row.executed_at).toLocaleDateString()}</div>
+                <div className="text-[10px] text-slate-400 font-mono">{new Date(row.executed_at).toLocaleTimeString()}</div>
+              </div>
+            )}
+          />
+          <Column
+            field="status"
+            header="Estado"
+            body={(row) => (
+              <Tag
+                value={row.status?.toUpperCase()}
+                severity={row.status === 'success' ? 'success' : 'danger'}
+                className="font-black text-[10px] px-2.5 py-0.5 rounded-full"
+              />
+            )}
+          />
+          <Column
+            field="items_evaluated"
+            header="Ítems Evaluados"
+            body={(row) => <span className="font-mono font-bold">{row.items_evaluated}</span>}
+          />
+          <Column
+            field="orders_generated"
+            header="ODCs Generadas"
+            body={(row) => (
+              <span className="font-mono font-bold text-indigo-600">
+                {row.orders_generated}
+              </span>
+            )}
+          />
+        </DataTable>
+      </Dialog>
+    </div>
+  );
 }

@@ -40,7 +40,7 @@ async def run_mrp_bot_scheduler():
                         MRPBotLog.executed_at >= today_start
                     ).first()
                     if not already_run:
-                        print(f"[MRP BOT SCHEDULER] Ejecutando bot automático diario a las {now}...")
+                        print(f"[MRP BOT SCHEDULER] Ejecutando diagnóstico predictivo de quiebres diario a las {now}...")
                         await run_mrp_bot(db)
                 except Exception as ex:
                     print(f"[MRP BOT SCHEDULER ERROR] Fallo durante ejecución: {ex}")

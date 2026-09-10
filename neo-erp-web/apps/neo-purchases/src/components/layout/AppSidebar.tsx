@@ -53,7 +53,7 @@ function AppSidebarContent() {
 
   const settingsItems = [
     { label: 'Equipo de Compradores', icon: 'pi pi-id-card', href: '/buyers' },
-    { label: 'Bot de Compras (IA)', icon: 'pi pi-cog', href: '/settings/bot' },
+    { label: 'Asistente Clara (Diagnóstico)', icon: 'pi pi-sparkles', href: '/settings/bot' },
   ];
 
   const isActivePath = (href: string) => {
