@@ -49,6 +49,12 @@ export default function WmsLocationsPage() {
   const [executingPutaway, setExecutingPutaway] = useState(false);
   const [productsList, setProductsList] = useState<any[]>([]);
 
+  // Multi-empaque y UOM para Reubicación (Putaway)
+  const [availablePackagings, setAvailablePackagings] = useState<any[]>([]);
+  const [selectedPackagingId, setSelectedPackagingId] = useState<number>(0);
+  const [currentProductUom, setCurrentProductUom] = useState<string>('UND');
+  const [loadingPackagings, setLoadingPackagings] = useState<boolean>(false);
+
   // Consulta de Stock (Ubicación Quirúrgica o Almacén Global)
   const [stockDialogVisible, setStockDialogVisible] = useState(false);
   const [loadingStock, setLoadingStock] = useState(false);
@@ -263,6 +269,27 @@ export default function WmsLocationsPage() {
     );
   }, [stockData, stockSearchQuery]);
 
+  const fetchVariantPackagings = async (vId: number) => {
+    if (!vId) {
+      setAvailablePackagings([]);
+      setCurrentProductUom('UND');
+      return;
+    }
+    setLoadingPackagings(true);
+    try {
+      const res = await api.get(`/wms/variants/${vId}/packagings`);
+      if (res.data) {
+        setAvailablePackagings(res.data.packagings || []);
+        setCurrentProductUom(res.data.uom || 'UND');
+      }
+    } catch (e) {
+      console.error("Error cargando empaques de variante:", e);
+      setAvailablePackagings([]);
+      setCurrentProductUom('UND');
+    }
+    setLoadingPackagings(false);
+  };
+
   const handleReubicarFromStock = (item: any) => {
     if (!currentStockWarehouse) return;
     openPutaway(
@@ -270,7 +297,9 @@ export default function WmsLocationsPage() {
       item.location_id || null,
       item.variant_id,
       item.batch_id || null,
-      item.quantity || 1
+      item.quantity || 1,
+      item.packagings || [],
+      item.uom || 'UND'
     );
   };
 
@@ -282,7 +311,9 @@ export default function WmsLocationsPage() {
     preselectedLocId: number | null = null, 
     preselectedVariantId: number | null = null,
     preselectedBatchId: number | null = null,
-    preselectedQty: number = 1
+    preselectedQty: number = 1,
+    preselectedPackagings: any[] | null = null,
+    preselectedUom: string = 'UND'
   ) => {
     if (!wh) return;
     setSourceWarehouse(wh);
@@ -303,8 +334,48 @@ export default function WmsLocationsPage() {
     setVariantId(preselectedVariantId);
     setBatchId(preselectedBatchId);
     setPutawayQty(preselectedQty > 0 ? preselectedQty : 1);
+
+    // Por defecto siempre Unidad (factor 1.0)
+    setSelectedPackagingId(0);
+    if (preselectedPackagings !== null) {
+      setAvailablePackagings(preselectedPackagings);
+      setCurrentProductUom(preselectedUom || 'UND');
+    } else if (preselectedVariantId) {
+      fetchVariantPackagings(preselectedVariantId);
+    } else {
+      setAvailablePackagings([]);
+      setCurrentProductUom('UND');
+    }
+
     setPutawayDialogVisible(true);
   };
+
+  const packagingOptions = useMemo(() => {
+    const baseOpt = {
+      id: 0,
+      name: 'Unidad',
+      qty_per_unit: 1.0,
+      label: `Unidad (${currentProductUom}) (x1)`,
+      value: 0
+    };
+    const extraOpts = (availablePackagings || []).map((pkg: any) => ({
+      id: pkg.id,
+      name: pkg.name,
+      qty_per_unit: Number(pkg.qty_per_unit) || 1,
+      label: `📦 ${pkg.name} (${pkg.qty_per_unit} ${currentProductUom})`,
+      value: pkg.id
+    }));
+    return [baseOpt, ...extraOpts];
+  }, [availablePackagings, currentProductUom]);
+
+  const selectedPackaging = useMemo(() => {
+    return packagingOptions.find(p => p.value === selectedPackagingId) || packagingOptions[0];
+  }, [packagingOptions, selectedPackagingId]);
+
+  const totalBaseQty = useMemo(() => {
+    const factor = selectedPackaging?.qty_per_unit || 1;
+    return Math.round(((putawayQty || 0) * factor) * 10000) / 10000;
+  }, [selectedPackaging, putawayQty]);
 
   const submitPutaway = async () => {
     if (!sourceWarehouse || !variantId || putawayQty <= 0) {
@@ -344,6 +415,7 @@ export default function WmsLocationsPage() {
 
     setExecutingPutaway(true);
     try {
+      const factor = selectedPackaging?.qty_per_unit || 1;
       await api.post('/wms/putaway', {
         source_warehouse_id: sourceWarehouse.id,
         dest_warehouse_id: targetDestWhId,
@@ -351,13 +423,15 @@ export default function WmsLocationsPage() {
         dest_location_id: finalDestLocId,
         variant_id: variantId,
         qty: putawayQty,
-        batch_id: batchId || null
+        batch_id: batchId || null,
+        packaging_id: selectedPackagingId > 0 ? selectedPackagingId : null,
+        factor: factor
       });
 
       toast.current?.show({ 
         severity: 'success', 
         summary: 'Reubicación Exitosa', 
-        detail: 'Mercancía reubicada satisfactoriamente con trazabilidad completa.' 
+        detail: `Mercancía reubicada satisfactoriamente: ${totalBaseQty.toLocaleString()} ${currentProductUom}.` 
       });
       setPutawayDialogVisible(false);
       fetchTreeAndOccupancy(selectedFacilityFilter);
@@ -908,7 +982,17 @@ export default function WmsLocationsPage() {
               options={productsList}
               optionLabel="label"
               optionValue="value"
-              onChange={(e) => setVariantId(e.value)}
+              onChange={(e) => {
+                const newVId = e.value;
+                setVariantId(newVId);
+                setSelectedPackagingId(0);
+                if (newVId) {
+                  fetchVariantPackagings(newVId);
+                } else {
+                  setAvailablePackagings([]);
+                  setCurrentProductUom('UND');
+                }
+              }}
               placeholder="Seleccionar variante o SKU..."
               filter
               showClear
@@ -978,15 +1062,53 @@ export default function WmsLocationsPage() {
             </div>
           </div>
 
-          {/* Cantidad */}
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad a Mover:</label>
-            <InputNumber 
-              value={putawayQty}
-              onValueChange={(e) => setPutawayQty(e.value || 1)}
-              min={1}
-              className="w-full"
-            />
+          {/* Presentación / Empaque y Cantidad */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700">Presentación / Empaque:</label>
+                {loadingPackagings && <i className="pi pi-spin pi-spinner text-xs text-blue-500"></i>}
+              </div>
+              <Dropdown 
+                value={selectedPackagingId}
+                options={packagingOptions}
+                optionLabel="label"
+                optionValue="value"
+                onChange={(e) => setSelectedPackagingId(e.value ?? 0)}
+                placeholder="Seleccionar empaque..."
+                className="w-full text-xs font-bold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Cantidad a Mover {selectedPackagingId > 0 ? `(${selectedPackaging?.name || 'Empaques'})` : `(${currentProductUom})`}:
+              </label>
+              <InputNumber 
+                value={putawayQty}
+                onValueChange={(e) => setPutawayQty(e.value || 1)}
+                min={0.0001}
+                maxFractionDigits={4}
+                className="w-full"
+              />
+            </div>
+
+            {/* Cálculo en Vivo de Equivalencia en Kardex */}
+            <div className="sm:col-span-2 bg-blue-50/70 border border-blue-200 rounded-lg p-2.5 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2 text-blue-900 font-bold">
+                <i className="pi pi-calculator text-blue-600 text-sm"></i>
+                <span>Total a Reubicar en Kardex:</span>
+              </div>
+              <div className="font-mono font-black text-blue-700 text-sm flex items-center gap-1.5">
+                <span>{totalBaseQty.toLocaleString()}</span>
+                <span className="text-xs font-bold text-blue-600">{currentProductUom}</span>
+                {selectedPackagingId > 0 && (
+                  <span className="text-[11px] font-normal text-slate-500 ml-1">
+                    ({putawayQty} x {selectedPackaging?.qty_per_unit} {currentProductUom})
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="flex justify-end gap-2 mt-3">

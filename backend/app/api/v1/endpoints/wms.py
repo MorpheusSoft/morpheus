@@ -9,7 +9,7 @@ from app.models.purchasing import PurchaseOrder, PurchaseOrderLine
 from app.models.inventory import (
     StockPicking, StockMove, StockPickingType, Batch, InventorySnapshot,
     Location, Warehouse, ProductVariant, Product, ProductFacilityPrice, ProductBarcode,
-    AdjustmentReason, InventoryAdjustment, InventoryAdjustmentLine
+    AdjustmentReason, InventoryAdjustment, InventoryAdjustmentLine, ProductPackaging
 )
 from app.models.core import Facility, Supplier, User
 from app.schemas.adjustment import (
@@ -18,6 +18,25 @@ from app.schemas.adjustment import (
 )
 
 router = APIRouter()
+
+def normalize_uom(raw_uom: Optional[str]) -> str:
+    """Normaliza la unidad de medida según convenciones de Morpheus."""
+    if not raw_uom:
+        return "UND"
+    clean = str(raw_uom).strip().upper()
+    if clean in ("PZA", "PIEZA", "PIEZAS", "UND", "UNIDAD", "UNIDADES", "UNI", "UN"):
+        return "UND"
+    if clean in ("KGS", "KILO", "KILOS", "KILOGRAMO", "KILOGRAMOS"):
+        return "KG"
+    if clean in ("LTS", "LITRO", "LITROS"):
+        return "LT"
+    if clean in ("PARES", "PAR"):
+        return "PAR"
+    if clean in ("METRO", "METROS", "MTS"):
+        return "MT"
+    if clean in ("GRAMOS", "GRAMO", "GRS"):
+        return "GR"
+    return clean
 
 class ReceiptLineInput(BaseModel):
     po_line_id: Optional[int] = None
@@ -59,6 +78,8 @@ class PutawayPayload(BaseModel):
     variant_id: int
     qty: float
     batch_id: Optional[int] = None
+    packaging_id: Optional[int] = None
+    factor: Optional[float] = 1.0
 
 class DirectReceiptLineInput(BaseModel):
     variant_id: int
@@ -961,8 +982,9 @@ def get_warehouse_stock(
             m.product_id AS variant_id,
             v.sku,
             COALESCE(v.barcode, pb.barcode, '') AS barcode,
+            p.id AS product_id,
             p.name AS product_name,
-            COALESCE(p.uom_base, 'UND') AS uom,
+            COALESCE(p.uom_base, 'UND') AS raw_uom,
             l.id AS location_id,
             l.code AS location_code,
             l.name AS location_name,
@@ -980,7 +1002,7 @@ def get_warehouse_stock(
         ) pb ON true
         {sql_filter}
         GROUP BY 
-            m.product_id, v.sku, v.barcode, pb.barcode, p.name, p.uom_base,
+            m.product_id, v.sku, v.barcode, pb.barcode, p.id, p.name, p.uom_base,
             l.id, l.code, l.name,
             m.batch_id, b.batch_number, b.expiry_date
         HAVING SUM(m.qty) > 0.0001
@@ -989,14 +1011,28 @@ def get_warehouse_stock(
 
     rows = db.execute(query, params).fetchall()
 
+    product_ids = list({r.product_id for r in rows if r.product_id})
+    packagings_by_product = {}
+    if product_ids:
+        pkgs_db = db.query(ProductPackaging).filter(ProductPackaging.product_id.in_(product_ids)).all()
+        for pkg in pkgs_db:
+            packagings_by_product.setdefault(pkg.product_id, []).append({
+                "id": pkg.id,
+                "name": pkg.name,
+                "qty_per_unit": float(pkg.qty_per_unit)
+            })
+
     items = []
     for r in rows:
+        clean_uom = normalize_uom(r.raw_uom)
         items.append({
             "variant_id": r.variant_id,
+            "product_id": r.product_id,
             "sku": r.sku,
             "barcode": r.barcode or "",
             "name": r.product_name,
-            "uom": r.uom,
+            "uom": clean_uom,
+            "packagings": packagings_by_product.get(r.product_id, []),
             "location_id": r.location_id,
             "location_code": r.location_code,
             "location_name": r.location_name,
@@ -1028,6 +1064,42 @@ def get_warehouse_stock(
             "total_units": total_units,
             "total_lots": len(set(i["lot_number"] for i in items if i.get("lot_number")))
         }
+    }
+
+@router.get("/variants/{variant_id}/packagings")
+def get_variant_packagings(
+    variant_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Retorna la UOM base normalizada y los empaques disponibles para una variante.
+    """
+    variant = db.query(ProductVariant).filter(ProductVariant.id == variant_id).first()
+    if not variant:
+        raise HTTPException(status_code=404, detail="Variante de producto no encontrada.")
+
+    product = db.query(Product).filter(Product.id == variant.product_id).first()
+    clean_uom = normalize_uom(product.uom_base) if product else "UND"
+
+    packagings = []
+    if product:
+        pkgs = db.query(ProductPackaging).filter(ProductPackaging.product_id == product.id).all()
+        packagings = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "qty_per_unit": float(p.qty_per_unit)
+            }
+            for p in pkgs
+        ]
+
+    return {
+        "variant_id": variant.id,
+        "product_id": product.id if product else None,
+        "sku": variant.sku,
+        "uom": clean_uom,
+        "packagings": packagings
     }
 
 @router.post("/putaway")
@@ -1066,6 +1138,27 @@ def execute_putaway(
 
     if payload.qty <= 0:
         raise HTTPException(status_code=400, detail="La cantidad a mover debe ser mayor a 0.")
+
+    # Resolver empaque y factor de conversión a unidad base
+    multiplier = 1.0
+    packaging_info = ""
+    product = db.query(Product).filter(Product.id == variant.product_id).first()
+    clean_uom = normalize_uom(product.uom_base) if product else "UND"
+
+    if payload.packaging_id and payload.packaging_id > 0:
+        pkg = db.query(ProductPackaging).filter(ProductPackaging.id == payload.packaging_id).first()
+        if pkg:
+            multiplier = float(pkg.qty_per_unit)
+            total_calc = round(payload.qty * multiplier, 4)
+            packaging_info = f" ({payload.qty:g} {pkg.name} x {multiplier:g} = {total_calc:g} {clean_uom})"
+    elif payload.factor and payload.factor > 0 and payload.factor != 1.0:
+        multiplier = float(payload.factor)
+        total_calc = round(payload.qty * multiplier, 4)
+        packaging_info = f" ({payload.qty:g} x {multiplier:g} = {total_calc:g} {clean_uom})"
+
+    total_base_qty = round(payload.qty * multiplier, 4)
+    if total_base_qty <= 0:
+        raise HTTPException(status_code=400, detail="La cantidad neta en unidades debe ser mayor a 0.")
 
     def clean_loc_id(val):
         if val is None:
@@ -1135,16 +1228,18 @@ def execute_putaway(
     db.add(picking)
     db.flush()
 
+    move_ref = f"REUBICACION-{source_wh.code}->{dest_wh.code}{packaging_info}" if is_inter_wh else f"REUBICACION-{source_wh.code}{packaging_info}"
+
     move = StockMove(
         picking_id=picking.id,
         product_id=payload.variant_id,
         location_src_id=src_loc.id,
         location_dest_id=dest_loc.id,
-        quantity_demand=payload.qty,
-        quantity_done=payload.qty,
+        quantity_demand=total_base_qty,
+        quantity_done=total_base_qty,
         state='DONE',
         batch_id=payload.batch_id,
-        reference=f"REUBICACION-{source_wh.code}->{dest_wh.code}" if is_inter_wh else f"REUBICACION-{source_wh.code}",
+        reference=move_ref,
         created_by_id=user_id_val
     )
     db.add(move)
@@ -1157,7 +1252,9 @@ def execute_putaway(
         "source_warehouse_id": source_wh.id,
         "dest_warehouse_id": dest_wh.id,
         "source_location_id": src_loc.id,
-        "dest_location_id": dest_loc.id
+        "dest_location_id": dest_loc.id,
+        "total_base_qty": total_base_qty,
+        "uom": clean_uom
     }
 
 
