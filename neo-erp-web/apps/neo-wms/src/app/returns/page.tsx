@@ -14,6 +14,7 @@ import { Tag } from 'primereact/tag';
 import { InputTextarea } from 'primereact/inputtextarea';
 import api from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import { isWeightUom, getUomDecimals, formatQuantity, sanitizeQuantity, preventDecimalKey } from '@/lib/uom';
 
 export default function ReturnsAndSwapsPage() {
   const [activeTab, setActiveTab] = useState<'rtv' | 'swaps'>('rtv');
@@ -124,7 +125,8 @@ export default function ReturnsAndSwapsPage() {
               value: v.id,
               cost: Number(v.average_cost || v.standard_cost || 0),
               sku: v.sku,
-              product_name: p.name
+              product_name: p.name,
+              uom_base: p.uom_base || v.uom_base || 'UND'
             });
           });
         }
@@ -223,7 +225,12 @@ export default function ReturnsAndSwapsPage() {
       const prod = products.find(p => p.value === value);
       if (prod) {
         updated[index].unit_cost = prod.cost || 0;
+        updated[index].uom_base = prod.uom_base || 'UND';
       }
+    }
+    if (field === 'quantity') {
+      const prod = products.find(p => p.value === updated[index].variant_id);
+      updated[index].quantity = sanitizeQuantity(value, prod?.uom_base || updated[index].uom_base);
     }
     setNewRtvLines(updated);
   };
@@ -252,7 +259,7 @@ export default function ReturnsAndSwapsPage() {
         lines: validLines.map(l => ({
           variant_id: l.variant_id,
           batch_id: l.batch_id || null,
-          quantity: Number(l.quantity),
+          quantity: sanitizeQuantity(l.quantity, l.uom_base),
           unit_cost: Number(l.unit_cost || 0),
           reason: l.reason || 'DEFECTO_FABRICA'
         }))
@@ -326,13 +333,20 @@ export default function ReturnsAndSwapsPage() {
       return;
     }
 
+    const selProd = products.find(p => p.value === newSwapVariantId);
+    const sanitizedQty = sanitizeQuantity(newSwapQty, selProd?.uom_base);
+    if (sanitizedQty <= 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Cantidad Inválida', detail: 'La cantidad a aislar debe ser mayor a cero.' });
+      return;
+    }
+
     try {
       const payload = {
         facility_id: newSwapFacilityId,
         supplier_id: newSwapSupplierId,
         variant_id: newSwapVariantId,
         damaged_batch_id: newSwapBatchId || null,
-        qty_quarantined: Number(newSwapQty),
+        qty_quarantined: sanitizedQty,
         damage_reason: newSwapReason,
         notes: newSwapNotes || null
       };
@@ -362,15 +376,17 @@ export default function ReturnsAndSwapsPage() {
       toast.current?.show({ severity: 'warn', summary: 'Datos Sanitarios Requeridos', detail: 'Indique número de lote nuevo y su fecha de vencimiento.' });
       return;
     }
-    if (Number(execQty) <= 0 || Number(execQty) > selectedSwapForExecution.qty_pending) {
-      toast.current?.show({ severity: 'warn', summary: 'Cantidad Inválida', detail: `La cantidad debe estar entre 1 y ${selectedSwapForExecution.qty_pending}.` });
+
+    const sanitizedExecQty = sanitizeQuantity(execQty, selectedSwapForExecution.uom_base);
+    if (sanitizedExecQty <= 0 || sanitizedExecQty > selectedSwapForExecution.qty_pending) {
+      toast.current?.show({ severity: 'warn', summary: 'Cantidad Inválida', detail: `La cantidad debe estar entre >0 y ${selectedSwapForExecution.qty_pending}.` });
       return;
     }
 
     try {
       const formattedDate = execExpiryDate.toISOString().split('T')[0];
       const payload = {
-        qty: Number(execQty),
+        qty: sanitizedExecQty,
         new_batch_number: execBatchNumber.trim().toUpperCase(),
         new_expiration_date: formattedDate,
         carrier_name: execCarrierName || null,
@@ -739,14 +755,14 @@ export default function ReturnsAndSwapsPage() {
               </div>
             )} />
             <Column field="qty_quarantined" header="Aislado (Cuarentena)" body={(s) => (
-              <span className="font-bold text-purple-800">{s.qty_quarantined} unds</span>
+              <span className="font-bold text-purple-800">{formatQuantity(s.qty_quarantined, s.uom_base, true)}</span>
             )} />
             <Column field="qty_swapped" header="Canjeado" body={(s) => (
-              <span className="font-bold text-emerald-700">{s.qty_swapped} unds</span>
+              <span className="font-bold text-emerald-700">{formatQuantity(s.qty_swapped, s.uom_base, true)}</span>
             )} />
             <Column field="qty_pending" header="Saldo Pendiente" body={(s) => (
               <span className={`font-black text-sm ${s.qty_pending > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
-                {s.qty_pending} unds
+                {formatQuantity(s.qty_pending, s.uom_base, true)}
               </span>
             )} />
             <Column field="damage_reason" header="Motivo Daño" body={(s) => (
@@ -924,9 +940,13 @@ export default function ReturnsAndSwapsPage() {
                           <InputNumber
                             value={line.quantity}
                             onValueChange={(e) => handleRtvLineChange(idx, 'quantity', e.value)}
-                            min={1}
+                            min={isWeightUom(line.uom_base) ? 0.001 : 1}
+                            minFractionDigits={getUomDecimals(line.uom_base)}
+                            maxFractionDigits={getUomDecimals(line.uom_base)}
+                            step={isWeightUom(line.uom_base) ? 0.001 : 1}
                             className="w-full text-xs"
                           />
+                          <span className="text-[10px] text-slate-400 block text-right mt-0.5">{line.uom_base || 'UND'}</span>
                         </td>
                         <td className="p-2">
                           <InputNumber
@@ -1138,13 +1158,27 @@ export default function ReturnsAndSwapsPage() {
               />
             </div>
             <div>
-              <label className="block text-slate-700 font-bold mb-1">Cantidad a Aislar *</label>
-              <InputNumber
-                value={newSwapQty}
-                onValueChange={(e) => setNewSwapQty(e.value || 1)}
-                min={1}
-                className="w-full text-xs"
-              />
+              {(() => {
+                const sel = products.find(p => p.value === newSwapVariantId);
+                const isW = isWeightUom(sel?.uom_base);
+                const d = getUomDecimals(sel?.uom_base);
+                return (
+                  <>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      Cantidad a Aislar * {sel?.uom_base ? `(${sel.uom_base})` : ''}
+                    </label>
+                    <InputNumber
+                      value={newSwapQty}
+                      onValueChange={(e) => setNewSwapQty(sanitizeQuantity(e.value || (isW ? 0.001 : 1), sel?.uom_base))}
+                      min={isW ? 0.001 : 1}
+                      minFractionDigits={d}
+                      maxFractionDigits={d}
+                      step={isW ? 0.001 : 1}
+                      className="w-full text-xs"
+                    />
+                  </>
+                );
+              })()}
             </div>
           </div>
 
@@ -1212,16 +1246,21 @@ export default function ReturnsAndSwapsPage() {
             <p><strong>Producto:</strong> {selectedSwapForExecution?.product_name}</p>
             <p><strong>Proveedor:</strong> {selectedSwapForExecution?.supplier_name}</p>
             <p><strong>Lote Dañado Entregado:</strong> {selectedSwapForExecution?.damaged_batch_number || 'S/L'}</p>
-            <p><strong>Saldo Pendiente de Canjear:</strong> <span className="text-amber-600 font-extrabold">{selectedSwapForExecution?.qty_pending} unidades</span></p>
+            <p><strong>Saldo Pendiente de Canjear:</strong> <span className="text-amber-600 font-extrabold">{formatQuantity(selectedSwapForExecution?.qty_pending, selectedSwapForExecution?.uom_base, true)}</span></p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-slate-700 font-bold mb-1">Cantidad a Canjear Hoy *</label>
+              <label className="block text-slate-700 font-bold mb-1">
+                Cantidad a Canjear Hoy * {selectedSwapForExecution?.uom_base ? `(${selectedSwapForExecution.uom_base})` : ''}
+              </label>
               <InputNumber
                 value={execQty}
-                onValueChange={(e) => setExecQty(e.value || 1)}
-                min={1}
+                onValueChange={(e) => setExecQty(sanitizeQuantity(e.value || (isWeightUom(selectedSwapForExecution?.uom_base) ? 0.001 : 1), selectedSwapForExecution?.uom_base))}
+                min={isWeightUom(selectedSwapForExecution?.uom_base) ? 0.001 : 1}
+                minFractionDigits={getUomDecimals(selectedSwapForExecution?.uom_base)}
+                maxFractionDigits={getUomDecimals(selectedSwapForExecution?.uom_base)}
+                step={isWeightUom(selectedSwapForExecution?.uom_base) ? 0.001 : 1}
                 max={selectedSwapForExecution?.qty_pending || 1000}
                 className="w-full text-xs"
               />
@@ -1304,7 +1343,7 @@ export default function ReturnsAndSwapsPage() {
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
             <p><strong>Producto:</strong> {selectedSwapHistory?.product_name}</p>
             <p><strong>Proveedor:</strong> {selectedSwapHistory?.supplier_name}</p>
-            <p><strong>Total Cuarentena:</strong> {selectedSwapHistory?.qty_quarantined} unds | <strong>Canjeado:</strong> {selectedSwapHistory?.qty_swapped} unds</p>
+            <p><strong>Total Cuarentena:</strong> {formatQuantity(selectedSwapHistory?.qty_quarantined, selectedSwapHistory?.uom_base, true)} | <strong>Canjeado:</strong> {formatQuantity(selectedSwapHistory?.qty_swapped, selectedSwapHistory?.uom_base, true)}</p>
           </div>
 
           <h4 className="font-bold text-slate-800 text-sm">Entregas Mano a Mano Registradas:</h4>
@@ -1325,7 +1364,7 @@ export default function ReturnsAndSwapsPage() {
                   {selectedSwapHistory.executions.map((ex: any, idx: number) => (
                     <tr key={idx} className="border-b border-slate-100">
                       <td className="p-2">{ex.executed_at}</td>
-                      <td className="p-2 font-bold text-emerald-700">{ex.qty} unds</td>
+                      <td className="p-2 font-bold text-emerald-700">{formatQuantity(ex.qty, selectedSwapHistory?.uom_base, true)}</td>
                       <td className="p-2 font-mono font-bold">{ex.new_batch_number}</td>
                       <td className="p-2">{ex.new_expiration_date}</td>
                       <td className="p-2">{ex.carrier_name || 'N/A'} ({ex.carrier_plate || 'S/P'})</td>
@@ -1478,12 +1517,12 @@ export default function ReturnsAndSwapsPage() {
                 <p className="font-bold text-[10px] mb-1">MERCANCÍA AVERIADA AISLADA:</p>
                 <p className="text-[10px]">{ticketData.product_name} (SKU: {ticketData.sku})</p>
                 <p className="text-[10px]">Lote Dañado: {ticketData.damaged_batch_number} (Exp: {ticketData.damaged_expiry_date})</p>
-                <p className="text-[10px]">Total en Cuarentena: {ticketData.qty_quarantined} unds</p>
+                <p className="text-[10px]">Total en Cuarentena: {formatQuantity(ticketData.qty_quarantined, ticketData.uom_base, true)}</p>
 
                 {ticketData.last_execution && (
                   <div className="mt-2 p-2 bg-slate-50 border border-slate-200">
                     <p className="font-bold text-[10px] text-emerald-800">✅ SUSTITUCIÓN RECIBIDA HOY:</p>
-                    <p className="text-[10px]"><strong>Cantidad:</strong> {ticketData.last_execution.qty} unds</p>
+                    <p className="text-[10px]"><strong>Cantidad:</strong> {formatQuantity(ticketData.last_execution.qty, ticketData.uom_base, true)}</p>
                     <p className="text-[10px]"><strong>Nuevo Lote:</strong> {ticketData.last_execution.new_batch_number}</p>
                     <p className="text-[10px]"><strong>Nuevo Vence:</strong> {ticketData.last_execution.new_expiration_date}</p>
                     <p className="text-[10px]"><strong>Chofer:</strong> {ticketData.last_execution.carrier_name} ({ticketData.last_execution.carrier_plate})</p>
@@ -1492,7 +1531,7 @@ export default function ReturnsAndSwapsPage() {
 
                 <div className="mt-2 flex justify-between font-bold text-[11px]">
                   <span>SALDO PENDIENTE:</span>
-                  <span>{ticketData.qty_pending} unds</span>
+                  <span>{formatQuantity(ticketData.qty_pending, ticketData.uom_base, true)}</span>
                 </div>
                 <div className="flex justify-between text-[10px] text-slate-600">
                   <span>DELTA FINANCIERO:</span>
@@ -1517,7 +1556,7 @@ export default function ReturnsAndSwapsPage() {
                           <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
                           <div className="text-[8px] text-slate-500">Lote: {it.batch_number} | Motivo: {it.reason}</div>
                         </td>
-                        <td className="py-1 text-center font-bold">{it.quantity}</td>
+                        <td className="py-1 text-center font-bold">{formatQuantity(it.quantity, it.uom_base, true)}</td>
                         <td className="py-1 text-right font-bold">${it.subtotal.toFixed(2)}</td>
                       </tr>
                     ))}

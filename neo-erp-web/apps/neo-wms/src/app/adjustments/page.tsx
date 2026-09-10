@@ -11,6 +11,7 @@ import { InputText } from 'primereact/inputtext';
 import { InputNumber } from 'primereact/inputnumber';
 import { Dropdown } from 'primereact/dropdown';
 import api from '@/lib/api';
+import { isWeightUom, sanitizeQuantity, getUomDecimals, formatQuantity, preventDecimalKey } from '@/lib/uom';
 
 export default function WmsAdjustmentsPage() {
   const toast = useRef<Toast>(null);
@@ -157,6 +158,7 @@ export default function WmsAdjustmentsPage() {
           variant_id: variantId,
           sku: skuCode,
           name: prodName,
+          uom_base: p.uom_base || 'UND',
           label: `[${skuCode}] ${prodName}`,
           cost: costVal
         };
@@ -272,7 +274,8 @@ export default function WmsAdjustmentsPage() {
         batch_id: null,
         quantity: 1,
         unit_cost: 0.0,
-        total_value: 0.0
+        total_value: 0.0,
+        uom_base: 'UND'
       }
     ]);
   };
@@ -286,7 +289,13 @@ export default function WmsAdjustmentsPage() {
         const prod = products.find(p => p.value === val);
         if (prod) {
           line.unit_cost = prod.cost || 0.0;
+          line.uom_base = prod.uom_base || 'UND';
         }
+      }
+
+      if (field === 'quantity') {
+        const prod = products.find(p => p.value === line.product_variant_id);
+        line.quantity = sanitizeQuantity(val, prod?.uom_base);
       }
 
       const q = parseFloat(line.quantity || 0);
@@ -351,12 +360,16 @@ export default function WmsAdjustmentsPage() {
         reason_id: selectedReasonId,
         movement_type: movementType,
         notes: notes.trim(),
-        lines: adjLines.map(l => ({
-          product_variant_id: l.product_variant_id,
-          batch_id: l.batch_id,
-          quantity: l.quantity,
-          unit_cost: l.unit_cost
-        }))
+        lines: adjLines.map(l => {
+          const prod = products.find(p => p.value === l.product_variant_id);
+          const uom = l.uom_base || prod?.uom_base || 'UND';
+          return {
+            product_variant_id: l.product_variant_id,
+            batch_id: l.batch_id,
+            quantity: sanitizeQuantity(l.quantity, uom),
+            unit_cost: l.unit_cost
+          };
+        })
       };
 
       const res = await api.post('/wms/adjustments', payload);
@@ -512,9 +525,12 @@ export default function WmsAdjustmentsPage() {
     }
     setSavingCount(true);
     try {
+      const prod = products.find(p => p.value === countingProdId);
+      const sanitizedQty = sanitizeQuantity(countingQty, prod?.uom_base);
+
       const res = await api.post(`/inventory-session/${selectedSession.id}/count`, {
         product_variant_id: countingProdId,
-        counted_qty: countingQty,
+        counted_qty: sanitizedQty,
         notes: countingNotes
       });
       setSelectedSession(res.data);
@@ -997,10 +1013,15 @@ export default function WmsAdjustmentsPage() {
                           <InputNumber
                             value={line.quantity}
                             onValueChange={e => updateLine(idx, 'quantity', e.value || 0)}
-                            min={0.001}
-                            maxFractionDigits={4}
+                            min={isWeightUom(line.uom_base) ? 0.001 : 1}
+                            minFractionDigits={getUomDecimals(line.uom_base)}
+                            maxFractionDigits={getUomDecimals(line.uom_base)}
+                            step={isWeightUom(line.uom_base) ? 0.001 : 1}
                             inputClassName="p-inputtext-sm text-xs font-bold w-full"
                           />
+                          <span className="text-[10px] text-slate-400 block text-right mt-0.5">
+                            {line.uom_base || 'UND'}
+                          </span>
                         </td>
                         <td className="p-2">
                           <InputNumber
@@ -1589,13 +1610,19 @@ export default function WmsAdjustmentsPage() {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-bold text-slate-700">Cantidad Contada Real *</label>
+                    <label className="text-[11px] font-bold text-slate-700">
+                      Cantidad Contada Real * {countingProdId && `(${products.find(p => p.value === countingProdId)?.uom_base || 'UND'})`}
+                    </label>
                     <InputNumber
                       value={countingQty}
-                      onValueChange={e => setCountingQty(e.value || 0)}
+                      onValueChange={e => {
+                        const prod = products.find(p => p.value === countingProdId);
+                        setCountingQty(sanitizeQuantity(e.value || 0, prod?.uom_base));
+                      }}
                       min={0}
-                      minFractionDigits={0}
-                      maxFractionDigits={4}
+                      minFractionDigits={getUomDecimals(products.find(p => p.value === countingProdId)?.uom_base)}
+                      maxFractionDigits={getUomDecimals(products.find(p => p.value === countingProdId)?.uom_base)}
+                      step={isWeightUom(products.find(p => p.value === countingProdId)?.uom_base) ? 0.001 : 1}
                       className="text-xs w-full p-inputtext-sm font-bold"
                     />
                   </div>
@@ -1640,7 +1667,7 @@ export default function WmsAdjustmentsPage() {
                       {selectedSession.state !== 'IN_PROGRESS' && (
                         <>
                           <th className="p-3 text-right">STOCK TEÓRICO (Snapshot)</th>
-                          <th className="p-3 text-right">DIFERENCIA (UNID)</th>
+                          <th className="p-3 text-right">DIFERENCIA</th>
                           <th className="p-3 text-center">SEMÁFORO DISCREPANCIA</th>
                         </>
                       )}
@@ -1662,6 +1689,7 @@ export default function WmsAdjustmentsPage() {
                         const counted = line.counted_qty ?? 0;
                         const theo = line.theoretical_qty ?? 0;
                         const diff = counted - theo;
+                        const uom = prod?.uom_base || 'UND';
 
                         return (
                           <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
@@ -1672,21 +1700,21 @@ export default function WmsAdjustmentsPage() {
                               </div>
                             </td>
                             <td className="p-3 text-right font-bold text-slate-900 text-sm">
-                              {counted}
+                              {formatQuantity(counted, uom, true)}
                             </td>
 
                             {selectedSession.state !== 'IN_PROGRESS' && (
                               <>
                                 <td className="p-3 text-right font-medium text-slate-500">
-                                  {theo}
+                                  {formatQuantity(theo, uom, true)}
                                 </td>
                                 <td className="p-3 text-right font-bold">
                                   {diff === 0 ? (
-                                    <span className="text-slate-500">0</span>
+                                    <span className="text-slate-500">0 {uom}</span>
                                   ) : diff > 0 ? (
-                                    <span className="text-emerald-600">+{diff} (Sobrante)</span>
+                                    <span className="text-emerald-600">+{formatQuantity(diff, uom, true)} (Sobrante)</span>
                                   ) : (
-                                    <span className="text-rose-600">{diff} (Faltante)</span>
+                                    <span className="text-rose-600">{formatQuantity(diff, uom, true)} (Faltante)</span>
                                   )}
                                 </td>
                                 <td className="p-3 text-center">

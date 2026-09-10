@@ -10,6 +10,7 @@ import { InputTextarea } from 'primereact/inputtextarea';
 import { Message } from 'primereact/message';
 import { PhysicalCountService } from '@/services/physical-count.service';
 import { ValuationService } from '@/services/valuation.service';
+import { isWeightUom, getUomDecimals, formatQuantity, sanitizeQuantity } from '@/lib/uom';
 
 export default function PhysicalCountsPage() {
   const [sessions, setSessions] = useState<any[]>([]);
@@ -356,8 +357,9 @@ export default function PhysicalCountsPage() {
                 {/* SKU */}
                 <Column field="product_variant_id" header="ARTÍCULO" body={(r) => (
                   <div className="flex flex-col">
-                    <span className="font-mono text-xs text-slate-600 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded w-fit mb-1">
-                      SKU ID: {r.product_variant_id}
+                    {r.product_name && <span className="font-bold text-xs text-slate-800">{r.product_name}</span>}
+                    <span className="font-mono text-[10px] text-slate-600 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded w-fit mb-1">
+                      SKU: {r.sku || r.product_variant_id}
                     </span>
                     {r.is_anomaly && (
                       <span className="text-[10px] text-rose-600 font-bold flex items-center gap-1">
@@ -374,22 +376,23 @@ export default function PhysicalCountsPage() {
 
                 {/* Counted Quantity */}
                 <Column field="counted_qty" header="CONTEO FÍSICO" body={(r) => (
-                  <span className="font-extrabold text-blue-700 text-sm tabular-nums">{r.counted_qty} U</span>
+                  <span className="font-extrabold text-blue-700 text-sm tabular-nums">{formatQuantity(r.counted_qty, r.uom_base, true)}</span>
                 )} style={{ width: '15%' }}></Column>
 
                 {/* Theoretical Stock (Supervisor only) */}
                 {isSupervisor && (
                   <Column field="theoretical_qty" header="STOCK SISTEMA" body={(r) => (
-                    <span className="font-semibold text-slate-500 text-sm tabular-nums">{r.theoretical_qty} U</span>
+                    <span className="font-semibold text-slate-500 text-sm tabular-nums">{formatQuantity(r.theoretical_qty, r.uom_base, true)}</span>
                   )} style={{ width: '15%' }}></Column>
                 )}
 
                 {/* Difference (Supervisor only) */}
                 {isSupervisor && (
                   <Column header="DIFERENCIA" body={(r) => {
-                    const diff = r.counted_qty - r.theoretical_qty;
+                    const diff = (r.counted_qty || 0) - (r.theoretical_qty || 0);
                     const color = diff > 0 ? 'text-emerald-600' : diff < 0 ? 'text-rose-600 font-extrabold' : 'text-slate-400';
-                    return <span className={`font-black text-sm tabular-nums ${color}`}>{diff > 0 ? `+${diff}` : diff} U</span>;
+                    const prefix = diff > 0 ? '+' : '';
+                    return <span className={`font-black text-sm tabular-nums ${color}`}>{prefix}{formatQuantity(diff, r.uom_base, true)}</span>;
                   }} style={{ width: '15%' }}></Column>
                 )}
 

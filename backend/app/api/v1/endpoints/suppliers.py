@@ -187,6 +187,7 @@ def get_supplier_catalog(supplier_id: int, category_id: int = None, db: Session 
             "category_name": cat.name if cat else "Sin Categoría",
             "pack_name": pack.name if pack else "Und.",
             "qty_per_unit": pack.qty_per_unit if pack else 1,
+            "uom_base": p.uom_base or "UND",
             "packagings": packagings_data
         })
         

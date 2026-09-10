@@ -13,6 +13,7 @@ import { Dropdown } from 'primereact/dropdown';
 import { Dialog } from 'primereact/dialog';
 import { Tag } from 'primereact/tag';
 import api from '@/lib/api';
+import { isWeightUom, sanitizeQuantity } from '@/lib/uom';
 import { format } from 'date-fns';
 
 export default function ReceiptExecutionPage() {
@@ -94,8 +95,13 @@ export default function ReceiptExecutionPage() {
   const handleQtyChange = (rowIndex: number, val: any) => {
       setLines(prev => {
           const updated = [...prev];
-          const parsed = isNaN(parseFloat(val)) ? '' : val;
-          updated[rowIndex] = { ...updated[rowIndex], received_qty: parsed };
+          const row = updated[rowIndex];
+          if (!row) return prev;
+          let parsed: any = '';
+          if (val !== '' && val !== null && val !== undefined && !isNaN(parseFloat(val))) {
+              parsed = sanitizeQuantity(val, row.uom_base);
+          }
+          updated[rowIndex] = { ...row, received_qty: parsed };
           return updated;
       });
   };
@@ -168,18 +174,19 @@ export default function ReceiptExecutionPage() {
           toast.current?.show({ severity: 'warn', summary: 'Cantidad inválida', detail: 'Ingrese una cantidad averiada mayor a 0.' });
           return;
       }
+      const cleanDamagedQty = sanitizeQuantity(discrepancyDamagedQty, discrepancyLine.uom_base);
       try {
           await api.post(`/wms/receipts/${orderId}/discrepancy`, {
               variant_id: discrepancyLine.variant_id,
               warehouse_id: selectedWarehouseId,
-              damaged_qty: discrepancyDamagedQty,
+              damaged_qty: cleanDamagedQty,
               reason: discrepancyReason || 'Avería reportada en muelle',
               lot_number: discrepancyLine.lot_number || null
           });
           
           setLines(prev => prev.map(l => {
               if (l.variant_id === discrepancyLine.variant_id) {
-                  return { ...l, damaged_qty: discrepancyDamagedQty };
+                  return { ...l, damaged_qty: cleanDamagedQty };
               }
               return l;
           }));
@@ -201,8 +208,8 @@ export default function ReceiptExecutionPage() {
               lines: lines.map(l => ({
                   po_line_id: l.id > 0 ? l.id : null,
                   variant_id: l.variant_id,
-                  received_qty: l.received_qty,
-                  damaged_qty: l.damaged_qty || 0,
+                  received_qty: sanitizeQuantity(l.received_qty, l.uom_base),
+                  damaged_qty: sanitizeQuantity(l.damaged_qty || 0, l.uom_base),
                   lot_number: l.lot_number || null,
                   expiration_date: l.expiration_date ? format(l.expiration_date, 'yyyy-MM-dd') : null
               }))
@@ -349,15 +356,16 @@ export default function ReceiptExecutionPage() {
           <Column header="Producto" field="product_name" body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
           
           <Column header="Esperado (Base)" body={r => {
-             const isWeight = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'].includes(r.uom_base?.toUpperCase());
+             const isWeight = isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
              const val = Number(r.expected_base_qty) || 0;
-             return <span className="font-semibold text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-200">{val.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} Unds</span>;
+             const uomLabel = r.uom_base || 'UND';
+             return <span className="font-semibold text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-200">{val.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} {uomLabel}</span>;
           }} align="right" />
           
           {/* CAMPOS INTERACTIVOS WMS */}
           <Column header="Físico Recibido" body={(r, options) => {
-             const isWeight = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'].includes(r.uom_base?.toUpperCase());
+             const isWeight = isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
              return (
                  <div className="flex justify-end">
@@ -366,6 +374,7 @@ export default function ReceiptExecutionPage() {
                         onValueChange={(e) => handleQtyChange(options.rowIndex, e.value === null ? '' : e.value)}
                         minFractionDigits={dec}
                         maxFractionDigits={dec}
+                        step={isWeight ? 0.001 : 1}
                         disabled={isReadOnly}
                         inputClassName="w-24 text-right text-lg font-black p-2 rounded-lg border-2 border-blue-200 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 bg-blue-50/50 transition-all text-blue-700 shadow-inner disabled:bg-slate-100 disabled:border-slate-300 disabled:text-slate-700" 
                      />
@@ -557,15 +566,27 @@ export default function ReceiptExecutionPage() {
                       </div>
                   </div>
 
-                  <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad Devuelta / Rechazada:</label>
-                      <InputNumber 
-                          value={discrepancyDamagedQty} 
-                          onValueChange={(e) => setDiscrepancyDamagedQty(e.value || 0)} 
-                          className="w-full"
-                          min={0}
-                      />
-                  </div>
+                   <div>
+                       {(() => {
+                           const isWeight = isWeightUom(discrepancyLine.uom_base);
+                           const dec = isWeight ? 3 : 0;
+                           const uomLabel = discrepancyLine.uom_base || 'UND';
+                           return (
+                               <>
+                                   <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad Devuelta / Rechazada ({uomLabel}):</label>
+                                   <InputNumber 
+                                       value={discrepancyDamagedQty} 
+                                       onValueChange={(e) => setDiscrepancyDamagedQty(e.value || 0)} 
+                                       className="w-full"
+                                       min={0}
+                                       minFractionDigits={dec}
+                                       maxFractionDigits={dec}
+                                       step={isWeight ? 0.001 : 1}
+                                   />
+                               </>
+                           );
+                       })()}
+                   </div>
 
                   <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">Motivo / Observación del Rechazo:</label>

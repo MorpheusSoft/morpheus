@@ -5,6 +5,7 @@ from app.api import deps
 from app.schemas import inventory_session as schemas
 from app.models.inventory import InventorySession, InventoryLine, Product, ProductVariant, Location, StockMove, InventorySnapshot, ProductBarcode, Category, Warehouse
 from app.models.core import User
+from app.core.uom import validate_quantity_uom
 from datetime import datetime
 
 router = APIRouter()
@@ -14,22 +15,27 @@ def attach_anomaly_fields(session: InventorySession, db: Session):
         line.is_anomaly = False
         line.anomaly_reason = None
         
+        variant = db.query(ProductVariant).filter(ProductVariant.id == line.product_variant_id).first()
+        prod = variant.product if (variant and hasattr(variant, 'product')) else None
+        line.uom_base = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
+        line.sku = variant.sku if variant else f"ID {line.product_variant_id}"
+        line.product_name = prod.name if prod else f"Producto #{line.product_variant_id}"
+        
         diff = float(line.counted_qty or 0) - float(line.theoretical_qty or 0)
         abs_diff = abs(diff)
         
         if abs_diff > 0:
-            variant = db.query(ProductVariant).filter(ProductVariant.id == line.product_variant_id).first()
             if variant:
                 cost = float(variant.standard_cost or variant.replacement_cost or 0)
                 if cost > 50.0:
                     line.is_anomaly = True
-                    line.anomaly_reason = f"Diferencia en artículo de alto valor ({cost} USD). Delta: {diff} unidades."
+                    line.anomaly_reason = f"Diferencia en artículo de alto valor ({cost} USD). Delta: {diff} {line.uom_base}."
                 elif line.theoretical_qty and (abs_diff / float(line.theoretical_qty)) > 0.5 and abs_diff > 5:
                     line.is_anomaly = True
-                    line.anomaly_reason = f"Desviación significativa (>50%). Teórico: {line.theoretical_qty}, Contado: {line.counted_qty}."
+                    line.anomaly_reason = f"Desviación significativa (>50%). Teórico: {line.theoretical_qty} {line.uom_base}, Contado: {line.counted_qty} {line.uom_base}."
                 elif not line.theoretical_qty and abs_diff > 20:
                     line.is_anomaly = True
-                    line.anomaly_reason = f"Cantidad contada inesperada sin stock teórico previo ({line.counted_qty} unidades)."
+                    line.anomaly_reason = f"Cantidad contada inesperada sin stock teórico previo ({line.counted_qty} {line.uom_base})."
 
 @router.get("/", response_model=List[schemas.InventorySession])
 def read_inventory_sessions(
@@ -160,6 +166,12 @@ def record_line_count(
     if session.state == "DONE":
         raise HTTPException(status_code=400, detail="La sesión ya fue validada y consolidada.")
 
+    # Validar unidad de medida del producto
+    variant = db.query(ProductVariant).filter(ProductVariant.id == line_in.product_variant_id).first()
+    prod = variant.product if (variant and hasattr(variant, 'product')) else None
+    uom = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
+    validate_quantity_uom(line_in.counted_qty, uom, item_label=prod.name if prod else f"Variante #{line_in.product_variant_id}")
+
     # Buscar línea existente o crear nueva
     existing_line = db.query(InventoryLine).filter(
         InventoryLine.session_id == id,
@@ -218,6 +230,10 @@ def bulk_upload_lines(
         if not variant or not location:
             # Saltamos silenciosamente los SKUs o Ubicaciones no encontrados
             continue
+
+        prod = variant.product if (variant and hasattr(variant, 'product')) else None
+        uom = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
+        validate_quantity_uom(item.counted_qty, uom, item_label=prod.name if prod else f"SKU {item.sku}")
             
         # Validar Filtros de Alcance (Scope Filters)
         if session.scope_type == 'WAREHOUSE' and session.scope_value:

@@ -14,6 +14,7 @@ import { Checkbox } from 'primereact/checkbox';
 import { Tag } from 'primereact/tag';
 import { SelectButton } from 'primereact/selectbutton';
 import api from '@/lib/api';
+import { isWeightUom, sanitizeQuantity, preventDecimalKey } from '@/lib/uom';
 
 export default function NewOrderPage() {
   const router = useRouter();
@@ -93,6 +94,7 @@ export default function NewOrderPage() {
                           variant_id: v.id,
                           variant_sku: v.sku,
                           product_name: p.name,
+                          uom_base: p.uom_base || 'UND',
                           pack_id: null,
                           pack_name: 'Und. Base',
                           qty_per_unit: 1,
@@ -133,6 +135,7 @@ export default function NewOrderPage() {
         .then(res => {
             const mappedCatalog = res.data.map((opt: any) => ({
                 ...opt,
+                uom_base: opt.uom_base || 'UND',
                 display_name: `${opt.variant_sku || ''} - ${opt.product_name} - $${opt.replacement_cost}`,
                 available_packagings: mapPackagings(opt.packagings)
             }));
@@ -164,6 +167,7 @@ export default function NewOrderPage() {
            const res = await api.get(`/suppliers/${selectedSupplierId}/catalog`);
            const mappedCatalog = res.data.map((opt: any) => ({
                 ...opt,
+                uom_base: opt.uom_base || 'UND',
                 display_name: `${opt.variant_sku || ''} - ${opt.product_name} - $${opt.replacement_cost}`,
                 available_packagings: mapPackagings(opt.packagings)
            }));
@@ -194,6 +198,7 @@ export default function NewOrderPage() {
                                       variant_id: v.id,
                                       variant_sku: v.sku,
                                       product_name: p.name,
+                                      uom_base: p.uom_base || 'UND',
                                       pack_id: null,
                                       pack_name: 'Und. Base',
                                       qty_per_unit: 1,
@@ -281,6 +286,7 @@ export default function NewOrderPage() {
         variant_id: selectedProduct.variant_id,
         sku: selectedProduct.variant_sku || 'N/A',
         product_name: selectedProduct.product_name,
+        uom_base: selectedProduct.uom_base || 'UND',
         pack_id: chosenPack.id,
         pack_name: chosenPack.name || 'Und. Base',
         qty_per_pack: qty_per_unit,
@@ -324,12 +330,13 @@ export default function NewOrderPage() {
   const handleQtyChange = (internalId: string, newQty: number) => {
       setLines(prev => prev.map(row => {
           if (row.internal_id !== internalId) return row;
-          const qty = isNaN(newQty) || newQty < 0 ? 0 : newQty;
+          const isPack = (row.qty_per_pack || 1) > 1;
+          const cleanQty = sanitizeQuantity(newQty, row.uom_base, isPack);
           const factor = (row.qty_per_pack && row.qty_per_pack > 0) ? row.qty_per_pack : 1;
-          const expected_base = qty * factor;
+          const expected_base = cleanQty * factor;
           return {
               ...row,
-              qty_ordered: qty,
+              qty_ordered: cleanQty,
               expected_base_qty: expected_base,
               subtotal: expected_base * (row.unit_cost || 0)
           };
@@ -623,7 +630,9 @@ export default function NewOrderPage() {
           || { id: null, name: 'Und. Base', qty_per_unit: 1, label: 'Unidad Base (x1)' };
         const key = `${item.variant_id}_${chosenPack.id}`;
         const qty_per_unit = Number(chosenPack.qty_per_unit) || 1;
-        const qtyNum = parseFloat(String(state.qty)) || 1;
+        const isPack = qty_per_unit > 1;
+        const rawQty = parseFloat(String(state.qty)) || 1;
+        const qtyNum = sanitizeQuantity(rawQty, item.uom_base, isPack);
         const replacement_cost = parseFloat(item.replacement_cost) || 0;
         const pack_cost = Number((replacement_cost * qty_per_unit).toFixed(4));
 
@@ -632,6 +641,7 @@ export default function NewOrderPage() {
           variant_id: item.variant_id,
           sku: item.variant_sku || 'N/A',
           product_name: item.product_name,
+          uom_base: item.uom_base || 'UND',
           pack_id: chosenPack.id,
           pack_name: chosenPack.name || 'Und. Base',
           qty_per_pack: qty_per_unit,
@@ -745,14 +755,16 @@ export default function NewOrderPage() {
       if (found) {
         const pack = (found.available_packagings || [])[0] || { id: null, name: 'Und. Base', qty_per_unit: 1 };
         const qty_per_unit = Number(pack.qty_per_unit) || 1;
+        const isPack = qty_per_unit > 1;
+        const cleanQty = sanitizeQuantity(qty, found.uom_base, isPack);
         const replacement_cost = parseFloat(found.replacement_cost) || 0;
         matched.push({
           item: found,
           pack: pack,
-          qty: qty,
+          qty: cleanQty,
           qty_per_unit: qty_per_unit,
           replacement_cost: replacement_cost,
-          subtotal: replacement_cost * qty_per_unit * qty
+          subtotal: replacement_cost * qty_per_unit * cleanQty
         });
       } else {
         unmatched.push(rawLine);
@@ -777,6 +789,7 @@ export default function NewOrderPage() {
           variant_id: item.variant_id,
           sku: item.variant_sku || 'N/A',
           product_name: item.product_name,
+          uom_base: item.uom_base || 'UND',
           pack_id: pack.id,
           pack_name: pack.name || 'Und. Base',
           qty_per_pack: qty_per_unit,
@@ -1335,25 +1348,42 @@ export default function NewOrderPage() {
                                        </span>
                                     </td>
 
-                                    {/* CANTIDAD - Entrada ágil por teclado */}
-                                    <td className="py-2 px-3 text-center">
-                                       <input
-                                          id={`batch-qty-${idx}`}
-                                          type="number"
-                                          min="0"
-                                          step="any"
-                                          value={qtyVal}
-                                          placeholder="0"
-                                          onFocus={(e) => e.target.select()}
-                                          onChange={(e) => updateBatchQty(r, e.target.value)}
-                                          onKeyDown={(e) => handleBatchKeyDown(e, idx)}
-                                          className={`w-20 text-center font-black p-1 text-xs rounded-lg border-2 outline-none transition-all ${
-                                             isSelected
-                                                ? 'border-indigo-500 bg-white text-indigo-800 shadow-xs ring-2 ring-indigo-100'
-                                                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 focus:border-indigo-400'
-                                          }`}
-                                       />
-                                    </td>
+                                     {/* CANTIDAD - Entrada ágil por teclado */}
+                                     <td className="py-2 px-3 text-center">
+                                        {(() => {
+                                           const isPack = (r.qty_per_unit || 1) > 1;
+                                           const isWeight = !isPack && isWeightUom(r.uom_base);
+                                           return (
+                                              <input
+                                                 id={`batch-qty-${idx}`}
+                                                 type="number"
+                                                 min="0"
+                                                 step={isWeight ? "0.001" : "1"}
+                                                 value={qtyVal}
+                                                 placeholder="0"
+                                                 onFocus={(e) => e.target.select()}
+                                                 onKeyDown={(e) => {
+                                                    preventDecimalKey(e, isWeight);
+                                                    handleBatchKeyDown(e, idx);
+                                                 }}
+                                                 onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (!isWeight && (val.includes('.') || val.includes(','))) {
+                                                       const clean = Math.round(parseFloat(val.replace(',', '.')) || 0).toString();
+                                                       updateBatchQty(r, clean);
+                                                    } else {
+                                                       updateBatchQty(r, val);
+                                                    }
+                                                 }}
+                                                 className={`w-20 text-center font-black p-1 text-xs rounded-lg border-2 outline-none transition-all ${
+                                                    isSelected
+                                                       ? 'border-indigo-500 bg-white text-indigo-800 shadow-xs ring-2 ring-indigo-100'
+                                                       : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 focus:border-indigo-400'
+                                                 }`}
+                                              />
+                                           );
+                                        })()}
+                                     </td>
 
                                     {/* SUBTOTAL */}
                                     <td className="py-2 px-3 text-right">
@@ -1613,14 +1643,26 @@ PRD-4297	5`}
           )} align="center" />
           
           <Column header="Cant. a Comprar" style={{ minWidth: '120px' }} body={(r) => {
-             const isPack = r.qty_per_pack > 1;
+             const isPack = (r.qty_per_pack || 1) > 1;
+             const isWeight = !isPack && isWeightUom(r.uom_base);
+             const uomLabel = r.uom_base || 'UND';
              return (
                  <div className="flex flex-col items-center gap-1">
                      <input 
                         type="number" 
                         value={r.qty_ordered} 
                         min="0"
-                        onChange={(e) => handleQtyChange(r.internal_id, parseFloat(e.target.value))}
+                        step={isWeight ? "0.001" : "1"}
+                        onKeyDown={(e) => preventDecimalKey(e, isWeight)}
+                        onChange={(e) => {
+                           const raw = e.target.value;
+                           if (raw === '') {
+                              handleQtyChange(r.internal_id, 0);
+                              return;
+                           }
+                           const parsed = isWeight ? parseFloat(raw.replace(',', '.')) : parseInt(raw, 10);
+                           handleQtyChange(r.internal_id, isNaN(parsed) ? 0 : parsed);
+                        }}
                         className={`w-20 text-center text-base font-black p-1.5 rounded-lg border-2 outline-none shadow-inner ${
                            r.qty_ordered === 0 
                               ? 'border-amber-200 bg-amber-50 text-amber-700' 
@@ -1629,11 +1671,11 @@ PRD-4297	5`}
                      />
                      {isPack ? (
                          <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
-                            = {r.expected_base_qty} Unds Base
+                            = {r.expected_base_qty} {uomLabel}
                          </span>
                      ) : (
                          <span className="text-[10px] font-semibold text-slate-400">
-                            {r.qty_ordered} Unds
+                            {r.qty_ordered} {uomLabel}
                          </span>
                      )}
                  </div>

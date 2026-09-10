@@ -8,6 +8,7 @@ import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
 import { Tag } from 'primereact/tag';
 import api from '@/lib/api';
+import { isWeightUom, sanitizeQuantity, preventDecimalKey } from '@/lib/uom';
 import { format } from 'date-fns';
 import { InputTextarea } from 'primereact/inputtextarea';
 import { InputText } from 'primereact/inputtext';
@@ -319,10 +320,11 @@ export default function OrderDetailsPage() {
           if(!updatedLines[rowIndex]) return updatedLines;
           const row = { ...updatedLines[rowIndex] };
           
-          const qty = isNaN(newQty) || newQty < 0 ? 0 : newQty;
+          const isPack = (row.qty_per_pack || 1) > 1;
+          const cleanQty = sanitizeQuantity(newQty, row.uom_base, isPack);
           
-          row.qty_ordered = qty;
-          row.expected_base_qty = qty * row.qty_per_pack;
+          row.qty_ordered = cleanQty;
+          row.expected_base_qty = cleanQty * (row.qty_per_pack || 1);
           const gross = row.expected_base_qty * row.unit_cost;
           row.subtotal = calcDiscountCascade(gross, row.line_discount_str);
           
@@ -1040,9 +1042,9 @@ export default function OrderDetailsPage() {
            }} align="right" />
           
           <Column header="Cant. a Facturar" style={{ minWidth: '120px' }} body={(r, options) => {
-             const isPack = r.qty_per_pack > 1;
-             const isWeight = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'].includes(r.uom_base?.toUpperCase());
-             const dec = isPack ? 0 : (isWeight ? 3 : 0);
+             const isPack = (r.qty_per_pack || 1) > 1;
+             const isWeight = !isPack && isWeightUom(r.uom_base);
+             const dec = isWeight ? 3 : 0;
              
              if (!isDraft) return <div className="flex justify-end pr-2"><span className="font-black text-xl text-slate-800">{Number(r.qty_ordered).toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})}</span></div>;
              
@@ -1050,9 +1052,14 @@ export default function OrderDetailsPage() {
                  <div className="flex justify-end">
                      <input 
                         type="number" 
-                        step={isPack ? "1" : (isWeight ? "0.001" : "1")}
+                        step={isWeight ? "0.001" : "1"}
                         defaultValue={Number(r.qty_ordered).toFixed(dec)} 
-                        onBlur={(e) => handleQtyChange(options.rowIndex, parseFloat(e.target.value))}
+                        onKeyDown={(e) => preventDecimalKey(e, isWeight)}
+                        onBlur={(e) => {
+                           const raw = parseFloat(e.target.value.replace(',', '.'));
+                           const clean = sanitizeQuantity(raw, r.uom_base, isPack);
+                           handleQtyChange(options.rowIndex, clean);
+                        }}
                         className="w-24 text-right text-lg font-black p-2 rounded-lg border-2 border-indigo-200 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 bg-indigo-50/50 transition-all text-indigo-700 shadow-inner" 
                      />
                  </div>
@@ -1060,10 +1067,11 @@ export default function OrderDetailsPage() {
           }} align="right" />
           
           <Column header="Equivalencia Neta" field="expected_base_qty" style={{ minWidth: '110px' }} body={r => {
-             const isWeight = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'].includes(r.uom_base?.toUpperCase());
+             const isWeight = isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
              const val = Number(r.expected_base_qty) || 0;
-             return <div className="flex justify-end pr-2"><span className="font-semibold text-slate-400">{val.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} Unds</span></div>;
+             const uomLabel = r.uom_base || 'UND';
+             return <div className="flex justify-end pr-2"><span className="font-semibold text-slate-400">{val.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} {uomLabel}</span></div>;
           }} align="right" />
           
            <Column header="Costo x Bulto" style={{ minWidth: '130px' }} body={(r, options) => {

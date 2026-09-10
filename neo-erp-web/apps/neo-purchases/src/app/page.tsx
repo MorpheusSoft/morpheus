@@ -8,6 +8,7 @@ import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
+import { isWeightUom, preventDecimalKey } from '@/lib/uom';
 import { ProductService } from '@/services/product.service';
 
 export default function MRPDashboard() {
@@ -320,8 +321,7 @@ export default function MRPDashboard() {
           )} />
           
           <Column header="Stock Físico" body={r => {
-             const weightUOMs = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'];
-             const isWeight = weightUOMs.includes(r.uom_base?.toUpperCase());
+             const isWeight = isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
              const displayStock = Number(r.current_stock).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
              return (
@@ -340,43 +340,59 @@ export default function MRPDashboard() {
           )} align="right" />
           
           <Column header="Run Rate (Diario)" body={r => {
-             const isWeight = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'].includes(r.uom_base?.toUpperCase());
+             const isWeight = isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
              return (
                  <div className="flex justify-end">
-                     <input type="number" step={isWeight ? "0.001" : "1"} defaultValue={Number(r.run_rate).toFixed(dec)} onBlur={(e) => {
-                         const val = parseFloat(e.target.value);
-                         if (!isNaN(val) && val !== parseFloat(r.run_rate)) updateMetric(r, 'run_rate', val);
-                     }} className="w-16 text-right text-xs font-bold p-1 rounded-lg border border-slate-300 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 bg-slate-50 transition-all text-slate-700" />
+                     <input 
+                        type="number" 
+                        step={isWeight ? "0.001" : "1"} 
+                        defaultValue={Number(r.run_rate).toFixed(dec)} 
+                        onKeyDown={(e) => preventDecimalKey(e, isWeight)}
+                        onBlur={(e) => {
+                           const raw = parseFloat(e.target.value.replace(',', '.'));
+                           const val = isWeight ? Number(raw.toFixed(3)) : Math.round(raw);
+                           if (!isNaN(val) && val !== parseFloat(r.run_rate)) updateMetric(r, 'run_rate', val);
+                        }} 
+                        className="w-16 text-right text-xs font-bold p-1 rounded-lg border border-slate-300 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 bg-slate-50 transition-all text-slate-700" 
+                     />
                  </div>
              );
           }} align="right" />
 
           <Column header="Safety Stock" body={r => {
-             const isWeight = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'].includes(r.uom_base?.toUpperCase());
+             const isWeight = isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
              return (
                  <div className="flex justify-end">
-                     <input type="number" step={isWeight ? "0.001" : "1"} defaultValue={Number(r.safety_stock).toFixed(dec)} onBlur={(e) => {
-                         const val = parseFloat(e.target.value);
-                         if (!isNaN(val) && val !== parseFloat(r.safety_stock)) updateMetric(r, 'safety_stock', val);
-                     }} className="w-16 text-right text-xs font-bold p-1 rounded-lg border border-slate-300 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 bg-slate-50 transition-all text-amber-700" />
+                     <input 
+                        type="number" 
+                        step={isWeight ? "0.001" : "1"} 
+                        defaultValue={Number(r.safety_stock).toFixed(dec)} 
+                        onKeyDown={(e) => preventDecimalKey(e, isWeight)}
+                        onBlur={(e) => {
+                           const raw = parseFloat(e.target.value.replace(',', '.'));
+                           const val = isWeight ? Number(raw.toFixed(3)) : Math.round(raw);
+                           if (!isNaN(val) && val !== parseFloat(r.safety_stock)) updateMetric(r, 'safety_stock', val);
+                        }} 
+                        className="w-16 text-right text-xs font-bold p-1 rounded-lg border border-slate-300 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 bg-slate-50 transition-all text-amber-700" 
+                     />
                  </div>
              );
           }} align="right" />
           
           <Column header="MOQ" body={r => {
-             const isPack = r.qty_per_pack > 1;
-             const isWeight = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'].includes(r.uom_base?.toUpperCase());
-             const dec = isPack ? 0 : (isWeight ? 3 : 0);
+             const isPack = (r.qty_per_pack || 1) > 1;
+             const isWeight = !isPack && isWeightUom(r.uom_base);
+             const dec = isWeight ? 3 : 0;
              return <div className="flex justify-end"><span className="text-slate-500 font-bold bg-slate-100 px-2 py-1 rounded text-xs">{Number(r.moq).toFixed(dec)}</span></div>;
           }} align="right" />
           
           <Column header="SUGERIDO" body={r => {
              const isWarning = r.suggested_qty > 0;
-             const isPack = r.qty_per_pack > 1;
-             const isWeight = ['KG', 'LBS', 'GR', 'L', 'LT', 'MT', 'KGS'].includes(r.uom_base?.toUpperCase());
-             const dec = isPack ? 0 : (isWeight ? 3 : 0);
+             const isPack = (r.qty_per_pack || 1) > 1;
+             const isWeight = !isPack && isWeightUom(r.uom_base);
+             const dec = isWeight ? 3 : 0;
              const displaySuggested = Number(r.suggested_qty).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
              
              return (

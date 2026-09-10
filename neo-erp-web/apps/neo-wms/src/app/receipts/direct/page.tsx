@@ -12,6 +12,7 @@ import { Toast } from 'primereact/toast';
 import { Dialog } from 'primereact/dialog';
 import { Tag } from 'primereact/tag';
 import api from '@/lib/api';
+import { isWeightUom, sanitizeQuantity, preventDecimalKey } from '@/lib/uom';
 import { useRouter } from 'next/navigation';
 import { format } from 'date-fns';
 
@@ -86,6 +87,7 @@ export default function DirectReceiptPage() {
               value: v.id,
               sku: v.sku,
               product_name: p.name,
+              uom_base: p.uom_base || 'UND',
               cost: parseFloat(v.average_cost || v.standard_cost || 0)
             });
           });
@@ -153,11 +155,14 @@ export default function DirectReceiptPage() {
       return;
     }
 
+    const cleanExpected = sanitizeQuantity(inputExpectedQty, selectedVariant.uom_base);
+    const cleanReceived = sanitizeQuantity(inputQty, selectedVariant.uom_base);
+
     const existingIndex = lines.findIndex(l => l.variant_id === selectedVariant.value);
     if (existingIndex >= 0) {
       const updated = [...lines];
-      updated[existingIndex].expected_qty += inputExpectedQty;
-      updated[existingIndex].received_qty += inputQty;
+      updated[existingIndex].expected_qty = sanitizeQuantity(updated[existingIndex].expected_qty + cleanExpected, updated[existingIndex].uom_base);
+      updated[existingIndex].received_qty = sanitizeQuantity(updated[existingIndex].received_qty + cleanReceived, updated[existingIndex].uom_base);
       if (inputCost > 0) updated[existingIndex].unit_cost = inputCost;
       setLines(updated);
     } else {
@@ -167,8 +172,9 @@ export default function DirectReceiptPage() {
           variant_id: selectedVariant.value,
           sku: selectedVariant.sku,
           product_name: selectedVariant.product_name,
-          expected_qty: inputExpectedQty,
-          received_qty: inputQty,
+          uom_base: selectedVariant.uom_base || 'UND',
+          expected_qty: cleanExpected,
+          received_qty: cleanReceived,
           damaged_qty: 0,
           unit_cost: inputCost,
           lot_number: inputLotNumber || '',
@@ -194,8 +200,10 @@ export default function DirectReceiptPage() {
   const handleQtyChange = (index: number, val: any) => {
     setLines(prev => {
       const updated = [...prev];
-      const parsed = isNaN(parseFloat(val)) ? 0 : parseFloat(val);
-      updated[index] = { ...updated[index], received_qty: parsed };
+      const row = updated[index];
+      if (!row) return prev;
+      const clean = sanitizeQuantity(val, row.uom_base);
+      updated[index] = { ...row, received_qty: clean };
       return updated;
     });
   };
@@ -203,8 +211,10 @@ export default function DirectReceiptPage() {
   const handleExpectedQtyChange = (index: number, val: any) => {
     setLines(prev => {
       const updated = [...prev];
-      const parsed = isNaN(parseFloat(val)) ? 0 : parseFloat(val);
-      updated[index] = { ...updated[index], expected_qty: parsed };
+      const row = updated[index];
+      if (!row) return prev;
+      const clean = sanitizeQuantity(val, row.uom_base);
+      updated[index] = { ...row, expected_qty: clean };
       return updated;
     });
   };
@@ -303,10 +313,10 @@ export default function DirectReceiptPage() {
         notes: notes || '',
         lines: lines.map(l => ({
           variant_id: Number(l.variant_id),
-          expected_qty: Number(l.expected_qty || l.received_qty || 1),
-          received_qty: Number(l.received_qty || 0),
+          expected_qty: sanitizeQuantity(l.expected_qty || l.received_qty || 1, l.uom_base),
+          received_qty: sanitizeQuantity(l.received_qty || 0, l.uom_base),
           unit_cost: Number(l.unit_cost || 0),
-          damaged_qty: Number(l.damaged_qty || 0),
+          damaged_qty: sanitizeQuantity(l.damaged_qty || 0, l.uom_base),
           rejection_reason: l.rejection_reason || null,
           lot_number: l.lot_number || null,
           expiration_date: formatDateSafe(l.expiration_date)
@@ -465,27 +475,41 @@ export default function DirectReceiptPage() {
           
           <Column header="Producto" field="product_name" body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
           
-          <Column header="Cant. Factura" body={(r, options) => (
-             <InputNumber 
-                value={r.expected_qty} 
-                onValueChange={e => handleExpectedQtyChange(options.rowIndex, e.value)} 
-                min={1} 
-                className="w-20 text-center font-bold" 
-                inputClassName="w-20 text-center text-xs font-bold border-slate-200"
-             />
-          )} align="center" style={{ width: '7rem' }} />
+          <Column header="Cant. Factura" body={(r, options) => {
+             const isWeight = isWeightUom(r.uom_base);
+             const dec = isWeight ? 3 : 0;
+             return (
+                <InputNumber 
+                   value={r.expected_qty} 
+                   onValueChange={e => handleExpectedQtyChange(options.rowIndex, e.value)} 
+                   min={0} 
+                   minFractionDigits={dec}
+                   maxFractionDigits={dec}
+                   step={isWeight ? 0.001 : 1}
+                   className="w-20 text-center font-bold" 
+                   inputClassName="w-20 text-center text-xs font-bold border-slate-200"
+                />
+             );
+          }} align="center" style={{ width: '7rem' }} />
 
           {/* FÍSICO RECIBIDO BUENO */}
-          <Column header="Físico Recibido" body={(r, options) => (
-             <div className="flex justify-end">
-                 <InputNumber 
-                    value={r.received_qty} 
-                    onValueChange={e => handleQtyChange(options.rowIndex, e.value)} 
-                    min={0} 
-                    inputClassName="w-24 text-right text-base font-black p-2 rounded-lg border-2 border-emerald-200 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 bg-emerald-50/50 transition-all text-emerald-700 shadow-inner" 
-                 />
-             </div>
-          )} align="right" style={{ width: '8rem' }} />
+          <Column header="Físico Recibido" body={(r, options) => {
+             const isWeight = isWeightUom(r.uom_base);
+             const dec = isWeight ? 3 : 0;
+             return (
+                <div className="flex justify-end">
+                    <InputNumber 
+                       value={r.received_qty} 
+                       onValueChange={e => handleQtyChange(options.rowIndex, e.value)} 
+                       min={0} 
+                       minFractionDigits={dec}
+                       maxFractionDigits={dec}
+                       step={isWeight ? 0.001 : 1}
+                       inputClassName="w-24 text-right text-base font-black p-2 rounded-lg border-2 border-emerald-200 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 bg-emerald-50/50 transition-all text-emerald-700 shadow-inner" 
+                    />
+                </div>
+             );
+          }} align="right" style={{ width: '8rem' }} />
 
           {/* ESTADO CONTEO */}
           <Column header="Estado Conteo" body={r => {
@@ -592,25 +616,40 @@ export default function DirectReceiptPage() {
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-               <div className="flex flex-col gap-1">
-                  <label className="text-xs font-bold text-slate-600 uppercase">Cant. según Factura (*)</label>
-                  <InputNumber 
-                     value={inputExpectedQty} 
-                     onValueChange={e => setInputExpectedQty(e.value || 1)} 
-                     min={1} 
-                     className="w-full font-bold" 
-                  />
-               </div>
+               {(() => {
+                  const isWeight = isWeightUom(selectedVariant?.uom_base);
+                  const dec = isWeight ? 3 : 0;
+                  const uomLabel = selectedVariant?.uom_base || 'UND';
+                  return (
+                     <>
+                        <div className="flex flex-col gap-1">
+                           <label className="text-xs font-bold text-slate-600 uppercase">Cant. según Factura ({uomLabel}) (*)</label>
+                           <InputNumber 
+                              value={inputExpectedQty} 
+                              onValueChange={e => setInputExpectedQty(e.value || 0)} 
+                              min={0} 
+                              minFractionDigits={dec}
+                              maxFractionDigits={dec}
+                              step={isWeight ? 0.001 : 1}
+                              className="w-full font-bold" 
+                           />
+                        </div>
 
-               <div className="flex flex-col gap-1">
-                  <label className="text-xs font-bold text-emerald-700 uppercase">Cant. Física Recibida (*)</label>
-                  <InputNumber 
-                     value={inputQty} 
-                     onValueChange={e => setInputQty(e.value ?? 0)} 
-                     min={0} 
-                     className="w-full font-bold text-emerald-700" 
-                  />
-               </div>
+                        <div className="flex flex-col gap-1">
+                           <label className="text-xs font-bold text-emerald-700 uppercase">Cant. Física Recibida ({uomLabel}) (*)</label>
+                           <InputNumber 
+                              value={inputQty} 
+                              onValueChange={e => setInputQty(e.value ?? 0)} 
+                              min={0} 
+                              minFractionDigits={dec}
+                              maxFractionDigits={dec}
+                              step={isWeight ? 0.001 : 1}
+                              className="w-full font-bold text-emerald-700" 
+                           />
+                        </div>
+                     </>
+                  );
+               })()}
             </div>
 
             <div className="grid grid-cols-2 gap-4">

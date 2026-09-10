@@ -13,6 +13,7 @@ import { Tag } from 'primereact/tag';
 import { Dropdown } from 'primereact/dropdown';
 import { InputTextarea } from 'primereact/inputtextarea';
 import api from '@/lib/api';
+import { isWeightUom, sanitizeQuantity } from '@/lib/uom';
 import { format } from 'date-fns';
 
 export default function ReconciliationPage() {
@@ -250,7 +251,9 @@ export default function ReconciliationPage() {
     if (val === null || val === undefined) return;
     setLines((prev) => {
       const arr = [...prev];
-      arr[rowIndex] = { ...arr[rowIndex], billed_qty: val };
+      const row = arr[rowIndex];
+      const cleanVal = sanitizeQuantity(val, row?.uom);
+      arr[rowIndex] = { ...arr[rowIndex], billed_qty: cleanVal };
       return arr;
     });
   };
@@ -1061,15 +1064,21 @@ export default function ReconciliationPage() {
                 {/* Col 1: ODC Original */}
                 <Column
                   header="[1] ODC Pactada"
-                  body={(r) => (
-                    <div className="flex flex-col items-end gap-0.5 text-right font-medium">
-                      <span className="text-slate-600 font-bold">{r.ordered_qty} {r.uom}</span>
-                      <span className="text-slate-500 text-[11px]">${r.unit_cost.toFixed(2)}/u</span>
-                      <span className="text-slate-700 font-bold text-xs border-t border-slate-200 pt-0.5 mt-0.5">
-                        ${(r.ordered_qty * r.unit_cost).toFixed(2)}
-                      </span>
-                    </div>
-                  )}
+                  body={(r) => {
+                    const isWeight = isWeightUom(r.uom);
+                    const dec = isWeight ? 3 : 0;
+                    return (
+                      <div className="flex flex-col items-end gap-0.5 text-right font-medium">
+                        <span className="text-slate-600 font-bold">
+                          {r.ordered_qty.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })} {r.uom}
+                        </span>
+                        <span className="text-slate-500 text-[11px]">${r.unit_cost.toFixed(2)}/u</span>
+                        <span className="text-slate-700 font-bold text-xs border-t border-slate-200 pt-0.5 mt-0.5">
+                          ${(r.ordered_qty * r.unit_cost).toFixed(2)}
+                        </span>
+                      </div>
+                    );
+                  }}
                   align="right"
                   style={{ width: '130px' }}
                 />
@@ -1079,10 +1088,12 @@ export default function ReconciliationPage() {
                   header="[2] Recepción WMS"
                   body={(r) => {
                     const isShort = r.received_qty < r.ordered_qty;
+                    const isWeight = isWeightUom(r.uom);
+                    const dec = isWeight ? 3 : 0;
                     return (
                       <div className="flex flex-col items-end gap-0.5 text-right font-medium">
                         <span className={`font-black px-1.5 py-0.5 rounded ${isShort ? 'bg-amber-100 text-amber-800' : 'bg-emerald-50 text-emerald-700'}`}>
-                          {r.received_qty} {r.uom}
+                          {r.received_qty.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })} {r.uom}
                         </span>
                         <span className="text-slate-500 text-[11px]">${r.unit_cost.toFixed(2)}/u</span>
                         <span className="text-slate-800 font-bold text-xs border-t border-slate-200 pt-0.5 mt-0.5">
@@ -1101,6 +1112,8 @@ export default function ReconciliationPage() {
                   body={(r, options) => {
                     const isPriceHike = r.billed_unit_cost > r.unit_cost;
                     const isQtyOver = r.billed_qty > r.received_qty;
+                    const isWeight = isWeightUom(r.uom);
+                    const dec = isWeight ? 3 : 0;
                     return (
                       <div className="flex flex-col items-end gap-1.5 bg-indigo-50/40 p-2 rounded-lg border border-indigo-100">
                         <div className="flex items-center gap-2">
@@ -1108,8 +1121,8 @@ export default function ReconciliationPage() {
                           <InputNumber
                             value={r.billed_qty}
                             onValueChange={(e) => handleBilledQtyChange(options.rowIndex, e.value)}
-                            minFractionDigits={0}
-                            maxFractionDigits={2}
+                            minFractionDigits={dec}
+                            maxFractionDigits={dec}
                             inputClassName={`w-20 text-right font-bold py-1 px-2 text-xs rounded border ${
                               isQtyOver ? 'border-red-400 bg-red-50 text-red-700' : 'border-slate-300'
                             }`}

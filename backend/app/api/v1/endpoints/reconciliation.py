@@ -18,6 +18,7 @@ from app.schemas.reconciliation import (
     ReconciliationProcessResponse,
     ReconciliationKPIs
 )
+from app.core.uom import validate_quantity_uom
 
 router = APIRouter()
 
@@ -372,6 +373,12 @@ def process_reconciliation(
 
         q_billed = Decimal(str(l_in.billed_qty))
         c_billed = Decimal(str(l_in.billed_unit_cost))
+        
+        variant = db.query(ProductVariant).filter(ProductVariant.id == db_line.variant_id).first()
+        uom_base = variant.product.uom_base if (variant and variant.product) else 'UND'
+        sku_label = variant.sku if variant else f"ID {db_line.variant_id}"
+        validate_quantity_uom(q_billed, uom_base, f"El producto [{sku_label}]")
+
         q_rec = Decimal(str(db_line.received_base_qty or 0))
         c_ord = Decimal(str(db_line.unit_cost or 0))
 

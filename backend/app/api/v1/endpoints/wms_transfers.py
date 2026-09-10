@@ -8,6 +8,7 @@ from datetime import datetime
 from app.api.deps import get_db, get_current_active_user
 from app.models.inventory import StockPicking, StockMove, StockPickingType, Location, InventorySnapshot, Warehouse, ProductVariant
 from app.models.core import User, Facility
+from app.core.uom import validate_quantity_uom
 
 router = APIRouter()
 
@@ -115,11 +116,13 @@ def list_transfers(facility_id: Optional[int] = None, db: Session = Depends(get_
             variant = db.query(ProductVariant).filter(ProductVariant.id == m.product_id).first()
             p_name = variant.product.name if (variant and hasattr(variant, 'product') and variant.product) else "Producto"
             sku_code = variant.sku if variant else "N/A"
+            uom_base = (variant.product.uom_base if (variant and hasattr(variant, 'product') and variant.product) else "UND") or "UND"
             lines_detail.append({
                 "id": m.id,
                 "variant_id": m.product_id,
                 "product_name": p_name,
                 "sku": sku_code,
+                "uom_base": uom_base,
                 "quantity_demand": m.quantity_demand,
                 "quantity_done": m.quantity_done,
                 "state": m.state,
@@ -191,6 +194,11 @@ def create_inter_facility_transfer(
         qty = float(line.qty)
         if qty <= 0:
             continue
+
+        variant = db.query(ProductVariant).filter(ProductVariant.id == line.variant_id).first()
+        prod = variant.product if (variant and hasattr(variant, 'product')) else None
+        uom = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
+        validate_quantity_uom(qty, uom, item_label=prod.name if prod else f"Variante #{line.variant_id}")
 
         move = StockMove(
             picking_id=picking.id,
@@ -283,11 +291,13 @@ def list_replenishment_requests(
             variant = db.query(ProductVariant).filter(ProductVariant.id == m.product_id).first()
             p_name = variant.product.name if (variant and hasattr(variant, 'product') and variant.product) else "Producto"
             sku_code = variant.sku if variant else "N/A"
+            uom_base = (variant.product.uom_base if (variant and hasattr(variant, 'product') and variant.product) else "UND") or "UND"
             lines_detail.append({
                 "id": m.id,
                 "variant_id": m.product_id,
                 "product_name": p_name,
                 "sku": sku_code,
+                "uom_base": uom_base,
                 "quantity_demand": float(m.quantity_demand or 0),
                 "quantity_done": float(m.quantity_done or 0),
                 "state": m.state,
@@ -358,6 +368,11 @@ def create_replenishment_request(
         qty = float(line.qty)
         if qty <= 0:
             continue
+
+        variant = db.query(ProductVariant).filter(ProductVariant.id == line.variant_id).first()
+        prod = variant.product if (variant and hasattr(variant, 'product')) else None
+        uom = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
+        validate_quantity_uom(qty, uom, item_label=prod.name if prod else f"Variante #{line.variant_id}")
         move = StockMove(
             picking_id=picking.id,
             product_id=line.variant_id,
@@ -455,6 +470,11 @@ def receive_replenishment_request(
     for move in picking.moves:
         reception_input = lines_dict.get(move.id)
         qty_received = float(reception_input.quantity_received) if reception_input else float(move.quantity_demand or 0)
+
+        variant = db.query(ProductVariant).filter(ProductVariant.id == move.product_id).first()
+        prod = variant.product if (variant and hasattr(variant, 'product')) else None
+        uom = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
+        validate_quantity_uom(qty_received, uom, item_label=prod.name if prod else f"Variante #{move.product_id}")
         
         move.quantity_done = qty_received
         move.state = 'DONE'

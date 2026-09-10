@@ -5,8 +5,10 @@ from sqlalchemy import desc, func
 
 from app.api import deps
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine
+from app.models.inventory import ProductVariant
 from app.models.core import User
 from app.schemas.purchase_order import PurchaseOrderResponse
+from app.core.uom import validate_quantity_uom
 
 router = APIRouter()
 
@@ -71,6 +73,13 @@ def create_purchase_order(
         qty = Decimal(str(l_create.qty_ordered))
         base_qty = Decimal(str(l_create.expected_base_qty))
         cost = Decimal(str(l_create.unit_cost))
+        
+        variant = db.query(ProductVariant).filter(ProductVariant.id == l_create.variant_id).first()
+        uom_base = variant.product.uom_base if (variant and variant.product) else 'UND'
+        sku_label = variant.sku if variant else f"ID {l_create.variant_id}"
+        validate_quantity_uom(qty, uom_base, f"El producto [{sku_label}]")
+        if not l_create.pack_id:
+            validate_quantity_uom(base_qty, uom_base, f"El producto [{sku_label}]")
         
         line = PurchaseOrderLine(
             order_id=order.id,
@@ -381,6 +390,13 @@ def update_purchase_order(
         qty = Decimal(str(l_up.qty_ordered))
         base_qty = Decimal(str(l_up.expected_base_qty))
         cost = Decimal(str(l_up.unit_cost))
+        
+        variant = db.query(ProductVariant).filter(ProductVariant.id == l_up.variant_id).first()
+        uom_base = variant.product.uom_base if (variant and variant.product) else 'UND'
+        sku_label = variant.sku if variant else f"ID {l_up.variant_id}"
+        validate_quantity_uom(qty, uom_base, f"El producto [{sku_label}]")
+        if not l_up.pack_id:
+            validate_quantity_uom(base_qty, uom_base, f"El producto [{sku_label}]")
         
         if l_up.id and l_up.id in line_map:
             db_line = line_map[l_up.id]

@@ -397,13 +397,16 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         qty_ordered_val = float(line.qty_ordered)
         expected_base_qty_val = float(line.expected_base_qty)
         
+        uom_label = prod.uom_base.upper() if (prod and prod.uom_base) else 'UND'
+        uom_str = "Kg" if uom_label in ('KG', 'KGS', 'KILOGRAMO') else ("Lt" if uom_label in ('LT', 'LTS', 'LITRO') else "Und")
+        
         qty_ordered_str = f"{qty_ordered_val:.3f}".rstrip('0').rstrip('.') if qty_ordered_val % 1 != 0 else f"{int(qty_ordered_val)}"
         expected_base_str = f"{expected_base_qty_val:.3f}".rstrip('0').rstrip('.') if expected_base_qty_val % 1 != 0 else f"{int(expected_base_qty_val)}"
         
         if line.pack_id:
-            qty_str = f"{qty_ordered_str} Pac. ({expected_base_str} Und.)"
+            qty_str = f"{qty_ordered_str} Pac. ({expected_base_str} {uom_str})"
         else:
-            qty_str = f"{expected_base_str} Und."
+            qty_str = f"{expected_base_str} {uom_str}"
             
         unit_cost_val = float(line.unit_cost)
         

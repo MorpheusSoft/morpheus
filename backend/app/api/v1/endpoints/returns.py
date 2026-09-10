@@ -14,6 +14,7 @@ from app.models.inventory import (
     ProductVariant, Product
 )
 from app.models.core import Facility, Supplier, User
+from app.core.uom import validate_quantity_uom
 
 router = APIRouter()
 
@@ -141,6 +142,7 @@ def list_supplier_returns(
                     "variant_id": l.variant_id,
                     "sku": l.variant.sku if l.variant else "N/A",
                     "product_name": l.variant.product.name if (l.variant and l.variant.product) else f"SKU {l.variant_id}",
+                    "uom_base": (l.variant.product.uom_base if (l.variant and hasattr(l.variant, 'product') and l.variant.product) else "UND") or "UND",
                     "batch_id": l.batch_id,
                     "batch_number": l.batch.batch_number if l.batch else "S/L",
                     "quantity": float(l.quantity or 0),
@@ -203,6 +205,7 @@ def get_supplier_return(
                 "variant_id": l.variant_id,
                 "sku": l.variant.sku if l.variant else "N/A",
                 "product_name": l.variant.product.name if (l.variant and l.variant.product) else f"SKU {l.variant_id}",
+                "uom_base": (l.variant.product.uom_base if (l.variant and hasattr(l.variant, 'product') and l.variant.product) else "UND") or "UND",
                 "batch_id": l.batch_id,
                 "batch_number": l.batch.batch_number if l.batch else "S/L",
                 "quantity": float(l.quantity or 0),
@@ -263,6 +266,10 @@ def create_supplier_return(
         variant = db.query(ProductVariant).filter(ProductVariant.id == line_data.variant_id).first()
         if not variant:
             raise HTTPException(status_code=404, detail=f"Variante #{line_data.variant_id} no encontrada.")
+
+        prod = variant.product if (variant and hasattr(variant, 'product')) else None
+        uom = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
+        validate_quantity_uom(line_data.quantity, uom, item_label=prod.name if prod else f"Variante #{line_data.variant_id}")
 
         cost = Decimal(str(line_data.unit_cost or variant.average_cost or variant.standard_cost or 0))
         qty = Decimal(str(line_data.quantity))
@@ -509,6 +516,7 @@ def list_vendor_swaps(
             "variant_id": s.variant_id,
             "sku": s.variant.sku if s.variant else "N/A",
             "product_name": s.variant.product.name if (s.variant and s.variant.product) else f"SKU {s.variant_id}",
+            "uom_base": (s.variant.product.uom_base if (s.variant and hasattr(s.variant, 'product') and s.variant.product) else "UND") or "UND",
             "damaged_batch_id": s.damaged_batch_id,
             "damaged_batch_number": s.damaged_batch.batch_number if s.damaged_batch else "S/L",
             "damaged_expiry_date": s.damaged_batch.expiry_date.strftime("%d/%m/%Y") if (s.damaged_batch and s.damaged_batch.expiry_date) else None,
@@ -624,6 +632,10 @@ def create_vendor_swap(
     if payload.qty_quarantined <= 0:
         raise HTTPException(status_code=400, detail="La cantidad en cuarentena debe ser mayor a 0.")
 
+    prod = variant.product if (variant and hasattr(variant, 'product')) else None
+    uom = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
+    validate_quantity_uom(payload.qty_quarantined, uom, item_label=prod.name if prod else f"Variante #{payload.variant_id}")
+
     # Generar correlativo SWAP
     timestamp_str = datetime.now().strftime("%Y%m%d-%H%M%S")
     swap_number = f"SWAP-{timestamp_str}"
@@ -720,6 +732,11 @@ def execute_vendor_swap(
         raise HTTPException(status_code=400, detail="La cantidad a canjear debe ser mayor a 0.")
     if payload.qty > remaining + 0.0001:
         raise HTTPException(status_code=400, detail=f"La cantidad ({payload.qty}) supera el saldo pendiente de canjear ({remaining}).")
+
+    variant = swap.variant
+    prod = variant.product if (variant and hasattr(variant, 'product')) else None
+    uom = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
+    validate_quantity_uom(payload.qty, uom, item_label=prod.name if prod else f"Variante #{swap.variant_id}")
 
     # Ubicaciones
     quarantine_loc = db.query(Location).filter(Location.code == "QUARANTINE").first()

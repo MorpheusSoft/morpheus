@@ -12,6 +12,7 @@ import { InputNumber } from 'primereact/inputnumber';
 import { InputText } from 'primereact/inputtext';
 import { TabView, TabPanel } from 'primereact/tabview';
 import api from '@/lib/api';
+import { isWeightUom, getUomDecimals, formatQuantity, sanitizeQuantity, preventDecimalKey } from '@/lib/uom';
 
 // Componente para input de observaciones por línea con estado propio (evita pérdida de foco en re-renderizado)
 const LineNotesInput = ({ initialValue, onChange }: { initialValue: string, onChange: (val: string) => void }) => {
@@ -124,7 +125,8 @@ export default function WmsTransfersPage() {
               label: `${p.name || 'Producto'} ${v.sku ? `(SKU: ${v.sku})` : ''}`,
               value: v.id,
               sku: v.sku || 'N/A',
-              product_name: p.name || 'Producto'
+              product_name: p.name || 'Producto',
+              uom_base: p.uom_base || v.uom_base || 'UND'
             });
           });
         } else if (p && p.id) {
@@ -132,7 +134,8 @@ export default function WmsTransfersPage() {
             label: `${p.name || 'Producto'} (ID: ${p.id})`,
             value: p.id,
             sku: p.sku || 'N/A',
-            product_name: p.name || 'Producto'
+            product_name: p.name || 'Producto',
+            uom_base: p.uom_base || 'UND'
           });
         }
       });
@@ -158,10 +161,16 @@ export default function WmsTransfersPage() {
     const item = productsList.find(p => p.value === selectedVariantId);
     if (!item) return;
 
+    const sanitizedQty = sanitizeQuantity(transferQty, item.uom_base);
+    if (sanitizedQty <= 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Atención', detail: 'La cantidad ingresada debe ser mayor a cero.' });
+      return;
+    }
+
     const existingIndex = requestLines.findIndex(l => l.variant_id === selectedVariantId);
     if (existingIndex >= 0) {
       const updated = [...requestLines];
-      updated[existingIndex].qty += transferQty;
+      updated[existingIndex].qty = sanitizeQuantity(updated[existingIndex].qty + sanitizedQty, item.uom_base);
       setRequestLines(updated);
     } else {
       setRequestLines([...requestLines, {
@@ -169,7 +178,8 @@ export default function WmsTransfersPage() {
         label: item.label,
         sku: item.sku,
         product_name: item.product_name,
-        qty: transferQty
+        uom_base: item.uom_base || 'UND',
+        qty: sanitizedQty
       }]);
     }
 
@@ -192,10 +202,16 @@ export default function WmsTransfersPage() {
     const item = productsList.find(p => p.value === selectedVariantId);
     if (!item) return;
 
+    const sanitizedQty = sanitizeQuantity(transferQty, item.uom_base);
+    if (sanitizedQty <= 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Atención', detail: 'La cantidad ingresada debe ser mayor a cero.' });
+      return;
+    }
+
     const existingIndex = directTransferLines.findIndex(l => l.variant_id === selectedVariantId);
     if (existingIndex >= 0) {
       const updated = [...directTransferLines];
-      updated[existingIndex].qty += transferQty;
+      updated[existingIndex].qty = sanitizeQuantity(updated[existingIndex].qty + sanitizedQty, item.uom_base);
       setDirectTransferLines(updated);
     } else {
       setDirectTransferLines([...directTransferLines, {
@@ -203,7 +219,8 @@ export default function WmsTransfersPage() {
         label: item.label,
         sku: item.sku,
         product_name: item.product_name,
-        qty: transferQty
+        uom_base: item.uom_base || 'UND',
+        qty: sanitizedQty
       }]);
     }
 
@@ -240,7 +257,7 @@ export default function WmsTransfersPage() {
         dest_facility_id: destFacilityId,
         lines: requestLines.map(l => ({
           variant_id: l.variant_id,
-          qty: l.qty
+          qty: sanitizeQuantity(l.qty, l.uom_base)
         }))
       });
       toast.current?.show({ severity: 'success', summary: 'Solicitud Creada', detail: `Solicitud registrada en estado SOLICITADA.` });
@@ -301,6 +318,7 @@ export default function WmsTransfersPage() {
       move_id: l.id,
       sku: l.sku,
       product_name: l.product_name,
+      uom_base: l.uom_base || 'UND',
       quantity_demand: l.quantity_demand,
       quantity_received: l.quantity_demand,
       notes: ''
@@ -317,7 +335,7 @@ export default function WmsTransfersPage() {
         general_notes: generalNotes,
         lines: receiveLines.map(l => ({
           move_id: l.move_id,
-          quantity_received: l.quantity_received,
+          quantity_received: sanitizeQuantity(l.quantity_received, l.uom_base),
           notes: l.notes || ''
         }))
       });
@@ -356,7 +374,7 @@ export default function WmsTransfersPage() {
         dest_facility_id: destFacilityId,
         lines: directTransferLines.map(l => ({
           variant_id: l.variant_id,
-          qty: l.qty
+          qty: sanitizeQuantity(l.qty, l.uom_base)
         }))
       });
       toast.current?.show({ severity: 'success', summary: 'Transferencia Directa Creada', detail: `Transferencia con ${directTransferLines.length} artículo(s) registrada en estado EN TRÁNSITO.` });
@@ -639,16 +657,28 @@ export default function WmsTransfersPage() {
             </div>
 
             <div className="flex items-end gap-3 pt-1">
-              <div className="w-36">
-                <label className="block text-xs font-bold text-slate-600 mb-1">Cantidad:</label>
-                <InputNumber 
-                  value={transferQty} 
-                  onValueChange={(e) => setTransferQty(e.value || 1)}
-                  min={1}
-                  className="w-full text-xs font-bold"
-                  inputClassName="w-full text-xs font-bold"
-                />
-              </div>
+              {(() => {
+                const sel = productsList.find(p => p.value === selectedVariantId);
+                const isW = isWeightUom(sel?.uom_base);
+                const d = getUomDecimals(sel?.uom_base);
+                return (
+                  <div className="w-36">
+                    <label className="block text-xs font-bold text-slate-600 mb-1">
+                      Cantidad {sel?.uom_base ? `(${sel.uom_base})` : ''}:
+                    </label>
+                    <InputNumber 
+                      value={transferQty} 
+                      onValueChange={(e) => setTransferQty(e.value || (isW ? 0.001 : 1))}
+                      min={isW ? 0.001 : 1}
+                      minFractionDigits={d}
+                      maxFractionDigits={d}
+                      step={isW ? 0.001 : 1}
+                      className="w-full text-xs font-bold"
+                      inputClassName="w-full text-xs font-bold"
+                    />
+                  </div>
+                );
+              })()}
 
               <Button 
                 label="Agregar a la Lista" 
@@ -671,7 +701,7 @@ export default function WmsTransfersPage() {
             >
               <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
               <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800 line-clamp-2">{l.product_name}</span>} />
-              <Column header="CANTIDAD SOLICITADA" field="qty" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{l.qty}</span>} />
+              <Column header="CANTIDAD SOLICITADA" field="qty" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{formatQuantity(l.qty, l.uom_base, true)}</span>} />
               <Column 
                 header="ACCIONES" 
                 align="center"
@@ -782,16 +812,28 @@ export default function WmsTransfersPage() {
             </div>
 
             <div className="flex items-end gap-3 pt-1">
-              <div className="w-36">
-                <label className="block text-xs font-bold text-slate-600 mb-1">Cantidad:</label>
-                <InputNumber 
-                  value={transferQty} 
-                  onValueChange={(e) => setTransferQty(e.value || 1)}
-                  min={1}
-                  className="w-full text-xs font-bold"
-                  inputClassName="w-full text-xs font-bold"
-                />
-              </div>
+              {(() => {
+                const sel = productsList.find(p => p.value === selectedVariantId);
+                const isW = isWeightUom(sel?.uom_base);
+                const d = getUomDecimals(sel?.uom_base);
+                return (
+                  <div className="w-36">
+                    <label className="block text-xs font-bold text-slate-600 mb-1">
+                      Cantidad {sel?.uom_base ? `(${sel.uom_base})` : ''}:
+                    </label>
+                    <InputNumber 
+                      value={transferQty} 
+                      onValueChange={(e) => setTransferQty(e.value || (isW ? 0.001 : 1))}
+                      min={isW ? 0.001 : 1}
+                      minFractionDigits={d}
+                      maxFractionDigits={d}
+                      step={isW ? 0.001 : 1}
+                      className="w-full text-xs font-bold"
+                      inputClassName="w-full text-xs font-bold"
+                    />
+                  </div>
+                );
+              })()}
 
               <Button 
                 label="Agregar a la Lista" 
@@ -814,7 +856,7 @@ export default function WmsTransfersPage() {
             >
               <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
               <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800 line-clamp-2">{l.product_name}</span>} />
-              <Column header="CANTIDAD A DESPACHAR" field="qty" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{l.qty}</span>} />
+              <Column header="CANTIDAD A DESPACHAR" field="qty" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{formatQuantity(l.qty, l.uom_base, true)}</span>} />
               <Column 
                 header="ACCIONES" 
                 align="center"
@@ -882,22 +924,32 @@ export default function WmsTransfersPage() {
               <DataTable value={receiveLines} size="small" stripedRows className="text-xs">
                 <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
                 <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800">{l.product_name}</span>} />
-                <Column header="CANT. DESPACHADA" field="quantity_demand" align="center" body={l => <span className="font-bold text-slate-600">{l.quantity_demand}</span>} />
+                <Column header="CANT. DESPACHADA" field="quantity_demand" align="center" body={l => <span className="font-bold text-slate-600">{formatQuantity(l.quantity_demand, l.uom_base, true)}</span>} />
                 <Column 
                   header="CANT. RECIBIDA" 
                   align="center"
-                  body={(l, options) => (
-                    <InputNumber 
-                      value={l.quantity_received} 
-                      onValueChange={(e) => {
-                        const updated = [...receiveLines];
-                        updated[options.rowIndex].quantity_received = e.value !== null && e.value !== undefined ? e.value : 0;
-                        setReceiveLines(updated);
-                      }}
-                      min={0}
-                      inputClassName="w-24 text-center font-extrabold text-emerald-700 text-xs py-1"
-                    />
-                  )} 
+                  body={(l, options) => {
+                    const isW = isWeightUom(l.uom_base);
+                    const d = getUomDecimals(l.uom_base);
+                    return (
+                      <div className="flex flex-col items-center">
+                        <InputNumber 
+                          value={l.quantity_received} 
+                          onValueChange={(e) => {
+                            const updated = [...receiveLines];
+                            updated[options.rowIndex].quantity_received = sanitizeQuantity(e.value !== null && e.value !== undefined ? e.value : 0, l.uom_base);
+                            setReceiveLines(updated);
+                          }}
+                          min={0}
+                          minFractionDigits={d}
+                          maxFractionDigits={d}
+                          step={isW ? 0.001 : 1}
+                          inputClassName="w-24 text-center font-extrabold text-emerald-700 text-xs py-1"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-0.5">{l.uom_base || 'UND'}</span>
+                      </div>
+                    );
+                  }} 
                 />
                 <Column 
                   header="OBSERVACIÓN POR PRODUCTO (OPCIONAL)" 
@@ -977,8 +1029,8 @@ export default function WmsTransfersPage() {
               <DataTable value={selectedRequest.lines || []} size="small" stripedRows className="text-xs">
                 <Column header="SKU" field="sku" body={l => <span className="font-mono font-bold text-slate-700">{l.sku}</span>} />
                 <Column header="PRODUCTO" field="product_name" body={l => <span className="font-bold text-slate-800">{l.product_name}</span>} />
-                <Column header="CANT. DEMANDADA" field="quantity_demand" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{l.quantity_demand}</span>} />
-                <Column header="CANT. RECIBIDA" field="quantity_done" align="center" body={l => <span className="font-extrabold text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">{l.quantity_done}</span>} />
+                <Column header="CANT. DEMANDADA" field="quantity_demand" align="center" body={l => <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-1 rounded border border-blue-200">{formatQuantity(l.quantity_demand, l.uom_base, true)}</span>} />
+                <Column header="CANT. RECIBIDA" field="quantity_done" align="center" body={l => <span className="font-extrabold text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">{formatQuantity(l.quantity_done, l.uom_base, true)}</span>} />
                 <Column header="OBSERVACIONES / NOVEDADES" field="notes" body={l => <span className="italic text-slate-600">{l.notes || 'Sin novedades'}</span>} />
               </DataTable>
             </div>

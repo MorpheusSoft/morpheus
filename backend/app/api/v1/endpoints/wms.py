@@ -16,6 +16,7 @@ from app.schemas.adjustment import (
     AdjustmentReasonCreate, AdjustmentReasonResponse,
     InventoryAdjustmentCreate, InventoryAdjustmentResponse
 )
+from app.core.uom import validate_quantity_uom
 
 router = APIRouter()
 
@@ -223,6 +224,11 @@ def create_direct_receipt(
         variant = db.query(ProductVariant).filter(ProductVariant.id == l.variant_id).first()
         if not variant:
             continue
+
+        uom_base = variant.product.uom_base if variant.product else 'UND'
+        sku_label = variant.sku or f"ID {l.variant_id}"
+        validate_quantity_uom(l.expected_qty, uom_base, f"El producto [{sku_label}]")
+        validate_quantity_uom(l.received_qty, uom_base, f"El producto [{sku_label}]")
 
         cost = float(l.unit_cost or variant.average_cost or variant.standard_cost or 0)
         expected = float(l.expected_qty if l.expected_qty is not None else l.received_qty)
@@ -448,6 +454,12 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
         qty_good = float(in_line.received_qty or 0)
         qty_damaged = float(in_line.damaged_qty or 0)
 
+        variant = po_line.variant if (po_line and po_line.variant) else db.query(ProductVariant).filter(ProductVariant.id == in_line.variant_id).first()
+        uom_base = variant.product.uom_base if (variant and variant.product) else 'UND'
+        sku_label = variant.sku if variant else f"ID {in_line.variant_id}"
+        validate_quantity_uom(qty_good, uom_base, f"El producto [{sku_label}]")
+        validate_quantity_uom(qty_damaged, uom_base, f"El producto [{sku_label}]")
+
         # Si se rechazó en muelle, solo la cantidad en buen estado ingresa a inventario
         po_line.received_base_qty = float(po_line.received_base_qty or 0) + qty_good
         total_expected += float(po_line.expected_base_qty or 0)
@@ -562,6 +574,11 @@ def report_receipt_discrepancy(order_id: int, payload: DiscrepancyPayload, db: S
     order = db.query(PurchaseOrder).filter(PurchaseOrder.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
+
+    variant = db.query(ProductVariant).filter(ProductVariant.id == payload.variant_id).first()
+    uom_base = variant.product.uom_base if (variant and variant.product) else 'UND'
+    sku_label = variant.sku if variant else f"ID {payload.variant_id}"
+    validate_quantity_uom(payload.damaged_qty, uom_base, f"El producto [{sku_label}]")
 
     warehouse = None
     if payload.warehouse_id:
@@ -1856,6 +1873,11 @@ def create_inventory_adjustment(
                 db.add(new_var)
                 db.flush()
                 target_variant_id = new_var.id
+
+        target_variant = db.query(ProductVariant).filter(ProductVariant.id == target_variant_id).first()
+        uom_base = target_variant.product.uom_base if (target_variant and target_variant.product) else 'UND'
+        sku_label = target_variant.sku if target_variant else f"ID {target_variant_id}"
+        validate_quantity_uom(q, uom_base, f"El producto [{sku_label}]")
 
         adj_line = InventoryAdjustmentLine(
             adjustment_id=adjustment.id,

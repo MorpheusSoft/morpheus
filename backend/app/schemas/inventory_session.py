@@ -37,6 +37,9 @@ class InventoryLine(InventoryLineBase):
     difference_qty: Optional[float] = None
     is_anomaly: Optional[bool] = False
     anomaly_reason: Optional[str] = None
+    uom_base: Optional[str] = "UND"
+    sku: Optional[str] = None
+    product_name: Optional[str] = None
     updated_at: datetime
     
     class Config:
