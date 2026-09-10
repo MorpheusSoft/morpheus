@@ -11,7 +11,7 @@ from unittest.mock import patch, MagicMock
 from app.main import app
 from app.api.deps import SessionLocal
 from app.models.core import User, Facility, Company, Tribute, Supplier, Currency, Role
-from app.models.inventory import Category, Product, ProductVariant
+from app.models.inventory import Category, Product, ProductVariant, ProductBarcode
 from app.models.purchasing import SupplierProduct
 from app.models.sales import Document, DocumentLine, Customer
 from app.core import security
@@ -349,4 +349,106 @@ def test_ai_chat_assistant_permissions(db_session: Session, setup_data):
     db_session.delete(test_user)
     db_session.delete(role)
     db_session.commit()
+
+
+def test_pricing_margin_barcode_resolution(db_session: Session, setup_data, auth_headers):
+    # Setup test variants with various barcode configurations
+    prod = setup_data["product"]
+
+    # 1. Variant with Unit Barcode (Priority 1)
+    v_unit = ProductVariant(
+        product_id=prod.id, sku="SKU-UNIT-BARCODE", standard_cost=Decimal("50.0"),
+        sales_price=Decimal("80.0"), barcode="FALLBACK-BARCODE", is_active=True
+    )
+    # 2. Variant with Multi-unit Barcode (Priority 2, conversion factor 12)
+    v_multi = ProductVariant(
+        product_id=prod.id, sku="SKU-MULTI-BARCODE", standard_cost=Decimal("50.0"),
+        sales_price=Decimal("80.0"), is_active=True
+    )
+    # 3. Variant with only variant.barcode (Priority 2 fallback)
+    v_variant_bc = ProductVariant(
+        product_id=prod.id, sku="SKU-DIRECT-BARCODE", standard_cost=Decimal("50.0"),
+        sales_price=Decimal("80.0"), barcode="DIRECT-BAR-777", is_active=True
+    )
+    # 4. Variant with neither barcode nor ProductBarcode (Priority 3 fallback to SKU)
+    v_no_bc = ProductVariant(
+        product_id=prod.id, sku="SKU-NO-BARCODE", standard_cost=Decimal("50.0"),
+        sales_price=Decimal("80.0"), is_active=True
+    )
+
+    db_session.add_all([v_unit, v_multi, v_variant_bc, v_no_bc])
+    db_session.commit()
+
+    # Add ProductBarcodes
+    # For v_unit: one with conv=12.0 and one with conv=1.0 -> unit should win over 12.0 and over variant.barcode
+    pb_unit_box = ProductBarcode(
+        product_variant_id=v_unit.id, barcode="PB-UNIT-BOX-12", code_type="BARCODE",
+        uom="CAJA", conversion_factor=Decimal("12.0")
+    )
+    pb_unit_item = ProductBarcode(
+        product_variant_id=v_unit.id, barcode="PB-UNIT-ITEM-01", code_type="BARCODE",
+        uom="PZA", conversion_factor=Decimal("1.0")
+    )
+    # For v_multi: only conv=12.0
+    pb_multi_box = ProductBarcode(
+        product_variant_id=v_multi.id, barcode="PB-MULTI-BOX-99", code_type="BARCODE",
+        uom="CAJA", conversion_factor=Decimal("12.0")
+    )
+
+    db_session.add_all([pb_unit_box, pb_unit_item, pb_multi_box])
+    db_session.commit()
+
+    try:
+        # Call API
+        resp = client.get("/api/v1/reports/pricing-margin", params={"limit": 500}, headers=auth_headers)
+        assert resp.status_code == 200
+        items_by_id = {item["id"]: item for item in resp.json()["data"]}
+
+        # Check v_unit: Priority 1 wins (unit barcode)
+        item_unit = items_by_id.get(v_unit.id)
+        assert item_unit is not None
+        assert item_unit["codigo"] == "PB-UNIT-ITEM-01"
+        assert item_unit["sku"] == "SKU-UNIT-BARCODE"
+        assert item_unit["barcode"] == "PB-UNIT-ITEM-01"
+
+        # Check v_multi: Priority 2 (non-unit ProductBarcode)
+        item_multi = items_by_id.get(v_multi.id)
+        assert item_multi is not None
+        assert item_multi["codigo"] == "PB-MULTI-BOX-99"
+        assert item_multi["sku"] == "SKU-MULTI-BARCODE"
+        assert item_multi["barcode"] == "PB-MULTI-BOX-99"
+
+        # Check v_variant_bc: Priority 2 (variant.barcode)
+        item_direct = items_by_id.get(v_variant_bc.id)
+        assert item_direct is not None
+        assert item_direct["codigo"] == "DIRECT-BAR-777"
+        assert item_direct["sku"] == "SKU-DIRECT-BARCODE"
+        assert item_direct["barcode"] == "DIRECT-BAR-777"
+
+        # Check v_no_bc: Priority 3 (fallback to sku)
+        item_nobc = items_by_id.get(v_no_bc.id)
+        assert item_nobc is not None
+        assert item_nobc["codigo"] == "SKU-NO-BARCODE"
+        assert item_nobc["sku"] == "SKU-NO-BARCODE"
+        assert item_nobc["barcode"] is None
+
+        # Check search by barcode works
+        search_resp = client.get("/api/v1/reports/pricing-margin", params={"search_term": "PB-UNIT-ITEM"}, headers=auth_headers)
+        assert search_resp.status_code == 200
+        found = [x for x in search_resp.json()["data"] if x["id"] == v_unit.id]
+        assert len(found) == 1
+    finally:
+        # Cleanup
+        db_session.query(ProductBarcode).filter(ProductBarcode.product_variant_id.in_([v_unit.id, v_multi.id, v_variant_bc.id, v_no_bc.id])).delete(synchronize_session=False)
+        db_session.query(ProductVariant).filter(ProductVariant.id.in_([v_unit.id, v_multi.id, v_variant_bc.id, v_no_bc.id])).delete(synchronize_session=False)
+        db_session.commit()
+
+
+def test_pricing_margin_pdf_export(db_session: Session, setup_data, auth_headers):
+    # Test generating PDF report
+    resp = client.get("/api/v1/reports/pricing-margin/pdf", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.headers.get("content-type") == "application/pdf"
+    assert len(resp.content) > 100
+    assert resp.content[:4] == b"%PDF"
 

@@ -159,7 +159,7 @@ export default function PricingMarginReportPage() {
         const ventas = Number(item.unidades_vendidas || 0);
 
         return {
-          'Código (SKU)': String(item.codigo || ''),
+          'Código / Barcode': String(item.codigo || ''),
           'Producto': String(item.producto || ''),
           'Costo sin IVA': Math.round(costSinIva * 100) / 100,
           'Costo con IVA': Math.round(costConIva * 100) / 100,
@@ -174,7 +174,7 @@ export default function PricingMarginReportPage() {
       
       // Auto-fit column widths
       worksheet['!cols'] = [
-        { wch: 16 }, // Código (SKU)
+        { wch: 18 }, // Código / Barcode
         { wch: 45 }, // Producto
         { wch: 15 }, // Costo sin IVA
         { wch: 15 }, // Costo con IVA
@@ -257,7 +257,7 @@ export default function PricingMarginReportPage() {
       }
 
       // Generate CSV content
-      const headers = ['Código (SKU)', 'Producto', 'Costo sin IVA', 'Costo con IVA', 'Margen %', 'Precio', 'PVP', 'Ventas (Últimos 30 días)'];
+      const headers = ['Código / Barcode', 'Producto', 'Costo sin IVA', 'Costo con IVA', 'Margen %', 'Precio', 'PVP', 'Ventas (Últimos 30 días)'];
       const rows = exportData.map((item: any) => [
         `"${item.codigo}"`,
         `"${item.producto.replace(/"/g, '""')}"`,
@@ -525,7 +525,7 @@ export default function PricingMarginReportPage() {
           >
             <Column
               field="codigo"
-              header="CÓDIGO (SKU)"
+              header="CÓDIGO / BARCODE"
               body={(r) => <span className="font-mono font-bold text-slate-700">{r.codigo}</span>}
               className="w-[12%]"
             ></Column>

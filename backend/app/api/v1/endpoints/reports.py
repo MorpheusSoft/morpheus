@@ -12,7 +12,7 @@ from fpdf import FPDF
 from pydantic import BaseModel
 
 from app.api import deps
-from app.models.inventory import StockMove, Product, ProductVariant, Warehouse, Location, Category, ProductFacilityPrice
+from app.models.inventory import StockMove, Product, ProductVariant, Warehouse, Location, Category, ProductFacilityPrice, ProductBarcode
 from app.models.core import User, Tribute, Supplier, Facility
 from app.models.purchasing import SupplierProduct, PurchaseOrder, PurchaseOrderLine
 from app.models.sales import Document, DocumentLine
@@ -489,7 +489,9 @@ def _build_pricing_margin_query(
         query = query.filter(
             or_(
                 Product.name.ilike(f"%{search_term}%"),
-                ProductVariant.sku.ilike(f"%{search_term}%")
+                ProductVariant.sku.ilike(f"%{search_term}%"),
+                ProductVariant.barcode.ilike(f"%{search_term}%"),
+                ProductVariant.barcodes.any(ProductBarcode.barcode.ilike(f"%{search_term}%"))
             )
         )
 
@@ -565,7 +567,7 @@ class PricingMarginPDF(FPDF):
         self.set_font('Helvetica', 'B', 7.5)
         
         cols = [
-            ('CÓDIGO (SKU)', 32, 'L'),
+            ('CÓDIGO / BARCODE', 32, 'L'),
             ('PRODUCTO', 92, 'L'),
             ('COSTO S/IVA', 23, 'R'),
             ('COSTO C/IVA', 23, 'R'),
@@ -662,6 +664,72 @@ class PricingMarginPDF(FPDF):
         self.set_y(ky + card_h + 4)
 
 
+def resolve_variant_barcodes_batch(db: Session, variants: List[ProductVariant]) -> dict:
+    """
+    Prefetches ProductBarcode records in batch for all variant IDs to prevent N+1 queries.
+    Resolves barcode according to priority:
+      * Priority 1: Unit barcode from ProductBarcode (code_type == 'BARCODE' and conversion_factor == 1.0).
+      * Priority 2: Any ProductBarcode with code_type == 'BARCODE' (or variant.barcode).
+      * Priority 3 (Fallback): Internal Neo code / SKU (variant.sku or fallback).
+    Returns dict mapping variant_id to:
+      {
+        "codigo": resolved_code,
+        "sku": variant.sku,
+        "barcode": resolved_barcode
+      }
+    """
+    if not variants:
+        return {}
+
+    variant_ids = list({v.id for v in variants if v.id is not None})
+    barcodes_by_variant = {}
+    if variant_ids:
+        chunk_size = 1000
+        for i in range(0, len(variant_ids), chunk_size):
+            chunk = variant_ids[i:i + chunk_size]
+            records = db.query(ProductBarcode).filter(
+                ProductBarcode.product_variant_id.in_(chunk)
+            ).all()
+            for r in records:
+                barcodes_by_variant.setdefault(r.product_variant_id, []).append(r)
+
+    resolved_map = {}
+    for v in variants:
+        b_list = barcodes_by_variant.get(v.id, [])
+
+        unit_bc = None
+        for b in b_list:
+            code_type = (b.code_type or 'BARCODE').strip().upper()
+            conv = float(b.conversion_factor or 0) if b.conversion_factor is not None else 0.0
+            bc_str = str(b.barcode).strip() if b.barcode else ''
+            if code_type == 'BARCODE' and conv == 1.0 and bc_str:
+                unit_bc = bc_str
+                break
+
+        any_bc = None
+        if not unit_bc:
+            for b in b_list:
+                code_type = (b.code_type or 'BARCODE').strip().upper()
+                bc_str = str(b.barcode).strip() if b.barcode else ''
+                if code_type == 'BARCODE' and bc_str:
+                    any_bc = bc_str
+                    break
+
+        variant_bc = str(v.barcode).strip() if v.barcode else ''
+
+        best_barcode = unit_bc or any_bc or (variant_bc if variant_bc else None)
+        v_sku = str(v.sku).strip() if v.sku else None
+        resolved_code = best_barcode or v_sku or f"VR-{v.id}"
+
+        resolved_map[v.id] = {
+            "codigo": resolved_code,
+            "sku": v.sku,
+            "barcode": best_barcode
+        }
+
+    return resolved_map
+
+
 @router.get("/pricing-margin")
 def get_pricing_margin_report(
     db: Session = Depends(deps.get_db),
@@ -699,6 +767,9 @@ def get_pricing_margin_report(
     total = query.count()
     results = query.offset(skip).limit(limit).all()
 
+    variants = [variant for variant, _, _, _ in results]
+    barcodes_map = resolve_variant_barcodes_batch(db, variants)
+
     data = []
     for variant, product, tribute, qty_sold in results:
         if cost_type == "AVERAGE":
@@ -715,9 +786,17 @@ def get_pricing_margin_report(
         precio_venta = float(variant.sales_price or 0)
         margin = ((precio_venta - cost_sin_iva) / precio_venta * 100.0) if precio_venta > 0 else 0.0
 
+        bc_info = barcodes_map.get(variant.id, {
+            "codigo": variant.sku or f"VR-{variant.id}",
+            "sku": variant.sku,
+            "barcode": variant.barcode
+        })
+
         data.append({
             "id": variant.id,
-            "codigo": variant.sku,
+            "codigo": bc_info["codigo"],
+            "sku": bc_info["sku"],
+            "barcode": bc_info["barcode"],
             "producto": product.name,
             "costo_sin_iva": cost_sin_iva,
             "costo_con_iva": cost_con_iva,
@@ -762,6 +841,9 @@ def get_pricing_margin_pdf(
     query = query.order_by(ProductVariant.id.desc())
     results = query.limit(limit).all()
 
+    variants = [variant for variant, _, _, _ in results]
+    barcodes_map = resolve_variant_barcodes_batch(db, variants)
+
     cost_labels = {
         "STANDARD": "Costo Estándar",
         "AVERAGE": "Costo Promedio",
@@ -794,8 +876,16 @@ def get_pricing_margin_pdf(
         total_margin += margin
         total_sold += qty_num
 
+        bc_info = barcodes_map.get(variant.id, {
+            "codigo": variant.sku or f"VR-{variant.id}",
+            "sku": variant.sku,
+            "barcode": variant.barcode
+        })
+        resolved_code = bc_info["codigo"]
+
         rows_data.append({
-            "sku": variant.sku or f"VR-{variant.id}",
+            "sku": resolved_code,
+            "codigo": resolved_code,
             "producto": product.name or "Sin nombre",
             "costo_sin_iva": cost_sin_iva,
             "costo_con_iva": cost_con_iva,
