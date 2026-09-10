@@ -486,14 +486,16 @@ def _build_pricing_margin_query(
 
     # 6. Fuzzy search term
     if search_term:
-        query = query.filter(
-            or_(
-                Product.name.ilike(f"%{search_term}%"),
-                ProductVariant.sku.ilike(f"%{search_term}%"),
-                ProductVariant.barcode.ilike(f"%{search_term}%"),
-                ProductVariant.barcodes.any(ProductBarcode.barcode.ilike(f"%{search_term}%"))
+        clean_search = search_term.strip()
+        if clean_search:
+            query = query.filter(
+                or_(
+                    Product.name.ilike(f"%{clean_search}%"),
+                    ProductVariant.sku.ilike(f"%{clean_search}%"),
+                    ProductVariant.barcode.ilike(f"%{clean_search}%"),
+                    ProductVariant.barcodes.any(ProductBarcode.barcode.ilike(f"%{clean_search}%"))
+                )
             )
-        )
 
     # Ensure distinct records if joined with supplier products
     if supplier_ids:
@@ -689,7 +691,7 @@ def resolve_variant_barcodes_batch(db: Session, variants: List[ProductVariant]) 
             chunk = variant_ids[i:i + chunk_size]
             records = db.query(ProductBarcode).filter(
                 ProductBarcode.product_variant_id.in_(chunk)
-            ).all()
+            ).order_by(ProductBarcode.id.asc()).all()
             for r in records:
                 barcodes_by_variant.setdefault(r.product_variant_id, []).append(r)
 
@@ -700,9 +702,15 @@ def resolve_variant_barcodes_batch(db: Session, variants: List[ProductVariant]) 
         unit_bc = None
         for b in b_list:
             code_type = (b.code_type or 'BARCODE').strip().upper()
-            conv = float(b.conversion_factor or 0) if b.conversion_factor is not None else 0.0
+            if b.conversion_factor is not None:
+                try:
+                    conv = float(b.conversion_factor)
+                except (ValueError, TypeError):
+                    conv = 0.0
+            else:
+                conv = 1.0
             bc_str = str(b.barcode).strip() if b.barcode else ''
-            if code_type == 'BARCODE' and conv == 1.0 and bc_str:
+            if code_type == 'BARCODE' and abs(conv - 1.0) < 1e-4 and bc_str:
                 unit_bc = bc_str
                 break
 
@@ -920,7 +928,7 @@ def get_pricing_margin_pdf(
     brands_desc = ", ".join(brands[:3]) if brands else "Todas"
     models_desc = ", ".join(models[:3]) if models else "Todos"
     attr_desc = f"{attribute_key}: {attribute_value}" if (attribute_key and attribute_value) else "Ninguno"
-    search_desc = search_term if search_term else "Ninguna"
+    search_desc = (search_term.strip() if search_term and search_term.strip() else "Ninguna")
 
     filter_info = {
         "cost_label": cost_label,
@@ -959,10 +967,10 @@ def get_pricing_margin_pdf(
             pdf.set_draw_color(226, 232, 240)
             pdf.set_font("Helvetica", "", 7.5)
 
-            sku_str = fit_pdf_text(pdf, r["sku"], 30)
+            code_str = fit_pdf_text(pdf, r.get("codigo") or r.get("sku"), 30)
             prod_str = fit_pdf_text(pdf, r["producto"], 90)
 
-            pdf.cell(32, 5.5, sku_str, border='B', fill=True)
+            pdf.cell(32, 5.5, code_str, border='B', fill=True)
             pdf.cell(92, 5.5, prod_str, border='B', fill=True)
             pdf.cell(23, 5.5, f"${r['costo_sin_iva']:,.2f}", border='B', align='R', fill=True)
             pdf.cell(23, 5.5, f"${r['costo_con_iva']:,.2f}", border='B', align='R', fill=True)

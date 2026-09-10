@@ -259,8 +259,8 @@ export default function PricingMarginReportPage() {
       // Generate CSV content
       const headers = ['Código / Barcode', 'Producto', 'Costo sin IVA', 'Costo con IVA', 'Margen %', 'Precio', 'PVP', 'Ventas (Últimos 30 días)'];
       const rows = exportData.map((item: any) => [
-        `"${item.codigo}"`,
-        `"${item.producto.replace(/"/g, '""')}"`,
+        `"${String(item.codigo || '').replace(/"/g, '""')}"`,
+        `"${String(item.producto || '').replace(/"/g, '""')}"`,
         Number(item.costo_sin_iva || 0).toFixed(2),
         Number(item.costo_con_iva || 0).toFixed(2),
         Number(item.margen || 0).toFixed(2),
@@ -481,7 +481,7 @@ export default function PricingMarginReportPage() {
             <InputText
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Ej. Lata, Caja..."
+              placeholder="Ej. Código, Barcode, Nombre..."
               className="w-full text-sm"
             />
           </div>

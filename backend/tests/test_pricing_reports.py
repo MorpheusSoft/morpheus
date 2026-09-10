@@ -2,6 +2,8 @@ import sys
 sys.path.insert(0, '/home/lzambrano/Desarrollo/Morpheus/backend')
 
 import pytest
+import io
+import pypdf
 from decimal import Decimal
 from datetime import datetime
 from fastapi.testclient import TestClient
@@ -375,12 +377,16 @@ def test_pricing_margin_barcode_resolution(db_session: Session, setup_data, auth
         product_id=prod.id, sku="SKU-NO-BARCODE", standard_cost=Decimal("50.0"),
         sales_price=Decimal("80.0"), is_active=True
     )
+    # 5. Variant with ProductBarcode where conversion_factor is None (should default to 1.0 -> Priority 1)
+    v_none_conv = ProductVariant(
+        product_id=prod.id, sku="SKU-NONE-CONV", standard_cost=Decimal("50.0"),
+        sales_price=Decimal("80.0"), is_active=True
+    )
 
-    db_session.add_all([v_unit, v_multi, v_variant_bc, v_no_bc])
+    db_session.add_all([v_unit, v_multi, v_variant_bc, v_no_bc, v_none_conv])
     db_session.commit()
 
     # Add ProductBarcodes
-    # For v_unit: one with conv=12.0 and one with conv=1.0 -> unit should win over 12.0 and over variant.barcode
     pb_unit_box = ProductBarcode(
         product_variant_id=v_unit.id, barcode="PB-UNIT-BOX-12", code_type="BARCODE",
         uom="CAJA", conversion_factor=Decimal("12.0")
@@ -389,14 +395,19 @@ def test_pricing_margin_barcode_resolution(db_session: Session, setup_data, auth
         product_variant_id=v_unit.id, barcode="PB-UNIT-ITEM-01", code_type="BARCODE",
         uom="PZA", conversion_factor=Decimal("1.0")
     )
-    # For v_multi: only conv=12.0
     pb_multi_box = ProductBarcode(
         product_variant_id=v_multi.id, barcode="PB-MULTI-BOX-99", code_type="BARCODE",
         uom="CAJA", conversion_factor=Decimal("12.0")
     )
+    pb_none_conv = ProductBarcode(
+        product_variant_id=v_none_conv.id, barcode="PB-NONE-CONV-01", code_type="BARCODE",
+        uom="PZA", conversion_factor=None
+    )
 
-    db_session.add_all([pb_unit_box, pb_unit_item, pb_multi_box])
+    db_session.add_all([pb_unit_box, pb_unit_item, pb_multi_box, pb_none_conv])
     db_session.commit()
+
+    all_test_ids = [v_unit.id, v_multi.id, v_variant_bc.id, v_no_bc.id, v_none_conv.id]
 
     try:
         # Call API
@@ -432,23 +443,73 @@ def test_pricing_margin_barcode_resolution(db_session: Session, setup_data, auth
         assert item_nobc["sku"] == "SKU-NO-BARCODE"
         assert item_nobc["barcode"] is None
 
+        # Check v_none_conv: Priority 1 (conversion_factor None defaults to 1.0 unit barcode)
+        item_none = items_by_id.get(v_none_conv.id)
+        assert item_none is not None
+        assert item_none["codigo"] == "PB-NONE-CONV-01"
+        assert item_none["sku"] == "SKU-NONE-CONV"
+        assert item_none["barcode"] == "PB-NONE-CONV-01"
+
         # Check search by barcode works
         search_resp = client.get("/api/v1/reports/pricing-margin", params={"search_term": "PB-UNIT-ITEM"}, headers=auth_headers)
         assert search_resp.status_code == 200
         found = [x for x in search_resp.json()["data"] if x["id"] == v_unit.id]
         assert len(found) == 1
+
+        # Check search with leading/trailing spaces and newline
+        search_spaces = client.get("/api/v1/reports/pricing-margin", params={"search_term": "  PB-UNIT-ITEM-01  \n"}, headers=auth_headers)
+        assert search_spaces.status_code == 200
+        found_spaces = [x for x in search_spaces.json()["data"] if x["id"] == v_unit.id]
+        assert len(found_spaces) == 1
+
+        # Check all-whitespace search doesn't wipe out results
+        search_empty = client.get("/api/v1/reports/pricing-margin", params={"search_term": "   "}, headers=auth_headers)
+        assert search_empty.status_code == 200
+        assert len(search_empty.json()["data"]) > 0
     finally:
         # Cleanup
-        db_session.query(ProductBarcode).filter(ProductBarcode.product_variant_id.in_([v_unit.id, v_multi.id, v_variant_bc.id, v_no_bc.id])).delete(synchronize_session=False)
-        db_session.query(ProductVariant).filter(ProductVariant.id.in_([v_unit.id, v_multi.id, v_variant_bc.id, v_no_bc.id])).delete(synchronize_session=False)
+        db_session.query(ProductBarcode).filter(ProductBarcode.product_variant_id.in_(all_test_ids)).delete(synchronize_session=False)
+        db_session.query(ProductVariant).filter(ProductVariant.id.in_(all_test_ids)).delete(synchronize_session=False)
         db_session.commit()
 
 
 def test_pricing_margin_pdf_export(db_session: Session, setup_data, auth_headers):
-    # Test generating PDF report
-    resp = client.get("/api/v1/reports/pricing-margin/pdf", headers=auth_headers)
-    assert resp.status_code == 200
-    assert resp.headers.get("content-type") == "application/pdf"
-    assert len(resp.content) > 100
-    assert resp.content[:4] == b"%PDF"
+    # Setup a specific test variant to verify it renders in the PDF
+    prod = setup_data["product"]
+    v_pdf = ProductVariant(
+        product_id=prod.id, sku="SKU-PDF-TEST-99", standard_cost=Decimal("30.0"),
+        sales_price=Decimal("60.0"), is_active=True
+    )
+    db_session.add(v_pdf)
+    db_session.commit()
+
+    pb_pdf = ProductBarcode(
+        product_variant_id=v_pdf.id, barcode="PB-PDF-VERIFY-123", code_type="BARCODE",
+        uom="PZA", conversion_factor=Decimal("1.0")
+    )
+    db_session.add(pb_pdf)
+    db_session.commit()
+
+    try:
+        # Test generating PDF report with search_term to isolate test variant
+        resp = client.get("/api/v1/reports/pricing-margin/pdf", params={"search_term": "PB-PDF-VERIFY"}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.headers.get("content-type") == "application/pdf"
+        assert len(resp.content) > 100
+        assert resp.content[:4] == b"%PDF"
+
+        # Verify PDF contents with pypdf
+        reader = pypdf.PdfReader(io.BytesIO(resp.content))
+        text = "".join(page.extract_text() for page in reader.pages)
+
+        # 1. Verify updated table header
+        assert "CÓDIGO / BARCODE" in text
+
+        # 2. Verify resolved unit barcode appears in the PDF body instead of SKU
+        assert "PB-PDF-VERIFY-123" in text
+        assert "SKU-PDF-TEST-99" not in text
+    finally:
+        db_session.query(ProductBarcode).filter(ProductBarcode.product_variant_id == v_pdf.id).delete(synchronize_session=False)
+        db_session.query(ProductVariant).filter(ProductVariant.id == v_pdf.id).delete(synchronize_session=False)
+        db_session.commit()
 
