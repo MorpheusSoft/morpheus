@@ -325,16 +325,35 @@ def get_advanced_kardex(
     def detect_product_uom(product_name: str, uom_base: str, sample_quantities: List[float]) -> tuple[str, bool]:
         uom_clean = (uom_base or "").strip().upper()
         name_upper = (product_name or "").upper()
-        has_fractional = any(abs(q - round(q)) > 1e-4 for q in sample_quantities if q is not None)
-        if uom_clean in ["KG", "KGS", "KILOGRAMO", "LT", "LTS", "LITRO", "LITROS", "GR", "GRAMO", "GRAMOS", "MT", "METRO"]:
-            display_uom = "KG" if "KG" in uom_clean else ("LT" if "LT" in uom_clean else uom_clean)
-            return display_uom, True
         import re
-        is_bulk = bool(re.search(r'\b(A GRANEL|AL PESO|POR PESO|PESADO|POR KILO|POR KG)\b', name_upper))
-        if has_fractional or is_bulk:
-            if "LT" in name_upper or "LITRO" in name_upper:
-                return "LT", True
+
+        # 1. Check for explicit discrete unit markers (UND, UNIDAD, PACK, CAJA, BTO, etc.)
+        is_explicit_unit = bool(re.search(r'\b\d*\s*(UND|UNID|UNIDAD|UNIDADES|PZA|PIEZA|PIEZAS|PACK|PQTE|PAQUETE|CAJA|BTO|BULTO)\b', name_upper))
+        has_bulk = bool(re.search(r'\b(A GRANEL|AL PESO|POR PESO|PESADO|POR KILO|POR KG)\b', name_upper))
+
+        if is_explicit_unit and not has_bulk:
+            return "UND", False
+
+        # 2. Check UOM base from DB if explicitly weight/volume
+        if uom_clean in ["KG", "KGS", "KILOGRAMO", "KILOGRAMOS"]:
             return "KG", True
+        if uom_clean in ["LT", "LTS", "LITRO", "LITROS"]:
+            return "LT", True
+        if uom_clean in ["MT", "METRO", "METROS"]:
+            return "MT", True
+
+        # 3. Check name for KG / LT indicators
+        has_kg = bool(re.search(r'\b\d*\.?\d*\s*(KG|KGS|KILO|KILOS)\b', name_upper))
+        has_lt = bool(re.search(r'\b\d*\.?\d*\s*(LT|LTS|LITRO|LITROS)\b', name_upper))
+        has_fractional = any(abs(q - round(q)) > 1e-4 for q in sample_quantities if q is not None)
+
+        if has_lt:
+            return "LT", True
+        if has_kg or has_bulk:
+            return "KG", True
+        if has_fractional:
+            return "KG", True
+
         return "UND", False
 
     results = []
