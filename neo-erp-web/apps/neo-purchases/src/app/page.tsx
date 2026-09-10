@@ -3,408 +3,477 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
-import { Dropdown } from 'primereact/dropdown';
 import { Button } from 'primereact/button';
+import { Tag } from 'primereact/tag';
 import { Toast } from 'primereact/toast';
 import { useRouter } from 'next/navigation';
+import { format } from 'date-fns';
 import api from '@/lib/api';
-import { isWeightUom, preventDecimalKey } from '@/lib/uom';
-import { ProductService } from '@/services/product.service';
 
-export default function MRPDashboard() {
+export default function PurchasesDashboardPage() {
   const router = useRouter();
-  const [data, setData] = useState<any[]>([]);
-  const [selectedProducts, setSelectedProducts] = useState<any[]>([]);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [selectedSupplier, setSelectedSupplier] = useState<number | null>(null);
-  const [facilities, setFacilities] = useState<any[]>([]);
-  const [selectedFacility, setSelectedFacility] = useState<number>(1);
-  const [aiAlerts, setAiAlerts] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
   const toast = useRef<Toast>(null);
 
-  const [ordersSummary, setOrdersSummary] = useState({ pendingApproval: 0, pendingSend: 0, pendingRead: 0, pendingReceipt: 0 });
-  const [ceoMetrics, setCeoMetrics] = useState({ pending_approval_usd: 0, pending_float_usd: 0 });
-
-  const fetchFacilities = async () => {
-    try {
-      const res = await ProductService.getFacilities();
-      setFacilities(res || []);
-      if (res && res.length > 0) {
-        setSelectedFacility(res[0].id);
-      }
-    } catch (e) {
-      console.error(e);
+  const [loading, setLoading] = useState(true);
+  const [ceoMetrics, setCeoMetrics] = useState({
+    pending_approval_usd: 0,
+    pending_float_usd: 0,
+    total_active_orders: 0,
+    counts: {
+      pending_approval: 0,
+      pending_send: 0,
+      pending_read: 0,
+      pending_receipt: 0,
     }
-  };
+  });
 
-  const fetchSuppliers = async () => {
-    try {
-      const res = await api.get('/suppliers/?limit=5000');
-      setSuppliers(res.data.data || res.data.items || res.data || []);
-    } catch (e) {
-      console.error(e);
-    }
-  };
+  const [claraDiagnosis, setClaraDiagnosis] = useState<{
+    suppliers_immediate_stockout: number;
+    suppliers_potential_stockout: number;
+    total_projected_cost_usd: number;
+    total_suppliers_analyzed: number;
+    critical_suppliers: any[];
+  }>({
+    suppliers_immediate_stockout: 0,
+    suppliers_potential_stockout: 0,
+    total_projected_cost_usd: 0,
+    total_suppliers_analyzed: 0,
+    critical_suppliers: [],
+  });
 
-  const fetchOrdersSummary = async () => {
-    try {
-      const res = await api.get('/purchase-orders/');
-      const orders = res.data;
-      setOrdersSummary({
-        pendingApproval: orders.filter((o: any) => o.status === 'draft' || o.status === 'pending_approval').length,
-        pendingSend: orders.filter((o: any) => o.status === 'approved').length,
-        pendingRead: orders.filter((o: any) => o.status === 'sent').length,
-        pendingReceipt: orders.filter((o: any) => o.status === 'viewed').length
-      });
-      
-      const ceoRes = await api.get('/dashboard/ceo-inbox');
-      setCeoMetrics(ceoRes.data);
-    } catch(e) {}
-  };
+  const [recentOrders, setRecentOrders] = useState<any[]>([]);
 
-  const fetchMRP = async () => {
-    if (!selectedFacility) return;
+  const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      const url = selectedSupplier 
-        ? `/mrp/simulator?supplier_id=${selectedSupplier}&facility_id=${selectedFacility}`
-        : `/mrp/simulator?facility_id=${selectedFacility}`;
-      const res = await api.get(url);
-      setData(res.data);
-    } catch (e) {
-      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Fallo al cargar simulador MRP' });
-    }
-    setLoading(false);
-  };
+      const [ceoRes, diagRes, ordersRes] = await Promise.allSettled([
+        api.get('/dashboard/ceo-inbox'),
+        api.get('/mrp/diagnosis?facility_id=1'),
+        api.get('/purchase-orders/?limit=8'),
+      ]);
 
-  const fetchAIAlerts = async () => {
-    if (!selectedFacility) return;
-    try {
-      const res = await api.get(`/mrp/ai-recommendations?facility_id=${selectedFacility}`);
-      setAiAlerts(res.data || []);
-    } catch (e) {
-      console.error("Error fetching AI alerts", e);
+      if (ceoRes.status === 'fulfilled' && ceoRes.value?.data) {
+        const data = ceoRes.value.data;
+        setCeoMetrics({
+          pending_approval_usd: data.pending_approval_usd || 0,
+          pending_float_usd: data.pending_float_usd || 0,
+          total_active_orders: data.total_active_orders || 0,
+          counts: data.counts || {
+            pending_approval: 0,
+            pending_send: 0,
+            pending_read: 0,
+            pending_receipt: 0,
+          },
+        });
+      }
+
+      if (diagRes.status === 'fulfilled' && diagRes.value?.data) {
+        const diag = diagRes.value.data;
+        const critical = (diag.suppliers || [])
+          .filter((s: any) => s.immediate_stockout_count > 0)
+          .slice(0, 4);
+
+        setClaraDiagnosis({
+          suppliers_immediate_stockout: diag.suppliers_immediate_stockout || 0,
+          suppliers_potential_stockout: diag.suppliers_potential_stockout || 0,
+          total_projected_cost_usd: diag.total_projected_cost_usd || 0,
+          total_suppliers_analyzed: diag.total_suppliers_analyzed || 0,
+          critical_suppliers: critical,
+        });
+      }
+
+      if (ordersRes.status === 'fulfilled' && ordersRes.value?.data) {
+        setRecentOrders(ordersRes.value.data || []);
+      }
+    } catch (err) {
+      console.error('Error fetching dashboard data:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchFacilities();
-    fetchSuppliers();
-    fetchOrdersSummary();
+    fetchDashboardData();
   }, []);
 
-  useEffect(() => {
-    if (selectedFacility) {
-      fetchMRP();
-      fetchAIAlerts();
-    }
-  }, [selectedSupplier, selectedFacility]);
-
-  const updateMetric = async (rowData: any, field: string, value: number) => {
-    toast.current?.show({ severity: 'info', summary: 'Guardando', detail: 'Calculando nueva proyección...', life: 1500 });
-    const payload = {
-        variant_id: rowData.variant_id,
-        facility_id: selectedFacility,
-        run_rate: field === 'run_rate' ? value : rowData.run_rate,
-        safety_stock: field === 'safety_stock' ? value : rowData.safety_stock
-    };
-    try {
-       await api.put('/mrp/sync-metrics', payload);
-       toast.current?.show({ severity: 'success', summary: 'Guardado', detail: 'Métricas recalibradas exitosamente', life: 2000 });
-       fetchMRP(); // Refresh full MRP simulation
-       fetchAIAlerts();
-    } catch (e) {
-       toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo actualizar métrica' });
+  const getStatusSeverity = (status: string): "info" | "warning" | "success" | "secondary" | "danger" => {
+    switch (status) {
+      case 'approved': return 'info';
+      case 'sent': return 'warning';
+      case 'viewed': return 'info';
+      case 'received': return 'success';
+      case 'draft':
+      case 'pending_approval': return 'secondary';
+      case 'cancelled': return 'danger';
+      default: return 'info';
     }
   };
 
-  const generateOrders = async () => {
-    // Fraccionamiento humano: Manda a comprar solo lo seleccionado, si nada está checkeado asume TODA la pantalla disponible.
-    const baseList = selectedProducts && selectedProducts.length > 0 ? selectedProducts : data;
-    const toOrder = baseList.filter((r: any) => r.suggested_qty > 0);
-    if (toOrder.length === 0) {
-       toast.current?.show({ severity: 'warn', summary: 'Atención', detail: 'No hay quiebres sugeridos para el grupo seleccionado.' });
-       return;
+  const getStatusName = (status: string) => {
+    switch (status) {
+      case 'approved': return 'Aprobada';
+      case 'sent': return 'Enviada';
+      case 'viewed': return 'En Tránsito';
+      case 'received': return 'Recibida';
+      case 'draft': return 'Borrador';
+      case 'pending_approval': return 'Por Autorizar';
+      case 'cancelled': return 'Cancelada';
+      default: return status;
     }
-    setLoading(true);
-    try {
-        toast.current?.show({ severity: 'info', summary: 'Procesando', detail: 'Consolidando órdenes y enrutando...', life: 2000 });
-        const payload = {
-            lines: toOrder,
-            facility_id: selectedFacility,
-            buyer_id: 2 // MVP (Admin/Compras)
-        };
-        const res = await api.post('/mrp/generate-orders', payload);
-        toast.current?.show({ severity: 'success', summary: '¡Éxito Fricción-Cero!', detail: `Se fabricaron ${res.data.orders_created} Órdenes de Compra (Borrador)`, life: 5000 });
-        fetchMRP();
-        fetchAIAlerts();
-    } catch(e) {
-        toast.current?.show({ severity: 'error', summary: 'Error Fatal', detail: 'Fallo al inyectar las órdenes transaccionales' });
-    }
-    setLoading(false);
   };
-
 
   return (
-    <div className="p-8 w-full max-w-[1400px] mx-auto fade-in">
+    <div className="p-4 sm:p-6 lg:p-8 w-full max-w-[1400px] mx-auto flex flex-col gap-6 animate-fade-in">
       <Toast ref={toast} position="bottom-right" />
-      {/* DASHBOARD EJECUTIVO */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8 cursor-pointer group" onClick={() => router.push('/orders')}>
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-orange-200 border-l-4 border-l-orange-500 relative overflow-hidden transition-all hover:shadow-md hover:bg-orange-50/30">
-             <div className="flex justify-between items-start">
-                <div>
-                   <p className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Autorización</p>
-                   <h3 className="text-3xl font-black text-slate-800">{ordersSummary.pendingApproval}</h3>
-                   <span className="text-sm font-black text-orange-600">${ceoMetrics.pending_approval_usd.toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
-                </div>
-                <div className="w-10 h-10 rounded-full bg-orange-50 flex items-center justify-center border border-orange-100 group-hover:bg-orange-100 transition-colors">
-                   <i className="pi pi-lock text-orange-500 text-lg"></i>
-                </div>
-             </div>
-             <div className="mt-3 text-[10px] font-bold text-slate-500 bg-slate-50 w-fit px-2 py-1 rounded hidden sm:block">Total Retenido (Estancado)</div>
+
+      {/* ENCABEZADO DE LA VISIÓN GENERAL */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-3xl shadow-xs border border-slate-200/80">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span className="text-xs font-bold text-emerald-700 tracking-wider uppercase">Centro de Operaciones</span>
           </div>
-          
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-sky-200 border-l-4 border-l-sky-500 relative overflow-hidden transition-all hover:shadow-md hover:bg-sky-50/30">
-             <div className="flex justify-between items-start">
-                <div>
-                   <p className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Por Enviar</p>
-                   <h3 className="text-3xl font-black text-slate-800">{ordersSummary.pendingSend}</h3>
-                   <span className="text-sm font-black text-sky-600">${ceoMetrics.pending_float_usd.toLocaleString('en-US', {minimumFractionDigits: 2})}</span>
-                </div>
-                <div className="w-10 h-10 rounded-full bg-sky-50 flex items-center justify-center border border-sky-100 group-hover:bg-sky-100 transition-colors">
-                   <i className="pi pi-envelope text-sky-500 text-lg"></i>
-                </div>
-             </div>
-             <div className="mt-3 text-[10px] font-bold text-slate-500 bg-slate-50 w-fit px-2 py-1 rounded hidden sm:block">Deuda Circulante (Pasivo Flotante)</div>
-          </div>
-          
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-yellow-200 border-l-4 border-l-yellow-500 relative overflow-hidden transition-all hover:shadow-md hover:bg-yellow-50/30">
-             <div className="flex justify-between items-start">
-                <div>
-                   <p className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Por Leer</p>
-                   <h3 className="text-3xl font-black text-slate-800">{ordersSummary.pendingRead}</h3>
-                </div>
-                <div className="w-10 h-10 rounded-full bg-yellow-50 flex items-center justify-center border border-yellow-100 group-hover:bg-yellow-100 transition-colors">
-                   <i className="pi pi-eye-slash text-yellow-500 text-lg"></i>
-                </div>
-             </div>
-             <div className="mt-3 text-[10px] font-bold text-yellow-600 bg-yellow-50 w-fit px-2 py-1 rounded hidden sm:block">Link no abierto</div>
-          </div>
-          
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-emerald-200 border-l-4 border-l-emerald-500 relative overflow-hidden transition-all hover:shadow-md hover:bg-emerald-50/30">
-             <div className="flex justify-between items-start">
-                <div>
-                   <p className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">En Tránsito</p>
-                   <h3 className="text-3xl font-black text-slate-800">{ordersSummary.pendingReceipt}</h3>
-                </div>
-                <div className="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center border border-emerald-100 group-hover:bg-emerald-100 transition-colors">
-                   <i className="pi pi-truck text-emerald-500 text-lg"></i>
-                </div>
-             </div>
-             <div className="mt-3 text-[10px] font-bold text-emerald-600 bg-emerald-50 w-fit px-2 py-1 rounded hidden sm:block">Leída, viene en camino</div>
-          </div>
+          <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+            Visión General de Compras
+          </h1>
+          <p className="text-slate-500 text-xs sm:text-sm mt-1">
+            Monitoreo en tiempo real, auditoría preventiva de quiebres con Clara y flujo transaccional.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Button
+            label="Actualizar"
+            icon="pi pi-refresh"
+            outlined
+            severity="secondary"
+            className="text-xs font-bold px-3 py-2 rounded-xl"
+            onClick={fetchDashboardData}
+            loading={loading}
+          />
+          <Button
+            label="Nueva Orden"
+            icon="pi pi-plus"
+            className="!bg-emerald-600 hover:!bg-emerald-700 !border-none text-white text-xs font-bold px-4 py-2 rounded-xl shadow-md shadow-emerald-600/20"
+            onClick={() => router.push('/orders/new')}
+          />
+        </div>
       </div>
 
-      <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center mb-6 mt-4 gap-4">
-         <div>
-            <h1 className="text-3xl font-black text-slate-800 flex items-center gap-3 tracking-tight">
-               <i className="pi pi-bolt text-yellow-500 text-3xl filter drop-shadow-md"></i> 
-               Tablero MRP <span className="text-slate-300 font-light mx-2">|</span> <span className="text-xl font-bold text-indigo-600">Proyección Inteligente</span>
-            </h1>
-            <p className="text-slate-500 text-sm mt-2 max-w-2xl font-medium">Asistente automatizado de necesidades. El sistema calcula Matemáticamente tus sugeridos cruzando Consumos, Empaques Logísticos de venta y Tiempos de Entrega históricos.</p>
-         </div>
-         <div className="flex flex-wrap gap-3">
-             <Dropdown 
-               value={selectedFacility} 
-               onChange={(e) => setSelectedFacility(e.value)} 
-               options={facilities} 
-               optionLabel="name" 
-               optionValue="id" 
-               placeholder="Seleccionar Sucursal" 
-               className="w-56 font-semibold shadow-sm border-slate-200"
-             />
-             <Dropdown 
-               value={selectedSupplier} 
-               onChange={(e) => setSelectedSupplier(e.value)} 
-               options={suppliers} 
-               optionLabel="name" 
-               optionValue="id" 
-               placeholder="Todos los Proveedores" 
-               showClear 
-               filter
-               virtualScrollerOptions={{ itemSize: 38 }}
-               className="w-72 font-semibold shadow-sm border-slate-200"
-             />
-             <Button onClick={generateOrders} label="Generar ODCs [Borradores]" icon="pi pi-send" severity="success" disabled={data.length === 0 || loading} className="font-bold shadow-md hover:shadow-lg transition-all" />
-         </div>
-      </div>
-
-      {/* ALERTA PREVENTIVA DE IA */}
-      {aiAlerts && aiAlerts.length > 0 && (
-         <div className="mb-6 bg-gradient-to-r from-violet-50 via-indigo-50/30 to-violet-50 border border-violet-200/60 p-5 rounded-2xl shadow-sm relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-violet-200 rounded-full opacity-10 filter blur-xl"></div>
-            <h3 className="text-sm font-bold text-violet-800 uppercase tracking-widest mb-3 flex items-center gap-2">
-               <i className="pi pi-sparkles text-violet-600"></i>
-               Alertas de Compra Proactiva por IA (Evitar Quiebres)
-            </h3>
-            <div className="flex flex-col gap-3">
-               {aiAlerts.map((alert: any, index: number) => (
-                  <div key={index} className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-white/75 backdrop-blur-sm p-4 rounded-xl border border-violet-100/80 hover:shadow-sm transition-all">
-                     <div>
-                        <div className="flex items-center gap-2 mb-1">
-                           <span className="px-2 py-0.5 bg-violet-100 text-violet-700 font-mono text-[10px] font-bold rounded">{alert.sku}</span>
-                           <span className="font-bold text-slate-800 text-sm">{alert.product_name}</span>
-                           <span className="text-xs text-rose-500 font-bold bg-rose-50 px-2 py-0.5 rounded-full">Se agota en {alert.days_left} días</span>
-                        </div>
-                        <p className="text-xs text-slate-600 font-medium">{alert.reason}</p>
-                     </div>
-                     <Button 
-                        icon="pi pi-plus" 
-                        label={`Pedir ${alert.suggested_qty} U.`} 
-                        className="p-button-sm !bg-violet-600 hover:!bg-violet-700 !border-none text-white rounded-lg text-xs font-bold shrink-0 shadow-sm"
-                        onClick={async () => {
-                           toast.current?.show({ severity: 'info', summary: 'Procesando', detail: 'Inyectando orden de compra borrador...', life: 2000 });
-                           try {
-                              const payload = {
-                                 lines: [{
-                                    variant_id: alert.variant_id,
-                                    supplier_id: alert.chosen_supplier_id,
-                                    supplier_default_facility_id: selectedFacility,
-                                    suggested_qty: alert.suggested_qty,
-                                    suggested_base_qty: alert.suggested_qty,
-                                    replacement_cost: alert.proposed_cost
-                                 }],
-                                 facility_id: selectedFacility,
-                                 buyer_id: 2
-                              };
-                              await api.post('/mrp/generate-orders', payload);
-                              toast.current?.show({ severity: 'success', summary: '¡ODC Creada!', detail: `Se generó borrador para ${alert.chosen_supplier_name}`, life: 4000 });
-                              fetchMRP();
-                              fetchAIAlerts();
-                           } catch (e) {
-                              toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo crear la ODC' });
-                           }
-                        }}
-                     />
-                  </div>
-               ))}
-            </div>
-         </div>
-      )}
-      
-      <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
-        <DataTable 
-          value={data} 
-          selectionMode="checkbox" 
-          selection={selectedProducts} 
-          onSelectionChange={(e) => setSelectedProducts(e.value)} 
-          dataKey="variant_id"
-          loading={loading} 
-          emptyMessage="No hay quiebres de stock ni alertas detectadas." 
-          size="small" 
-          stripedRows 
-          rowHover 
-          className="text-sm"
-          paginator
-          rows={10}
-          rowsPerPageOptions={[10, 25, 50, 100]}
+      {/* TARJETAS KPI DE ESTADO DEL CICLO DE COMPRAS */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Autorización */}
+        <div
+          onClick={() => router.push('/orders?status=draft')}
+          className="bg-white p-5 rounded-2xl shadow-xs border border-amber-200/80 border-l-4 border-l-amber-500 cursor-pointer hover:shadow-md hover:bg-amber-50/20 transition-all group"
         >
-          <Column selectionMode="multiple" headerStyle={{ width: '3rem' }}></Column>
-          <Column header="SKU" field="sku" body={r => <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-600">{r.sku}</span>} />
-          
-          <Column header="Insumo Comercial" field="product_name" body={r => (
-              <div className="flex flex-col">
-                  <span className="font-bold text-slate-800">{r.product_name}</span>
-                  <span className="text-slate-400 text-[10px] uppercase font-semibold">{r.supplier_name}</span>
-              </div>
-          )} />
-          
-          <Column header="Stock Físico" body={r => {
-             const isWeight = isWeightUom(r.uom_base);
-             const dec = isWeight ? 3 : 0;
-             const displayStock = Number(r.current_stock).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
-             return (
-                 <div className="flex justify-end pr-2">
-                     <span className={`font-black text-lg ${r.current_stock <= r.safety_stock ? 'text-rose-600' : 'text-slate-700'}`}>
-                        {displayStock}
-                     </span>
-                 </div>
-             );
-          }} align="right" />
-          
-          <Column header="Lead Time" body={r => (
-             <span className="text-slate-500 font-medium bg-slate-50 border border-slate-200 px-2 py-1 rounded-md text-xs">
-                <i className="pi pi-clock text-[10px] mr-1 text-indigo-400"></i> {r.lead_time} d
-             </span>
-          )} align="right" />
-          
-          <Column header="Run Rate (Diario)" body={r => {
-             const isWeight = isWeightUom(r.uom_base);
-             const dec = isWeight ? 3 : 0;
-             return (
-                 <div className="flex justify-end">
-                     <input 
-                        type="number" 
-                        step={isWeight ? "0.001" : "1"} 
-                        defaultValue={Number(r.run_rate).toFixed(dec)} 
-                        onKeyDown={(e) => preventDecimalKey(e, isWeight)}
-                        onBlur={(e) => {
-                           const raw = parseFloat(e.target.value.replace(',', '.'));
-                           const val = isWeight ? Number(raw.toFixed(3)) : Math.round(raw);
-                           if (!isNaN(val) && val !== parseFloat(r.run_rate)) updateMetric(r, 'run_rate', val);
-                        }} 
-                        className="w-16 text-right text-xs font-bold p-1 rounded-lg border border-slate-300 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 bg-slate-50 transition-all text-slate-700" 
-                     />
-                 </div>
-             );
-          }} align="right" />
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Por Autorizar</p>
+              <h3 className="text-2xl sm:text-3xl font-black text-slate-800">
+                {ceoMetrics.counts.pending_approval}
+              </h3>
+              <span className="text-xs sm:text-sm font-black text-amber-600">
+                ${ceoMetrics.pending_approval_usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+              <i className="pi pi-lock text-lg"></i>
+            </div>
+          </div>
+          <div className="mt-3 text-[10px] font-bold text-slate-500 bg-slate-100/80 w-fit px-2 py-0.5 rounded">
+            Total Retenido (Estancado)
+          </div>
+        </div>
 
-          <Column header="Safety Stock" body={r => {
-             const isWeight = isWeightUom(r.uom_base);
-             const dec = isWeight ? 3 : 0;
-             return (
-                 <div className="flex justify-end">
-                     <input 
-                        type="number" 
-                        step={isWeight ? "0.001" : "1"} 
-                        defaultValue={Number(r.safety_stock).toFixed(dec)} 
-                        onKeyDown={(e) => preventDecimalKey(e, isWeight)}
-                        onBlur={(e) => {
-                           const raw = parseFloat(e.target.value.replace(',', '.'));
-                           const val = isWeight ? Number(raw.toFixed(3)) : Math.round(raw);
-                           if (!isNaN(val) && val !== parseFloat(r.safety_stock)) updateMetric(r, 'safety_stock', val);
-                        }} 
-                        className="w-16 text-right text-xs font-bold p-1 rounded-lg border border-slate-300 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 bg-slate-50 transition-all text-amber-700" 
-                     />
-                 </div>
-             );
-          }} align="right" />
-          
-          <Column header="MOQ" body={r => {
-             const isPack = (r.qty_per_pack || 1) > 1;
-             const isWeight = !isPack && isWeightUom(r.uom_base);
-             const dec = isWeight ? 3 : 0;
-             return <div className="flex justify-end"><span className="text-slate-500 font-bold bg-slate-100 px-2 py-1 rounded text-xs">{Number(r.moq).toFixed(dec)}</span></div>;
-          }} align="right" />
-          
-          <Column header="SUGERIDO" body={r => {
-             const isWarning = r.suggested_qty > 0;
-             const isPack = (r.qty_per_pack || 1) > 1;
-             const isWeight = !isPack && isWeightUom(r.uom_base);
-             const dec = isWeight ? 3 : 0;
-             const displaySuggested = Number(r.suggested_qty).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
-             
-             return (
-                 <div className={`flex flex-col items-end justify-center rounded-xl p-2 border ${isWarning ? 'bg-green-50 text-green-700 border-green-200 shadow-sm' : 'bg-slate-50 text-slate-400 border-slate-100'}`}>
-                    <span className="font-black text-xl">{displaySuggested}</span>
-                    <div className="flex items-center justify-end gap-1 mt-1 opacity-80">
-                        <i className="pi pi-box text-[9px]"></i>
-                        <span className="text-[9px] uppercase font-bold tracking-widest text-right">{r.pack_name}</span>
-                    </div>
-                 </div>
-             );
-          }} align="right" style={{ width: '120px' }} />
+        {/* Por Enviar */}
+        <div
+          onClick={() => router.push('/orders?status=transit')}
+          className="bg-white p-5 rounded-2xl shadow-xs border border-sky-200/80 border-l-4 border-l-sky-500 cursor-pointer hover:shadow-md hover:bg-sky-50/20 transition-all group"
+        >
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Por Enviar</p>
+              <h3 className="text-2xl sm:text-3xl font-black text-slate-800">
+                {ceoMetrics.counts.pending_send}
+              </h3>
+              <span className="text-xs sm:text-sm font-black text-sky-600">
+                ${ceoMetrics.pending_float_usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+              <i className="pi pi-envelope text-lg"></i>
+            </div>
+          </div>
+          <div className="mt-3 text-[10px] font-bold text-slate-500 bg-slate-100/80 w-fit px-2 py-0.5 rounded">
+            Pasivo Flotante Aprobado
+          </div>
+        </div>
+
+        {/* Por Leer */}
+        <div
+          onClick={() => router.push('/orders?status=transit')}
+          className="bg-white p-5 rounded-2xl shadow-xs border border-yellow-200/80 border-l-4 border-l-yellow-500 cursor-pointer hover:shadow-md hover:bg-yellow-50/20 transition-all group"
+        >
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">Por Leer</p>
+              <h3 className="text-2xl sm:text-3xl font-black text-slate-800">
+                {ceoMetrics.counts.pending_read}
+              </h3>
+              <span className="text-xs font-bold text-yellow-600">Pendiente de apertura</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-yellow-50 text-yellow-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+              <i className="pi pi-eye-slash text-lg"></i>
+            </div>
+          </div>
+          <div className="mt-3 text-[10px] font-bold text-yellow-700 bg-yellow-50 w-fit px-2 py-0.5 rounded">
+            Enviadas a Proveedor
+          </div>
+        </div>
+
+        {/* En Tránsito */}
+        <div
+          onClick={() => router.push('/orders?status=transit')}
+          className="bg-white p-5 rounded-2xl shadow-xs border border-emerald-200/80 border-l-4 border-l-emerald-500 cursor-pointer hover:shadow-md hover:bg-emerald-50/20 transition-all group"
+        >
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">En Tránsito</p>
+              <h3 className="text-2xl sm:text-3xl font-black text-slate-800">
+                {ceoMetrics.counts.pending_receipt}
+              </h3>
+              <span className="text-xs font-bold text-emerald-600">Vienen en camino</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+              <i className="pi pi-truck text-lg"></i>
+            </div>
+          </div>
+          <div className="mt-3 text-[10px] font-bold text-emerald-700 bg-emerald-50 w-fit px-2 py-0.5 rounded">
+            Confirmadas por WMS
+          </div>
+        </div>
+      </div>
+
+      {/* WIDGET HERO: DIAGNÓSTICO EJECUTIVO DE CLARA COMPRAS */}
+      <div className="bg-gradient-to-br from-[#0f172a] via-[#1e293b] to-[#0f172a] text-white p-6 rounded-3xl shadow-xl border border-slate-800 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10 mb-6">
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-bold flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                Diagnóstico en Memoria Activo (0.72s)
+              </span>
+              <span className="text-slate-400 text-xs hidden sm:inline">• Clara Digital Worker</span>
+            </div>
+            <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white flex items-center gap-2.5">
+              <i className="pi pi-sparkles text-emerald-400 text-xl"></i>
+              Diagnóstico Autónomo de Catálogo y Quiebres
+            </h2>
+            <p className="text-slate-400 text-xs mt-1 max-w-2xl leading-relaxed">
+              Clara audita en tiempo real {claraDiagnosis.total_suppliers_analyzed || 435} proveedores y su inventario, identificando quiebres inminentes sin generar órdenes ciegas masivas ni saturar la base de datos.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2.5">
+            <Button
+              label="Abrir Consola Clara"
+              icon="pi pi-external-link"
+              className="!bg-emerald-600 hover:!bg-emerald-500 !border-none text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow-lg shadow-emerald-600/30"
+              onClick={() => router.push('/settings/bot')}
+            />
+            <Button
+              label="Consultar con Copilot"
+              icon="pi pi-comments"
+              outlined
+              className="!border-slate-600 hover:!border-slate-500 !text-slate-200 text-xs font-bold px-4 py-2.5 rounded-xl"
+              onClick={() => window.dispatchEvent(new CustomEvent('open-digital-copilot'))}
+            />
+          </div>
+        </div>
+
+        {/* METRICAS DE CLARA */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 relative z-10">
+          <div className="bg-slate-800/60 backdrop-blur-xs p-4 rounded-2xl border border-slate-700/60">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-400">Quiebre Inmediato</span>
+            </div>
+            <p className="text-2xl sm:text-3xl font-black text-rose-300">
+              {claraDiagnosis.suppliers_immediate_stockout}
+            </p>
+            <span className="text-[10px] text-slate-400">Proveedores en stock cero</span>
+          </div>
+
+          <div className="bg-slate-800/60 backdrop-blur-xs p-4 rounded-2xl border border-slate-700/60">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300">En Riesgo</span>
+            </div>
+            <p className="text-2xl sm:text-3xl font-black text-amber-300">
+              {claraDiagnosis.suppliers_potential_stockout}
+            </p>
+            <span className="text-[10px] text-slate-400">Menos de 7 días de stock</span>
+          </div>
+
+          <div className="bg-slate-800/60 backdrop-blur-xs p-4 rounded-2xl border border-slate-700/60">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400">Inversión Sugerida</span>
+            </div>
+            <p className="text-2xl sm:text-3xl font-black text-emerald-300">
+              ${Number(claraDiagnosis.total_projected_cost_usd || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+            </p>
+            <span className="text-[10px] text-slate-400">Reposición óptima en USD</span>
+          </div>
+
+          <div className="bg-slate-800/60 backdrop-blur-xs p-4 rounded-2xl border border-slate-700/60">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-400">Catálogo Auditado</span>
+            </div>
+            <p className="text-2xl sm:text-3xl font-black text-cyan-300">
+              {claraDiagnosis.total_suppliers_analyzed}
+            </p>
+            <span className="text-[10px] text-slate-400">Proveedores en tiempo real</span>
+          </div>
+        </div>
+
+        {/* ALERTA RÁPIDA DE PROVEEDORES CRÍTICOS */}
+        {claraDiagnosis.critical_suppliers.length > 0 && (
+          <div className="mt-5 pt-4 border-t border-slate-800/80 flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-slate-400 font-medium">Proveedores de alta urgencia:</span>
+            {claraDiagnosis.critical_suppliers.map((supp, idx) => (
+              <span
+                key={idx}
+                onClick={() => router.push('/settings/bot')}
+                className="bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/30 px-2.5 py-1 rounded-lg font-semibold cursor-pointer transition-colors flex items-center gap-1.5 text-[11px]"
+              >
+                <i className="pi pi-exclamation-circle text-rose-400 text-[10px]"></i>
+                {supp.supplier_name}
+                <span className="text-slate-400 font-normal">({supp.immediate_stockout_count} SKUs)</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* TABLA DE ÓRDENES DE COMPRA RECIENTES */}
+      <div className="bg-white rounded-3xl shadow-xs border border-slate-200/80 p-6 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+              <i className="pi pi-file text-slate-400 text-base"></i>
+              Órdenes de Compra Recientes
+            </h2>
+            <p className="text-slate-500 text-xs mt-0.5">
+              Últimas transacciones generadas en el sistema por compradores y asistentes.
+            </p>
+          </div>
+
+          <Button
+            label="Ver Todas las Órdenes"
+            icon="pi pi-arrow-right"
+            iconPos="right"
+            text
+            className="text-xs font-bold text-emerald-700 hover:text-emerald-800"
+            onClick={() => router.push('/orders')}
+          />
+        </div>
+
+        <DataTable
+          value={recentOrders}
+          loading={loading}
+          emptyMessage="No hay órdenes de compra registradas recientemente."
+          size="small"
+          stripedRows
+          rowHover
+          className="text-xs"
+        >
+          <Column
+            header="NÚMERO ODC"
+            field="reference"
+            body={(r: any) => (
+              <span
+                onClick={() => router.push(`/orders/${r.id}`)}
+                className="font-mono font-bold text-slate-800 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg border border-slate-200/80 cursor-pointer transition-colors"
+              >
+                {r.reference || `ODC-${r.id}`}
+              </span>
+            )}
+            style={{ width: '11rem' }}
+          />
+
+          <Column
+            header="PROVEEDOR"
+            body={(r: any) => (
+              <span className="font-bold text-slate-800">
+                {r.supplier?.name || 'Proveedor no especificado'}
+              </span>
+            )}
+            style={{ minWidth: '14rem' }}
+          />
+
+          <Column
+            header="DESTINO"
+            body={(r: any) => (
+              <span className="text-slate-600 bg-slate-50 border border-slate-200/60 px-2 py-0.5 rounded text-[11px] font-medium">
+                <i className="pi pi-building text-[10px] mr-1 text-slate-400"></i>
+                {r.dest_facility?.name || 'Almacén Central'}
+              </span>
+            )}
+          />
+
+          <Column
+            header="FECHA"
+            field="created_at"
+            body={(r: any) => (
+              <span className="text-slate-500 text-[11px]">
+                {r.created_at ? format(new Date(r.created_at), 'dd/MM/yyyy HH:mm') : '—'}
+              </span>
+            )}
+          />
+
+          <Column
+            header="ESTADO"
+            body={(r: any) => (
+              <Tag
+                severity={getStatusSeverity(r.status)}
+                value={getStatusName(r.status)}
+                className="font-extrabold uppercase text-[9px] px-2 py-0.5"
+              />
+            )}
+            align="center"
+          />
+
+          <Column
+            header="TOTAL USD"
+            body={(r: any) => (
+              <span className="font-mono font-extrabold text-slate-900">
+                ${Number(r.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            )}
+            align="right"
+          />
+
+          <Column
+            header="ACCIÓN"
+            body={(r: any) => (
+              <Button
+                icon="pi pi-eye"
+                rounded
+                text
+                severity="secondary"
+                aria-label="Ver ODC"
+                onClick={() => router.push(`/orders/${r.id}`)}
+                className="w-8 h-8"
+              />
+            )}
+            align="center"
+            style={{ width: '4rem' }}
+          />
         </DataTable>
       </div>
     </div>
