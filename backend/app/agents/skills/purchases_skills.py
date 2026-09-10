@@ -1,5 +1,6 @@
 import math
 import logging
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Dict, Any, Tuple
@@ -190,7 +191,7 @@ def run_mrp_draft_generation(db: Session, worker: DigitalWorker) -> List[Dict[st
             dest_facility_id=dest_facility_id,
             status='draft',
             total_amount=Decimal('0.00'),
-            reference=f"ODC-{year}-TEMP",
+            reference=f"ODC-{year}-TEMP-{uuid.uuid4().hex[:8]}",
             notes=f"Orden sugerida automáticamente por {worker.display_title}. Generada para evitar quiebre de inventario proyectado. Requiere revisión y confirmación del comprador humano."
         )
         db.add(po)

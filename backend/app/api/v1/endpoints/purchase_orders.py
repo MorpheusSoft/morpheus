@@ -41,6 +41,7 @@ def read_purchase_order(
         raise HTTPException(status_code=404, detail="Purchase Order not found")
     return order
 
+import uuid
 from app.schemas.purchase_order import PurchaseOrderCreate
 from datetime import datetime
 
@@ -51,13 +52,14 @@ def create_purchase_order(
     payload: PurchaseOrderCreate
 ) -> Any:
     year = datetime.now().year
+    temp_ref = f"ODC-{year}-TEMP-{uuid.uuid4().hex[:8]}"
     
     order = PurchaseOrder(
         supplier_id=payload.supplier_id,
         dest_facility_id=payload.dest_facility_id,
         status='draft',
         total_amount=Decimal(0),
-        reference=f"ODC-{year}-TEMP"
+        reference=temp_ref
     )
     db.add(order)
     db.flush()

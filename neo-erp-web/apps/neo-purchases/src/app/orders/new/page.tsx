@@ -844,8 +844,10 @@ export default function NewOrderPage() {
           setTimeout(() => {
               router.push('/orders/' + res.data.id);
           }, 1500);
-      } catch(e) {
-          toast.current?.show({ severity: 'error', summary: 'Fallo', detail: 'No se pudo crear el borrador.' });
+      } catch(e: any) {
+          console.error('Error creating draft order:', e);
+          const errMsg = e.response?.data?.detail || e.message || 'No se pudo crear el borrador.';
+          toast.current?.show({ severity: 'error', summary: 'Fallo', detail: typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg) });
           setSaving(false);
       }
   };

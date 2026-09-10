@@ -6,6 +6,7 @@ from app.models.purchasing import SupplierProduct, PurchaseOrder, PurchaseOrderL
 from decimal import Decimal
 from datetime import datetime
 import math
+import uuid
 
 class MRPService:
     @staticmethod
@@ -139,7 +140,7 @@ class MRPService:
                 dest_facility_id=dest_fac,
                 status='draft',
                 total_amount=total_amount,
-                reference=f"ODC-{year}-TEMP"
+                reference=f"ODC-{year}-TEMP-{uuid.uuid4().hex[:8]}"
             )
             db.add(po)
             db.flush()

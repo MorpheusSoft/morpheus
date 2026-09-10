@@ -1,4 +1,5 @@
 import math
+import uuid
 from datetime import datetime
 from decimal import Decimal
 import json
@@ -335,7 +336,7 @@ async def run_mrp_bot(db: Session) -> MRPBotLog:
                 dest_facility_id=dest_facility_id,
                 status='draft',
                 total_amount=Decimal('0.00'),
-                reference=f"ODC-{year}-TEMP"
+                reference=f"ODC-{year}-TEMP-{uuid.uuid4().hex[:8]}"
             )
             db.add(po)
             db.flush()
