@@ -42,7 +42,6 @@ function AppSidebarContent() {
   ];
 
   const auditItems = [
-    { label: 'Tomas Físicas', icon: 'pi pi-check-square', href: '/physical-counts' },
     { label: 'Impresión de Etiquetas', icon: 'pi pi-print', href: '/labels' },
     { label: 'Métodos de Costeo', icon: 'pi pi-percentage', href: '/costs' },
   ];

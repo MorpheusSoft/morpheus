@@ -6,7 +6,6 @@ import { Dropdown } from 'primereact/dropdown';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { ValuationService } from '@/services/valuation.service';
-import { PhysicalCountService } from '@/services/physical-count.service';
 
 export default function InventoryDashboardPage() {
   const [loading, setLoading] = useState(true);
@@ -20,7 +19,6 @@ export default function InventoryDashboardPage() {
   const [totalValActualUsd, setTotalValActualUsd] = useState<number>(0);
   const [totalQty, setTotalQty] = useState<number>(0);
   const [totalSkus, setTotalSkus] = useState<number>(0);
-  const [activeSessionsCount, setActiveSessionsCount] = useState<number>(0);
   const [topValuedItems, setTopValuedItems] = useState<any[]>([]);
 
   useEffect(() => {
@@ -45,11 +43,7 @@ export default function InventoryDashboardPage() {
     try {
       const facilityId = selectedFacility ? selectedFacility.id : undefined;
 
-      // Parallel fetch of valuation data and physical count sessions
-      const [valData, sessionsData] = await Promise.all([
-        ValuationService.getValuation({ facility_id: facilityId }),
-        PhysicalCountService.getSessions(0, 100).catch(() => []),
-      ]);
+      const valData = await ValuationService.getValuation({ facility_id: facilityId });
 
       if (valData) {
         setExchangeRate(valData.rate || 0);
@@ -64,13 +58,6 @@ export default function InventoryDashboardPage() {
         // Sort by total valuation USD descending for top 5
         const sorted = [...items].sort((a, b) => (b.val_total_avg_usd || 0) - (a.val_total_avg_usd || 0));
         setTopValuedItems(sorted.slice(0, 5));
-      }
-
-      if (Array.isArray(sessionsData)) {
-        const active = sessionsData.filter(
-          (s: any) => s.state === 'IN_PROGRESS' || s.state === 'DRAFT'
-        );
-        setActiveSessionsCount(active.length);
       }
     } catch (err) {
       console.error('Error cargando métricas del dashboard:', err);
@@ -111,15 +98,6 @@ export default function InventoryDashboardPage() {
       color: 'from-emerald-500 to-teal-600',
       badge: 'Finanzas',
       badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    },
-    {
-      title: 'Tomas Físicas',
-      description: 'Conteos cíclicos, tomas a ciegas, importación por archivo plano y ajuste de faltantes/sobrantes.',
-      icon: 'pi pi-check-square',
-      href: '/physical-counts',
-      color: 'from-violet-500 to-purple-600',
-      badge: `${activeSessionsCount} activas`,
-      badgeColor: activeSessionsCount > 0 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-50 text-slate-600 border-slate-200',
     },
     {
       title: 'Libro de Inventarios',
@@ -263,23 +241,23 @@ export default function InventoryDashboardPage() {
           </div>
         </div>
 
-        {/* Card 4: Tomas Físicas Activas */}
+        {/* Card 4: Libro Fiscal */}
         <div className="bg-white rounded-[1.75rem] p-5 border border-slate-100 shadow-lg shadow-slate-200/30 flex flex-col justify-between relative overflow-hidden group hover:shadow-xl transition-all duration-300">
           <div className="flex justify-between items-start">
             <div className="flex flex-col">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Tomas Físicas</span>
-              <h2 className="text-2xl lg:text-3xl font-black text-violet-700 mt-2 mb-0 tabular-nums">
-                {loading ? '---' : activeSessionsCount}
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Libro Fiscal</span>
+              <h2 className="text-2xl lg:text-3xl font-black text-amber-600 mt-2 mb-0 tabular-nums">
+                Tributario
               </h2>
             </div>
-            <div className="w-12 h-12 rounded-2xl bg-violet-50 border border-violet-100 flex items-center justify-center text-violet-600 group-hover:scale-110 transition-transform">
-              <i className="pi pi-check-square text-xl"></i>
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600 group-hover:scale-110 transition-transform">
+              <i className="pi pi-book text-xl"></i>
             </div>
           </div>
           <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <span>Estado Operativo:</span>
-            <Link href="/physical-counts" className="font-bold text-violet-600 hover:underline flex items-center gap-1">
-              Ver sesiones <i className="pi pi-arrow-right text-[10px]"></i>
+            <span>Reporte Mensual:</span>
+            <Link href="/book" className="font-bold text-amber-600 hover:underline flex items-center gap-1">
+              Ver libro <i className="pi pi-arrow-right text-[10px]"></i>
             </Link>
           </div>
         </div>
