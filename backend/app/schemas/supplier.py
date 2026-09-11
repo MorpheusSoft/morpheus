@@ -55,6 +55,16 @@ class SupplierBase(BaseModel):
     buyer_id: Optional[int] = None
     return_policy: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
+    # Phase 3: Clara Logistics Calibration
+    auto_tune_logistics: Optional[bool] = False
+    clara_suggested_lead_time: Optional[int] = None
+    clara_suggested_restock_days: Optional[int] = None
+    clara_lead_time_deviation: Optional[int] = 0
+    clara_restock_deviation: Optional[int] = 0
+    clara_deliveries_analyzed: Optional[int] = 0
+    clara_logistics_score: Optional[Decimal] = Field(default=Decimal('100.0'), max_digits=5, decimal_places=2)
+    clara_last_evaluated_at: Optional[datetime] = None
+
 class SupplierCreate(SupplierBase):
     banks: Optional[List[SupplierBankCreate]] = []
 
@@ -101,3 +111,38 @@ class SupplierProductResponse(SupplierProductBase):
 class SupplierPaginated(BaseModel):
     data: List[SupplierResponse]
     total: int
+
+class SupplierDeliveryMetric(BaseModel):
+    order_id: int
+    order_reference: str
+    order_date: datetime
+    receipt_date: Optional[datetime] = None
+    lead_time_days: int
+    on_time: bool
+
+class SupplierLogisticsAuditResponse(BaseModel):
+    supplier_id: int
+    supplier_name: str
+    configured_lead_time: int
+    configured_restock_days: int
+    configured_default_facility_id: Optional[int] = None
+    real_lead_time: Optional[int] = None
+    real_restock_days: Optional[int] = None
+    suggested_facility_id: Optional[int] = None
+    suggested_facility_name: Optional[str] = None
+    lead_time_deviation: int = 0
+    restock_deviation: int = 0
+    deliveries_analyzed: int = 0
+    on_time_score: Decimal = Decimal('100.0')
+    is_calibrated: bool = True
+    requires_attention: bool = False
+    auto_tune_logistics: bool = False
+    clara_recommendation: str
+    history: List[SupplierDeliveryMetric] = []
+    evaluated_at: Optional[datetime] = None
+
+class ApplyCalibrationRequest(BaseModel):
+    apply_lead_time: bool = True
+    apply_restock: bool = True
+    apply_default_facility: bool = False
+

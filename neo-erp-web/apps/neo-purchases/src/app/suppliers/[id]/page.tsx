@@ -29,6 +29,8 @@ export default function SupplierEdit() {
   
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
+  const [claraAudit, setClaraAudit] = useState<any>(null);
+  const [calibrating, setCalibrating] = useState(false);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [facilities, setFacilities] = useState<any[]>([]);
   const [buyers, setBuyers] = useState<any[]>([]);
@@ -53,6 +55,8 @@ export default function SupplierEdit() {
       restock_coverage_days: 0,
       sales_analysis_days: 0,
       minimum_order_qty: 0,
+      auto_tune_logistics: false,
+
 
       commercial_contact_name: '',
       commercial_contact_phone: '',
@@ -88,10 +92,14 @@ export default function SupplierEdit() {
       api.get('/facilities/').catch(() => ({ data: [] })),
       api.get('/buyers/').catch(() => ({ data: [] })),
       api.get('/users/').catch(() => ({ data: [] })),
-      api.get(`/suppliers/${supplierId}`)
-    ]).then(([currRes, facRes, buyersRes, usersRes, suppRes]) => {
+      api.get(`/suppliers/${supplierId}`),
+      api.get(`/suppliers/${supplierId}/logistics-audit`).catch(() => ({ data: null }))
+    ]).then(([currRes, facRes, buyersRes, usersRes, suppRes, auditRes]) => {
       setCurrencies(currRes.data || []);
       setFacilities(facRes.data || []);
+      if (auditRes.data) {
+        setClaraAudit(auditRes.data);
+      }
       
       const buyersList = Array.isArray(buyersRes.data) ? buyersRes.data : [];
       const usersList = Array.isArray(usersRes.data) ? usersRes.data : [];
@@ -106,6 +114,7 @@ export default function SupplierEdit() {
 
       const parsedData = {
         ...suppRes.data,
+        auto_tune_logistics: !!suppRes.data.auto_tune_logistics,
         buyer_id: suppRes.data.buyer_id || null,
         commercial_name: suppRes.data.commercial_name || '',
         international_tax_id: suppRes.data.international_tax_id || '',
@@ -136,6 +145,36 @@ export default function SupplierEdit() {
       setFetching(false);
     });
   }, [supplierId, reset]);
+
+  const handleApplyClaraCalibration = async () => {
+    setCalibrating(true);
+    try {
+      const res = await api.post(`/suppliers/${supplierId}/apply-calibration`, {
+        apply_lead_time: true,
+        apply_restock: true,
+        apply_default_facility: !!claraAudit?.suggested_facility_id
+      });
+      if (res.data?.ok) {
+        if (res.data.updated_lead_time_days !== undefined) {
+          setValue('lead_time_days', res.data.updated_lead_time_days);
+        }
+        if (res.data.updated_restock_coverage_days !== undefined) {
+          setValue('restock_coverage_days', res.data.updated_restock_coverage_days);
+        }
+        if (res.data.updated_default_facility_id !== undefined && res.data.updated_default_facility_id !== null) {
+          setValue('default_facility_id', res.data.updated_default_facility_id);
+        }
+        const auditRes = await api.get(`/suppliers/${supplierId}/logistics-audit`);
+        setClaraAudit(auditRes.data);
+        alert('✨ Calibración de Clara aplicada con éxito a la ficha.');
+      }
+    } catch (e: any) {
+      alert('Error al aplicar calibración: ' + (e.response?.data?.detail || e.message));
+    } finally {
+      setCalibrating(false);
+    }
+  };
+
 
   const onSubmit = async (data: any) => {
     setLoading(true);
@@ -317,6 +356,138 @@ export default function SupplierEdit() {
               </div>
               
               <div className="hidden md:block"></div>
+
+              {/* CLARA DIGITAL WORKER: Banner de Auditoría y Calibración Logística Adaptativa */}
+              <div className="col-span-1 md:col-span-3 bg-gradient-to-r from-indigo-900/5 via-purple-900/5 to-slate-50 border border-indigo-200/80 rounded-2xl p-5 shadow-sm mt-2">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-indigo-100">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center text-white shadow-md flex-shrink-0">
+                      <i className="pi pi-sparkles text-lg" />
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-base font-bold text-slate-800">Clara (IA de Compras) • Calibración Logística</h3>
+                        {claraAudit?.requires_attention ? (
+                          <span className="bg-amber-100 text-amber-800 text-xs px-2.5 py-0.5 rounded-full font-semibold border border-amber-300 flex items-center gap-1">
+                            <i className="pi pi-exclamation-triangle text-xs" /> Desvío Detectado
+                          </span>
+                        ) : claraAudit?.deliveries_analyzed >= 3 ? (
+                          <span className="bg-emerald-100 text-emerald-800 text-xs px-2.5 py-0.5 rounded-full font-semibold border border-emerald-300 flex items-center gap-1">
+                            <i className="pi pi-check-circle text-xs" /> Calibrado
+                          </span>
+                        ) : (
+                          <span className="bg-slate-100 text-slate-700 text-xs px-2.5 py-0.5 rounded-full font-medium border border-slate-200 flex items-center gap-1">
+                            <i className="pi pi-info-circle text-xs" /> Observación Pasiva
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Medición de Lead Time real (días de despacho) y cadencia de reposición basada en WMS.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <Button
+                      type="button"
+                      label="Aplicar Calibración de Clara"
+                      icon="pi pi-sparkles"
+                      loading={calibrating}
+                      disabled={!claraAudit || !claraAudit.requires_attention}
+                      onClick={handleApplyClaraCalibration}
+                      className="bg-indigo-600 hover:bg-indigo-700 border-none text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow transition-all disabled:opacity-40"
+                    />
+                  </div>
+                </div>
+
+                {/* Metric Cards Comparison */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-xs">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Lead Time (Despacho)</span>
+                    <div className="flex items-baseline gap-2 mt-1">
+                      <span className="text-xl font-black text-slate-800">
+                        {claraAudit?.real_lead_time !== null && claraAudit?.real_lead_time !== undefined ? `${claraAudit.real_lead_time}d` : '---'}
+                      </span>
+                      <span className="text-xs text-slate-500">real vs {watch('lead_time_days') || 0}d ficha</span>
+                    </div>
+                    <div className="mt-1 text-[11px]">
+                      {claraAudit && claraAudit.lead_time_deviation > 0 ? (
+                        <span className="text-rose-600 font-semibold">+{claraAudit.lead_time_deviation}d de retraso</span>
+                      ) : claraAudit && claraAudit.lead_time_deviation < 0 ? (
+                        <span className="text-emerald-600 font-semibold">{claraAudit.lead_time_deviation}d más rápido</span>
+                      ) : (
+                        <span className="text-slate-500">Sin variación</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-xs">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Cadencia (Reposición)</span>
+                    <div className="flex items-baseline gap-2 mt-1">
+                      <span className="text-xl font-black text-slate-800">
+                        {claraAudit?.real_restock_days !== null && claraAudit?.real_restock_days !== undefined ? `${claraAudit.real_restock_days}d` : '---'}
+                      </span>
+                      <span className="text-xs text-slate-500">real vs {watch('restock_coverage_days') || 0}d ficha</span>
+                    </div>
+                    <div className="mt-1 text-[11px]">
+                      {claraAudit && claraAudit.restock_deviation !== 0 && claraAudit.restock_deviation !== undefined ? (
+                        <span className="text-amber-600 font-semibold">
+                          {claraAudit.restock_deviation > 0 ? `+${claraAudit.restock_deviation}d` : `${claraAudit.restock_deviation}d`} desfase
+                        </span>
+                      ) : (
+                        <span className="text-slate-500">Cadencia alineada</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-xs">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Puntualidad OTIF</span>
+                    <div className="flex items-baseline gap-2 mt-1">
+                      <span className="text-xl font-black text-slate-800">
+                        {claraAudit?.on_time_score ?? 100}%
+                      </span>
+                      <span className="text-xs text-slate-500">a tiempo</span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {claraAudit?.deliveries_analyzed || 0} entregas analizadas
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+                    <div>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Modo Autónomo</span>
+                      <div className="flex items-center gap-2 mt-2">
+                        <Controller
+                          name="auto_tune_logistics"
+                          control={control}
+                          render={({ field }) => (
+                            <Checkbox
+                              inputId="auto_tune_logistics"
+                              checked={field.value}
+                              onChange={(e) => field.onChange(e.checked)}
+                            />
+                          )}
+                        />
+                        <label htmlFor="auto_tune_logistics" className="text-xs font-semibold text-slate-700 cursor-pointer">
+                          Auto-calibrar por Clara
+                        </label>
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-1">Ajuste periódico en escaneo de fondo</span>
+                  </div>
+                </div>
+
+                {/* Clara's Recommendation Message */}
+                {claraAudit?.clara_recommendation && (
+                  <div className="mt-4 bg-indigo-50/70 border border-indigo-100 rounded-xl p-3 flex items-start gap-3">
+                    <i className="pi pi-comment text-indigo-500 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs text-indigo-950 leading-relaxed font-medium">
+                      <span className="font-bold text-indigo-900">Diagnóstico de Clara: </span>
+                      {claraAudit.clara_recommendation}
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <div className="col-span-1 md:col-span-3 pb-2 border-b border-slate-100 mt-4">
                 <h3 className="text-orange-600 font-bold text-sm tracking-widest uppercase">Ciclo de Compra y MRP</h3>

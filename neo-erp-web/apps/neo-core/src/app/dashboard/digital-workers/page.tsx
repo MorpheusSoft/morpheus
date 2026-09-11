@@ -19,6 +19,7 @@ export default function DigitalWorkersPage() {
   
   // Execution state
   const [runningWorkerId, setRunningWorkerId] = useState<number | null>(null);
+  const [workerFilter, setWorkerFilter] = useState<string>("ALL");
   
   // Audit log modal
   const [selectedWorkerForLogs, setSelectedWorkerForLogs] = useState<any | null>(null);
@@ -188,6 +189,60 @@ export default function DigitalWorkersPage() {
         </div>
       </div>
 
+      {/* Worker Navigation Tabs */}
+      {!loading && workers.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2.5 mb-7 bg-white p-2 rounded-2xl border border-slate-200 shadow-2xs">
+          <button
+            onClick={() => setWorkerFilter("ALL")}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              workerFilter === "ALL"
+                ? "bg-slate-900 text-white shadow-sm"
+                : "text-slate-600 hover:bg-slate-100"
+            }`}
+          >
+            <i className="pi pi-users text-xs"></i>
+            <span>Todos los Agentes</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
+              workerFilter === "ALL" ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"
+            }`}>
+              {workers.length}
+            </span>
+          </button>
+
+          {workers.map((w) => {
+            const isSelected = workerFilter === w.agent_code;
+            const isArturo = w.agent_code === "ARTURO_WMS";
+            const skillsCount = w.worker_skills?.filter((s: any) => s.is_enabled).length || 0;
+
+            return (
+              <button
+                key={w.id}
+                onClick={() => setWorkerFilter(w.agent_code)}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                  isSelected
+                    ? isArturo
+                      ? "bg-blue-600 text-white shadow-sm"
+                      : "bg-purple-600 text-white shadow-sm"
+                    : "text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                <i className={`pi ${isArturo ? "pi-box" : "pi-shopping-cart"} text-xs`}></i>
+                <span>{isArturo ? "Arturo (WMS)" : "Clara (Compras)"}</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                  isSelected
+                    ? "bg-white/25 text-white"
+                    : isArturo
+                    ? "bg-blue-50 text-blue-700"
+                    : "bg-purple-50 text-purple-700"
+                }`}>
+                  {skillsCount} Habilidades
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Workers Grid */}
       {loading ? (
         <div className="bg-white border border-slate-200 rounded-3xl p-16 text-center text-slate-400 shadow-sm">
@@ -199,8 +254,12 @@ export default function DigitalWorkersPage() {
           No hay usuarios digitales configurados en este entorno.
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {workers.map((worker) => {
+        <div className={`grid gap-8 ${
+          workerFilter === "ALL" ? "grid-cols-1 xl:grid-cols-2" : "grid-cols-1 max-w-2xl mx-auto"
+        }`}>
+          {workers
+            .filter((worker) => workerFilter === "ALL" || worker.agent_code === workerFilter)
+            .map((worker) => {
             const isArturo = worker.agent_code === "ARTURO_WMS";
             const avatarColor = isArturo 
               ? "from-blue-600 to-cyan-600 border-blue-200" 
@@ -263,7 +322,7 @@ export default function DigitalWorkersPage() {
                       <span className="text-[11px] text-slate-400">Modelo: {worker.model_name || "gemini-2.5-flash"}</span>
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="max-h-[380px] overflow-y-auto pr-1 space-y-2 custom-scrollbar">
                       {worker.worker_skills?.map((ws: any) => (
                         <div
                           key={ws.id}

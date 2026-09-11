@@ -63,6 +63,8 @@ class ReconciliationOrderDetail(BaseModel):
     total_billed_amount: Optional[Decimal] = None
     total_debit_note_suggested: Decimal = Decimal(0)
     net_payable_suggested: Decimal = Decimal(0)
+    invoice_documents: Optional[List[dict]] = []
+    ocr_extracted_payload: Optional[dict] = {}
     lines: List[ReconciliationLineOut]
 
 class ReconciliationOrderListItem(BaseModel):

@@ -53,7 +53,13 @@ def read_ai_recommendations(
     """
     return MRPService.get_ai_recommendations(db, facility_id=facility_id)
 
-from app.services.mrp_bot_service import run_mrp_bot, diagnose_stockouts, generate_supplier_po_draft
+from app.services.mrp_bot_service import (
+    run_mrp_bot,
+    diagnose_stockouts,
+    generate_supplier_po_draft,
+    analyze_supplier_dispatch_pattern,
+    generate_consolidated_cendi_order
+)
 from app.models.purchasing import MRPBotLog
 from sqlalchemy import desc
 
@@ -72,6 +78,46 @@ def get_mrp_diagnosis(
         return diagnosis
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error realizando diagnóstico MRP: {str(e)}")
+
+@router.post("/supplier-strategy", response_model=schemas.SupplierStrategyResponse)
+def get_supplier_strategy(
+    supplier_id: int = Query(..., description="ID del proveedor a evaluar"),
+    limit: int = Query(10, description="Límite de ODC históricas a analizar"),
+    db: Session = Depends(deps.get_db)
+) -> Any:
+    """
+    Analiza el patrón histórico de abastecimiento del proveedor (CENDI vs Tiendas Directas)
+    y retorna la recomendación estratégica de Clara Compras.
+    """
+    try:
+        strategy = analyze_supplier_dispatch_pattern(db, supplier_id=supplier_id, limit=limit)
+        return strategy
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error evaluando estrategia de proveedor: {str(e)}")
+
+@router.post("/generate-cendi-order", response_model=schemas.GenerateCendiOrderResponse)
+def generate_cendi_order(
+    payload: schemas.GenerateCendiOrderRequest,
+    db: Session = Depends(deps.get_db)
+) -> Any:
+    """
+    Genera una Orden de Compra Consolidada para el CENDI con el desglose de distribución por tienda.
+    """
+    try:
+        result = generate_consolidated_cendi_order(
+            db=db,
+            supplier_id=payload.supplier_id,
+            cendi_facility_id=payload.cendi_facility_id,
+            buyer_id=payload.buyer_id,
+            notes=payload.notes
+        )
+        return result
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando orden consolidada para CENDI: {str(e)}")
 
 @router.post("/generate-supplier-order", response_model=schemas.GenerateSupplierOrderResponse)
 def generate_supplier_order(

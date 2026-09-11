@@ -94,6 +94,20 @@ export default function OrderDetailsPage() {
   });
 
   const [selectedPackId, setSelectedPackId] = useState<number | null>(null);
+  const [showBreakdownModal, setShowBreakdownModal] = useState(false);
+
+  const handleDownloadBreakdown = async (formatType: 'xlsx' | 'xml') => {
+    try {
+      const res = await api.get(`/purchase-orders/${orderId}/export-breakdown?format=${formatType}`);
+      const downloadUrl = res.data.download_url;
+      const baseUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000').replace(/\/api\/v1\/?$/, '');
+      const fullUrl = downloadUrl.startsWith('http') ? downloadUrl : `${baseUrl}${downloadUrl.startsWith('/') ? '' : '/'}${downloadUrl}`;
+      window.open(fullUrl, '_blank');
+      toast.current?.show({ severity: 'success', summary: 'Exportación Exitosa', detail: `Archivo ${res.data.filename} generado correctamente.` });
+    } catch (e: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No fue posible generar el archivo de exportación.' });
+    }
+  };
 
   const mapPackagings = (packagings: any[]) => [
       { id: null, name: 'Und. Base', qty_per_unit: 1, label: 'Unidad Base (x1)' },
@@ -838,16 +852,33 @@ export default function OrderDetailsPage() {
               <div className="flex items-center gap-3 mb-1">
                  <Button icon="pi pi-arrow-left" rounded text aria-label="Volver" onClick={() => router.push('/orders')} />
                  <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">{order.reference}</h1>
+                 {order.consolidation_mode === 'CONSOLIDATED_CD' && (
+                   <span className="ml-2 px-3 py-1 rounded-full text-xs font-black bg-purple-100 text-purple-800 border border-purple-300 flex items-center gap-1.5 shadow-2xs">
+                     <i className="pi pi-building text-[11px]"></i>
+                     CONSOLIDADA CENDI
+                   </span>
+                 )}
                  {order.status === 'draft' && <Tag severity="warning" value="BORRADOR" className="ml-2 font-bold tracking-widest px-3 py-1" />}
                  {order.status === 'pending_approval' && <Tag severity="info" value="ESPERANDO GERENCIA" className="ml-2 font-bold tracking-widest px-3 py-1 bg-orange-500" />}
                  {order.status === 'approved' && <Tag severity="success" value="APROBADA" className="ml-2 font-bold tracking-widest px-3 py-1" />}
                  {order.status === 'sent' && <Tag severity="success" value="ENVIADA (SIN LEER)" className="ml-2 font-bold tracking-widest px-3 py-1 bg-sky-500 border-none" icon="pi pi-send" />}
                  {order.status === 'viewed' && <Tag severity="success" value="LEÍDA (DOBLE CHECK)" className="ml-2 font-bold tracking-widest px-3 py-1 bg-indigo-600 border-none" icon="pi pi-check-circle" />}
+                 {order.consolidation_mode === 'CONSOLIDATED_CD' && (
+                   <Button
+                     label="Desglose a Tiendas"
+                     icon="pi pi-sitemap"
+                     severity="help"
+                     size="small"
+                     outlined
+                     onClick={() => setShowBreakdownModal(true)}
+                     className="ml-2 font-bold text-xs"
+                   />
+                 )}
               </div>
               <p className="text-slate-500 ml-12 text-xs sm:text-sm mt-1 sm:mt-2 flex flex-wrap items-center gap-y-1">
                   <span className="flex items-center"><i className="pi pi-building mr-2 text-indigo-400"></i> Proveedor: <span className="font-bold text-slate-700 ml-1">{order.supplier.name}</span></span>
                   <span className="mx-3 text-slate-200">|</span>
-                  <span className="flex items-center"><i className="pi pi-map-marker mr-2 text-indigo-400"></i> Destino: <span className="font-bold text-slate-700 ml-1">{order.dest_facility ? order.dest_facility.name : 'General (Libre)'}</span></span>
+                  <span className="flex items-center"><i className="pi pi-map-marker mr-2 text-indigo-400"></i> Destino: <span className="font-bold text-slate-700 ml-1">{order.dest_facility ? order.dest_facility.name : 'General (Libre)'} {order.consolidation_mode === 'CONSOLIDATED_CD' ? '(CENDI Hub)' : ''}</span></span>
                   <span className="mx-3 text-slate-200">|</span>
                   <span className="flex items-center"><i className="pi pi-calendar mr-2 text-indigo-400"></i> {format(new Date(order.created_at), 'dd de MMM yyyy - HH:mm')}</span>
                   <span className="mx-3 text-slate-200">|</span>
@@ -1667,6 +1698,123 @@ export default function OrderDetailsPage() {
                    />
               </div>
           </div>
+      </Dialog>
+
+      {/* MODAL DESGLOSE DE DISTRIBUCIÓN CENDI */}
+      <Dialog
+        header={
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center">
+              <i className="pi pi-sitemap text-sm"></i>
+            </div>
+            <div>
+              <h3 className="text-sm font-extrabold text-slate-800">Desglose de Distribución a Tiendas</h3>
+              <p className="text-[11px] text-slate-500 font-medium">Asignación para Cross-Docking logístico desde CENDI</p>
+            </div>
+          </div>
+        }
+        visible={showBreakdownModal}
+        style={{ width: '840px', maxWidth: '95vw' }}
+        onHide={() => setShowBreakdownModal(false)}
+        footer={
+          <div className="flex items-center justify-between gap-2 p-2 border-t border-slate-100">
+            <div className="flex gap-2">
+              <Button
+                label="Descargar Excel (.xlsx)"
+                icon="pi pi-file-excel"
+                severity="success"
+                size="small"
+                onClick={() => handleDownloadBreakdown('xlsx')}
+                className="font-bold text-xs"
+              />
+              <Button
+                label="Exportar B2B (.xml)"
+                icon="pi pi-code"
+                severity="secondary"
+                size="small"
+                onClick={() => handleDownloadBreakdown('xml')}
+                className="font-bold text-xs"
+              />
+            </div>
+            <Button
+              label="Cerrar"
+              icon="pi pi-times"
+              text
+              size="small"
+              onClick={() => setShowBreakdownModal(false)}
+            />
+          </div>
+        }
+      >
+        <div className="py-2">
+          {(!order.distribution_breakdown || order.distribution_breakdown.length === 0) ? (
+            <p className="text-slate-500 text-center py-6 text-xs">No hay desglose de distribución registrado para esta orden.</p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-purple-50/70 border border-purple-100 p-3 rounded-xl">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600 block">Renglones Maestros</span>
+                  <span className="text-xl font-black text-purple-900">{order.distribution_breakdown.length}</span>
+                </div>
+                <div className="bg-slate-50 border border-slate-200/80 p-3 rounded-xl">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Destino CENDI</span>
+                  <span className="text-sm font-black text-slate-800 truncate block">{order.dest_facility?.name || 'CENDI'}</span>
+                </div>
+                <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-xl">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 block">Monto Consolidado</span>
+                  <span className="text-xl font-black text-emerald-900">${calculateTotal().toLocaleString('en-US', { minimumFractionDigits: 2 })} USD</span>
+                </div>
+              </div>
+
+              <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[420px] overflow-y-auto">
+                <table className="min-w-full divide-y divide-slate-200 text-xs">
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-bold text-slate-600">SKU / Producto</th>
+                      <th className="px-3 py-2 text-left font-bold text-slate-600">Sucursal Destino</th>
+                      <th className="px-3 py-2 text-right font-bold text-slate-600">Cant. Asignada</th>
+                      <th className="px-3 py-2 text-right font-bold text-slate-600">Bultos</th>
+                      <th className="px-3 py-2 text-right font-bold text-slate-600">Subtotal ($)</th>
+                      <th className="px-3 py-2 text-center font-bold text-slate-600">Urgencia</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-slate-100">
+                    {order.distribution_breakdown.flatMap((item: any, iIdx: number) =>
+                      (item.stores || []).map((s: any, sIdx: number) => (
+                        <tr key={`${iIdx}-${sIdx}`} className="hover:bg-slate-50/60 transition-colors">
+                          <td className="px-3 py-2 font-medium text-slate-800">
+                            <span className="font-bold text-purple-700 block">{item.sku}</span>
+                            <span className="text-[10px] text-slate-500">{item.product_name}</span>
+                          </td>
+                          <td className="px-3 py-2 font-bold text-slate-700">
+                            {s.facility_name}
+                            <span className="text-[10px] text-slate-400 font-normal block">{s.facility_code}</span>
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">
+                            {Number(s.qty_needed).toLocaleString()}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-600">
+                            {s.boxes_needed}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono font-bold text-emerald-600">
+                            ${Number(s.subtotal).toFixed(2)}
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              s.urgency === 'CRITICAL' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                            }`}>
+                              {s.urgency || 'NORMAL'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       </Dialog>
     </div>
   );

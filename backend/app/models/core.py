@@ -105,8 +105,12 @@ class SystemSettings(Base):
     utility_calc_method = Column(String, nullable=False, default='MARGIN_ON_SALES')
     b2b_web_stock_percent = Column(Numeric(5, 2), default=30.0)
     b2b_safety_stock = Column(Numeric(19, 4), default=0.0)
+    # Phase 4: Clara Inventory Intelligence Thresholds
+    dead_stock_days_threshold = Column(Integer, default=60)
+    shrinkage_analysis_days = Column(Integer, default=90)
 
 class ExchangeRateAuditLog(Base):
+
     __tablename__ = "exchange_rate_audit_logs"
     __table_args__ = {"schema": "core"}
     
@@ -147,6 +151,16 @@ class Supplier(Base):
     sales_analysis_days = Column(Integer, default=0) # Días de Análisis
     minimum_order_qty = Column(Numeric(19, 4), default=0) # MOQ
     
+    # Phase 3: Clara Logistics & Cadence Calibration
+    auto_tune_logistics = Column(Boolean, default=False)
+    clara_suggested_lead_time = Column(Integer, nullable=True)
+    clara_suggested_restock_days = Column(Integer, nullable=True)
+    clara_lead_time_deviation = Column(Integer, default=0)
+    clara_restock_deviation = Column(Integer, default=0)
+    clara_deliveries_analyzed = Column(Integer, default=0)
+    clara_logistics_score = Column(Numeric(5, 2), default=100.0)
+    clara_last_evaluated_at = Column(DateTime(timezone=True), nullable=True)
+
     # 3. Contactos Segmentados
     commercial_contact_name = Column(String)
     commercial_contact_phone = Column(String)
@@ -205,4 +219,21 @@ class SystemJob(Base):
     is_enabled = Column(Boolean, default=True)
     execution_time = Column(Time, nullable=False)
     last_executed_at = Column(DateTime(timezone=True))
+
+class ScheduledReport(Base):
+    __tablename__ = "scheduled_reports"
+    __table_args__ = {"schema": "core"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    report_type = Column(String(60), nullable=False)
+    name = Column(String(200), nullable=False)
+    frequency = Column(String(30), default="MONTHLY") # MONTHLY, WEEKLY, DAILY
+    format = Column(String(10), default="XLSX") # XLSX, PDF, XML
+    recipient_emails = Column(JSONB, default=list)
+    filters = Column(JSONB, default=dict)
+    last_generated_at = Column(DateTime(timezone=True))
+    last_file_path = Column(String(500))
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 

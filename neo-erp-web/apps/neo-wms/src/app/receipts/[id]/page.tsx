@@ -47,6 +47,54 @@ export default function ReceiptExecutionPage() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searchingProducts, setSearchingProducts] = useState(false);
 
+  // Clara Invoice Upload & 3-Way Match Modal State
+  const [invoiceModalVisible, setInvoiceModalVisible] = useState(false);
+  const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrResult, setOcrResult] = useState<any>(null);
+  const [confirmingReconciliation, setConfirmingReconciliation] = useState(false);
+
+  const handleUploadInvoiceToClara = async () => {
+    if (!invoiceFile) {
+      toast.current?.show({ severity: 'warn', summary: 'Archivo requerido', detail: 'Por favor selecciona la foto o PDF de la factura.' });
+      return;
+    }
+    setOcrLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', invoiceFile);
+      const res = await api.post(`/reconciliation/${orderId}/upload-invoice`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      setOcrResult(res.data);
+      toast.current?.show({ 
+        severity: 'success', 
+        summary: 'OCR Completado por Clara', 
+        detail: `Factura ${res.data.invoice_number || ''} procesada. Estado: ${res.data.reconciliation_status}` 
+      });
+      fetchOrder();
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'Error procesando la factura con Clara.';
+      toast.current?.show({ severity: 'error', summary: 'Error OCR', detail: msg });
+    } finally {
+      setOcrLoading(false);
+    }
+  };
+
+  const handleConfirmReconciliation = async () => {
+    setConfirmingReconciliation(true);
+    try {
+      const res = await api.post(`/reconciliation/${orderId}/confirm-reconciliation`);
+      toast.current?.show({ severity: 'success', summary: 'Orden Conciliada', detail: res.data.message });
+      setInvoiceModalVisible(false);
+      fetchOrder();
+    } catch (err: any) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo confirmar la conciliación.' });
+    } finally {
+      setConfirmingReconciliation(false);
+    }
+  };
+
   const fetchOrder = async () => {
     setLoading(true);
     try {
@@ -235,7 +283,7 @@ export default function ReceiptExecutionPage() {
           });
           
           setOrder((prev: any) => ({ ...prev, status: 'received' }));
-          await openTicketDialog();
+          setInvoiceModalVisible(true);
       } catch(e: any) {
           const detailMsg = typeof e.response?.data?.detail === 'string' 
               ? e.response.data.detail 
@@ -273,8 +321,17 @@ export default function ReceiptExecutionPage() {
               </p>
           </div>
           
-          {/* Opciones de Impresión */}
+          {/* Opciones de Impresión y Conciliación */}
           <div className="flex flex-col sm:flex-row items-end gap-3">
+              {isReadOnly && (
+                  <Button 
+                      label="Conciliar con Clara 🤖" 
+                      icon="pi pi-sparkles" 
+                      severity="info" 
+                      onClick={() => setInvoiceModalVisible(true)} 
+                      className="font-bold bg-blue-600 hover:bg-blue-700 text-white border-none shadow-sm text-xs px-3 py-2" 
+                  />
+              )}
               <Button 
                   icon="pi pi-print" 
                   rounded 
@@ -333,11 +390,34 @@ export default function ReceiptExecutionPage() {
           <div className="flex items-center gap-3">
             <i className="pi pi-check-circle text-3xl text-emerald-600"></i>
             <div>
-              <h3 className="font-black text-lg text-emerald-900">RECEPCIÓN REGISTRADA Y ASENTADA EN INVENTARIO</h3>
+              <div className="flex items-center gap-2">
+                <h3 className="font-black text-lg text-emerald-900">RECEPCIÓN REGISTRADA Y ASENTADA EN INVENTARIO</h3>
+                {order?.reconciliation_status === 'MATCH_EXACT' && (
+                  <Tag value="✓ CONCILIADA 100%" severity="success" className="font-black text-[10px]" />
+                )}
+                {order?.reconciliation_status === 'MATCH_WITH_DEBIT_NOTE' && (
+                  <Tag value={`⚠️ NOTA DÉBITO: $${Number(order.debit_note_amount || 0).toFixed(2)}`} severity="warning" className="font-black text-[10px]" />
+                )}
+              </div>
               <p className="text-xs text-emerald-700 font-medium">Esta orden fue recibida y cerrada. No se permiten modificaciones para preservar la validez legal del acta impresa.</p>
             </div>
           </div>
-          <Button label="Imprimir Acta Definitiva 🖨️" icon="pi pi-print" severity="success" onClick={openTicketDialog} className="font-bold bg-emerald-600 text-white border-none px-6 py-3 shadow-md hover:bg-emerald-700 shrink-0" />
+          <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+            <Button 
+                label="Conciliar Factura con Clara 🤖" 
+                icon="pi pi-sparkles" 
+                severity="info" 
+                onClick={() => setInvoiceModalVisible(true)} 
+                className="font-black bg-blue-600 hover:bg-blue-700 text-white border-none px-4 py-3 shadow-md" 
+            />
+            <Button 
+                label="Imprimir Acta Definitiva 🖨️" 
+                icon="pi pi-print" 
+                severity="success" 
+                onClick={openTicketDialog} 
+                className="font-bold bg-emerald-600 text-white border-none px-6 py-3 shadow-md hover:bg-emerald-700" 
+            />
+          </div>
         </div>
       )}
 
@@ -651,6 +731,129 @@ export default function ReceiptExecutionPage() {
                       <p className="p-4 text-xs text-slate-400 text-center">Ingrese término para buscar en catálogo.</p>
                   )}
               </div>
+          </div>
+      </Dialog>
+
+      {/* DIÁLOGO COTEJO FISCAL Y CONCILIACIÓN CON CLARA (OCR MULTIMODAL) */}
+      <Dialog 
+          header={
+            <div className="flex items-center gap-2">
+              <span className="p-2 rounded-lg bg-blue-100 text-blue-700 font-black text-sm">🤖 CLARA AI</span>
+              <span className="font-black text-slate-800 text-lg">Cotejo Fiscal y Conciliación 3-Way</span>
+            </div>
+          } 
+          visible={invoiceModalVisible} 
+          onHide={() => setInvoiceModalVisible(false)} 
+          style={{ width: '620px' }}
+      >
+          <div className="flex flex-col gap-4 py-2 text-slate-700">
+              <div className="p-3 bg-blue-50/60 border border-blue-200 rounded-xl text-xs text-blue-900 leading-relaxed">
+                  <p className="font-bold mb-1">📸 Ingesta de Factura / Guía de Despacho:</p>
+                  Sube la foto del documento o PDF entregado por el proveedor. Clara extraerá automáticamente los datos fiscales y cotejará línea a línea con la recepción en muelle para validar precios y cantidades.
+              </div>
+
+              {/* Selector de Archivo */}
+              <div className="flex flex-col gap-2">
+                  <label className="text-xs font-bold text-slate-600">Seleccionar Documento (Foto o PDF):</label>
+                  <input 
+                      type="file" 
+                      accept="image/*,application/pdf" 
+                      onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                              setInvoiceFile(e.target.files[0]);
+                          }
+                      }}
+                      className="block w-full text-xs text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-black file:bg-blue-600 file:text-white hover:file:bg-blue-700 file:cursor-pointer cursor-pointer border border-slate-200 rounded-xl p-1 bg-slate-50"
+                  />
+                  {invoiceFile && (
+                      <p className="text-[11px] text-emerald-600 font-bold flex items-center gap-1">
+                          <i className="pi pi-check"></i> Archivo listo: {invoiceFile.name} ({(invoiceFile.size / 1024).toFixed(1)} KB)
+                      </p>
+                  )}
+              </div>
+
+              {/* Botón de Análisis OCR */}
+              <Button 
+                  label={ocrLoading ? "Clara está leyendo el documento y cotejando..." : "Analizar con Clara OCR ⚡"} 
+                  icon={ocrLoading ? "pi pi-spin pi-spinner" : "pi pi-sparkles"} 
+                  severity="info" 
+                  disabled={!invoiceFile || ocrLoading} 
+                  onClick={handleUploadInvoiceToClara}
+                  className="w-full font-black py-3 bg-blue-600 hover:bg-blue-700 border-none shadow-md"
+              />
+
+              {/* Resultados de la Conciliación */}
+              {ocrResult && (
+                  <div className="mt-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col gap-3">
+                      <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                          <div>
+                              <p className="font-bold text-slate-800 text-sm">Factura: {ocrResult.invoice_number || 'N/A'}</p>
+                              <p className="text-[11px] text-slate-500">Fecha: {ocrResult.invoice_date || 'N/A'}</p>
+                          </div>
+                          {ocrResult.reconciliation_status === 'MATCH_EXACT' && (
+                              <Tag value="✓ COINCIDENCIA EXACTA" severity="success" className="font-black px-3 py-1" />
+                          )}
+                          {ocrResult.reconciliation_status === 'MATCH_WITH_DEBIT_NOTE' && (
+                              <Tag value="⚠️ NOTA DE DÉBITO SUGERIDA" severity="warning" className="font-black px-3 py-1" />
+                          )}
+                          {ocrResult.reconciliation_status === 'PENDING_DECISION' && (
+                              <Tag value="❓ ÍTEMS NO PEDIDOS" severity="danger" className="font-black px-3 py-1" />
+                          )}
+                      </div>
+
+                      {/* Métricas Resumidas */}
+                      <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                          <div className="p-2 bg-white rounded-xl border border-slate-200">
+                              <span className="text-slate-400 block text-[10px] uppercase font-bold">Físico Recibido</span>
+                              <span className="font-bold text-slate-700">${ocrResult.total_received?.toFixed(2)}</span>
+                          </div>
+                          <div className="p-2 bg-white rounded-xl border border-slate-200">
+                              <span className="text-slate-400 block text-[10px] uppercase font-bold">Facturado OCR</span>
+                              <span className="font-bold text-blue-700">${ocrResult.total_invoiced?.toFixed(2)}</span>
+                          </div>
+                          <div className="p-2 bg-white rounded-xl border border-slate-200">
+                              <span className="text-slate-400 block text-[10px] uppercase font-bold">Diferencia</span>
+                              <span className={`font-black ${ocrResult.net_financial_diff > 0.50 ? 'text-red-600' : 'text-emerald-600'}`}>
+                                  ${ocrResult.net_financial_diff?.toFixed(2)}
+                              </span>
+                          </div>
+                      </div>
+
+                      {/* Alerta de Nota de Débito */}
+                      {ocrResult.debit_note_amount > 0 && (
+                          <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 flex justify-between items-center">
+                              <div>
+                                  <p className="font-bold">Nota de Débito {ocrResult.debit_note_number}:</p>
+                                  <p className="text-[11px] text-amber-800">{ocrResult.reconciliation_notes}</p>
+                              </div>
+                              <span className="text-base font-black text-amber-900 bg-amber-200 px-3 py-1 rounded-lg">
+                                  ${ocrResult.debit_note_amount?.toFixed(2)}
+                              </span>
+                          </div>
+                      )}
+
+                      {/* Botón de Confirmación */}
+                      <div className="flex justify-end gap-2 mt-2 pt-2 border-t border-slate-200">
+                          <Button 
+                              label="Cerrar y Revisar en Compras" 
+                              text 
+                              severity="secondary" 
+                              onClick={() => {
+                                  setInvoiceModalVisible(false);
+                                  router.push('/reconciliation');
+                              }} 
+                          />
+                          <Button 
+                              label="Aprobar y Conciliar Orden" 
+                              icon="pi pi-check-circle" 
+                              severity="success" 
+                              loading={confirmingReconciliation} 
+                              onClick={handleConfirmReconciliation} 
+                              className="font-bold bg-emerald-600 border-none"
+                          />
+                      </div>
+                  </div>
+              )}
           </div>
       </Dialog>
     </div>

@@ -34,11 +34,13 @@ function AppSidebarContent() {
   const analyticsItems = [
     { label: 'Visión General', icon: 'pi pi-chart-pie', href: '/' },
     { label: 'Consola Clara (Diagnóstico)', icon: 'pi pi-sparkles', href: '/settings/bot' },
+    { label: 'Dead Stock & Merma Real', icon: 'pi pi-exclamation-triangle', href: '/dead-stock' },
   ];
 
   const operationsItems = [
     { label: 'Requisiciones Internas', icon: 'pi pi-inbox', href: '/requisitions' },
     { label: 'Órdenes de Compra', icon: 'pi pi-file', href: '/orders' },
+    { label: 'Convenios Sell-Out & N/C', icon: 'pi pi-percentage', href: '/sell-out' },
     { label: 'Conciliación 3-Way Match', icon: 'pi pi-check-circle', href: '/reconciliation' },
     { label: 'Directorio de Proveedores', icon: 'pi pi-users', href: '/suppliers' },
   ];

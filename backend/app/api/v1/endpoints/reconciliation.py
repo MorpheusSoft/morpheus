@@ -1,15 +1,19 @@
 from typing import Any, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import desc, func, or_
 from decimal import Decimal
 from datetime import datetime, date
+import os
+import uuid
 
 from pydantic import BaseModel
 from app.api import deps
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine, SupplierProduct
 from app.models.inventory import ProductVariant, Product, ProductPackaging, InventorySnapshot, SupplierReturn, SupplierReturnLine
 from app.models.core import Supplier, Currency, Facility, User, Company
+from app.models.digital_workers import DigitalWorker, DigitalWorkerActionLog
+from app.services.invoice_ocr_service import InvoiceOCRService
 from app.schemas.reconciliation import (
     ReconciliationOrderDetail,
     ReconciliationLineOut,
@@ -310,6 +314,8 @@ def get_reconciliation_order_detail(
         total_billed_amount=round(total_billed, 4),
         total_debit_note_suggested=round(total_debit_note, 4),
         net_payable_suggested=round(net_payable, 4),
+        invoice_documents=order.invoice_documents or [],
+        ocr_extracted_payload=order.ocr_extracted_payload or {},
         lines=lines_out
     )
 
@@ -723,5 +729,172 @@ def close_return_reconciliation(
         "credit_note_number": ret.credit_note_number,
         "credit_note_amount": float(ret.credit_note_amount),
         "conciliated_at": ret.conciliated_at.strftime("%d/%m/%Y %H:%M")
+    }
+
+
+# ==========================================
+# ENDPOINTS OCR MULTIMODAL Y 3-WAY MATCH (CLARA)
+# ==========================================
+
+INVOICE_UPLOAD_DIR = "static/uploads/invoices"
+os.makedirs(INVOICE_UPLOAD_DIR, exist_ok=True)
+
+@router.post("/{order_id}/upload-invoice")
+async def upload_invoice_and_match(
+    order_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Carga la factura o guía física del proveedor (foto de alta resolución o PDF),
+    ejecuta el OCR multimodal de Clara con Gemini 2.5 Flash y procesa la conciliación 3-Way.
+    """
+    order = db.query(PurchaseOrder).options(
+        selectinload(PurchaseOrder.lines),
+        selectinload(PurchaseOrder.supplier),
+        selectinload(PurchaseOrder.dest_facility)
+    ).filter(PurchaseOrder.id == order_id).first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden de compra no encontrada.")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".jpg", ".jpeg", ".png", ".webp", ".pdf"]:
+        raise HTTPException(status_code=400, detail="Formato no soportado. Se admiten JPG, PNG, WEBP y PDF.")
+
+    contents = await file.read()
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="El archivo enviado está vacío.")
+
+    # Guardar archivo sin degradar resolución para garantizar legibilidad de fuentes fiscales
+    filename = f"inv_{order.reference}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}{ext}"
+    file_path = os.path.join(INVOICE_UPLOAD_DIR, filename)
+    with open(file_path, "wb") as f:
+        f.write(contents)
+
+    file_url = f"/static/uploads/invoices/{filename}"
+
+    # Actualizar documentos adjuntos en la ODC
+    existing_docs = order.invoice_documents or []
+    if not isinstance(existing_docs, list):
+        existing_docs = []
+    existing_docs.append({
+        "filename": file.filename,
+        "url": file_url,
+        "uploaded_at": datetime.utcnow().isoformat(),
+        "uploaded_by": current_user.email or current_user.full_name
+    })
+    order.invoice_documents = existing_docs
+
+    mime_type = "application/pdf" if ext == ".pdf" else f"image/{ext.replace('.', '')}"
+    if mime_type == "image/jpg":
+        mime_type = "image/jpeg"
+
+    # Extracción OCR Multimodal
+    extracted_data = InvoiceOCRService.extract_invoice_data(contents, mime_type, order, db)
+
+    # Procesar 3-Way Match
+    match_result = InvoiceOCRService.process_3way_match(order, extracted_data, db)
+    match_result["invoice_file_url"] = file_url
+    match_result["all_documents"] = existing_docs
+
+    # Registrar en logs de Trabajador Digital (Clara)
+    clara = db.query(DigitalWorker).filter(DigitalWorker.agent_code == "CLARA_COMPRAS").first()
+    if clara:
+        order.reconciled_by_worker_id = clara.id
+        action_log = DigitalWorkerActionLog(
+            worker_id=clara.id,
+            action_type="3WAY_MATCH_OCR",
+            description=f"Clara procesó factura para {order.reference}. Estado: {match_result['reconciliation_status']}",
+            entity_type="PURCHASE_ORDER",
+            entity_id=str(order.id),
+            execution_status="SUCCESS",
+            details=match_result
+        )
+        db.add(action_log)
+        db.commit()
+
+    return match_result
+
+@router.get("/{order_id}/ocr-status")
+def get_order_ocr_status(
+    order_id: int,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden no encontrada")
+
+    return {
+        "order_id": order.id,
+        "order_reference": order.reference,
+        "reconciliation_status": order.reconciliation_status or "PENDING",
+        "invoice_number": order.invoice_number,
+        "invoice_date": str(order.invoice_date) if order.invoice_date else None,
+        "debit_note_number": order.debit_note_number,
+        "debit_note_amount": float(order.debit_note_amount or 0),
+        "reconciliation_notes": order.reconciliation_notes,
+        "invoice_documents": order.invoice_documents or [],
+        "ocr_extracted_payload": order.ocr_extracted_payload or {}
+    }
+
+@router.post("/{order_id}/confirm-reconciliation")
+def confirm_order_reconciliation(
+    order_id: int,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Confirma el cierre de la conciliación 3-Way asistida por Clara.
+    Aplica la Nota de Débito calculada si corresponde y actualiza el costo de reposición.
+    """
+    order = db.query(PurchaseOrder).options(
+        selectinload(PurchaseOrder.lines)
+    ).filter(PurchaseOrder.id == order_id).first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden no encontrada")
+
+    has_nd = order.debit_note_amount and order.debit_note_amount > Decimal('0.50')
+    order.reconciliation_status = "MATCH_WITH_DEBIT_NOTE" if has_nd else "MATCH_EXACT"
+    order.status = "conciliated"
+    order.conciliated_at = datetime.utcnow()
+    order.conciliated_by_id = current_user.id
+
+    # Actualizar costos en variantes
+    for line in order.lines:
+        variant = db.query(ProductVariant).filter(ProductVariant.id == line.variant_id).first()
+        if variant and line.billed_unit_cost and line.billed_unit_cost > 0:
+            c_billed = line.billed_unit_cost
+            variant.replacement_cost = c_billed
+            variant.last_cost = c_billed
+
+            # Recálculo ponderado del costo promedio (WAVG)
+            snap = db.query(InventorySnapshot).filter(
+                InventorySnapshot.variant_id == line.variant_id,
+                InventorySnapshot.facility_id == order.dest_facility_id
+            ).first() if order.dest_facility_id else None
+
+            current_stock = Decimal(str(snap.stock_qty or 0)) if snap else Decimal(0)
+            rec_qty = Decimal(str(line.received_base_qty or 0))
+            if current_stock + rec_qty > 0 and variant.average_cost and variant.average_cost > 0:
+                new_avg = ((Decimal(str(variant.average_cost)) * current_stock) + (c_billed * rec_qty)) / (current_stock + rec_qty)
+                variant.average_cost = round(new_avg, 4)
+            else:
+                variant.average_cost = c_billed
+
+    db.commit()
+    db.refresh(order)
+
+    return {
+        "status": "success",
+        "order_id": order.id,
+        "order_reference": order.reference,
+        "reconciliation_status": order.reconciliation_status,
+        "debit_note_number": order.debit_note_number,
+        "debit_note_amount": float(order.debit_note_amount or 0),
+        "message": f"Orden {order.reference} conciliada exitosamente."
     }
 

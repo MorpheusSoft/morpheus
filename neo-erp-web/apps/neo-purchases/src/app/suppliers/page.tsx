@@ -18,7 +18,13 @@ interface Supplier {
     lead_time_days: number;
     minimum_order_qty: number;
     is_active: boolean;
+    auto_tune_logistics?: boolean;
+    clara_lead_time_deviation?: number;
+    clara_restock_deviation?: number;
+    clara_deliveries_analyzed?: number;
+    clara_logistics_score?: number;
 }
+
 
 export default function SuppliersCatalog() {
     const router = useRouter();
@@ -179,8 +185,40 @@ export default function SuppliersCatalog() {
                         style={{ minWidth: '12rem' }}
                     ></Column>
                     <Column field="commercial_email" header="Email Comercial" style={{ minWidth: '15rem' }}></Column>
-                    <Column field="lead_time_days" header="Lead Time (Días)" sortable style={{ minWidth: '10rem' }}></Column>
+                    <Column 
+                        header="Lead Time & Calibración" 
+                        sortable 
+                        sortField="lead_time_days"
+                        body={(rowData: Supplier) => {
+                            const dev = rowData.clara_lead_time_deviation || 0;
+                            const analyzed = rowData.clara_deliveries_analyzed || 0;
+                            const hasDrift = Math.abs(dev) >= 2 && analyzed >= 3;
+                            return (
+                                <div className="flex flex-col gap-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-semibold text-slate-700">{rowData.lead_time_days ?? 0} días</span>
+                                        {rowData.auto_tune_logistics && (
+                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold border border-indigo-200" title="Auto-calibración por Clara activada">
+                                                ⚡ Auto
+                                            </span>
+                                        )}
+                                    </div>
+                                    {hasDrift ? (
+                                        <span className="inline-flex items-center w-fit text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-medium">
+                                            ⚠️ Desvío ({dev > 0 ? `+${dev}` : dev}d)
+                                        </span>
+                                    ) : analyzed >= 3 ? (
+                                        <span className="inline-flex items-center w-fit text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
+                                            ✓ Calibrado
+                                        </span>
+                                    ) : null}
+                                </div>
+                            );
+                        }}
+                        style={{ minWidth: '13rem' }}
+                    ></Column>
                     <Column body={statusBodyTemplate} header="Estado" style={{ minWidth: '8rem' }}></Column>
+
                     <Column 
                         body={(rowData) => (
                             <div className="flex justify-end gap-2">

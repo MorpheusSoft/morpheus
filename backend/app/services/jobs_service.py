@@ -18,8 +18,12 @@ def execute_job_by_code(job_code: str, db: Session):
         execute_mrp_consolidation(db)
     elif job_code == 'bcv_daily_rate_sync':
         execute_bcv_rate_sync(db)
+    elif job_code == 'monthly_purchases_audit_report':
+        from app.services.monthly_reports_service import execute_scheduled_monthly_job
+        execute_scheduled_monthly_job(db)
     else:
         logger.warning(f"[CRON DAEMON] Código de job desconocido: {job_code}")
+
 
 def poll_and_execute_jobs():
     from app.db.base_class import Base  # Just to ensure models are loaded

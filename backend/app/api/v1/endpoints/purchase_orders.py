@@ -1,5 +1,5 @@
 from typing import Any, List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
@@ -257,6 +257,13 @@ def read_purchase_order_details(
             "name": facility.name,
             "code": facility.code
         } if facility else None,
+        "consolidation_mode": getattr(order, "consolidation_mode", "DIRECT_STORE") or "DIRECT_STORE",
+        "target_cd_facility": {
+            "id": order.target_cd_facility.id,
+            "name": order.target_cd_facility.name,
+            "code": order.target_cd_facility.code
+        } if getattr(order, "target_cd_facility", None) else None,
+        "distribution_breakdown": getattr(order, "distribution_breakdown", []) or [],
         "invoice_number": order.invoice_number,
         "invoice_date": order.invoice_date,
         "conciliated_at": order.conciliated_at,
@@ -755,4 +762,61 @@ def get_purchase_order_pdf_data(
             "total_amount": float(order.total_amount or (subtotal * Decimal('1.16')))
         }
     }
+
+@router.get("/{id}/export-breakdown")
+def export_purchase_order_breakdown(
+    id: int,
+    format: str = Query("xlsx", regex="^(xlsx|xml)$"),
+    db: Session = Depends(deps.get_db)
+):
+    """
+    Exporta el desglose de distribución a tiendas de una Orden Consolidada CENDI en Excel o XML.
+    """
+    from app.services.dynamic_export_service import export_cendi_order_to_excel, export_cendi_order_to_xml
+    from app.models.inventory import Product, ProductVariant
+    from app.models.core import Supplier, Facility
+
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden de compra no encontrada")
+
+    supp = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
+    supplier_name = supp.name if supp else "Proveedor"
+    cendi = db.query(Facility).filter(Facility.id == order.dest_facility_id).first()
+    cendi_name = cendi.name if cendi else "CENDI"
+
+    breakdown = order.distribution_breakdown or []
+    lines_data = []
+    for l in order.lines:
+        variant = db.query(ProductVariant).filter(ProductVariant.id == l.variant_id).first()
+        prod = db.query(Product).filter(Product.id == variant.product_id).first() if variant else None
+        lines_data.append({
+            "sku": variant.sku if variant else "N/A",
+            "product_name": prod.name if prod else "N/A",
+            "boxes_needed": int(l.qty_ordered),
+            "total_qty": float(l.expected_base_qty),
+            "unit_cost": float(l.unit_cost),
+            "total_subtotal": float(l.expected_base_qty * l.unit_cost)
+        })
+
+    if format == "xml":
+        res = export_cendi_order_to_xml(
+            order_reference=order.reference,
+            supplier_name=supplier_name,
+            cendi_name=cendi_name,
+            total_amount=float(order.total_amount),
+            distribution_breakdown=breakdown
+        )
+    else:
+        res = export_cendi_order_to_excel(
+            order_reference=order.reference,
+            supplier_name=supplier_name,
+            cendi_name=cendi_name,
+            total_amount=float(order.total_amount),
+            lines=lines_data,
+            distribution_breakdown=breakdown
+        )
+
+    return res
+
 

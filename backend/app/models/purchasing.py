@@ -5,7 +5,7 @@ import uuid
 from sqlalchemy.sql import func
 from app.db.base_class import Base
 
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
 class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
@@ -47,8 +47,20 @@ class PurchaseOrder(Base):
     debit_note_amount = Column(Numeric(19, 4), default=0)
     reconciliation_notes = Column(Text, nullable=True)
     
+    # Phase 1 Digital Worker Extension
+    invoice_documents = Column(JSONB, default=list)
+    ocr_extracted_payload = Column(JSONB, default=dict)
+    reconciliation_mode = Column(String(30), default='AUTO')
+    reconciled_by_worker_id = Column(Integer, ForeignKey("core.digital_workers.id"), nullable=True)
+
+    # Phase 2 Digital Worker Extension: CENDI & Multi-Store Consolidation
+    consolidation_mode = Column(String(30), default='DIRECT_STORE')  # DIRECT_STORE, CONSOLIDATED_CD
+    target_cd_facility_id = Column(Integer, ForeignKey("core.facilities.id"), nullable=True)
+    distribution_breakdown = Column(JSONB, default=list)
+    
     supplier = relationship("Supplier")
-    dest_facility = relationship("Facility")
+    dest_facility = relationship("Facility", foreign_keys=[dest_facility_id])
+    target_cd_facility = relationship("Facility", foreign_keys=[target_cd_facility_id])
     lines = relationship("PurchaseOrderLine", back_populates="order")
 
 class PurchaseOrderLine(Base):
@@ -92,6 +104,13 @@ class SupplierProduct(Base):
     min_order_qty = Column(Numeric(19, 4), default=1)
     is_active = Column(Boolean, default=True)
     is_primary = Column(Boolean, default=False)
+    
+    # Phase 1: Reorder Blocking for Dead Stock / Negative Margin
+    is_reorder_blocked = Column(Boolean, default=False)
+    block_reason = Column(String(255), nullable=True)
+    blocked_at = Column(DateTime(timezone=True), nullable=True)
+    blocked_by_worker_id = Column(Integer, ForeignKey("core.digital_workers.id"), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -105,4 +124,52 @@ class MRPBotLog(Base):
     orders_generated = Column(Integer, default=0)
     items_evaluated = Column(Integer, default=0)
     details = Column(Text) # JSON string containing details of what was bought and omitted
+
+class SellOutAgreement(Base):
+    __tablename__ = "sell_out_agreements"
+    __table_args__ = {"schema": "pur"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(50), unique=True, nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    supplier_id = Column(Integer, ForeignKey("core.suppliers.id"), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    status = Column(String(30), default="DRAFT", index=True) # DRAFT, ACTIVE, SETTLED, CONCILIATED, CANCELLED
+    total_claim_amount = Column(Numeric(19, 4), default=0.0)
+    settled_at = Column(DateTime(timezone=True), nullable=True)
+    settled_by_worker_id = Column(Integer, ForeignKey("core.digital_workers.id"), nullable=True)
+    credit_note_number = Column(String(80), nullable=True)
+    credit_note_date = Column(Date, nullable=True)
+    credit_note_amount = Column(Numeric(19, 4), default=0.0)
+    conciliation_status = Column(String(30), default="PENDING") # PENDING, MATCH_EXACT, DISCREPANCY, REJECTED
+    conciliation_notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    supplier = relationship("Supplier")
+    lines = relationship("SellOutAgreementLine", back_populates="agreement", cascade="all, delete-orphan")
+
+class SellOutAgreementLine(Base):
+    __tablename__ = "sell_out_agreement_lines"
+    __table_args__ = {"schema": "pur"}
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    agreement_id = Column(Integer, ForeignKey("pur.sell_out_agreements.id", ondelete="CASCADE"), nullable=False)
+    variant_id = Column(Integer, ForeignKey("inv.product_variants.id"), nullable=False)
+    regular_price = Column(Numeric(19, 4), nullable=False, default=0.0)
+    promo_price = Column(Numeric(19, 4), nullable=False, default=0.0)
+    discount_per_unit = Column(Numeric(19, 4), nullable=False, default=0.0)
+    provider_share_pct = Column(Numeric(5, 2), default=100.0)
+    provider_share_fixed = Column(Numeric(19, 4), default=0.0)
+    units_sold_qty = Column(Numeric(19, 4), default=0.0)
+    claim_amount = Column(Numeric(19, 4), default=0.0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    agreement = relationship("SellOutAgreement", back_populates="lines")
+    variant = relationship("ProductVariant")
+
+# Ensure cross-schema relations resolve properly
+from app.models import inventory  # noqa: F401
+
 

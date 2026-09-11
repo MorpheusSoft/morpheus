@@ -5,11 +5,29 @@ import { InputText } from 'primereact/inputtext';
 import { ReportService } from '@/services/report.service';
 import { SvgChart } from '@/components/SvgChart';
 
+export interface ActionButton {
+  label: string;
+  action: string;
+  icon?: string;
+  prompt?: string;
+  payload?: any;
+}
+
+export interface FileExport {
+  filename: string;
+  download_url: string;
+  format: string;
+  file_size?: string;
+  total_records?: number;
+}
+
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
   table?: any[];
   chart?: any;
+  actions?: ActionButton[];
+  file_export?: FileExport;
   timestamp?: string;
 }
 
@@ -175,6 +193,8 @@ export function DigitalWorkerCopilot({
           content: res.text_response || 'He procesado la consulta.',
           table: res.data_table || undefined,
           chart: res.chart || undefined,
+          actions: res.actions || undefined,
+          file_export: res.file_export || undefined,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         },
       ]);
@@ -191,6 +211,19 @@ export function DigitalWorkerCopilot({
     } finally {
       setLoading(false);
     }
+  };
+
+  const getDownloadUrl = (url: string) => {
+    if (!url) return '#';
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    const baseUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000').replace(/\/api\/v1\/?$/, '');
+    return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+  };
+
+  const handleActionClick = (action: ActionButton) => {
+    if (loading) return;
+    const promptToSend = action.prompt || action.label;
+    handleSend(promptToSend);
   };
 
   const handleClearHistory = () => {
@@ -414,6 +447,58 @@ export function DigitalWorkerCopilot({
                   {m.chart && (
                     <div className="mt-3 bg-white rounded-xl p-2 border border-slate-200">
                       <SvgChart type={m.chart.type} labels={m.chart.labels} datasets={m.chart.datasets} />
+                    </div>
+                  )}
+
+                  {/* Interactive Decision Actions */}
+                  {m.actions && m.actions.length > 0 && (
+                    <div className="mt-3.5 pt-3 border-t border-slate-100 flex flex-wrap gap-2">
+                      {m.actions.map((act, aIdx) => (
+                        <button
+                          key={aIdx}
+                          onClick={() => handleActionClick(act)}
+                          disabled={loading}
+                          className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white border border-emerald-300 transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        >
+                          <i className={act.icon || 'pi pi-bolt'} style={{ fontSize: '11px' }}></i>
+                          <span>{act.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Dynamic File Export Card */}
+                  {m.file_export && (
+                    <div className="mt-3.5 p-3 rounded-xl bg-slate-50 border border-slate-200 shadow-2xs flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div
+                          className={`w-9 h-9 rounded-lg flex items-center justify-center font-black text-sm shrink-0 ${
+                            m.file_export.format === 'xlsx'
+                              ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                              : 'bg-indigo-100 text-indigo-700 border border-indigo-200'
+                          }`}
+                        >
+                          <i className={m.file_export.format === 'xlsx' ? 'pi pi-file-excel' : 'pi pi-code'}></i>
+                        </div>
+                        <div className="truncate">
+                          <p className="font-bold text-slate-900 text-xs truncate max-w-[190px]" title={m.file_export.filename}>
+                            {m.file_export.filename}
+                          </p>
+                          <p className="text-[10px] text-slate-500 font-medium">
+                            {m.file_export.format.toUpperCase()} {m.file_export.total_records ? `• ${m.file_export.total_records} registros` : ''} {m.file_export.file_size ? `• ${m.file_export.file_size}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        href={getDownloadUrl(m.file_export.download_url)}
+                        download={m.file_export.filename}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 shrink-0 no-underline"
+                      >
+                        <i className="pi pi-download text-xs"></i>
+                        <span>Descargar</span>
+                      </a>
                     </div>
                   )}
                 </div>

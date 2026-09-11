@@ -1309,17 +1309,31 @@ def ai_chat_assistant(
                 "products_count": prod_count
             }
 
-    # Resolve Supplier
+    # Resolve Supplier & CENDI Dispatch Strategy
+    resolved_sup = None
     if resolved_entities.get("search_supplier"):
         sup_term = resolved_entities["search_supplier"]
         resolved_sup = db.query(Supplier).filter(Supplier.name.ilike(f"%{sup_term}%")).first()
-        if resolved_sup:
-            # Get supplier products count
-            prod_count = db.query(SupplierProduct).filter(SupplierProduct.supplier_id == resolved_sup.id).count()
-            db_context["supplier"] = {
-                "name": resolved_sup.name,
-                "products_count": prod_count
-            }
+    if not resolved_sup:
+        for s in db.query(Supplier).all():
+            if s.name.lower() in payload.message.lower():
+                resolved_sup = s
+                break
+
+    if resolved_sup:
+        prod_count = db.query(SupplierProduct).filter(SupplierProduct.supplier_id == resolved_sup.id).count()
+        db_context["supplier"] = {
+            "id": resolved_sup.id,
+            "name": resolved_sup.name,
+            "products_count": prod_count
+        }
+        try:
+            from app.services.mrp_bot_service import analyze_supplier_dispatch_pattern
+            patron_info = analyze_supplier_dispatch_pattern(db, supplier_id=resolved_sup.id)
+            db_context["patron_despacho_proveedor"] = patron_info
+        except Exception as ex:
+            print(f"Error analyzing supplier dispatch pattern: {ex}")
+
 
     # Intent-specific and keyword-based contextual queries
     intent = resolved_entities.get("intent", "general")
@@ -1395,7 +1409,82 @@ def ai_chat_assistant(
             for po, sup in pos
         ]
 
+    # 4. Auditoría Dead Stock & Inmovilizado (Fase 4 - Caso 4)
+    if any(k in msg_lower for k in ["dead stock", "stock muerto", "inmovilizado", "sin movimiento", "estancado", "rotacion lenta", "rotación lenta"]):
+        try:
+            from app.services.dead_stock_service import audit_all_dead_stock
+            dead_data = audit_all_dead_stock(db, days_threshold=60, auto_block=False)
+            db_context["auditoria_dead_stock"] = {
+                "total_articulos_dead_stock": dead_data["total_dead_stock_items"],
+                "total_articulos_lenta_rotacion": dead_data["total_slow_moving_items"],
+                "capital_inmovilizado_usd": float(dead_data["total_capital_immobilized_usd"]),
+                "articulos_bloqueados_recompra": dead_data["items_blocked_for_reorder"],
+                "top_dead_stock": [
+                    {
+                        "sku": it["sku"],
+                        "producto": it["product_name"],
+                        "stock": float(it["qty_on_hand"]),
+                        "dias_sin_ventas": it["days_without_sales"],
+                        "valoracion_usd": float(it["stock_valuation_usd"]),
+                        "estatus": it["dead_stock_status"],
+                        "bloqueado": it["is_blocked_for_purchasing"]
+                    }
+                    for it in dead_data["items"][:8]
+                ]
+            }
+        except Exception as ex:
+            print(f"Error in dead_stock chat context: {ex}")
+
+    # 5. Auditoría Mermas & Rentabilidad Real (Fase 4 - Caso 7)
+    if any(k in msg_lower for k in ["merma", "mermas", "desperdicio", "averia", "avería", "scrap", "rentabilidad real", "margen real"]):
+        try:
+            from app.services.shrinkage_profitability_service import audit_all_shrinkage_profitability
+            shrinkage_data = audit_all_shrinkage_profitability(db, lookback_days=90, auto_block=False)
+            db_context["auditoria_mermas_rentabilidad"] = {
+                "total_skus_evaluados": shrinkage_data["total_skus_evaluated"],
+                "skus_en_riesgo_margen": shrinkage_data["skus_at_risk"],
+                "perdida_total_mermas_usd": float(shrinkage_data["total_shrinkage_loss_usd"]),
+                "promedio_merma_pct": float(shrinkage_data["average_shrinkage_pct"]),
+                "top_mermas_criticas": [
+                    {
+                        "sku": it["sku"],
+                        "producto": it["product_name"],
+                        "merma_pct": float(it["shrinkage_pct"]),
+                        "margen_bruto_pct": float(it["gross_margin_pct"]),
+                        "margen_neto_real_pct": float(it["net_real_margin_pct"]),
+                        "perdida_usd": float(it["shrinkage_cost_usd"]),
+                        "estado": it["profitability_status"]
+                    }
+                    for it in shrinkage_data["items"][:8]
+                ]
+            }
+        except Exception as ex:
+            print(f"Error in shrinkage chat context: {ex}")
+
+    # 6. Convenios Sell-Out (Fase 4 - Caso 9)
+    if any(k in msg_lower for k in ["sell out", "sell-out", "sellout", "convenio", "convenios", "reclamo proveedor"]):
+        try:
+            from app.services.sell_out_service import get_sell_out_agreements
+            agreements = get_sell_out_agreements(db)
+            db_context["convenios_sell_out"] = [
+                {
+                    "codigo": a["code"],
+                    "titulo": a["title"],
+                    "proveedor": a["supplier_name"],
+                    "vigencia": f"{a['start_date']} al {a['end_date']}",
+                    "estado": a["status"],
+                    "monto_reclamo_usd": float(a["total_claim_amount"] or 0),
+                    "nc_proveedor": a["credit_note_number"],
+                    "monto_nc_usd": float(a["credit_note_amount"] or 0),
+                    "conciliacion": a["conciliation_status"]
+                }
+                for a in agreements[:8]
+            ]
+        except Exception as ex:
+            print(f"Error in sell_out chat context: {ex}")
+
     # Step 3: Analysis & Formatting Response using Gemini
+
     final_prompt = (
         "Eres Clara, la Especialista Digital de Compras de Neo ERP.\n"
         "Eres profesional, proactiva, analítica y amigable. Tu labor es asesorar al equipo de compras con datos exactos y en tiempo real.\n"
@@ -1439,11 +1528,191 @@ def ai_chat_assistant(
         with urllib.request.urlopen(req, timeout=20) as response:
             res_data = json.loads(response.read().decode('utf-8'))
             text_content = res_data['candidates'][0]['content']['parts'][0]['text']
-            return json.loads(text_content.strip())
+            res_dict = json.loads(text_content.strip())
+            if not isinstance(res_dict, dict):
+                res_dict = {"text_response": str(res_dict), "data_table": [], "chart": None}
     except Exception as e:
         print(f"Error calling Gemini in chat: {e}")
-        return {
+        res_dict = {
             "text_response": f"Lo siento, ocurrió un error al consultar con el Asistente de IA: {str(e)}",
             "data_table": [],
             "chart": None
         }
+
+    # Post-Processing: CENDI Consolidation & Dynamic Export Engine
+    try:
+        import re
+        from app.services.dynamic_export_service import (
+            generate_excel_export,
+            generate_xml_export,
+            export_cendi_order_to_excel,
+            export_cendi_order_to_xml
+        )
+        from app.services.mrp_bot_service import generate_consolidated_cendi_order
+
+        # 1. Action Trigger: Explicit request to consolidate in CENDI
+        if any(k in msg_lower for k in ["consolidar en cendi", "consolidar cendi", "orden consolidada cendi", "consolidar pedido en cendi"]):
+            target_sup = resolved_sup
+            if not target_sup:
+                for s in db.query(Supplier).all():
+                    if s.name.lower() in msg_lower:
+                        target_sup = s
+                        break
+            if target_sup:
+                try:
+                    cendi_res = generate_consolidated_cendi_order(
+                        db=db,
+                        supplier_id=target_sup.id,
+                        notes="Orden generada interactivamente desde el Copilot de Clara Compras."
+                    )
+                    xl_export = export_cendi_order_to_excel(
+                        order_reference=cendi_res["order_reference"],
+                        supplier_name=target_sup.name,
+                        cendi_name=cendi_res["cendi_facility_name"],
+                        total_amount=cendi_res["total_amount"],
+                        lines=[
+                            {
+                                "sku": it["sku"],
+                                "product_name": it["product_name"],
+                                "pack_name": it.get("pack_name", "Und. Base"),
+                                "boxes_needed": it["boxes_needed"],
+                                "total_qty": it["total_qty"],
+                                "unit_cost": it["unit_cost"],
+                                "total_subtotal": it["total_subtotal"]
+                            }
+                            for it in cendi_res["distribution_breakdown"]
+                        ],
+                        distribution_breakdown=cendi_res["distribution_breakdown"]
+                    )
+                    res_dict["file_export"] = xl_export
+                    res_dict["text_response"] = (
+                        f"✅ **Orden de Compra Consolidada {cendi_res['order_reference']} Creada Exitosamente**\n\n"
+                        f"- **Proveedor:** {target_sup.name}\n"
+                        f"- **Destino (CENDI):** {cendi_res['cendi_facility_name']}\n"
+                        f"- **Monto Total:** ${cendi_res['total_amount']:,.2f} USD\n"
+                        f"- **Renglones Maestros:** {cendi_res['lines_count']} ítems\n"
+                        f"- **Sucursales Beneficiadas:** {cendi_res['stores_count']} tiendas (listas para Cross-Docking)\n\n"
+                        f"He generado el archivo Excel corporativo con el desglose exacto de distribución por tienda para el equipo de logística y almacén."
+                    )
+                    res_dict["data_table"] = [
+                        {
+                            "SKU": it["sku"],
+                            "Producto": it["product_name"],
+                            "Bultos": it["boxes_needed"],
+                            "Cantidad Total": it["total_qty"],
+                            "Subtotal USD": it["total_subtotal"]
+                        }
+                        for it in cendi_res["distribution_breakdown"][:10]
+                    ]
+                except Exception as e:
+                    res_dict["text_response"] = f"⚠️ Nota sobre orden consolidada para {target_sup.name}: {str(e)}"
+
+        # 2. Add Decision Actions if Disparity is Detected and no export was just generated
+        patron = db_context.get("patron_despacho_proveedor")
+        if patron and patron.get("requires_human_decision") and not res_dict.get("file_export"):
+            sup_name = patron.get("supplier_name", "Proveedor")
+            res_dict["actions"] = [
+                {
+                    "label": "Consolidar en CENDI",
+                    "action": "CONSOLIDATE_CENDI",
+                    "icon": "pi pi-building",
+                    "prompt": f"Consolidar pedido en CENDI para {sup_name}"
+                },
+                {
+                    "label": "Separar por Tiendas",
+                    "action": "DIRECT_STORES",
+                    "icon": "pi pi-shopping-bag",
+                    "prompt": f"Generar órdenes directas por tienda para {sup_name}"
+                }
+            ]
+
+        # 3. Dynamic Export to Excel or XML if requested
+        is_excel = any(k in msg_lower for k in ["excel", "xlsx", "hoja de calculo", "hoja de cálculo", "planilla"])
+        is_xml = any(k in msg_lower for k in ["xml", "b2b"])
+        is_export = is_excel or is_xml or any(k in msg_lower for k in ["exportar", "descargar", "exportame", "descárgame", "descargame", "bajar"])
+
+        # Caso 5: Detección de solicitud de Reporte Mensual Integral
+        is_monthly_report = any(k in msg_lower for k in ["reporte mensual", "informe mensual", "reportes mensuales", "resumen mensual", "mensual de compras"])
+        if is_monthly_report and not res_dict.get("file_export"):
+            try:
+                from app.services.monthly_reports_service import generate_monthly_comprehensive_report
+                monthly_res = generate_monthly_comprehensive_report(db)
+                res_dict["file_export"] = {
+                    "file_name": monthly_res["file_name"],
+                    "file_url": monthly_res["file_url"],
+                    "format": "xlsx",
+                    "file_size_kb": monthly_res["file_size_kb"],
+                    "row_count": monthly_res["total_orders"]
+                }
+                if not res_dict.get("text_response") or len(res_dict.get("text_response", "")) < 40:
+                    res_dict["text_response"] = (
+                        f"📊 He generado el **{monthly_res['title']}** en formato Excel corporativo.\n\n"
+                        f"Incluye las 5 pestañas ejecutivas: Resumen ODC, Calibración OTIF de Proveedores, Mermas & Rentabilidad, Dead Stock Inmovilizado y Convenios Sell-Out.\n\n"
+                        f"Puedes descargarlo directamente desde la tarjeta adjunta a continuación."
+                    )
+            except Exception as e:
+                print(f"Error generating monthly report in chat: {e}")
+
+        if is_export and not res_dict.get("file_export"):
+
+            order_match = re.search(r'ODC[-_]?\d{4}[-_]?\w+', payload.message, re.IGNORECASE)
+            po_obj = None
+            if order_match:
+                ref_code = order_match.group(0)
+                po_obj = db.query(PurchaseOrder).filter(PurchaseOrder.reference.ilike(f"%{ref_code}%")).first()
+
+            if po_obj:
+                sup = db.query(Supplier).filter(Supplier.id == po_obj.supplier_id).first()
+                sname = sup.name if sup else "Proveedor"
+                fac = db.query(Facility).filter(Facility.id == po_obj.dest_facility_id).first()
+                fname = fac.name if fac else "CENDI"
+                if is_xml:
+                    res_dict["file_export"] = export_cendi_order_to_xml(
+                        order_reference=po_obj.reference,
+                        supplier_name=sname,
+                        cendi_name=fname,
+                        total_amount=float(po_obj.total_amount),
+                        distribution_breakdown=po_obj.distribution_breakdown or []
+                    )
+                else:
+                    lines_data = [
+                        {
+                            "sku": getattr(l, "variant", None).sku if getattr(l, "variant", None) else f"SKU-{l.variant_id}",
+                            "product_name": "Producto",
+                            "boxes_needed": int(l.qty_ordered),
+                            "total_qty": float(l.expected_base_qty),
+                            "unit_cost": float(l.unit_cost),
+                            "total_subtotal": float(l.expected_base_qty * l.unit_cost)
+                        }
+                        for l in po_obj.lines
+                    ]
+                    res_dict["file_export"] = export_cendi_order_to_excel(
+                        order_reference=po_obj.reference,
+                        supplier_name=sname,
+                        cendi_name=fname,
+                        total_amount=float(po_obj.total_amount),
+                        lines=lines_data,
+                        distribution_breakdown=po_obj.distribution_breakdown or []
+                    )
+            elif res_dict.get("data_table") and len(res_dict["data_table"]) > 0:
+                table = res_dict["data_table"]
+                headers = list(table[0].keys())
+                rows = [[row.get(h) for h in headers] for row in table]
+                if is_xml:
+                    res_dict["file_export"] = generate_xml_export(
+                        root_element="NeoERPReport",
+                        data={"Title": "Reporte Copilot Clara", "Records": table},
+                        filename_prefix="reporte_clara"
+                    )
+                else:
+                    res_dict["file_export"] = generate_excel_export(
+                        title="Reporte Generado por Clara Compras",
+                        headers=headers,
+                        rows=rows,
+                        filename_prefix="reporte_clara",
+                        sheet_title="Reporte"
+                    )
+    except Exception as ex:
+        print(f"Error in dynamic export post-processing: {ex}")
+
+    return res_dict

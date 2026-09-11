@@ -123,7 +123,16 @@ class ProductVariant(Base):
     is_active = Column(Boolean, default=True)
     price_base_cost = Column(String, default='STANDARD', nullable=False)
     
+    # Phase 4: Clara Inventory Intelligence, Dead Stock & Shrinkage
+    is_blocked_for_purchasing = Column(Boolean, default=False)
+    purchasing_blocked_reason = Column(String(255), nullable=True)
+    shrinkage_pct = Column(Numeric(5, 2), default=0.0)
+    net_real_margin = Column(Numeric(5, 2), default=0.0)
+    days_without_sales = Column(Integer, default=0)
+    dead_stock_status = Column(String(30), default='HEALTHY')
+    
     product = relationship("Product", back_populates="variants")
+
     barcodes = relationship("ProductBarcode", backref="variant")
     facility_prices = relationship("ProductFacilityPrice", backref="variant", cascade="all, delete-orphan")
     inventory_snapshots = relationship("InventorySnapshot", backref="variant", cascade="all, delete-orphan")

@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from app.models.inventory import ProductVariant, Product, InventorySnapshot, ProductPackaging
+from app.models.inventory import ProductVariant, Product, InventorySnapshot, ProductPackaging, ProductFacilityPrice
 from app.models.purchasing import SupplierProduct
 from app.models.core import Supplier, Buyer
 from app.models.purchasing import SupplierProduct, PurchaseOrder, PurchaseOrderLine
@@ -12,7 +12,7 @@ class MRPService:
     @staticmethod
     def get_simulator_data(db: Session, facility_id: int, supplier_id: int = None, buyer_id: int = None):
         query = db.query(
-            SupplierProduct, ProductVariant, Product, InventorySnapshot, Supplier, ProductPackaging
+            SupplierProduct, ProductVariant, Product, InventorySnapshot, Supplier, ProductPackaging, ProductFacilityPrice
         ).join(
             ProductVariant, SupplierProduct.variant_id == ProductVariant.id
         ).join(
@@ -23,6 +23,8 @@ class MRPService:
             InventorySnapshot, (InventorySnapshot.variant_id == ProductVariant.id) & (InventorySnapshot.facility_id == facility_id)
         ).outerjoin(
             ProductPackaging, SupplierProduct.pack_id == ProductPackaging.id
+        ).outerjoin(
+            ProductFacilityPrice, (ProductFacilityPrice.variant_id == ProductVariant.id) & (ProductFacilityPrice.facility_id == facility_id)
         )
         
         if supplier_id:
@@ -31,7 +33,7 @@ class MRPService:
         results = query.all()
         simulator_lines = []
         
-        for sp, pv, p, snapshot, supp, pack in results:
+        for sp, pv, p, snapshot, supp, pack, fp in results:
             run_rate = snapshot.run_rate if snapshot and snapshot.run_rate else Decimal(0)
             safety_stock = snapshot.safety_stock if snapshot and snapshot.safety_stock else Decimal(0)
             current_stock = snapshot.stock_qty if snapshot and snapshot.stock_qty else Decimal(0)
@@ -51,19 +53,40 @@ class MRPService:
             pack_name = pack.name if pack else "Unidad Min"
             
             # MOQ and Logistic rounding
-            # 1. Respect the Minimum Order Qty (MOQ)
             if net_to_buy > 0 and net_to_buy < moq:
                 net_to_buy = moq
                 
-            # 2. Round to step (multiples of qty_per_pack)
             if net_to_buy > 0 and qty_per_pack > 1:
-                # e.g., if net_to_buy is 43 and box has 20, we need 3 boxes = 60
                 boxes_needed = math.ceil(float(net_to_buy) / float(qty_per_pack))
                 net_to_buy_base = Decimal(boxes_needed) * qty_per_pack
                 logistic_qty = Decimal(boxes_needed)
             else:
                 net_to_buy_base = net_to_buy
                 logistic_qty = net_to_buy
+
+            # Guardián de Margen y Filtro de Bloqueo
+            sales_price = fp.sales_price if fp and fp.sales_price and fp.sales_price > 0 else (pv.sales_price or Decimal(0))
+            cost = sp.replacement_cost or pv.replacement_cost or Decimal(0)
+            margin_pct = Decimal(0)
+            if sales_price > 0:
+                margin_pct = ((Decimal(str(sales_price)) - Decimal(str(cost))) / Decimal(str(sales_price))) * Decimal(100)
+
+            net_margin = getattr(pv, 'net_real_margin', None)
+            shrinkage = getattr(pv, 'shrinkage_pct', 0) or 0
+            has_negative_real_margin = (net_margin is not None and net_margin <= Decimal('0') and shrinkage > Decimal('0'))
+
+            is_margin_critical = (sales_price <= 0 or margin_pct <= Decimal(0) or has_negative_real_margin)
+            is_reorder_blocked = (
+                bool(getattr(sp, 'is_reorder_blocked', False)) or
+                bool(getattr(pv, 'is_blocked_for_purchasing', False)) or
+                (getattr(pv, 'dead_stock_status', None) == 'DEAD_STOCK')
+            )
+
+            # Si el producto tiene margen crítico o está bloqueado, no se sugiere comprar
+            if is_margin_critical or is_reorder_blocked:
+                logistic_qty = Decimal(0)
+                net_to_buy_base = Decimal(0)
+
 
             line = {
                 "variant_id": pv.id,
@@ -79,6 +102,10 @@ class MRPService:
                 "current_stock": current_stock,
                 "lead_time": lead_time,
                 "replacement_cost": sp.replacement_cost,
+                "sales_price": float(sales_price),
+                "margin_pct": round(float(margin_pct), 2),
+                "is_margin_critical": is_margin_critical,
+                "is_reorder_blocked": is_reorder_blocked,
                 "pack_id": sp.pack_id,
                 "pack_name": pack_name,
                 "qty_per_pack": qty_per_pack,
@@ -113,6 +140,9 @@ class MRPService:
         # Group lines by supplier and destination facility
         supplier_lines = {}
         for line in lines_data:
+            # Guardián de Margen y Bloqueo
+            if line.get("is_margin_critical") or line.get("is_reorder_blocked"):
+                continue
             suggested = Decimal(str(line.get("suggested_qty", 0)))
             if suggested > 0:
                 sup_id = line["supplier_id"]

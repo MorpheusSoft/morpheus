@@ -4,7 +4,14 @@ from typing import List, Any
 from app.api.deps import get_db
 from app.models.core import Supplier, SupplierBank
 from app.models.purchasing import SupplierProduct
-from app.schemas.supplier import SupplierCreate, SupplierUpdate, SupplierResponse, SupplierProductResponse, SupplierProductCreate, SupplierPaginated
+from app.schemas.supplier import (
+    SupplierCreate, SupplierUpdate, SupplierResponse, SupplierProductResponse, 
+    SupplierProductCreate, SupplierPaginated, SupplierLogisticsAuditResponse, ApplyCalibrationRequest
+)
+from app.services.supplier_logistics_service import (
+    audit_supplier_logistics, apply_clara_calibration, batch_tune_all_suppliers
+)
+
 router = APIRouter()
 
 @router.get("/install_cost_trigger")
@@ -83,8 +90,49 @@ def get_suppliers(
     
     return {"data": suppliers, "total": total}
 
+@router.post("/batch-tune-logistics")
+def run_batch_tune_logistics(db: Session = Depends(get_db)) -> Any:
+    """
+    Escaneo masivo y autónomo de Clara para calibrar reglas logísticas
+    de proveedores con auto_tune_logistics activado.
+    """
+    return batch_tune_all_suppliers(db)
+
+@router.get("/{supplier_id}/logistics-audit", response_model=SupplierLogisticsAuditResponse)
+def get_supplier_logistics_audit(supplier_id: int, db: Session = Depends(get_db)) -> Any:
+    """
+    Diagnóstico en tiempo real de Clara:
+    Lead Time real vs teórico, cadencia de reposición real vs teórica y OTIF.
+    """
+    try:
+        return audit_supplier_logistics(db, supplier_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@router.post("/{supplier_id}/apply-calibration")
+def apply_supplier_calibration(
+    supplier_id: int,
+    req: ApplyCalibrationRequest,
+    db: Session = Depends(get_db)
+) -> Any:
+    """
+    Aplica la calibración adaptativa sugerida por Clara en la ficha del proveedor
+    y registra la acción en el log del trabajador digital.
+    """
+    try:
+        return apply_clara_calibration(
+            db,
+            supplier_id,
+            apply_lead_time=req.apply_lead_time,
+            apply_restock=req.apply_restock,
+            apply_default_facility=req.apply_default_facility
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 @router.get("/{supplier_id}", response_model=SupplierResponse)
 def get_supplier(supplier_id: int, db: Session = Depends(get_db)) -> Any:
+
     supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")

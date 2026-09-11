@@ -115,4 +115,55 @@ class GenerateSupplierOrderResponse(BaseModel):
     total_amount: float
     lines_count: int
 
+class StoreBreakdownItem(BaseModel):
+    facility_id: int
+    facility_name: str
+    facility_code: str
+    qty_needed: float
+    boxes_needed: int
+    subtotal: float
+    urgency: Optional[str] = None
+
+class VariantDistributionBreakdown(BaseModel):
+    variant_id: int
+    sku: str
+    product_name: str
+    total_qty: float
+    unit_cost: float
+    total_subtotal: float
+    stores: List[StoreBreakdownItem] = []
+
+class SupplierStrategyResponse(BaseModel):
+    supplier_id: int
+    supplier_name: str
+    total_orders_analyzed: int
+    cendi_orders_count: int
+    store_orders_count: int
+    cendi_percentage: float
+    store_percentage: float
+    pattern: str  # 'PREDOMINANT_CENDI' | 'PREDOMINANT_STORES' | 'DISPARITY_DETECTED'
+    recommendation: str
+    requires_human_decision: bool
+    suggested_cendi_id: Optional[int] = None
+    suggested_cendi_name: Optional[str] = None
+
+class GenerateCendiOrderRequest(BaseModel):
+    supplier_id: int
+    cendi_facility_id: Optional[int] = None
+    buyer_id: Optional[int] = None
+    notes: Optional[str] = None
+
+class GenerateCendiOrderResponse(BaseModel):
+    success: bool
+    message: str
+    order_id: int
+    order_reference: str
+    supplier_name: str
+    cendi_facility_name: str
+    total_amount: float
+    lines_count: int
+    stores_count: int
+    distribution_breakdown: List[dict] = []
+
+
 

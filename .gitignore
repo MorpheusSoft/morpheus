@@ -43,3 +43,5 @@ MorpheusInventoryAgent/publish_windows_final/
 # Local workspace custom overrides
 scratch/
 .venv_local/
+backend/static/uploads/exports/
+

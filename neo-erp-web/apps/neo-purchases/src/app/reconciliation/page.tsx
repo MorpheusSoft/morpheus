@@ -986,6 +986,27 @@ export default function ReconciliationPage() {
           </div>
         ) : (
           <div className="space-y-6 pt-2">
+            {/* Banner de Documentos Adjuntos de Factura (Ingesta WMS / Clara) */}
+            {selectedOrder?.invoice_documents && selectedOrder.invoice_documents.length > 0 && (
+              <div className="bg-indigo-50/70 border border-indigo-200 p-3 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 rounded-lg bg-indigo-600 text-white font-black text-[10px]">🤖 CLARA OCR</span>
+                  <span className="font-bold text-indigo-950">Documento Fiscal Adjunto en Recepción WMS:</span>
+                  <span className="text-indigo-700 font-mono font-medium">{selectedOrder.invoice_documents[selectedOrder.invoice_documents.length - 1].filename}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a 
+                    href={selectedOrder.invoice_documents[selectedOrder.invoice_documents.length - 1].url} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 bg-white border border-indigo-300 text-indigo-700 px-3 py-1.5 rounded-lg font-bold hover:bg-indigo-50 shadow-sm transition-all"
+                  >
+                    <i className="pi pi-external-link text-[10px]"></i> Ver Factura Original
+                  </a>
+                </div>
+              </div>
+            )}
+
             {/* Header: Datos Fiscales de la Factura */}
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>

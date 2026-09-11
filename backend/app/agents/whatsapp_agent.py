@@ -330,6 +330,41 @@ def process_incoming_whatsapp_message(sender_phone: str, message_text: str, db: 
                 f"\n\n_He generado borradores de ajuste preventivo para revisión del supervisor._"
             )
 
+    elif any(w in lower_text for w in ["aprobar conciliacion", "aprueba la conciliacion", "aprobar orden", "concilia la orden", "conciliar orden"]):
+        tool_executed = "approve_reconciliation"
+        odc_match = re.search(r"(?:odc[-_\s]?\d{4}[-_\s]?\d+|odc[-_\s]?\d+|\b\d+\b)", lower_text)
+        target_po = None
+        if odc_match:
+            cand = odc_match.group(0).upper().replace(" ", "-")
+            target_po = db.query(PurchaseOrder).filter(
+                or_(
+                    PurchaseOrder.reference.ilike(f"%{cand}%"),
+                    PurchaseOrder.id == int(cand) if cand.isdigit() else False
+                )
+            ).first()
+
+        if target_po:
+            try:
+                has_nd = target_po.debit_note_amount and target_po.debit_note_amount > Decimal('0.50')
+                target_po.reconciliation_status = "MATCH_WITH_DEBIT_NOTE" if has_nd else "MATCH_EXACT"
+                target_po.status = "conciliated"
+                target_po.conciliated_at = datetime.utcnow()
+                target_po.conciliated_by_id = user.id
+                db.commit()
+
+                reply_text = (
+                    f"✅ *Conciliación 3-Way Aprobada*\n\n"
+                    f"He cerrado la conciliación para la orden *{target_po.reference}*.\n"
+                    f"• Estado: `CONCILIATED` ({target_po.reconciliation_status})\n"
+                )
+                if has_nd:
+                    reply_text += f"• Nota de Débito Generada: *{target_po.debit_note_number}* por *${target_po.debit_note_amount:,.2f} USD*\n"
+                reply_text += f"\n_Los costos y saldos han sido actualizados en Neo ERP._"
+            except Exception as ex:
+                reply_text = f"⚠️ *Error al aprobar conciliación*: {str(ex)}"
+        else:
+            reply_text = "❓ No encontré la orden especificada. Por favor indícame la referencia completa, ej: *'Clara, aprueba la conciliación de ODC-2026-00012'*."
+
     elif any(w in lower_text for w in ["concilia", "pendiente", "odc sin conciliar", "factura"]):
         tool_executed = "audit_unreconciled_orders"
         orders = execute_unreconciled_orders_lookup(db)

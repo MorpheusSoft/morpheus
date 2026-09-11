@@ -14,15 +14,36 @@ from app.models.inventory import InventoryAdjustment
 from app.models.digital_workers import DigitalWorker, DigitalSkill, DigitalWorkerSkill, DigitalWorkerActionLog
 from app.models.core import User
 from app.agents.skills.wms_skills import audit_negative_stock, audit_dock_returns_and_scrap, audit_unreconciled_orders
-from app.agents.skills.purchases_skills import run_mrp_draft_generation
+from app.agents.skills.purchases_skills import (
+    run_mrp_draft_generation,
+    run_shrinkage_margin_audit,
+    run_dead_stock_audit,
+    run_supplier_logistics_calibration,
+    run_sell_out_settlement_audit,
+    run_invoice_ocr_reconciliation_audit,
+    run_cendi_strategy_audit,
+    run_monthly_executive_reports,
+    run_purchase_whatsapp_listener
+)
 
 logger = logging.getLogger(__name__)
 
 SKILL_DISPATCHER = {
+    # Arturo WMS
     'negative_stock_auditor': audit_negative_stock,
     'dock_returns_and_scrap_monitor': audit_dock_returns_and_scrap,
     '3way_unreconciled_watchdog': audit_unreconciled_orders,
+
+    # Clara Compras
     'mrp_purchase_suggester': run_mrp_draft_generation,
+    'clara_invoice_ocr_reconciliation': run_invoice_ocr_reconciliation_audit,
+    'clara_cendi_multistore_consolidation': run_cendi_strategy_audit,
+    'clara_supplier_logistics_calibration': run_supplier_logistics_calibration,
+    'clara_shrinkage_profitability_guard': run_shrinkage_margin_audit,
+    'clara_dead_stock_detector': run_dead_stock_audit,
+    'clara_sell_out_settlement': run_sell_out_settlement_audit,
+    'clara_monthly_executive_reports': run_monthly_executive_reports,
+    'purchase_whatsapp_assistant': run_purchase_whatsapp_listener,
 }
 
 def run_worker_cycle(agent_code: str, db: Session) -> Dict[str, Any]:
@@ -34,47 +55,52 @@ def run_worker_cycle(agent_code: str, db: Session) -> Dict[str, Any]:
     if not worker:
         raise ValueError(f"Trabajador digital no encontrado: {agent_code}")
 
-    logger.info(f"[DIGITAL WORKER DAEMON] Iniciando ciclo para {worker.display_title} ({worker.agent_code})...")
+    w_id = worker.id
+    w_agent_code = worker.agent_code
+    w_display_title = worker.display_title
+
+    logger.info(f"[DIGITAL WORKER DAEMON] Iniciando ciclo para {w_display_title} ({w_agent_code})...")
     cycle_summary = {
-        "agent_code": worker.agent_code,
-        "display_title": worker.display_title,
+        "agent_code": w_agent_code,
+        "display_title": w_display_title,
         "executed_skills": [],
         "errors": []
     }
 
     active_skills = db.query(DigitalWorkerSkill).join(DigitalSkill).filter(
-        DigitalWorkerSkill.worker_id == worker.id,
+        DigitalWorkerSkill.worker_id == w_id,
         DigitalWorkerSkill.is_enabled == True
     ).all()
 
     for ws in active_skills:
         skill_code = ws.skill.skill_code
+        skill_name = ws.skill.name
         handler = SKILL_DISPATCHER.get(skill_code)
 
         if not handler:
-            logger.warning(f"[{worker.agent_code}] Habilidad sin handler nativo registrado: {skill_code}")
+            logger.warning(f"[{w_agent_code}] Habilidad sin handler nativo registrado: {skill_code}")
             continue
 
         try:
-            logger.info(f"[{worker.agent_code}] Ejecutando habilidad: {ws.skill.name} ({skill_code})...")
+            logger.info(f"[{w_agent_code}] Ejecutando habilidad: {skill_name} ({skill_code})...")
             result = handler(db, worker)
             cycle_summary["executed_skills"].append({
                 "skill_code": skill_code,
-                "name": ws.skill.name,
+                "name": skill_name,
                 "items_processed": len(result) if isinstance(result, list) else 1
             })
         except Exception as e:
             error_msg = f"Error ejecutando {skill_code}: {str(e)}"
-            logger.error(f"[{worker.agent_code}] {error_msg}")
+            logger.error(f"[{w_agent_code}] {error_msg}")
             cycle_summary["errors"].append(error_msg)
             # Log failure in action log
             try:
                 db.rollback()
                 fail_log = DigitalWorkerActionLog(
-                    worker_id=worker.id,
+                    worker_id=w_id,
                     action_type=f"{skill_code.upper()}_ERROR",
                     severity='CRITICAL',
-                    summary=f"Fallo durante la ejecución de la habilidad {ws.skill.name}: {str(e)}",
+                    summary=f"Fallo durante la ejecución de la habilidad {skill_name}: {str(e)}",
                     status='FAILED'
                 )
                 db.add(fail_log)
@@ -83,11 +109,15 @@ def run_worker_cycle(agent_code: str, db: Session) -> Dict[str, Any]:
                 db.rollback()
 
     # Actualizar última ejecución
-    worker.last_scan_at = datetime.now(CARACAS_TZ)
-    db.commit()
-    db.refresh(worker)
+    try:
+        w_curr = db.query(DigitalWorker).filter(DigitalWorker.id == w_id).first()
+        if w_curr:
+            w_curr.last_scan_at = datetime.now(CARACAS_TZ)
+            db.commit()
+    except Exception:
+        db.rollback()
 
-    logger.info(f"[DIGITAL WORKER DAEMON] Ciclo completado para {worker.display_title}.")
+    logger.info(f"[DIGITAL WORKER DAEMON] Ciclo completado para {w_display_title}.")
     return cycle_summary
 
 def poll_and_run_due_workers(db: Optional[Session] = None):
