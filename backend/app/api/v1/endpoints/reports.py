@@ -1217,7 +1217,7 @@ def ai_chat_assistant(
 
     # Step 1: Entity Resolution using Gemini
     intent_prompt = (
-        "Analiza el siguiente mensaje del usuario para el sistema ERP Morpheus.\n"
+        "Analiza el siguiente mensaje del usuario para el sistema Neo ERP.\n"
         "Identifica los nombres de productos, sucursales (tiendas/facilities), proveedores (suppliers), categorías o números de documentos y el tipo de intención.\n"
         "Genera una respuesta estrictamente en formato JSON plano sin bloques de código ni formato adicional, utilizando las siguientes claves:\n"
         "{\n"
@@ -1397,7 +1397,7 @@ def ai_chat_assistant(
 
     # Step 3: Analysis & Formatting Response using Gemini
     final_prompt = (
-        "Eres Clara, la Especialista Digital de Compras de Morpheus ERP.\n"
+        "Eres Clara, la Especialista Digital de Compras de Neo ERP.\n"
         "Eres profesional, proactiva, analítica y amigable. Tu labor es asesorar al equipo de compras con datos exactos y en tiempo real.\n"
         "Te proporcionamos los datos reales del ERP para responder a la consulta del usuario. Utiliza estos datos para dar una respuesta completa y ejecutiva.\n\n"
         "INSTRUCCIONES CLAVE:\n"

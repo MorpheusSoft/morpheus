@@ -215,7 +215,7 @@ def approve_wholesaler(
     # Mock de envío de Email
     email_body = f"""
     ✉️ [MOCK EMAIL] ENVIADO A: {customer.email}
-    📌 ASUNTO: ¡Bienvenido a Morpheus Soft Wholesale Portal!
+    📌 ASUNTO: ¡Bienvenido a Neo Wholesale Portal!
     
     Estimado {customer.name},
     Su afiliación B2B ha sido APROBADA con éxito.
@@ -405,7 +405,7 @@ def create_web_order(
     # Email de confirmación de pedido
     email_body = f"""
     ✉️ [MOCK EMAIL] ENVIADO A: {customer.email}
-    📌 ASUNTO: Pedido Recibido - Morpheus B2B #{document.document_number}
+    📌 ASUNTO: Pedido Recibido - Neo B2B #{document.document_number}
     
     Estimado {customer.name},
     Hemos recibido su pedido borrador con éxito en el sistema.

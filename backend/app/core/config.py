@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 from typing import Optional
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "Inventory ERP"
+    PROJECT_NAME: str = "Neo ERP"
     API_V1_STR: str = "/api/v1"
     
     # PRODUCT SKU CONFIGURATION

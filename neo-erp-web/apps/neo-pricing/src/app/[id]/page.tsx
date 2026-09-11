@@ -898,7 +898,7 @@ export default function PricingValidationBoardPage() {
         setPdfProgressMsg('IA: Carga finalizada con éxito.');
         await new Promise(r => setTimeout(r, 400));
         fetchSession();
-        alert('¡Factura procesada con éxito! La IA de Morpheus identificó 3 productos en la imagen y detectó un incremento de costos de un 15% de promedio.');
+        alert('¡Factura procesada con éxito! La IA de Neo identificó 3 productos en la imagen y detectó un incremento de costos de un 15% de promedio.');
       } else {
         alert('No se encontraron productos en el catálogo para simular la carga. Por favor, agrega productos primero.');
       }

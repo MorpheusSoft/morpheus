@@ -59,7 +59,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 <i className="pi pi-shopping-bag text-lg text-white"></i>
               </div>
               <div className="flex flex-col">
-                <span className="text-md font-black tracking-widest leading-none">MORPHEUS B2B</span>
+                <span className="text-md font-black tracking-widest leading-none">NEO B2B</span>
                 <span className="text-[10px] text-slate-400 font-medium tracking-wider mt-0.5 uppercase">Wholesale Store</span>
               </div>
             </div>
@@ -100,7 +100,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       {/* Footer */}
       <footer className="bg-white border-t border-slate-200 py-6 text-center text-xs text-slate-400 font-medium">
         <div className="max-w-7xl mx-auto px-4">
-          &copy; {new Date().getFullYear()} Morpheus Soft ERP. Todos los derechos reservados.
+          &copy; {new Date().getFullYear()} Neo ERP. Todos los derechos reservados.
         </div>
       </footer>
     </div>

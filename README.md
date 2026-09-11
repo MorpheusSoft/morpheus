@@ -1,6 +1,6 @@
-# Inventory ERP System
+# Neo ERP System
 
-Sistema de gestión de inventario y ERP.
+Sistema integral de gestión ERP (Neo).
 
 ## Requisitos Previos
 

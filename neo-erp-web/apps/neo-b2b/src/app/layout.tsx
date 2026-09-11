@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Morpheus B2B Web Store",
+  title: "Neo B2B Web Store",
   description: "Wholesale Portal for Approved Clients",
 };
 

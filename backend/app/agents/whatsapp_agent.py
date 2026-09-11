@@ -121,7 +121,7 @@ def call_gemini_format(worker: DigitalWorker, user_name: str, user_message: str,
         return None
 
     prompt = (
-        f"Eres {worker.display_title} en Morpheus ERP. Tu rol es: {worker.system_prompt}.\n"
+        f"Eres {worker.display_title} en Neo ERP. Tu rol es: {worker.system_prompt}.\n"
         f"Estás respondiendo un mensaje de WhatsApp a tu supervisor o colega {user_name}.\n"
         f"Mensaje del usuario: \"{user_message}\"\n\n"
         f"Datos extraídos del ERP para responder:\n{json.dumps(data_context, ensure_ascii=False, indent=2)}\n\n"
@@ -174,9 +174,9 @@ def process_incoming_whatsapp_message(sender_phone: str, message_text: str, db: 
         return {
             "reply": (
                 f"🔒 *Acceso no autorizado*\n\n"
-                f"Tu número de WhatsApp (`+{sender_phone}`) no está vinculado a ningún usuario en Morpheus ERP.\n\n"
+                f"Tu número de WhatsApp (`+{sender_phone}`) no está vinculado a ningún usuario en Neo ERP.\n\n"
                 f"Para vincular tu dispositivo:\n"
-                f"1. Ingresa a Morpheus ERP > Usuarios Digitales.\n"
+                f"1. Ingresa a Neo ERP > Usuarios Digitales.\n"
                 f"2. Haz clic en *Generar PIN de WhatsApp*.\n"
                 f"3. Escribe por aquí: *Vincular <TU_PIN_DE_6_DIGITOS>*."
             ),
@@ -270,7 +270,7 @@ def process_incoming_whatsapp_message(sender_phone: str, message_text: str, db: 
                     f"• Total Estimado: *${po_res['total_amount']:,.2f} USD*\n"
                     f"• Renglones: *{po_res['lines_count']} ítems calculados*\n"
                     f"• Estado: `DRAFT` (Borrador)\n\n"
-                    f"_Ya está disponible en Morpheus ERP para revisión y firma._"
+                    f"_Ya está disponible en Neo ERP para revisión y firma._"
                 )
             except Exception as ex:
                 reply_text = f"⚠️ *No se pudo generar la orden*: {str(ex)}"

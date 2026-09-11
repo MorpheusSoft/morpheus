@@ -318,7 +318,7 @@ export default function NewCostSessionPage() {
         <div className="flex flex-col gap-4 mt-2">
           <div>
             <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Razón Social / Nombre</label>
-            <InputText value={quickSupplierName} onChange={(e) => setQuickSupplierName(e.target.value)} placeholder="Ej. Distribuidora Morpheus C.A." className="w-full p-2 text-sm border border-slate-200 rounded" />
+            <InputText value={quickSupplierName} onChange={(e) => setQuickSupplierName(e.target.value)} placeholder="Ej. Distribuidora Neo C.A." className="w-full p-2 text-sm border border-slate-200 rounded" />
           </div>
           <div>
             <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Identificación Fiscal / RIF</label>

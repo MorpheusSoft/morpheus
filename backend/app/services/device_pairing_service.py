@@ -18,7 +18,7 @@ def pair_device_by_pin(phone_number: str, pin: str, db: Session) -> Dict[str, An
     if not user:
         return {
             "success": False,
-            "message": "❌ El PIN de vinculación ingresado es inválido o ha expirado. Por favor genera un nuevo PIN desde el módulo de Usuarios Digitales en Morpheus ERP."
+            "message": "❌ El PIN de vinculación ingresado es inválido o ha expirado. Por favor genera un nuevo PIN desde el módulo de Usuarios Digitales en Neo ERP."
         }
 
     # Asignar teléfono y verificar
@@ -57,7 +57,7 @@ def pair_device_by_pin(phone_number: str, pin: str, db: Session) -> Dict[str, An
 
         db.commit()
 
-    worker_title = worker.display_title if worker else "Asistente Digital Morpheus"
+    worker_title = worker.display_title if worker else "Asistente Digital Neo"
     return {
         "success": True,
         "user_id": user.id,
@@ -66,7 +66,7 @@ def pair_device_by_pin(phone_number: str, pin: str, db: Session) -> Dict[str, An
         "worker_name": worker_title,
         "message": (
             f"✅ *¡Dispositivo Vinculado con Éxito!*\n\n"
-            f"Hola *{user.full_name}*, has conectado tu WhatsApp con el ecosistema de IA de Morpheus ERP.\n"
+            f"Hola *{user.full_name}*, has conectado tu WhatsApp con el ecosistema de IA de Neo ERP.\n"
             f"Soy *{worker_title}*. A partir de este momento puedes preguntarme directamente por aquí:\n\n"
             f"• *'¿Hay existencia negativa en Patio Trigal?'*\n"
             f"• *'¿Qué órdenes de compra están pendientes de conciliar?'*\n"

@@ -35,7 +35,7 @@ class NeoPosApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Morpheus POS',
+      title: 'Neo POS',
       theme: AppTheme.darkTheme,
       home: const SupermarketScreen(),
       debugShowCheckedModeBanner: false,

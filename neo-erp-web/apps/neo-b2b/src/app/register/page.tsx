@@ -153,7 +153,7 @@ export default function RegisterPage() {
                 name="name"
                 value={formData.name}
                 onChange={handleInputChange}
-                placeholder="Ej: Distribuidora Morpheus C.A."
+                placeholder="Ej: Distribuidora Neo C.A."
                 autoComplete="off"
                 className="w-full !rounded-xl border-slate-200 focus:!border-blue-400 focus:!ring-4 focus:!ring-blue-500/10 shadow-sm !py-2.5 text-sm"
               />

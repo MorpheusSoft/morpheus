@@ -521,7 +521,7 @@ export default function DigitalWorkersPage() {
                 </div>
                 <div>
                   <div className="font-bold text-sm text-white flex items-center gap-2">
-                    <span>Morpheus ERP Assistant</span>
+                    <span>Neo ERP Assistant</span>
                     <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
                   </div>
                   <div className="text-[11px] text-slate-400">Arturo WMS & Clara Compras</div>

@@ -17,7 +17,7 @@ export default function AIChatAssistantPage() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: '👋 ¡Hola! Soy tu **Asistente de Inteligencia Artificial Morpheus**.\n\nEstoy aquí para ayudarte a analizar costos, simular márgenes, auditar variaciones de precios y explorar los datos financieros de tus sucursales.\n\n¿De qué te gustaría hablar hoy?'
+      content: '👋 ¡Hola! Soy tu **Asistente de Inteligencia Artificial Neo**.\n\nEstoy aquí para ayudarte a analizar costos, simular márgenes, auditar variaciones de precios y explorar los datos financieros de tus sucursales.\n\n¿De qué te gustaría hablar hoy?'
     }
   ]);
   const [input, setInput] = useState('');
@@ -148,7 +148,7 @@ export default function AIChatAssistantPage() {
                   {/* Avatar / Name indicator */}
                   <div className="flex items-center gap-2 mb-2">
                     <span className={`text-[10px] font-bold uppercase tracking-wider ${isUser ? 'text-rose-100' : 'text-rose-500'}`}>
-                      {isUser ? 'Tú (Usuario)' : '🤖 Asistente IA Morpheus'}
+                      {isUser ? 'Tú (Usuario)' : '🤖 Asistente IA Neo'}
                     </span>
                   </div>
 
@@ -197,7 +197,7 @@ export default function AIChatAssistantPage() {
             <div className="flex justify-start">
               <div className="bg-slate-50 text-slate-500 border border-slate-100 rounded-3xl rounded-tl-none p-5 max-w-[80%] flex items-center gap-3">
                 <i className="pi pi-spin pi-spinner text-rose-500 text-lg"></i>
-                <span className="text-xs font-bold tracking-wide animate-pulse">Analizando base de datos Morpheus y generando respuesta estructurada...</span>
+                <span className="text-xs font-bold tracking-wide animate-pulse">Analizando base de datos Neo y generando respuesta estructurada...</span>
               </div>
             </div>
           )}

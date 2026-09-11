@@ -184,7 +184,7 @@ export function DigitalWorkerCopilot({
         ...prev,
         {
           role: 'assistant',
-          content: `⚠️ **Error de conexión con el agente**\n\nNo fue posible comunicarse con el servicio de IA en este momento. Por favor verifica la conexión con el backend de Morpheus.`,
+          content: `⚠️ **Error de conexión con el agente**\n\nNo fue posible comunicarse con el servicio de IA en este momento. Por favor verifica la conexión con el backend de Neo ERP.`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         },
       ]);
@@ -479,7 +479,7 @@ export function DigitalWorkerCopilot({
           </form>
           <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-400 px-1">
             <span>Presiona Enter para enviar</span>
-            <span>Morpheus Digital Worker</span>
+            <span>Neo Digital Worker</span>
           </div>
         </div>
       </aside>
