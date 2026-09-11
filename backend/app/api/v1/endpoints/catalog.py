@@ -59,9 +59,9 @@ def read_categories_tree(
     db: Session = Depends(deps.get_db),
 ) -> Any:
     """
-    Retrieve categories as a nested tree hierarchy.
+    Retrieve categories as a nested tree hierarchy ordered alphabetically.
     """
-    categories_db = db.query(Category).all()
+    categories_db = db.query(Category).order_by(Category.name.asc()).all()
     categories_dict = {cat.id: schemas.CategoryTree.model_validate(cat) for cat in categories_db}
     
     tree = []
@@ -72,6 +72,8 @@ def read_categories_tree(
             parent = categories_dict.get(cat.parent_id)
             if parent:
                 parent.children.append(cat)
+            else:
+                tree.append(cat)
                 
     return tree
 

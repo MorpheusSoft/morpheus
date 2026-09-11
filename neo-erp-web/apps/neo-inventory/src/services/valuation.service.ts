@@ -41,5 +41,10 @@ export const ValuationService = {
   getCategories: async () => {
     const { data } = await api.get('/categories/');
     return data;
+  },
+
+  getCategoriesTree: async () => {
+    const { data } = await api.get('/categories/tree');
+    return data;
   }
 };

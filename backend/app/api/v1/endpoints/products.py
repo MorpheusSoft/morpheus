@@ -102,7 +102,8 @@ def read_products(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
     limit: int = 100,
-    q: str = None,
+    q: Optional[str] = None,
+    query: Optional[str] = None,
     category_ids: Optional[List[int]] = Query(None),
     supplier_ids: Optional[List[int]] = Query(None)
 ) -> Any:
@@ -113,50 +114,63 @@ def read_products(
         from sqlalchemy.orm import selectinload
         from sqlalchemy import or_
         
-        query = db.query(Product)
+        prod_query = db.query(Product)
         
         # Supplier filtering
         if supplier_ids and isinstance(supplier_ids, (list, tuple)):
-            query = query.join(ProductVariant, ProductVariant.product_id == Product.id) \
+            prod_query = prod_query.join(ProductVariant, ProductVariant.product_id == Product.id) \
                          .join(SupplierProduct, SupplierProduct.variant_id == ProductVariant.id) \
                          .filter(SupplierProduct.supplier_id.in_(supplier_ids))
             
-        # Category filtering
+        # Category filtering (including all descendants)
         if category_ids and isinstance(category_ids, (list, tuple)):
-            query = query.join(Category, Category.id == Product.category_id)
+            all_cat_ids = set(category_ids)
             cats = db.query(Category).filter(Category.id.in_(category_ids)).all()
-            cat_conditions = []
             for c in cats:
-                cat_conditions.append(Category.id == c.id)
                 if c.path:
-                    cat_conditions.append(Category.path.like(f"{c.path}/%"))
-            if cat_conditions:
-                query = query.filter(or_(*cat_conditions))
+                    sub_c = db.query(Category.id).filter(Category.path.like(f"{c.path}/%")).all()
+                    for sc in sub_c:
+                        all_cat_ids.add(sc.id)
+            to_visit = list(category_ids)
+            while to_visit:
+                curr_c = to_visit.pop(0)
+                children = db.query(Category.id).filter(Category.parent_id == curr_c).all()
+                for ch in children:
+                    if ch.id not in all_cat_ids:
+                        all_cat_ids.add(ch.id)
+                        to_visit.append(ch.id)
+            prod_query = prod_query.filter(Product.category_id.in_(list(all_cat_ids)))
 
-        if q:
-            clean_q = q.strip()
+        search_term = (q or query or "").strip()
+        if search_term:
+            clean_q = search_term
             barcode_prod_ids = db.query(ProductVariant.product_id)\
                 .join(ProductBarcode, ProductBarcode.product_variant_id == ProductVariant.id)\
                 .filter(ProductBarcode.barcode.ilike(f"%{clean_q}%"))
 
+            supplier_prod_ids = db.query(ProductVariant.product_id)\
+                .join(SupplierProduct, SupplierProduct.variant_id == ProductVariant.id)\
+                .filter(SupplierProduct.supplier_sku.ilike(f"%{clean_q}%"))
+
             if not (supplier_ids and isinstance(supplier_ids, (list, tuple))):
-                query = query.outerjoin(ProductVariant)
-            query = query.filter(
+                prod_query = prod_query.outerjoin(ProductVariant)
+            prod_query = prod_query.filter(
                 or_(
                     Product.name.ilike(f"%{clean_q}%"),
                     ProductVariant.sku.ilike(f"%{clean_q}%"),
                     ProductVariant.barcode.ilike(f"%{clean_q}%"),
                     ProductVariant.part_number.ilike(f"%{clean_q}%"),
-                    Product.id.in_(barcode_prod_ids)
+                    Product.id.in_(barcode_prod_ids),
+                    Product.id.in_(supplier_prod_ids)
                 )
             )
 
-        if (supplier_ids and isinstance(supplier_ids, (list, tuple))) or q:
-            query = query.distinct()
+        if (supplier_ids and isinstance(supplier_ids, (list, tuple))) or search_term:
+            prod_query = prod_query.distinct()
             
-        total = query.count()
+        total = prod_query.count()
         
-        products = query.options(
+        products = prod_query.options(
             selectinload(Product.variants).selectinload(ProductVariant.barcodes),
             selectinload(Product.variants).selectinload(ProductVariant.facility_prices),
             selectinload(Product.packagings)

@@ -4,6 +4,7 @@ import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { Button } from 'primereact/button';
 import { Dropdown } from 'primereact/dropdown';
+import { TreeSelect } from 'primereact/treeselect';
 import { InputText } from 'primereact/inputtext';
 import { Dialog } from 'primereact/dialog';
 import { InputTextarea } from 'primereact/inputtextarea';
@@ -27,6 +28,7 @@ export default function PhysicalCountsPage() {
   const [facilities, setFacilities] = useState<any[]>([]);
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
+  const [categoriesTree, setCategoriesTree] = useState<any[]>([]);
   
   const [selectedFacility, setSelectedFacility] = useState<any>(null);
   const [selectedWarehouse, setSelectedWarehouse] = useState<any>(null);
@@ -46,16 +48,29 @@ export default function PhysicalCountsPage() {
     { label: 'Por Categoría de Producto', value: 'CATEGORY' }
   ];
 
+  const formatCategoryTreeNodes = (nodes: any[]): any[] => {
+    if (!nodes || !Array.isArray(nodes)) return [];
+    return nodes.map(node => ({
+      key: String(node.id),
+      label: node.name,
+      data: node.id,
+      icon: (node.children && node.children.length > 0) ? 'pi pi-folder text-blue-600' : 'pi pi-tag text-slate-500',
+      children: (node.children && node.children.length > 0) ? formatCategoryTreeNodes(node.children) : undefined
+    }));
+  };
+
   // Fetch metadata and current user
   useEffect(() => {
     const loadMetadata = async () => {
       try {
-        const [facs, cats] = await Promise.all([
+        const [facs, cats, tree] = await Promise.all([
           ValuationService.getFacilities(),
-          ValuationService.getCategories()
+          ValuationService.getCategories(),
+          ValuationService.getCategoriesTree()
         ]);
         setFacilities(facs || []);
         setCategories(cats || []);
+        setCategoriesTree(formatCategoryTreeNodes(tree || []));
       } catch (err) {
         console.error("Error cargando metadatos", err);
       }
@@ -464,15 +479,17 @@ export default function PhysicalCountsPage() {
 
           {scopeType === 'CATEGORY' && (
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider pl-1">Seleccionar Categoría</label>
-              <Dropdown
-                value={selectedCategory}
-                options={categories}
-                optionLabel="name"
-                optionValue="id"
-                onChange={(e) => setSelectedCategory(e.value)}
-                placeholder="Seleccione categoría"
-                className="w-full !rounded-xl border-slate-200 focus:!border-blue-400"
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider pl-1">Seleccionar Categoría Jerárquica</label>
+              <TreeSelect
+                value={selectedCategory ? String(selectedCategory) : null}
+                options={categoriesTree}
+                onChange={(e) => setSelectedCategory(e.value ? Number(e.value) : null)}
+                placeholder="Seleccione categoría jerárquica (desplegable)..."
+                filter
+                filterBy="label"
+                filterMode="lenient"
+                showClear
+                className="w-full !rounded-xl border-slate-200 focus:!border-blue-400 text-xs"
               />
             </div>
           )}
@@ -502,7 +519,7 @@ export default function PhysicalCountsPage() {
               SKU_O_CODIGO_BARRAS,CODIGO_UBICACION,CANTIDAD_CONTADA
             </code>
             <p className="text-[10px] text-slate-400 mt-1 italic">
-              Ejemplo: HARINA-PAN,ALM1-P01,42
+              Ejemplo: 7591000123456,ALM1-P01,42 ó HARINA-PAN,ALM1-P01,42 (Acepta cualquier código de barra, Stellar o SKU)
             </p>
           </div>
 

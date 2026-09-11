@@ -4,11 +4,42 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.schemas import inventory_session as schemas
 from app.models.inventory import InventorySession, InventoryLine, Product, ProductVariant, Location, StockMove, InventorySnapshot, ProductBarcode, Category, Warehouse
+from app.models.purchasing import SupplierProduct
 from app.models.core import User
 from app.core.uom import validate_quantity_uom
 from datetime import datetime
 
 router = APIRouter()
+
+def get_all_descendant_category_ids(db: Session, root_cat_id: int) -> List[int]:
+    """
+    Returns the root category id along with all descendants in the hierarchy,
+    handling both tree path and parent_id references (even if path is NULL).
+    """
+    all_cat_ids = {root_cat_id}
+    root_cat = db.query(Category).filter(Category.id == root_cat_id).first()
+    if not root_cat:
+        return list(all_cat_ids)
+    
+    # 1. If path is present, fetch subcategories by path prefix
+    if root_cat.path:
+        sub_cats = db.query(Category.id).filter(
+            (Category.id == root_cat.id) | (Category.path.like(f"{root_cat.path}/%"))
+        ).all()
+        for sc in sub_cats:
+            all_cat_ids.add(sc.id)
+
+    # 2. Traverse parent_id to catch categories where path might be NULL or not updated
+    to_visit = [root_cat_id]
+    while to_visit:
+        curr_id = to_visit.pop(0)
+        children = db.query(Category.id).filter(Category.parent_id == curr_id).all()
+        for ch in children:
+            if ch.id not in all_cat_ids:
+                all_cat_ids.add(ch.id)
+                to_visit.append(ch.id)
+                
+    return list(all_cat_ids)
 
 def attach_anomaly_fields(session: InventorySession, db: Session):
     for line in session.lines:
@@ -44,6 +75,9 @@ def read_inventory_sessions(
     limit: int = 100,
     current_user: Any = Depends(deps.get_current_active_user)
 ) -> Any:
+    """
+    Retrieve inventory sessions.
+    """
     sessions = db.query(InventorySession).offset(skip).limit(limit).all()
     is_supervisor = False
     if hasattr(current_user, 'roles'):
@@ -117,21 +151,12 @@ def create_inventory_session(
     # Filtrar por Categoría Jerárquica (si se especifica en scope_value, category_id o scope_type == 'CYCLIC')
     cat_id_to_filter = session_in.category_id or (int(session_in.scope_value) if (session_in.scope_value and session_in.scope_value.isdigit()) else None)
     if cat_id_to_filter:
-        parent_cat = db.query(Category).filter(Category.id == cat_id_to_filter).first()
-        if parent_cat:
-            if parent_cat.path:
-                sub_cats = db.query(Category.id).filter(
-                    (Category.id == parent_cat.id) | (Category.path.like(f"{parent_cat.path}/%"))
-                ).all()
-                cat_ids = [c.id for c in sub_cats]
-            else:
-                cat_ids = [parent_cat.id]
-
-            prod_ids = db.query(Product.id).filter(Product.category_id.in_(cat_ids)).all()
-            p_ids = [p.id for p in prod_ids]
-            var_ids = db.query(ProductVariant.id).filter(ProductVariant.product_id.in_(p_ids)).all()
-            target_vids = [v.id for v in var_ids]
-            snapshots_query = snapshots_query.filter(InventorySnapshot.variant_id.in_(target_vids))
+        cat_ids = get_all_descendant_category_ids(db, cat_id_to_filter)
+        prod_ids = db.query(Product.id).filter(Product.category_id.in_(cat_ids)).all()
+        p_ids = [p.id for p in prod_ids]
+        var_ids = db.query(ProductVariant.id).filter(ProductVariant.product_id.in_(p_ids)).all()
+        target_vids = [v.id for v in var_ids]
+        snapshots_query = snapshots_query.filter(InventorySnapshot.variant_id.in_(target_vids))
 
     snapshots = snapshots_query.all()
     default_loc = db.query(Location).filter(Location.warehouse_id == target_wh.id).first() if target_wh else None
@@ -219,16 +244,29 @@ def bulk_upload_lines(
         
     count_inserted = 0
     for item in bulk_in.lines:
-        variant = db.query(ProductVariant).filter(ProductVariant.sku == item.sku).first()
+        code_clean = (item.sku or "").strip()
+        if not code_clean:
+            continue
+            
+        variant = db.query(ProductVariant).filter(
+            (ProductVariant.sku.ilike(code_clean)) |
+            (ProductVariant.barcode.ilike(code_clean)) |
+            (ProductVariant.part_number.ilike(code_clean))
+        ).first()
         if not variant:
-            barcode = db.query(ProductBarcode).filter(ProductBarcode.barcode == item.sku).first()
+            barcode = db.query(ProductBarcode).filter(ProductBarcode.barcode.ilike(code_clean)).first()
             if barcode:
                 variant = db.query(ProductVariant).filter(ProductVariant.id == barcode.product_variant_id).first()
+        if not variant:
+            supplier_prod = db.query(SupplierProduct).filter(SupplierProduct.supplier_sku.ilike(code_clean)).first()
+            if supplier_prod:
+                variant = db.query(ProductVariant).filter(ProductVariant.id == supplier_prod.variant_id).first()
                 
-        location = db.query(Location).filter(Location.code == item.location_code).first()
+        loc_code_clean = (item.location_code or "").strip()
+        location = db.query(Location).filter(Location.code.ilike(loc_code_clean)).first()
         
         if not variant or not location:
-            # Saltamos silenciosamente los SKUs o Ubicaciones no encontrados
+            # Saltamos silenciosamente los códigos o Ubicaciones no encontrados
             continue
 
         prod = variant.product if (variant and hasattr(variant, 'product')) else None
@@ -251,14 +289,12 @@ def bulk_upload_lines(
             except ValueError:
                 if location.code != session.scope_value:
                     continue
-        elif session.scope_type == 'CATEGORY' and session.scope_value and variant.product:
+        elif session.scope_type in ('CATEGORY', 'CYCLIC') and session.scope_value and variant.product:
             try:
                 scope_cat_id = int(session.scope_value)
-                if variant.product.category_id != scope_cat_id:
-                    cat = db.query(Category).filter(Category.id == variant.product.category_id).first()
-                    parent_cat = db.query(Category).filter(Category.id == scope_cat_id).first()
-                    if not (cat and parent_cat and cat.path and parent_cat.path and cat.path.startswith(parent_cat.path)):
-                        continue
+                valid_cat_ids = get_all_descendant_category_ids(db, scope_cat_id)
+                if variant.product.category_id not in valid_cat_ids:
+                    continue
             except ValueError:
                 pass
             

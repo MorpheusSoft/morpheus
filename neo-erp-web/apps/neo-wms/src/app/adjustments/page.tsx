@@ -10,6 +10,7 @@ import { Dialog } from 'primereact/dialog';
 import { InputText } from 'primereact/inputtext';
 import { InputNumber } from 'primereact/inputnumber';
 import { Dropdown } from 'primereact/dropdown';
+import { TreeSelect } from 'primereact/treeselect';
 import api from '@/lib/api';
 import { isWeightUom, sanitizeQuantity, getUomDecimals, formatQuantity, preventDecimalKey } from '@/lib/uom';
 
@@ -62,12 +63,15 @@ export default function WmsAdjustmentsPage() {
   const [sessionCategoryId, setSessionCategoryId] = useState<number | null>(null);
   const [sessionLocationId, setSessionLocationId] = useState<number | null>(null);
   const [categories, setCategories] = useState<any[]>([]);
+  const [categoriesTree, setCategoriesTree] = useState<any[]>([]);
   const [creatingSession, setCreatingSession] = useState(false);
 
   // MANAGE SESSION MODAL STATE
   const [manageSessionDialogVisible, setManageSessionDialogVisible] = useState(false);
   const [selectedSession, setSelectedSession] = useState<any>(null);
   const [countingProdId, setCountingProdId] = useState<number | null>(null);
+  const [countingBarcodeInput, setCountingBarcodeInput] = useState('');
+  const countingQtyInputRef = useRef<any>(null);
   const [countingQty, setCountingQty] = useState<number>(0);
   const [countingSheetNo, setCountingSheetNo] = useState('');
   const [countingOperator, setCountingOperator] = useState('');
@@ -76,6 +80,74 @@ export default function WmsAdjustmentsPage() {
   const [validatingSession, setValidatingSession] = useState(false);
   const [aiAuditResult, setAiAuditResult] = useState<any>(null);
   const [loadingAiAudit, setLoadingAiAudit] = useState(false);
+
+  // Formateador jerárquico recursivo para TreeSelect de PrimeReact
+  const formatCategoryTreeNodes = (nodes: any[]): any[] => {
+    if (!nodes || !Array.isArray(nodes)) return [];
+    return nodes.map(node => ({
+      key: String(node.id),
+      label: node.name,
+      data: node.id,
+      icon: (node.children && node.children.length > 0) ? 'pi pi-folder text-amber-600' : 'pi pi-tag text-slate-500',
+      children: (node.children && node.children.length > 0) ? formatCategoryTreeNodes(node.children) : undefined
+    }));
+  };
+
+  const productOptionTemplate = (option: any) => {
+    if (!option) return null;
+    return (
+      <div className="flex flex-col py-1 text-xs gap-0.5 max-w-full overflow-hidden">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-bold text-slate-800 truncate">{option.name}</span>
+          <span className="text-[10px] font-mono bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200 shrink-0">
+            {option.sku}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-[11px] text-slate-500">
+          {option.primary_barcode ? (
+            <span className="flex items-center text-indigo-700 font-mono text-[10px] bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 shrink-0">
+              <i className="pi pi-barcode mr-1 text-[11px]"></i>
+              {option.primary_barcode}
+            </span>
+          ) : (
+            <span className="text-[10px] text-slate-400 italic">Sin barra</span>
+          )}
+          {option.barcodes && option.barcodes.length > 1 && (
+            <span className="text-[9px] text-slate-400 truncate">
+              +{option.barcodes.length - 1} más ({option.barcodes.slice(1, 3).join(', ')})
+            </span>
+          )}
+          <span className="ml-auto text-[10px] font-semibold text-slate-600 bg-slate-100 px-1 rounded shrink-0">
+            {option.uom_base}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  const handleBarcodeScanOrLookup = (codeToSearch: string) => {
+    const clean = codeToSearch.trim().toLowerCase();
+    if (!clean) return;
+    const found = products.find(p => 
+      p.sku.toLowerCase() === clean ||
+      (p.primary_barcode && p.primary_barcode.toLowerCase() === clean) ||
+      (p.barcodes && p.barcodes.some((b: string) => b.toLowerCase() === clean)) ||
+      p.name.toLowerCase().includes(clean)
+    );
+    if (found) {
+      setCountingProdId(found.value);
+      setCountingBarcodeInput('');
+      toast.current?.show({ severity: 'success', summary: 'Producto Identificado', detail: `${found.name} (${found.sku})`, life: 2500 });
+      setTimeout(() => {
+        if (countingQtyInputRef.current) {
+          const inputEl = countingQtyInputRef.current.getInput ? countingQtyInputRef.current.getInput() : countingQtyInputRef.current;
+          if (inputEl && inputEl.focus) inputEl.focus();
+        }
+      }, 100);
+    } else {
+      toast.current?.show({ severity: 'warn', summary: 'Código no Encontrado', detail: `No se halló ningún producto con código o barra: "${codeToSearch}"`, life: 3500 });
+    }
+  };
 
   // LOAD DATA
   const fetchAdjustments = async () => {
@@ -152,6 +224,33 @@ export default function WmsAdjustmentsPage() {
         const prodName = p.name || p.product_name || 'Producto Sin Nombre';
         const costVal = mainVar?.average_cost || mainVar?.standard_cost || p.cost_usd || p.cost || 0.0;
 
+        // Extraer todos los códigos de barra y códigos alternos de todas las variantes
+        const allBarcodes: string[] = [];
+        if (mainVar?.barcode && !allBarcodes.includes(mainVar.barcode)) allBarcodes.push(mainVar.barcode);
+        if (mainVar?.barcodes && Array.isArray(mainVar.barcodes)) {
+          mainVar.barcodes.forEach((b: any) => {
+            if (b.barcode && !allBarcodes.includes(b.barcode)) allBarcodes.push(b.barcode);
+          });
+        }
+        if (p.variants && Array.isArray(p.variants)) {
+          p.variants.forEach((v: any) => {
+            if (v.barcode && !allBarcodes.includes(v.barcode)) allBarcodes.push(v.barcode);
+            if (v.barcodes && Array.isArray(v.barcodes)) {
+              v.barcodes.forEach((b: any) => {
+                if (b.barcode && !allBarcodes.includes(b.barcode)) allBarcodes.push(b.barcode);
+              });
+            }
+            if (v.part_number && !allBarcodes.includes(v.part_number)) allBarcodes.push(v.part_number);
+          });
+        }
+
+        const primaryBarcode = allBarcodes.length > 0 ? allBarcodes[0] : '';
+        const barcodes_str = allBarcodes.join(' ');
+        const search_key = `${skuCode} ${prodName} ${barcodes_str}`.toLowerCase();
+        const displayLabel = primaryBarcode 
+          ? `[${skuCode}] ${prodName} (Barra: ${primaryBarcode})`
+          : `[${skuCode}] ${prodName}`;
+
         return {
           id: variantId,
           value: variantId,
@@ -159,7 +258,11 @@ export default function WmsAdjustmentsPage() {
           sku: skuCode,
           name: prodName,
           uom_base: p.uom_base || 'UND',
-          label: `[${skuCode}] ${prodName}`,
+          label: displayLabel,
+          primary_barcode: primaryBarcode,
+          barcodes: allBarcodes,
+          barcodes_str: barcodes_str,
+          search_key: search_key,
           cost: costVal
         };
       });
@@ -173,14 +276,15 @@ export default function WmsAdjustmentsPage() {
     try {
       let res;
       try {
-        res = await api.get('/categories?limit=1000');
+        res = await api.get('/categories/tree');
       } catch (err) {
-        res = await api.get('/catalog/categories?limit=1000');
+        res = await api.get('/catalog/categories/tree');
       }
-      const list = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.items || []);
-      setCategories(list);
+      const rawTree = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+      setCategories(rawTree);
+      setCategoriesTree(formatCategoryTreeNodes(rawTree));
     } catch (e) {
-      console.error('Error cargando categorías:', e);
+      console.error('Error cargando árbol de categorías:', e);
     }
   };
 
@@ -1003,9 +1107,12 @@ export default function WmsAdjustmentsPage() {
                             optionLabel="label"
                             optionValue="value"
                             onChange={e => updateLine(idx, 'product_variant_id', e.value)}
-                            placeholder="Seleccione Producto / SKU..."
+                            placeholder="Buscar por Código de Barra, SKU o Nombre..."
                             className="w-full text-xs"
                             filter
+                            filterBy="label,search_key,sku,name,barcodes_str"
+                            filterMatchMode="contains"
+                            itemTemplate={productOptionTemplate}
                             showClear
                           />
                         </td>
@@ -1368,15 +1475,17 @@ export default function WmsAdjustmentsPage() {
               
               <div className="grid grid-cols-2 gap-3">
                 <div className="flex flex-col gap-1">
-                  <label className="font-bold text-amber-900 text-[11px]">Categoría Padre (Opcional)</label>
-                  <Dropdown
-                    value={sessionCategoryId}
-                    options={categories.map(c => ({ label: c.name, value: c.id }))}
-                    onChange={e => setSessionCategoryId(e.value)}
-                    placeholder="Todas las categorías..."
+                  <label className="font-bold text-amber-900 text-[11px]">Categoría Jerárquica (Opcional)</label>
+                  <TreeSelect
+                    value={sessionCategoryId ? String(sessionCategoryId) : null}
+                    options={categoriesTree}
+                    onChange={e => setSessionCategoryId(e.value ? Number(e.value) : null)}
+                    placeholder="Todas las categorías (desplegable)..."
                     filter
+                    filterBy="label"
+                    filterMode="lenient"
                     showClear
-                    className="text-xs"
+                    className="text-xs w-full"
                   />
                 </div>
 
@@ -1596,15 +1705,52 @@ export default function WmsAdjustmentsPage() {
                   <span className="text-[10px] text-indigo-600 font-medium">🙈 Las cantidades teóricas están ocultas para preservar la imparcialidad del operador.</span>
                 </div>
 
+                {/* Buscador Rápido por Código de Barras / Escáner */}
+                <div className="bg-white p-3 rounded-xl border border-indigo-100 shadow-sm flex flex-col sm:flex-row items-center gap-3">
+                  <div className="flex items-center gap-2 text-indigo-700 text-xs font-bold shrink-0">
+                    <i className="pi pi-barcode text-base"></i>
+                    <span>Escanear Código / Barra:</span>
+                  </div>
+                  <div className="relative flex-1 w-full">
+                    <InputText
+                      value={countingBarcodeInput}
+                      onChange={e => setCountingBarcodeInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleBarcodeScanOrLookup(countingBarcodeInput);
+                        }
+                      }}
+                      placeholder="Escanee con pistola o ingrese cualquier código (EAN, DUN, Stellar, SKU) y presione Enter..."
+                      className="text-xs p-inputtext-sm w-full font-mono pl-8"
+                    />
+                    <i className="pi pi-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                  </div>
+                  <Button
+                    label="Buscar"
+                    icon="pi pi-search"
+                    size="small"
+                    outlined
+                    className="font-bold text-xs shrink-0"
+                    onClick={() => handleBarcodeScanOrLookup(countingBarcodeInput)}
+                  />
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
                   <div className="md:col-span-2 flex flex-col gap-1">
                     <label className="text-[11px] font-bold text-slate-700">Producto / SKU *</label>
                     <Dropdown
                       value={countingProdId}
                       options={products}
+                      optionLabel="label"
+                      optionValue="value"
                       onChange={e => setCountingProdId(e.value)}
-                      placeholder="Buscar producto por SKU o Nombre..."
+                      placeholder="Buscar por Código de Barra, SKU o Nombre..."
                       filter
+                      filterBy="label,search_key,sku,name,barcodes_str"
+                      filterMatchMode="contains"
+                      itemTemplate={productOptionTemplate}
+                      showClear
                       className="text-xs w-full"
                     />
                   </div>
@@ -1614,6 +1760,7 @@ export default function WmsAdjustmentsPage() {
                       Cantidad Contada Real * {countingProdId && `(${products.find(p => p.value === countingProdId)?.uom_base || 'UND'})`}
                     </label>
                     <InputNumber
+                      ref={countingQtyInputRef}
                       value={countingQty}
                       onValueChange={e => {
                         const prod = products.find(p => p.value === countingProdId);
