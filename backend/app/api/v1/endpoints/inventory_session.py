@@ -68,7 +68,7 @@ def attach_anomaly_fields(session: InventorySession, db: Session):
                     line.is_anomaly = True
                     line.anomaly_reason = f"Cantidad contada inesperada sin stock teórico previo ({line.counted_qty} {line.uom_base})."
 
-@router.get("/", response_model=List[schemas.InventorySession])
+@router.get("/", response_model=List[schemas.InventorySessionListItem])
 def read_inventory_sessions(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -76,23 +76,34 @@ def read_inventory_sessions(
     current_user: Any = Depends(deps.get_current_active_user)
 ) -> Any:
     """
-    Retrieve inventory sessions.
+    Retrieve inventory sessions list with fast aggregate counts (no heavy lines payload).
     """
-    sessions = db.query(InventorySession).offset(skip).limit(limit).all()
-    is_supervisor = False
-    if hasattr(current_user, 'roles'):
-        is_supervisor = any(r.name.upper() in ('SUPERVISOR', 'ADMIN', 'GERENTE') for r in current_user.roles)
-        
+    sessions = db.query(InventorySession).order_by(InventorySession.id.desc()).offset(skip).limit(limit).all()
+    session_ids = [s.id for s in sessions]
+    line_counts = {}
+    if session_ids:
+        from sqlalchemy.sql import func
+        counts = db.query(InventoryLine.session_id, func.count(InventoryLine.id))\
+            .filter(InventoryLine.session_id.in_(session_ids))\
+            .group_by(InventoryLine.session_id).all()
+        line_counts = {c[0]: c[1] for c in counts}
+
+    results = []
     for s in sessions:
-        if is_supervisor:
-            attach_anomaly_fields(s, db)
-        else:
-            for line in s.lines:
-                line.theoretical_qty = None
-                line.difference_qty = None
-                line.is_anomaly = False
-                line.anomaly_reason = None
-    return sessions
+        results.append(schemas.InventorySessionListItem(
+            id=s.id,
+            name=s.name,
+            facility_id=s.facility_id,
+            warehouse_id=s.warehouse_id,
+            scope_type=s.scope_type,
+            scope_value=s.scope_value,
+            state=s.state,
+            date_start=s.date_start,
+            date_end=s.date_end,
+            total_lines=line_counts.get(s.id, 0),
+            lines=[]
+        ))
+    return results
 
 @router.get("/{id}", response_model=schemas.InventorySession)
 def get_inventory_session(

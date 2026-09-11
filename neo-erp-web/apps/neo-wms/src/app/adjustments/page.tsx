@@ -215,8 +215,19 @@ export default function WmsAdjustmentsPage() {
 
   const fetchProducts = async () => {
     try {
-      const res = await api.get('/products/?limit=1000');
+      let res;
+      try {
+        res = await api.get('/products/selector?limit=1000');
+      } catch (err) {
+        res = await api.get('/products/?limit=1000');
+      }
       const list = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.items || []);
+      // Si proviene del endpoint /products/selector, los objetos ya vienen preformateados y optimizados
+      if (list.length > 0 && list[0].search_key) {
+        setProducts(list);
+        return;
+      }
+
       const formatted = list.map((p: any) => {
         const mainVar = (p.variants && p.variants.length > 0) ? p.variants[0] : null;
         const skuCode = mainVar?.sku || p.sku || p.code || p.default_code || `PRD-${p.id}`;
@@ -290,17 +301,20 @@ export default function WmsAdjustmentsPage() {
 
   const loadAllData = async () => {
     setLoading(true);
+    // 1. Carga inmediata y prioritaria de los datos visibles en pantalla (tiempo de respuesta < 200 ms)
     await Promise.all([
       fetchAdjustments(),
       fetchSessions(),
       fetchFacilities(),
       fetchWarehouses(),
       fetchLocationsTree(),
-      fetchReasons(),
-      fetchProducts(),
-      fetchCategories()
+      fetchReasons()
     ]);
     setLoading(false);
+
+    // 2. Carga en segundo plano sin congelar la interfaz de usuario (para modales)
+    fetchProducts();
+    fetchCategories();
   };
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Any
 from pydantic import BaseModel
 from datetime import datetime
 from enum import Enum
@@ -57,6 +57,17 @@ class InventorySessionBase(BaseModel):
 
 class InventorySessionCreate(InventorySessionBase):
     pass
+
+class InventorySessionListItem(InventorySessionBase):
+    id: int
+    state: SessionState
+    date_start: datetime
+    date_end: Optional[datetime]
+    total_lines: int = 0
+    lines: List[Any] = []
+    
+    class Config:
+        from_attributes = True
 
 class InventorySession(InventorySessionBase):
     id: int

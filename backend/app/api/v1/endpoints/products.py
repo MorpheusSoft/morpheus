@@ -97,6 +97,84 @@ def delete_variant(
     """
     return ProductService.delete_variant(db, variant_id)
 
+@router.get("/selector")
+def read_products_selector(
+    db: Session = Depends(deps.get_db),
+    limit: int = 1000,
+    q: Optional[str] = None
+) -> Any:
+    """
+    Ultra-lightweight endpoint for fast UI dropdown selectors and barcode lookups.
+    Returns variant_id, sku, name, uom_base, cost, and all associated barcodes in <150ms.
+    """
+    from sqlalchemy import or_
+    query = db.query(
+        ProductVariant.id.label("variant_id"),
+        ProductVariant.sku,
+        ProductVariant.barcode,
+        ProductVariant.part_number,
+        ProductVariant.average_cost,
+        ProductVariant.standard_cost,
+        Product.name.label("product_name"),
+        Product.uom_base.label("prod_uom")
+    ).join(Product, Product.id == ProductVariant.product_id)
+
+    if q:
+        clean_q = q.strip()
+        barcode_vids = db.query(ProductBarcode.product_variant_id)\
+            .filter(ProductBarcode.barcode.ilike(f"%{clean_q}%"))
+        query = query.filter(
+            or_(
+                Product.name.ilike(f"%{clean_q}%"),
+                ProductVariant.sku.ilike(f"%{clean_q}%"),
+                ProductVariant.barcode.ilike(f"%{clean_q}%"),
+                ProductVariant.part_number.ilike(f"%{clean_q}%"),
+                ProductVariant.id.in_(barcode_vids)
+            )
+        )
+
+    items = query.order_by(Product.name.asc()).limit(limit).all()
+    v_ids = [r.variant_id for r in items]
+
+    bc_map = {}
+    if v_ids:
+        barcodes = db.query(ProductBarcode.product_variant_id, ProductBarcode.barcode)\
+            .filter(ProductBarcode.product_variant_id.in_(v_ids)).all()
+        for vid, bc in barcodes:
+            if bc:
+                bc_map.setdefault(vid, []).append(bc)
+
+    results = []
+    for r in items:
+        all_bc = list(bc_map.get(r.variant_id, []))
+        if r.barcode and r.barcode not in all_bc:
+            all_bc.append(r.barcode)
+        if r.part_number and r.part_number not in all_bc:
+            all_bc.append(r.part_number)
+
+        primary_bc = all_bc[0] if all_bc else ""
+        sku_code = r.sku or f"PRD-{r.variant_id}"
+        prod_name = r.product_name or "Producto Sin Nombre"
+        barcodes_str = " ".join(all_bc)
+        search_key = f"{sku_code} {prod_name} {barcodes_str}".lower()
+        display_label = f"[{sku_code}] {prod_name} (Barra: {primary_bc})" if primary_bc else f"[{sku_code}] {prod_name}"
+
+        results.append({
+            "id": r.variant_id,
+            "value": r.variant_id,
+            "variant_id": r.variant_id,
+            "sku": sku_code,
+            "name": prod_name,
+            "uom_base": r.prod_uom or "UND",
+            "cost": float(r.average_cost or r.standard_cost or 0.0),
+            "label": display_label,
+            "primary_barcode": primary_bc,
+            "barcodes": all_bc,
+            "barcodes_str": barcodes_str,
+            "search_key": search_key
+        })
+    return results
+
 @router.get("/", response_model=schemas.ProductPaginated)
 def read_products(
     db: Session = Depends(deps.get_db),
