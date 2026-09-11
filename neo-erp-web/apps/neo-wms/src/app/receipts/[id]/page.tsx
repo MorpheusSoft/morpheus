@@ -200,7 +200,12 @@ export default function ReceiptExecutionPage() {
           setDiscrepancyDialogVisible(false);
           toast.current?.show({ severity: 'success', summary: 'Rechazo Registrado', detail: `${cleanDamagedQty} unds devueltas al chofer registradas en muelle.` });
       } catch (e: any) {
-          toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'No se pudo registrar el rechazo.' });
+          const detailMsg = typeof e.response?.data?.detail === 'string' 
+              ? e.response.data.detail 
+              : Array.isArray(e.response?.data?.detail)
+                  ? e.response.data.detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
+                  : e.message || 'No se pudo registrar el rechazo.';
+          toast.current?.show({ severity: 'error', summary: 'Error', detail: detailMsg });
       }
   };
 
@@ -232,7 +237,12 @@ export default function ReceiptExecutionPage() {
           setOrder((prev: any) => ({ ...prev, status: 'received' }));
           await openTicketDialog();
       } catch(e: any) {
-          toast.current?.show({ severity: 'error', summary: 'Error de Recepción', detail: e.response?.data?.detail || 'Fallo de conexión WMS' });
+          const detailMsg = typeof e.response?.data?.detail === 'string' 
+              ? e.response.data.detail 
+              : Array.isArray(e.response?.data?.detail)
+                  ? e.response.data.detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
+                  : e.message || 'Fallo de conexión WMS';
+          toast.current?.show({ severity: 'error', summary: 'Error de Recepción', detail: detailMsg });
       }
       setSaving(false);
   };

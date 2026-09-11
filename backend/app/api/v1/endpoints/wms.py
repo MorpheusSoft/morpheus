@@ -312,12 +312,9 @@ def receive_purchase_order(
     # 2. Determinar Almacén de Destino
     warehouse = None
     if payload.warehouse_id:
-        warehouse = db.query(Warehouse).filter(
-            Warehouse.id == payload.warehouse_id,
-            Warehouse.facility_id == order.dest_facility_id
-        ).first()
+        warehouse = db.query(Warehouse).filter(Warehouse.id == payload.warehouse_id).first()
     
-    if not warehouse:
+    if not warehouse and order.dest_facility_id:
         warehouse = db.query(Warehouse).filter(
             Warehouse.facility_id == order.dest_facility_id,
             Warehouse.is_scrap == False,
@@ -325,15 +322,34 @@ def receive_purchase_order(
         ).first()
         
     if not warehouse:
-        facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first()
-        facility_name = facility.name if facility else f"ID {order.dest_facility_id}"
-        warehouse = Warehouse(
-            facility_id=order.dest_facility_id,
-            name=f"Almacén Principal {facility_name}",
-            code=f"WH-{order.dest_facility_id}"
-        )
-        db.add(warehouse)
-        db.flush()
+        # Fallback a sucursal del usuario o primer almacén del sistema
+        user_facility_id = getattr(current_user, 'facility_id', None)
+        if user_facility_id:
+            warehouse = db.query(Warehouse).filter(
+                Warehouse.facility_id == user_facility_id,
+                Warehouse.is_scrap == False,
+                Warehouse.is_transit == False
+            ).first()
+            
+    if not warehouse:
+        warehouse = db.query(Warehouse).filter(
+            Warehouse.is_scrap == False,
+            Warehouse.is_transit == False
+        ).order_by(Warehouse.id.asc()).first()
+
+    if not warehouse:
+        raise HTTPException(status_code=400, detail="Debe configurar al menos un almacén en el sistema para recibir mercancía.")
+
+    # Resolver facility_id definitivo
+    target_facility_id = (warehouse.facility_id if warehouse else None) or order.dest_facility_id
+    if not target_facility_id:
+        target_facility_id = getattr(current_user, 'facility_id', None)
+    if not target_facility_id:
+        first_fac = db.query(Facility).filter(Facility.is_active == True).order_by(Facility.id.asc()).first()
+        target_facility_id = first_fac.id if first_fac else 1
+
+    if not order.dest_facility_id:
+        order.dest_facility_id = target_facility_id
 
     # 3. Configurar Picking Types y Ubicaciones
     picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'RECEIPT').first()
@@ -413,7 +429,7 @@ def receive_purchase_order(
         picking_type_id=picking_type.id,
         name=f"IN-{order.reference}",
         origin_document=payload.invoice_number or order.reference,
-        facility_id=order.dest_facility_id,
+        facility_id=target_facility_id,
         status='DONE',
         date_done=date_done_val,
         created_by_id=user_id_val
@@ -429,7 +445,7 @@ def receive_purchase_order(
     for in_line in payload.lines:
         fac_price = db.query(ProductFacilityPrice).filter(
             ProductFacilityPrice.variant_id == in_line.variant_id,
-            ProductFacilityPrice.facility_id == order.dest_facility_id
+            ProductFacilityPrice.facility_id == target_facility_id
         ).first()
         if fac_price and not fac_price.is_active:
             prod_name = db.query(Product.name).join(ProductVariant).filter(ProductVariant.id == in_line.variant_id).scalar() or "desconocido"
@@ -521,7 +537,7 @@ def receive_purchase_order(
             # Asentar en Snapshot Activo
             snapshot = db.query(InventorySnapshot).filter(
                 InventorySnapshot.variant_id == in_line.variant_id,
-                InventorySnapshot.facility_id == order.dest_facility_id
+                InventorySnapshot.facility_id == target_facility_id
             ).first()
 
             if snapshot:
@@ -534,7 +550,7 @@ def receive_purchase_order(
             else:
                 snapshot = InventorySnapshot(
                     variant_id=in_line.variant_id,
-                    facility_id=order.dest_facility_id,
+                    facility_id=target_facility_id,
                     batch_id=batch_id,
                     stock_qty=qty_good,
                     avg_cost=unit_cost,
@@ -610,14 +626,23 @@ def report_receipt_discrepancy(
     warehouse = None
     if payload.warehouse_id:
         warehouse = db.query(Warehouse).filter(Warehouse.id == payload.warehouse_id).first()
-    if not warehouse:
+    if not warehouse and order.dest_facility_id:
         warehouse = db.query(Warehouse).filter(
             Warehouse.facility_id == order.dest_facility_id,
             Warehouse.is_scrap == False
         ).first()
 
     if not warehouse:
+        warehouse = db.query(Warehouse).filter(
+            Warehouse.is_scrap == False,
+            Warehouse.is_transit == False
+        ).order_by(Warehouse.id.asc()).first()
+
+    if not warehouse:
         raise HTTPException(status_code=404, detail="Almacén no encontrado para registrar avería.")
+
+    if not order.dest_facility_id and warehouse.facility_id:
+        order.dest_facility_id = warehouse.facility_id
 
     # Si es rechazo en puerta (Devolver al chofer), NO ingresa a inventario SCRAP
     if payload.reject_at_dock:
@@ -680,7 +705,11 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Orden no encontrada")
 
     supplier = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
-    facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first()
+    facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first() if order.dest_facility_id else None
+    if not facility:
+        picking = db.query(StockPicking).filter(StockPicking.name.like(f"%{order.reference}%")).first()
+        if picking and picking.facility_id:
+            facility = db.query(Facility).filter(Facility.id == picking.facility_id).first()
 
     is_confirmed = (order.status in ('received', 'partial'))
     items = []
