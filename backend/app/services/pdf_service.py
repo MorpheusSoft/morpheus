@@ -162,13 +162,31 @@ def resolve_line_code(
     return sku_fallback
 
 class PurchaseOrderPDF(FPDF):
-    def __init__(self, reference, currency_code, *args, **kwargs):
+    def __init__(self, reference, currency_code, status=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.reference = sanitize_pdf_text(reference)
         self.currency_code = sanitize_pdf_text(currency_code)
+        self.status = str(status or "").lower()
+        self.is_approved = self.status in ['approved', 'sent', 'viewed', 'received', 'partial_received', 'conciliated']
         self.alias_nb_pages()
 
     def header(self):
+        # Diagonal watermark across center of page if order is unapproved
+        if not self.is_approved:
+            if self.status == 'pending_approval':
+                watermark_text = "PENDIENTE DE APROBACION"
+            elif self.status == 'rejected':
+                watermark_text = "ORDEN RECHAZADA"
+            else:
+                watermark_text = "BORRADOR - NO APROBADA"
+
+            self.set_font("Helvetica", "B", 34)
+            self.set_text_color(226, 232, 240)  # Very light soft gray (slate-200)
+            self.rotate(45, 105, 148)
+            txt_w = self.get_string_width(watermark_text)
+            self.text(105 - (txt_w / 2), 148, watermark_text)
+            self.rotate(0)
+
         # Top banner decoration
         self.set_fill_color(79, 70, 229)  # Indigo
         self.rect(0, 0, 210, 8, 'F')
@@ -185,7 +203,20 @@ class PurchaseOrderPDF(FPDF):
         self.set_font("Helvetica", "", 8)
         self.set_text_color(148, 163, 184)
         self.cell(180, 4, f"Referencia: {self.reference}", ln=True, align="R")
-        self.ln(3)
+
+        # Visual state alert badge if unapproved
+        if not self.is_approved:
+            self.set_font("Helvetica", "B", 8)
+            if self.status == 'pending_approval':
+                self.set_text_color(217, 119, 6) # Amber-600
+                self.cell(180, 4, "** PENDIENTE DE APROBACION - SIN VALIDEZ COMERCIAL **", ln=True, align="R")
+            elif self.status == 'rejected':
+                self.set_text_color(220, 38, 38) # Red-600
+                self.cell(180, 4, "** ORDEN RECHAZADA - SIN VALIDEZ COMERCIAL **", ln=True, align="R")
+            else:
+                self.set_text_color(100, 116, 139) # Slate-500
+                self.cell(180, 4, "** BORRADOR - SIN VALIDEZ COMERCIAL **", ln=True, align="R")
+        self.ln(2)
 
     def footer(self):
         self.set_y(-15)
@@ -244,7 +275,7 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
             if buyer_user:
                 buyer_name = sanitize_pdf_text(safe_field(buyer_user, "full_name") or "N/A")
                 
-    pdf = PurchaseOrderPDF(reference=order.reference, currency_code=currency_code)
+    pdf = PurchaseOrderPDF(reference=order.reference, currency_code=currency_code, status=order.status)
     pdf.set_margins(15, 15, 15)
     pdf.add_page()
     
@@ -497,9 +528,14 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
     
     # Signature line
     pdf.set_xy(15, y_totals + 23)
-    pdf.set_font("Helvetica", "", 8)
-    pdf.set_text_color(71, 85, 105)
-    pdf.cell(110, 6, "Firma Recepción: _______________________   Fecha: ____/____/________", ln=True)
+    if pdf.is_approved:
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(71, 85, 105)
+        pdf.cell(110, 6, "Firma Recepción: _______________________   Fecha: ____/____/________", ln=True)
+    else:
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(180, 83, 9)
+        pdf.cell(110, 6, "[ FIRMA INHABILITADA - DOCUMENTO EN REVISION / BORRADOR ]", ln=True)
     
     # Totals (Right Column)
     pdf.set_xy(130, y_totals)
@@ -546,8 +582,12 @@ def generate_purchase_order_pdf(order_id: int, db: Session, code_type: str = "ba
         
     pdf.set_text_color(148, 163, 184)
     pdf.set_font("Helvetica", "I", 7)
-    pdf.cell(0, 4, "Documento contractual autogenerado por Neo ERP. Todos los montos son vinculantes.", ln=True, align='C')
-    pdf.cell(0, 4, "El proveedor reconoce y acepta cantidades y costos al procesar este documento.", ln=True, align='C')
+    if pdf.is_approved:
+        pdf.cell(0, 4, "Documento contractual autogenerado por Neo ERP. Todos los montos son vinculantes.", ln=True, align='C')
+        pdf.cell(0, 4, "El proveedor reconoce y acepta cantidades y costos al procesar este documento.", ln=True, align='C')
+    else:
+        pdf.cell(0, 4, "Documento preliminar generado por Neo ERP. No posee validez legal ni comercial sin aprobación formal.", ln=True, align='C')
+        pdf.cell(0, 4, "Prohibido su despacho o procesamiento por el proveedor hasta su debida aprobación y firma.", ln=True, align='C')
     
     pdf_bytes = pdf.output(dest='S')
     if isinstance(pdf_bytes, str):

@@ -702,12 +702,13 @@ export default function OrderDetailsPage() {
               <!DOCTYPE html>
               <html>
               <head>
-                  <title>${data.reference} - Orden de Compra Oficial</title>
+                  <title>${data.reference} - Orden de Compra Neo ERP</title>
                   <style>
                       body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; color: #1e293b; background: #ffffff; }
                       .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #4f46e5; padding-bottom: 20px; margin-bottom: 30px; }
                       .title { font-size: 24px; font-weight: 900; color: #4f46e5; margin: 0; }
                       .ref { font-size: 18px; font-weight: 800; color: #0f172a; margin-top: 5px; }
+                      .warn-banner { background: #fef3c7; color: #92400e; padding: 10px 16px; border: 1px dashed #f59e0b; border-radius: 6px; text-align: center; font-weight: bold; margin-bottom: 20px; font-size: 13px; }
                       .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
                       .card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; }
                       .card h4 { margin: 0 0 10px 0; color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
@@ -721,9 +722,14 @@ export default function OrderDetailsPage() {
                   </style>
               </head>
               <body>
+                  ${!['approved', 'sent', 'viewed', 'received', 'partial_received', 'conciliated'].includes(String(data.status || '').toLowerCase()) ? `
+                      <div class="warn-banner">
+                          ** DOCUMENTO PRELIMINAR (${String(data.status || '').toUpperCase()}) — SIN VALIDEZ COMERCIAL NI CONTRACTUAL HASTA SU APROBACIÓN **
+                      </div>
+                  ` : ''}
                   <div class="header">
                       <div>
-                          <div class="title">MORPHEUS ERP — SISTEMA DE COMPRAS</div>
+                          <div class="title">NEO ERP — GESTIÓN DE COMPRAS</div>
                           <div class="ref">${data.reference} — ${data.title}</div>
                       </div>
                       <div style="text-align: right;">
@@ -802,6 +808,7 @@ export default function OrderDetailsPage() {
   const handleDownloadPdf = async (codeType: string) => {
       setShowPdfCodeTypeModal(false);
       try {
+          toast.current?.show({ severity: 'info', summary: 'Generando PDF', detail: 'Preparando documento oficial...', life: 2500 });
           const response = await api.get(`/purchase-orders/${orderId}/pdf`, {
               params: { code_type: codeType },
               responseType: 'blob'
@@ -1339,7 +1346,7 @@ export default function OrderDetailsPage() {
       {isDraft && (
           <div className="flex flex-wrap justify-end gap-3 p-6 bg-white rounded-2xl shadow-sm border border-slate-200 mt-6">
              <Button label="Guardar Progreso" icon="pi pi-save" outlined severity="secondary" onClick={saveChanges} disabled={saving} className="font-bold border-2" />
-             <Button label="Imprimir PDF" icon="pi pi-file-pdf" severity="help" outlined onClick={printOfficialPdfDocument} className="font-bold border-2" />
+             <Button label="Imprimir PDF" icon="pi pi-file-pdf" severity="help" outlined onClick={() => setShowPdfCodeTypeModal(true)} className="font-bold border-2" />
              <Button label="Enviar a Aprobación" icon="pi pi-send" severity="info" onClick={submitForApproval} disabled={saving} className="font-bold" />
              <Button label="Aprobar Orden" icon="pi pi-check-circle" severity="success" onClick={approveOrder} disabled={saving} className="font-bold px-6 shadow-lg hover:shadow-xl transition-all shadow-emerald-500/30" />
           </div>
@@ -1348,7 +1355,7 @@ export default function OrderDetailsPage() {
           <div className="flex flex-wrap justify-between items-center gap-4 p-6 bg-white rounded-2xl shadow-sm border border-orange-200 bg-orange-50 mt-6">
              <span className="flex items-center text-orange-700 font-bold"><i className="pi pi-lock mr-2 text-xl"></i> Límite de Compra Excedido. Esperando revisión de Gerencia de Compras.</span>
              <div className="flex gap-3">
-                 <Button label="Imprimir PDF" icon="pi pi-file-pdf" severity="help" outlined onClick={printOfficialPdfDocument} className="font-bold bg-white" />
+                 <Button label="Imprimir PDF" icon="pi pi-file-pdf" severity="help" outlined onClick={() => setShowPdfCodeTypeModal(true)} className="font-bold bg-white" />
                  <Button label="Rechazar" icon="pi pi-times-circle" severity="danger" onClick={rejectOrder} disabled={saving} className="font-bold" />
                  <Button label="Aprobar (Gerencia)" icon="pi pi-key" severity="warning" onClick={approveOrder} disabled={saving} className="font-bold px-6 shadow-lg bg-orange-600 border-none" />
              </div>
@@ -1358,15 +1365,14 @@ export default function OrderDetailsPage() {
           <div className="flex justify-between items-center p-6 bg-red-50 rounded-2xl border border-red-200 mt-6">
              <span className="text-red-700 font-bold"><i className="pi pi-exclamation-triangle mr-2"></i> Orden Rechazada por Gerencia. Puede editarla y volver a enviarla.</span>
              <div className="flex gap-3">
-                 <Button label="Imprimir PDF" icon="pi pi-file-pdf" severity="help" outlined onClick={printOfficialPdfDocument} className="font-bold bg-white" />
+                 <Button label="Imprimir PDF" icon="pi pi-file-pdf" severity="help" outlined onClick={() => setShowPdfCodeTypeModal(true)} className="font-bold bg-white" />
                  <Button label="Re-Enviar a Aprobación" icon="pi pi-refresh" severity="info" onClick={submitForApproval} disabled={saving} className="font-bold" />
              </div>
           </div>
       )}
       {!isDraft && order.status !== 'pending_approval' && order.status !== 'rejected' && (
           <div className="flex justify-end gap-4 p-6 bg-slate-50 rounded-2xl shadow-inner border border-slate-200 mt-6">
-              <Button label="Imprimir O/C (PDF)" icon="pi pi-print" severity="help" onClick={printOfficialPdfDocument} className="font-bold shadow-sm" />
-              <Button label="Visor PDF Corporativo" icon="pi pi-file-pdf" severity="danger" outlined onClick={() => setShowPdfCodeTypeModal(true)} className="font-bold bg-white" />
+              <Button label="Imprimir PDF" icon="pi pi-file-pdf" severity="help" onClick={() => setShowPdfCodeTypeModal(true)} className="font-bold shadow-sm" />
              {(order.status === 'approved' || order.status === 'sent' || order.status === 'viewed') && (
                  <Button label="Disparar a Proveedor" icon="pi pi-whatsapp" severity="success" onClick={triggerMailer} disabled={saving} className="font-bold px-8 shadow-md" />
              )}

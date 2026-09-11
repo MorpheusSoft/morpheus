@@ -738,9 +738,9 @@ def get_purchase_order_pdf_data(
         "supplier": {
             "name": supp.name if supp else "N/A",
             "tax_id": supp.tax_id if supp else "N/A",
-            "phone": supp.phone if supp else "N/A",
-            "email": supp.email if supp else "N/A",
-            "address": supp.address if supp else "N/A"
+            "phone": (supp.commercial_contact_phone or supp.financial_contact_phone or "N/A") if supp else "N/A",
+            "email": (supp.commercial_email or supp.financial_email or "N/A") if supp else "N/A",
+            "address": (supp.fiscal_address or "N/A") if supp else "N/A"
         },
         "dest_facility": {
             "name": facility.name if facility else "N/A",
