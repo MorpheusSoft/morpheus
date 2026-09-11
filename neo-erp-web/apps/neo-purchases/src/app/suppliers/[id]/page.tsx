@@ -84,17 +84,19 @@ export default function SupplierEdit() {
 
   useEffect(() => {
     Promise.all([
-      api.get('/currencies/'),
-      api.get('/facilities/'),
-      api.get('/buyers/'),
-      api.get('/users/'),
+      api.get('/currencies/').catch(() => ({ data: [] })),
+      api.get('/facilities/').catch(() => ({ data: [] })),
+      api.get('/buyers/').catch(() => ({ data: [] })),
+      api.get('/users/').catch(() => ({ data: [] })),
       api.get(`/suppliers/${supplierId}`)
     ]).then(([currRes, facRes, buyersRes, usersRes, suppRes]) => {
-      setCurrencies(currRes.data);
-      setFacilities(facRes.data);
+      setCurrencies(currRes.data || []);
+      setFacilities(facRes.data || []);
       
-      const mappedBuyers = buyersRes.data.map((b: any) => {
-        const u = usersRes.data.find((x: any) => x.id === b.user_id);
+      const buyersList = Array.isArray(buyersRes.data) ? buyersRes.data : [];
+      const usersList = Array.isArray(usersRes.data) ? usersRes.data : [];
+      const mappedBuyers = buyersList.map((b: any) => {
+        const u = usersList.find((x: any) => x.id === b.user_id);
         return {
           id: b.id,
           name: u ? u.full_name || u.email : `Comprador ID ${b.id}`
