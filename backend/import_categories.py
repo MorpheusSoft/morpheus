@@ -26,11 +26,19 @@ def import_categories():
                 nombre = row[c_desc].strip()
                 if not codigo: continue
                 
-                slug = f"dep-{codigo}"
-                cat = session.query(Category).filter_by(slug=slug).first()
+                clean_code = codigo.lstrip('0') or '0'
+                padded_code = clean_code.zfill(2) if clean_code.isdigit() else clean_code
+                candidate_slugs = list(dict.fromkeys([f"dep-{codigo}", f"dep-{clean_code}", f"dep-{padded_code}"]))
+                
+                cat = session.query(Category).filter(Category.slug.in_(candidate_slugs)).first()
+                target_slug = f"dep-{padded_code}"
                 if not cat:
-                    cat = Category(name=nombre, slug=slug, parent_id=None, path=slug)
+                    cat = Category(name=nombre, slug=target_slug, parent_id=None, path=target_slug)
                     session.add(cat)
+                else:
+                    cat.name = nombre
+                    if not cat.path:
+                        cat.path = cat.slug
         session.commit()
         print("✓ Departamentos cargados.")
         
@@ -49,19 +57,25 @@ def import_categories():
                 depto = row[c_dep].strip()
                 if not codigo: continue
                 
-                # Como descubrí que hay códigos duplicados entre deptos, armamos un slug compuesto
-                slug = f"grp-{depto}-{codigo}"
-                parent_slug = f"dep-{depto}"
+                clean_dep = depto.lstrip('0') or '0'
+                padded_dep = clean_dep.zfill(2) if clean_dep.isdigit() else clean_dep
                 
-                parent = session.query(Category).filter_by(slug=parent_slug).first()
+                slug = f"grp-{padded_dep}-{codigo}"
+                candidate_parent_slugs = [f"dep-{padded_dep}", f"dep-{clean_dep}", f"dep-{depto}"]
+                
+                parent = session.query(Category).filter(Category.slug.in_(candidate_parent_slugs)).first()
                 if not parent:
-                    print(f"  [!] Alerta: Padre no encontrado para el grupo {nombre} (Se buscó: {parent_slug})")
+                    print(f"  [!] Alerta: Padre no encontrado para el grupo {nombre} (Se buscó: {candidate_parent_slugs})")
                     continue
                 
                 cat = session.query(Category).filter_by(slug=slug).first()
                 if not cat:
                     cat = Category(name=nombre, slug=slug, parent_id=parent.id, path=f"{parent.path}/{slug}")
                     session.add(cat)
+                else:
+                    cat.name = nombre
+                    cat.parent_id = parent.id
+                    cat.path = f"{parent.path}/{cat.slug}"
         session.commit()
         print("✓ Grupos cargados.")
 
@@ -82,18 +96,25 @@ def import_categories():
                 grupo = row[c_grp].strip()
                 if not codigo: continue
                 
-                slug = f"sub-{grupo}-{codigo}"
-                parent_slug = f"grp-{depto}-{grupo}"
+                clean_dep = depto.lstrip('0') or '0'
+                padded_dep = clean_dep.zfill(2) if clean_dep.isdigit() else clean_dep
                 
-                parent = session.query(Category).filter_by(slug=parent_slug).first()
+                slug = f"sub-{grupo}-{codigo}"
+                candidate_parent_slugs = [f"grp-{padded_dep}-{grupo}", f"grp-{clean_dep}-{grupo}", f"grp-{depto}-{grupo}"]
+                
+                parent = session.query(Category).filter(Category.slug.in_(candidate_parent_slugs)).first()
                 if not parent:
-                    print(f"  [!] Alerta: Padre no encontrado para el subgrupo {nombre} (Se buscó: {parent_slug})")
+                    print(f"  [!] Alerta: Padre no encontrado para el subgrupo {nombre} (Se buscó: {candidate_parent_slugs})")
                     continue
                     
                 cat = session.query(Category).filter_by(slug=slug).first()
                 if not cat:
                     cat = Category(name=nombre, slug=slug, parent_id=parent.id, path=f"{parent.path}/{slug}")
                     session.add(cat)
+                else:
+                    cat.name = nombre
+                    cat.parent_id = parent.id
+                    cat.path = f"{parent.path}/{cat.slug}"
         session.commit()
         print("✓ Subgrupos cargados.")
         print("✅ ¡Árbol de categorías migrado con éxito!")

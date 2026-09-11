@@ -38,6 +38,11 @@ def import_products():
             if cat.slug:
                 part = cat.slug.split('-')[-1]
                 cat_cache[part] = cat.id
+                clean_p = part.lstrip('0')
+                if clean_p:
+                    cat_cache[clean_p] = cat.id
+                    cat_cache[clean_p.zfill(2)] = cat.id
+                    cat_cache[clean_p.zfill(3)] = cat.id
                 
         base_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data_import', 'productos_base.csv')
         

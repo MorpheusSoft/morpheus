@@ -71,6 +71,7 @@ def import_products_legacy(
             clean_p = part.lstrip('0')
             if clean_p:
                 cat_cache[clean_p] = cat.id
+                cat_cache[clean_p.zfill(2)] = cat.id
                 cat_cache[clean_p.zfill(3)] = cat.id
             
     # Cache existing variants based on STELLAR_CODE to speed up lookups
@@ -833,17 +834,28 @@ def import_categories_legacy(
         code = str(d.c_Codigo).strip()
         name = str(d.c_Descripcio).strip()
         if not code: continue
-        slug = f"dep-{code}"
-        cat = session.query(Category).filter_by(slug=slug).first()
-        is_liquor = 'LICOR' in name.upper() or code == '11'
+
+        clean_code = code.lstrip('0') or '0'
+        padded_code = clean_code.zfill(2) if clean_code.isdigit() else clean_code
+        candidate_slugs = list(dict.fromkeys([f"dep-{code}", f"dep-{clean_code}", f"dep-{padded_code}"]))
+
+        cat = session.query(Category).filter(Category.slug.in_(candidate_slugs)).first()
+        is_liquor = 'LICOR' in name.upper() or code in ('11', 'dep-11')
+        target_slug = f"dep-{padded_code}"
+
         if not cat:
-            cat = Category(name=name, slug=slug, parent_id=None, path=slug, is_liquor=is_liquor)
+            cat = Category(name=name, slug=target_slug, parent_id=None, path=target_slug, is_liquor=is_liquor)
             session.add(cat)
             session.flush()
         else:
             cat.name = name
             cat.is_liquor = is_liquor
+            if not cat.path:
+                cat.path = cat.slug
+
         dept_map[code] = cat
+        dept_map[clean_code] = cat
+        dept_map[padded_code] = cat
     session.commit()
     
     # 2. Grupos (Nivel 2 - Hijos de Depto)
@@ -853,23 +865,47 @@ def import_categories_legacy(
         name = str(g.c_Descripcio).strip()
         dep_code = str(g.c_Departamento).strip()
         if not code: continue
-        slug = f"grp-{dep_code}-{code}"
-        parent = dept_map.get(dep_code) or session.query(Category).filter_by(slug=f"dep-{dep_code}").first()
+
+        clean_dep = dep_code.lstrip('0') or '0'
+        padded_dep = clean_dep.zfill(2) if clean_dep.isdigit() else clean_dep
+        clean_grp = code.lstrip('0') or '0'
+        padded_grp = clean_grp.zfill(2) if clean_grp.isdigit() else code
+
+        target_slug = f"grp-{padded_dep}-{code}"
+        candidate_slugs = list(dict.fromkeys([
+            f"grp-{dep_code}-{code}",
+            f"grp-{clean_dep}-{code}",
+            f"grp-{padded_dep}-{code}",
+            f"grp-{dep_code}-{clean_grp}",
+            f"grp-{padded_dep}-{clean_grp}"
+        ]))
+
+        parent = (
+            dept_map.get(dep_code)
+            or dept_map.get(clean_dep)
+            or dept_map.get(padded_dep)
+            or session.query(Category).filter(Category.slug.in_([f"dep-{dep_code}", f"dep-{clean_dep}", f"dep-{padded_dep}"])).first()
+        )
         parent_id = parent.id if parent else None
         parent_path = parent.path if parent else ""
         is_liquor = (parent and parent.is_liquor) or 'LICOR' in name.upper()
         
-        cat = session.query(Category).filter_by(slug=slug).first()
+        cat = session.query(Category).filter(Category.slug.in_(candidate_slugs)).first()
         if not cat:
-            cat = Category(name=name, slug=slug, parent_id=parent_id, path=f"{parent_path}/{slug}" if parent_path else slug, is_liquor=is_liquor)
+            cat = Category(name=name, slug=target_slug, parent_id=parent_id, path=f"{parent_path}/{target_slug}" if parent_path else target_slug, is_liquor=is_liquor)
             session.add(cat)
             session.flush()
         else:
             cat.name = name
             cat.parent_id = parent_id
+            cat.path = f"{parent_path}/{cat.slug}" if parent_path else cat.slug
             cat.is_liquor = is_liquor
+
         grp_map[(dep_code, code)] = cat
+        grp_map[(clean_dep, code)] = cat
+        grp_map[(padded_dep, code)] = cat
         grp_map[code] = cat
+        grp_map[clean_grp] = cat
     session.commit()
     
     # 3. Subgrupos (Nivel 3 - Hijos de Grupo)
@@ -879,21 +915,49 @@ def import_categories_legacy(
         dep_code = str(s.c_in_departamento).strip()
         grp_code = str(s.c_in_grupo).strip()
         if not code: continue
-        slug = f"sub-{grp_code}-{code}"
-        
-        parent = grp_map.get((dep_code, grp_code)) or grp_map.get(grp_code) or session.query(Category).filter_by(slug=f"grp-{dep_code}-{grp_code}").first()
+
+        clean_dep = dep_code.lstrip('0') or '0'
+        padded_dep = clean_dep.zfill(2) if clean_dep.isdigit() else clean_dep
+        clean_grp = grp_code.lstrip('0') or '0'
+        padded_grp = clean_grp.zfill(2) if clean_grp.isdigit() else grp_code
+        clean_code = code.lstrip('0') or '0'
+        padded_code = clean_code.zfill(2) if clean_code.isdigit() else code
+
+        target_slug = f"sub-{grp_code}-{code}"
+        candidate_slugs = list(dict.fromkeys([
+            f"sub-{grp_code}-{code}",
+            f"sub-{clean_grp}-{code}",
+            f"sub-{padded_grp}-{code}",
+            f"sub-{grp_code}-{clean_code}",
+            f"sub-{grp_code}-{padded_code}"
+        ]))
+
+        parent = (
+            grp_map.get((dep_code, grp_code))
+            or grp_map.get((clean_dep, grp_code))
+            or grp_map.get((padded_dep, grp_code))
+            or grp_map.get(grp_code)
+            or grp_map.get(clean_grp)
+            or session.query(Category).filter(Category.slug.in_([
+                f"grp-{dep_code}-{grp_code}",
+                f"grp-{clean_dep}-{grp_code}",
+                f"grp-{padded_dep}-{grp_code}",
+                f"grp-{padded_dep}-{clean_grp}"
+            ])).first()
+        )
         parent_id = parent.id if parent else None
         parent_path = parent.path if parent else ""
         is_liquor = (parent and parent.is_liquor) or 'LICOR' in name.upper()
         
-        cat = session.query(Category).filter_by(slug=slug).first()
+        cat = session.query(Category).filter(Category.slug.in_(candidate_slugs)).first()
         if not cat:
-            cat = Category(name=name, slug=slug, parent_id=parent_id, path=f"{parent_path}/{slug}" if parent_path else slug, is_liquor=is_liquor)
+            cat = Category(name=name, slug=target_slug, parent_id=parent_id, path=f"{parent_path}/{target_slug}" if parent_path else target_slug, is_liquor=is_liquor)
             session.add(cat)
             session.flush()
         else:
             cat.name = name
             cat.parent_id = parent_id
+            cat.path = f"{parent_path}/{cat.slug}" if parent_path else cat.slug
             cat.is_liquor = is_liquor
     session.commit()
     

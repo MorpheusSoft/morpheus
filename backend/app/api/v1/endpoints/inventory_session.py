@@ -30,13 +30,15 @@ def get_all_descendant_category_ids(db: Session, root_cat_id: int) -> List[int]:
             all_cat_ids.add(sc.id)
 
     # 2. Traverse parent_id to catch categories where path might be NULL or not updated
+    visited = set()
     to_visit = [root_cat_id]
     while to_visit:
         curr_id = to_visit.pop(0)
+        visited.add(curr_id)
         children = db.query(Category.id).filter(Category.parent_id == curr_id).all()
         for ch in children:
-            if ch.id not in all_cat_ids:
-                all_cat_ids.add(ch.id)
+            all_cat_ids.add(ch.id)
+            if ch.id not in visited and ch.id not in to_visit:
                 to_visit.append(ch.id)
                 
     return list(all_cat_ids)
