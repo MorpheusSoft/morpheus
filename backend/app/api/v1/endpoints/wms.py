@@ -461,7 +461,7 @@ def receive_purchase_order(
         qty_good = float(in_line.received_qty or 0)
         qty_damaged = float(in_line.damaged_qty or 0)
 
-        variant = po_line.variant if (po_line and po_line.variant) else db.query(ProductVariant).filter(ProductVariant.id == in_line.variant_id).first()
+        variant = db.query(ProductVariant).filter(ProductVariant.id == in_line.variant_id).first()
         uom_base = variant.product.uom_base if (variant and variant.product) else 'UND'
         sku_label = variant.sku if variant else f"ID {in_line.variant_id}"
         validate_quantity_uom(qty_good, uom_base, f"El producto [{sku_label}]")
