@@ -256,18 +256,42 @@ export default function UsersPage() {
                     {/* Roles Selector */}
                     <div>
                        <h4 className="font-bold text-slate-700 text-sm mb-3"><i className="pi pi-id-card mr-1 text-slate-400"></i> Asignación de Roles</h4>
-                       <div className="border border-slate-200 rounded-xl overflow-hidden bg-white max-h-48 overflow-y-auto custom-scrollbar">
-                          {roles.map(r => (
-                             <label key={r.id} className="flex items-center gap-3 p-3 border-b border-slate-100 hover:bg-slate-50 cursor-pointer transition-colors last:border-0">
-                                <input 
-                                   type="checkbox" 
-                                   checked={selectedRoles.includes(r.id)}
-                                   onChange={() => toggleRole(r.id)}
-                                   className="w-4 h-4 text-indigo-600 rounded bg-slate-100 border-slate-300 focus:ring-indigo-500 focus:ring-2"
-                                />
-                                <span className="text-sm font-medium text-slate-700">{r.name}</span>
-                             </label>
-                          ))}
+                       <div className="border border-slate-200 rounded-xl overflow-hidden bg-white max-h-60 overflow-y-auto custom-scrollbar divide-y divide-slate-100">
+                          {roles
+                             .slice()
+                             .sort((a, b) => {
+                                const aIsDigital = a.name.toLowerCase().includes("digital");
+                                const bIsDigital = b.name.toLowerCase().includes("digital");
+                                if (aIsDigital && !bIsDigital) return 1;
+                                if (!aIsDigital && bIsDigital) return -1;
+                                return a.name.localeCompare(b.name);
+                             })
+                             .map(r => {
+                                const isDigital = r.name.toLowerCase().includes("digital");
+                                return (
+                                   <label key={r.id} className="flex items-start gap-3 p-3 hover:bg-slate-50 cursor-pointer transition-colors">
+                                      <input 
+                                         type="checkbox" 
+                                         checked={selectedRoles.includes(r.id)}
+                                         onChange={() => toggleRole(r.id)}
+                                         className="w-4 h-4 mt-0.5 text-indigo-600 rounded bg-slate-100 border-slate-300 focus:ring-indigo-500 focus:ring-2"
+                                      />
+                                      <div className="flex-1 min-w-0">
+                                         <div className="flex items-center gap-2">
+                                            <span className="text-sm font-semibold text-slate-800">{r.name}</span>
+                                            {isDigital && (
+                                               <span className="text-[10px] bg-purple-50 text-purple-700 font-bold px-1.5 py-0.5 rounded border border-purple-200">
+                                                  Agente IA
+                                               </span>
+                                            )}
+                                         </div>
+                                         {r.description && (
+                                            <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1 leading-tight">{r.description}</p>
+                                         )}
+                                      </div>
+                                   </label>
+                                );
+                             })}
                           {roles.length === 0 && <div className="p-4 text-xs text-slate-400 text-center">No hay roles disponibles.</div>}
                        </div>
                     </div>
