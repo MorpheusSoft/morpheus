@@ -440,7 +440,16 @@ def receive_purchase_order(
 
         po_line = None
         if in_line.po_line_id and in_line.po_line_id > 0:
-            po_line = db.query(PurchaseOrderLine).filter(PurchaseOrderLine.id == in_line.po_line_id).first()
+            po_line = db.query(PurchaseOrderLine).filter(
+                PurchaseOrderLine.id == in_line.po_line_id,
+                PurchaseOrderLine.order_id == order.id
+            ).first()
+
+        if not po_line:
+            po_line = db.query(PurchaseOrderLine).filter(
+                PurchaseOrderLine.order_id == order.id,
+                PurchaseOrderLine.variant_id == in_line.variant_id
+            ).first()
 
         if not po_line:
             variant = db.query(ProductVariant).filter(ProductVariant.id == in_line.variant_id).first()
