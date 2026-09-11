@@ -45,6 +45,7 @@ class ReceiptLineInput(BaseModel):
     received_qty: float
     unit_cost: Optional[float] = 0.0
     damaged_qty: Optional[float] = 0.0
+    reject_at_dock: Optional[bool] = True
     rejection_reason: Optional[str] = None
     lot_number: Optional[str] = None
     expiration_date: Optional[date] = None
@@ -61,6 +62,7 @@ class DiscrepancyPayload(BaseModel):
     damaged_qty: float
     reason: str
     reject_at_dock: Optional[bool] = True
+    lot_number: Optional[str] = None
 
 class DirectDamageReportInput(BaseModel):
     product_id: int
@@ -293,7 +295,12 @@ def create_direct_receipt(
     }
 
 @router.post("/receipts/{order_id}")
-def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session = Depends(get_db)):
+def receive_purchase_order(
+    order_id: int, 
+    payload: ReceiptPayload, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
     # 1. Traer la Orden de Compra
     order = db.query(PurchaseOrder).filter(PurchaseOrder.id == order_id).first()
     if not order:
@@ -552,6 +559,12 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
                 )
                 db.add(move_scrap)
 
+    # Registro de notas de rechazo en la ODC
+    if rejection_notes:
+        existing_notes = order.notes or ""
+        joined_rejections = "[Rechazo en Muelle]: " + " | ".join(rejection_notes)
+        order.notes = f"{existing_notes}\n{joined_rejections}".strip()
+
     # Cierre Logístico de la ODC
     if total_received >= total_expected and total_expected > 0:
         order.status = 'received'
@@ -570,7 +583,12 @@ def receive_purchase_order(order_id: int, payload: ReceiptPayload, db: Session =
     }
 
 @router.post("/receipts/{order_id}/discrepancy")
-def report_receipt_discrepancy(order_id: int, payload: DiscrepancyPayload, db: Session = Depends(get_db)):
+def report_receipt_discrepancy(
+    order_id: int, 
+    payload: DiscrepancyPayload, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
     order = db.query(PurchaseOrder).filter(PurchaseOrder.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
@@ -591,6 +609,15 @@ def report_receipt_discrepancy(order_id: int, payload: DiscrepancyPayload, db: S
 
     if not warehouse:
         raise HTTPException(status_code=404, detail="Almacén no encontrado para registrar avería.")
+
+    # Si es rechazo en puerta (Devolver al chofer), NO ingresa a inventario SCRAP
+    if payload.reject_at_dock:
+        return {
+            "message": f"Rechazo en puerta registrado: {payload.damaged_qty:g} {uom_base} devueltas al chofer.",
+            "status": "rejected_at_dock",
+            "quantity": payload.damaged_qty,
+            "reason": payload.reason
+        }
 
     supplier_loc = db.query(Location).filter(Location.usage == 'EXTERNAL', Location.code == 'VEN').first()
     scrap_loc = db.query(Location).filter(
@@ -618,10 +645,9 @@ def report_receipt_discrepancy(order_id: int, payload: DiscrepancyPayload, db: S
         if batch:
             batch_id = batch.id
 
-    variant = db.query(ProductVariant).filter(ProductVariant.id == payload.variant_id).first()
     unit_cost = float(variant.average_cost or variant.standard_cost or 0) if variant else 0.0
-
     user_id_val = getattr(current_user, 'id', None)
+
     move = StockMove(
         product_id=payload.variant_id,
         location_src_id=supplier_loc.id if supplier_loc else 1,
@@ -647,7 +673,7 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
     supplier = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
     facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first()
 
-    is_confirmed = (order.status == 'received')
+    is_confirmed = (order.status in ('received', 'partial'))
     items = []
     has_discrepancies = False
     for l in order.lines:

@@ -181,20 +181,26 @@ export default function ReceiptExecutionPage() {
               warehouse_id: selectedWarehouseId,
               damaged_qty: cleanDamagedQty,
               reason: discrepancyReason || 'Avería reportada en muelle',
-              lot_number: discrepancyLine.lot_number || null
+              lot_number: discrepancyLine.lot_number || null,
+              reject_at_dock: true
           });
           
           setLines(prev => prev.map(l => {
               if (l.variant_id === discrepancyLine.variant_id) {
-                  return { ...l, damaged_qty: cleanDamagedQty };
+                  return { 
+                      ...l, 
+                      damaged_qty: cleanDamagedQty,
+                      rejection_reason: discrepancyReason || 'Avería reportada en muelle',
+                      reject_at_dock: true
+                  };
               }
               return l;
           }));
 
           setDiscrepancyDialogVisible(false);
-          toast.current?.show({ severity: 'success', summary: 'Avería Registrada', detail: 'Mercancía desviada a la zona SCRAP.' });
+          toast.current?.show({ severity: 'success', summary: 'Rechazo Registrado', detail: `${cleanDamagedQty} unds devueltas al chofer registradas en muelle.` });
       } catch (e: any) {
-          toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'No se pudo registrar la avería.' });
+          toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'No se pudo registrar el rechazo.' });
       }
   };
 
@@ -210,6 +216,8 @@ export default function ReceiptExecutionPage() {
                   variant_id: l.variant_id,
                   received_qty: sanitizeQuantity(l.received_qty, l.uom_base),
                   damaged_qty: sanitizeQuantity(l.damaged_qty || 0, l.uom_base),
+                  reject_at_dock: l.reject_at_dock !== false,
+                  rejection_reason: l.rejection_reason || null,
                   lot_number: l.lot_number || null,
                   expiration_date: l.expiration_date ? format(l.expiration_date, 'yyyy-MM-dd') : null
               }))
