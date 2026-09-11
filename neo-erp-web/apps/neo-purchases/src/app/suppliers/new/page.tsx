@@ -10,6 +10,7 @@ import { Button } from 'primereact/button';
 import { TabView, TabPanel } from 'primereact/tabview';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
+import SupplierReturnPolicyTab from '@/components/suppliers/SupplierReturnPolicyTab';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 
@@ -25,7 +26,7 @@ export default function SupplierMaster() {
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [facilities, setFacilities] = useState<any[]>([]);
 
-  const { control, handleSubmit, reset } = useForm<any>({
+  const { control, handleSubmit, reset, setValue, watch } = useForm<any>({
     defaultValues: {
       name: '',
       commercial_name: '',
@@ -51,6 +52,18 @@ export default function SupplierMaster() {
       financial_contact_name: '',
       financial_contact_phone: '',
       financial_email: '',
+
+      return_policy: {
+        allows_returns: 'YES',
+        max_claim_days: 7,
+        compensation_method: 'REPLACEMENT',
+        freight_responsibility: 'SUPPLIER',
+        accepted_reasons: ['Avería de Fábrica', 'Daño en Transporte'],
+        claims_contact_name: '',
+        claims_contact_phone: '',
+        claims_contact_email: '',
+        procedure_notes: '',
+      },
 
       banks: []
     }
@@ -370,7 +383,12 @@ export default function SupplierMaster() {
                     </table>
                   </div>
                 )}
-             </div>
+              </div>
+          </TabPanel>
+
+          {/* TAB 5: Políticas de Cambio y Devolución */}
+          <TabPanel header="5. Políticas de Cambio" leftIcon="pi pi-replay mr-2">
+            <SupplierReturnPolicyTab control={control} setValue={setValue} watch={watch} />
           </TabPanel>
         </TabView>
       </div>

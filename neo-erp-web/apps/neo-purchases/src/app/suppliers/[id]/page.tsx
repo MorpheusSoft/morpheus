@@ -11,6 +11,7 @@ import { TabView, TabPanel } from 'primereact/tabview';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import SupplierCatalogTab from './SupplierCatalogTab';
+import SupplierReturnPolicyTab from '@/components/suppliers/SupplierReturnPolicyTab';
 import { useRouter, useParams } from 'next/navigation';
 import api from '@/lib/api';
 
@@ -32,7 +33,7 @@ export default function SupplierEdit() {
   const [facilities, setFacilities] = useState<any[]>([]);
   const [buyers, setBuyers] = useState<any[]>([]);
 
-  const { control, handleSubmit, reset } = useForm<any>({
+  const { control, handleSubmit, reset, setValue, watch } = useForm<any>({
     defaultValues: {
       name: '',
       commercial_name: '',
@@ -59,6 +60,18 @@ export default function SupplierEdit() {
       financial_contact_name: '',
       financial_contact_phone: '',
       financial_email: '',
+
+      return_policy: {
+        allows_returns: 'YES',
+        max_claim_days: 7,
+        compensation_method: 'REPLACEMENT',
+        freight_responsibility: 'SUPPLIER',
+        accepted_reasons: ['Avería de Fábrica', 'Daño en Transporte'],
+        claims_contact_name: '',
+        claims_contact_phone: '',
+        claims_contact_email: '',
+        procedure_notes: '',
+      },
 
       banks: []
     }
@@ -101,6 +114,17 @@ export default function SupplierEdit() {
         financial_contact_name: suppRes.data.financial_contact_name || '',
         financial_contact_phone: suppRes.data.financial_contact_phone || '',
         financial_email: suppRes.data.financial_email || '',
+        return_policy: suppRes.data.return_policy && Object.keys(suppRes.data.return_policy).length > 0 ? suppRes.data.return_policy : {
+          allows_returns: 'YES',
+          max_claim_days: 7,
+          compensation_method: 'REPLACEMENT',
+          freight_responsibility: 'SUPPLIER',
+          accepted_reasons: ['Avería de Fábrica', 'Daño en Transporte'],
+          claims_contact_name: '',
+          claims_contact_phone: '',
+          claims_contact_email: '',
+          procedure_notes: '',
+        },
       };
       reset(parsedData);
       setFetching(false);
@@ -439,7 +463,12 @@ export default function SupplierEdit() {
                     </table>
                   </div>
                 )}
-             </div>
+              </div>
+          </TabPanel>
+
+          {/* TAB 6: Políticas de Cambio y Devolución */}
+          <TabPanel header="6. Políticas de Cambio" leftIcon="pi pi-replay mr-2">
+            <SupplierReturnPolicyTab control={control} setValue={setValue} watch={watch} />
           </TabPanel>
         </TabView>
       </div>

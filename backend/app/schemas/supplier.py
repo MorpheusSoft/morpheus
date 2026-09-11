@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from decimal import Decimal
 from datetime import datetime
 
@@ -53,6 +53,7 @@ class SupplierBase(BaseModel):
     financial_contact_phone: Optional[str] = None
     financial_email: Optional[str] = None
     buyer_id: Optional[int] = None
+    return_policy: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 class SupplierCreate(SupplierBase):
     banks: Optional[List[SupplierBankCreate]] = []

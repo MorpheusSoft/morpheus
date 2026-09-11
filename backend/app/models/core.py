@@ -90,6 +90,7 @@ class Facility(Base):
     name = Column(String, nullable=False)
     code = Column(String, unique=True, nullable=False)
     address = Column(Text, nullable=False)
+    is_distribution_center = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -155,6 +156,7 @@ class Supplier(Base):
     financial_email = Column(String)
 
     buyer_id = Column(Integer, ForeignKey("core.buyers.id"), nullable=True)
+    return_policy = Column(JSONB, default=dict, nullable=True)
 
     banks = relationship("SupplierBank", backref="supplier", cascade="all, delete-orphan")
 
