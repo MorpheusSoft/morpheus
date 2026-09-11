@@ -22,7 +22,7 @@ export function AppSwitcher() {
     { name: "Neo Core", icon: "pi pi-desktop", color: "text-indigo-600", bg: "bg-indigo-50", href: isProd ? "https://hub.qa.morpheussoft.net/dashboard" : "http://localhost:4000/dashboard" },
     { name: "Neo Inventario", icon: "pi pi-box", color: "text-blue-600", bg: "bg-blue-50", href: isProd ? "https://inventario.qa.morpheussoft.net/inventario" : "http://localhost:4001/products" },
     { name: "Neo Compras", icon: "pi pi-shopping-cart", color: "text-emerald-600", bg: "bg-emerald-50", href: isProd ? "https://compras.qa.morpheussoft.net/compras" : "http://localhost:4002/compras" },
-    { name: "Neo Logística", icon: "pi pi-truck", color: "text-purple-600", bg: "bg-purple-50", href: isProd ? "https://logistica.qa.morpheussoft.net/wms" : "http://localhost:4003/" },
+    { name: "Neo WMS", icon: "pi pi-truck", color: "text-purple-600", bg: "bg-purple-50", href: isProd ? "https://logistica.qa.morpheussoft.net/wms" : "http://localhost:4003/" },
     { name: "Costos y Precios", icon: "pi pi-percentage", color: "text-rose-600", bg: "bg-rose-50", href: isProd ? "https://costos.qa.morpheussoft.net/costos" : "http://localhost:4004/costos" },
     { name: "Catálogo B2B", icon: "pi pi-globe", color: "text-teal-600", bg: "bg-teal-50", href: isProd ? "https://b2b.qa.morpheussoft.net" : "http://localhost:4005/", disabled: false },
     { name: "Ventas", icon: "pi pi-dollar", color: "text-amber-600", bg: "bg-amber-50", href: "#", disabled: true },

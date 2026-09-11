@@ -94,7 +94,7 @@ export default async function DashboardPage() {
                   { name: "Neo Core", active: true, port: 4000 },
                   { name: "Neo Inventario", active: true, port: 4001 },
                   { name: "Neo Compras", active: true, port: 4002 },
-                  { name: "Neo Logística (WMS)", active: true, port: 4003 },
+                  { name: "Neo WMS", active: true, port: 4003 },
                   { name: "Neo Ventas", active: false, port: null }
                 ].map((node, i) => (
                   <li key={i} className="flex items-center justify-between p-3 rounded-xl hover:bg-slate-50 transition-colors border border-transparent hover:border-slate-100">
