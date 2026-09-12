@@ -25,6 +25,11 @@ from app.agents.skills.purchases_skills import (
     run_monthly_executive_reports,
     run_purchase_whatsapp_listener
 )
+from app.services.dante_it_service import (
+    audit_store_sync_heartbeats,
+    detect_sales_consecutive_gaps,
+    reconcile_daily_sales_totals
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +49,11 @@ SKILL_DISPATCHER = {
     'clara_sell_out_settlement': run_sell_out_settlement_audit,
     'clara_monthly_executive_reports': run_monthly_executive_reports,
     'purchase_whatsapp_assistant': run_purchase_whatsapp_listener,
+
+    # Dante TI & Sincronización
+    'it_sync_heartbeat_monitor': audit_store_sync_heartbeats,
+    'it_sales_gap_detector': detect_sales_consecutive_gaps,
+    'it_daily_sales_reconciliation': reconcile_daily_sales_totals,
 }
 
 def run_worker_cycle(agent_code: str, db: Session) -> Dict[str, Any]:

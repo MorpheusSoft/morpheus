@@ -45,6 +45,7 @@ export function AppSidebar() {
   const orgItems = [
     { label: 'Empresas Base', icon: 'pi pi-building', href: '/dashboard/companies' },
     { label: 'Sucursales / Sedes', icon: 'pi pi-sitemap', href: '/dashboard/facilities' },
+    { label: 'Agentes de Tienda (Sync)', icon: 'pi pi-sync', href: '/dashboard/store-sync' },
   ];
 
   const settingsItems = [

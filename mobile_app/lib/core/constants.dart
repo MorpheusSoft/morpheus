@@ -1,5 +1,6 @@
+import 'services/kiosk_config_service.dart';
+
 class AppConstants {
-  // Use 10.0.2.2 for Android Emulator, localhost for iOS simulator/desktop apps.
-  // This should ideally be configurable via environment variables in production.
-  static const String baseUrl = 'http://10.0.2.2:8000/api/v1';
+  // Retorna la URL dinámica configurada en el Kiosco, con fallback al valor por defecto
+  static String get baseUrl => KioskConfigService.instance.serverUrl;
 }

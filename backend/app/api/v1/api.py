@@ -6,7 +6,8 @@ from app.api.v1.endpoints import (
     reconciliation, currencies, wms, wms_transfers, jobs, dashboard, facilities,
     pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b,
     labels, import_legacy, print_templates, promotions, sales_report, returns,
-    digital_workers, whatsapp, sell_out, inventory_intelligence
+    digital_workers, whatsapp, sell_out, inventory_intelligence, wms_offline_sync,
+    sync_sales, store_agent_control
 )
 
 from app.api.v1.endpoints import public_orders
@@ -56,6 +57,10 @@ api_router.include_router(sync.router, prefix="/sync", tags=["sync"]) # Sin auth
 api_router.include_router(public_orders.router, prefix="/public/orders", tags=["public-orders"])
 api_router.include_router(sell_out.router, prefix="/sell-out", tags=["sell-out"], dependencies=secure_dependencies)
 api_router.include_router(inventory_intelligence.router, prefix="/inventory-intelligence", tags=["inventory-intelligence"], dependencies=secure_dependencies)
+api_router.include_router(wms_offline_sync.router, prefix="/wms/sync", tags=["wms sync"])
+api_router.include_router(import_legacy.router, prefix="/import", tags=["import"])
+api_router.include_router(sync_sales.router, tags=["sync sales and telemetry"])
+api_router.include_router(store_agent_control.router, prefix="/store-agent", tags=["store agent control"])
 
 
 

@@ -49,6 +49,7 @@ public class MainForm : Form
     private RadioButton rbSalesAll = null!;
     private RadioButton rbSalesCustom = null!;
     private TextBox txtSalesCustomDate = null!;
+    private TextBox txtSalesBatchSize = null!;
     private Button btnSyncSales = null!;
     private Button btnSyncMovements = null!;
     private RadioButton rbMovementsIncremental = null!;
@@ -397,12 +398,17 @@ public class MainForm : Form
         rbSalesCustom = new RadioButton { Text = "Desde fecha especifica:", Location = new Point(20, 168), AutoSize = true, ForeColor = Color.White };
         txtSalesCustomDate = new TextBox { Text = "2026-01-01", Location = new Point(190, 166), Width = 100, BackColor = Color.FromArgb(15, 23, 42), ForeColor = Color.White };
 
+        var lblBatch = new Label { Text = "Lote HTTP:", Location = new Point(310, 168), AutoSize = true, ForeColor = Color.FromArgb(148, 163, 184) };
+        txtSalesBatchSize = new TextBox { Text = "500", Location = new Point(380, 166), Width = 60, BackColor = Color.FromArgb(15, 23, 42), ForeColor = Color.White };
+
         gbSales.Controls.Add(rbSales30Days);
         gbSales.Controls.Add(rbSales3Months);
         gbSales.Controls.Add(rbSales6Months);
         gbSales.Controls.Add(rbSalesAll);
         gbSales.Controls.Add(rbSalesCustom);
         gbSales.Controls.Add(txtSalesCustomDate);
+        gbSales.Controls.Add(lblBatch);
+        gbSales.Controls.Add(txtSalesBatchSize);
 
         btnSyncSales = CreateButton("Sincronizar Ventas Ahora", 20, 196, 220, 36, Color.FromArgb(16, 185, 129));
         btnSyncSales.Click += BtnSyncSales_Click;
@@ -1004,11 +1010,11 @@ public class MainForm : Form
 
     private void BtnSyncSales_Click(object? sender, EventArgs e)
     {
-        DateTime start = DateTime.Today;
+        DateTime start = DateTime.Today.AddMonths(-3);
         if (rbSales30Days.Checked) start = DateTime.Today.AddDays(-30);
         else if (rbSales3Months.Checked) start = DateTime.Today.AddMonths(-3);
         else if (rbSales6Months.Checked) start = DateTime.Today.AddMonths(-6);
-        else if (rbSalesAll.Checked) start = new DateTime(2000, 1, 1);
+        else if (rbSalesAll.Checked) start = new DateTime(2020, 1, 1);
         else if (rbSalesCustom.Checked)
         {
             if (!DateTime.TryParse(txtSalesCustomDate.Text.Trim(), out start))
@@ -1018,37 +1024,14 @@ public class MainForm : Form
             }
         }
 
-        try
+        int batchSize = 500;
+        if (int.TryParse(txtSalesBatchSize.Text.Trim(), out int b) && b > 0)
         {
-            JsonNode stateObj;
-            if (File.Exists(_syncStatePath))
-            {
-                stateObj = JsonNode.Parse(File.ReadAllText(_syncStatePath)) ?? new JsonObject();
-            }
-            else
-            {
-                stateObj = new JsonObject
-                {
-                    ["LastProductSync"] = "2000-01-01T00:00:00",
-                    ["LastBarcodeSync"] = "2000-01-01T00:00:00",
-                    ["BaselineInventoryDone"] = true,
-                    ["LastMovementSync"] = "2000-01-01T00:00:00",
-                    ["LastSalesSync"] = "2000-01-01T00:00:00",
-                    ["LastSupplierProductSync"] = "2000-01-01T00:00:00"
-                };
-            }
-
-            stateObj["LastSalesSync"] = start.ToString("yyyy-MM-ddT00:00:00");
-            stateObj["BaselineInventoryDone"] = true;
-            File.WriteAllText(_syncStatePath, stateObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-
-            RefreshSyncState();
-            RunExtractor("sales");
+            batchSize = b;
         }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Error ajustando fecha de ventas:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+
+        DateTime end = DateTime.Now;
+        RunExtractor("sales", $"--from {start:yyyy-MM-dd} --to {end:yyyy-MM-dd} --batch-size {batchSize}");
     }
 
     private void BtnSyncMovements_Click(object? sender, EventArgs e)

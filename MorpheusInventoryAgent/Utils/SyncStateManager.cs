@@ -70,4 +70,42 @@ public static class SyncStateManager
             Console.WriteLine($"Error saving state: {ex.Message}");
         }
     }
+
+    private static readonly string HistoryStateFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "history_sync_state.json");
+
+    public static Models.HistorySyncState LoadHistoryState()
+    {
+        try
+        {
+            lock (_lock)
+            {
+                if (File.Exists(HistoryStateFilePath))
+                {
+                    var json = File.ReadAllText(HistoryStateFilePath);
+                    return JsonSerializer.Deserialize<Models.HistorySyncState>(json) ?? new Models.HistorySyncState();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading history state: {ex.Message}");
+        }
+        return new Models.HistorySyncState();
+    }
+
+    public static void SaveHistoryState(Models.HistorySyncState state)
+    {
+        try
+        {
+            lock (_lock)
+            {
+                var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(HistoryStateFilePath, json);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error saving history state: {ex.Message}");
+        }
+    }
 }

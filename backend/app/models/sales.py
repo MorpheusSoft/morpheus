@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Numeric, Enum as SQLEnum, BigInteger, Boolean
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Numeric, Enum as SQLEnum, BigInteger, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.base_class import Base
@@ -39,10 +39,15 @@ class Customer(Base):
 
 class Document(Base):
     __tablename__ = "documents"
-    __table_args__ = {"schema": "sales"}
+    __table_args__ = (
+        UniqueConstraint("facility_id", "register_code", "document_number", name="uq_sales_documents_facility_register_doc"),
+        {"schema": "sales"}
+    )
     
     id = Column(BigInteger, primary_key=True, index=True)
-    document_number = Column(String, unique=True, index=True, nullable=False) # Ej: FAC-001
+    document_number = Column(String, index=True, nullable=False) # Ej: 001096670
+    register_code = Column(String(20), nullable=True, index=True) # Ej: 01, 02
+    is_historical = Column(Boolean, default=False, index=True)
     
     # Metadatos Fiscales
     fiscal_number = Column(String, index=True, nullable=True)

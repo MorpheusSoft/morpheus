@@ -12,6 +12,47 @@ import {
   simulateWhatsApp
 } from "@/app/actions/digital-workers";
 
+const getWorkerMeta = (agentCode: string) => {
+  if (agentCode === "ARTURO_WMS") {
+    return {
+      name: "Arturo (WMS)",
+      shortCode: "AW",
+      icon: "pi-box",
+      colorClass: "bg-blue-600 text-white shadow-sm",
+      badgeColor: "bg-blue-50 text-blue-700",
+      avatarGradient: "from-blue-600 to-cyan-600 border-blue-200"
+    };
+  }
+  if (agentCode === "CLARA_PURCHASING") {
+    return {
+      name: "Clara (Compras)",
+      shortCode: "CC",
+      icon: "pi-shopping-cart",
+      colorClass: "bg-purple-600 text-white shadow-sm",
+      badgeColor: "bg-purple-50 text-purple-700",
+      avatarGradient: "from-purple-600 to-pink-600 border-purple-200"
+    };
+  }
+  if (agentCode === "DANTE_IT") {
+    return {
+      name: "Dante (TI & Sync)",
+      shortCode: "DT",
+      icon: "pi-shield",
+      colorClass: "bg-indigo-600 text-white shadow-sm",
+      badgeColor: "bg-indigo-50 text-indigo-700",
+      avatarGradient: "from-indigo-600 to-emerald-600 border-indigo-200"
+    };
+  }
+  return {
+    name: agentCode,
+    shortCode: agentCode.slice(0, 2).toUpperCase(),
+    icon: "pi-android",
+    colorClass: "bg-slate-800 text-white shadow-sm",
+    badgeColor: "bg-slate-50 text-slate-700",
+    avatarGradient: "from-slate-700 to-indigo-700 border-slate-200"
+  };
+};
+
 export default function DigitalWorkersPage() {
   const [workers, setWorkers] = useState<any[]>([]);
   const [skillsCatalog, setSkillsCatalog] = useState<any[]>([]);
@@ -211,7 +252,7 @@ export default function DigitalWorkersPage() {
 
           {workers.map((w) => {
             const isSelected = workerFilter === w.agent_code;
-            const isArturo = w.agent_code === "ARTURO_WMS";
+            const meta = getWorkerMeta(w.agent_code);
             const skillsCount = w.worker_skills?.filter((s: any) => s.is_enabled).length || 0;
 
             return (
@@ -220,20 +261,16 @@ export default function DigitalWorkersPage() {
                 onClick={() => setWorkerFilter(w.agent_code)}
                 className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
                   isSelected
-                    ? isArturo
-                      ? "bg-blue-600 text-white shadow-sm"
-                      : "bg-purple-600 text-white shadow-sm"
+                    ? meta.colorClass
                     : "text-slate-600 hover:bg-slate-100"
                 }`}
               >
-                <i className={`pi ${isArturo ? "pi-box" : "pi-shopping-cart"} text-xs`}></i>
-                <span>{isArturo ? "Arturo (WMS)" : "Clara (Compras)"}</span>
+                <i className={`pi ${meta.icon} text-xs`}></i>
+                <span>{meta.name}</span>
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
                   isSelected
                     ? "bg-white/25 text-white"
-                    : isArturo
-                    ? "bg-blue-50 text-blue-700"
-                    : "bg-purple-50 text-purple-700"
+                    : meta.badgeColor
                 }`}>
                   {skillsCount} Habilidades
                 </span>
@@ -260,10 +297,7 @@ export default function DigitalWorkersPage() {
           {workers
             .filter((worker) => workerFilter === "ALL" || worker.agent_code === workerFilter)
             .map((worker) => {
-            const isArturo = worker.agent_code === "ARTURO_WMS";
-            const avatarColor = isArturo 
-              ? "from-blue-600 to-cyan-600 border-blue-200" 
-              : "from-purple-600 to-pink-600 border-purple-200";
+            const meta = getWorkerMeta(worker.agent_code);
 
             return (
               <div
@@ -274,8 +308,8 @@ export default function DigitalWorkersPage() {
                 <div className="p-7">
                   <div className="flex items-start justify-between gap-4 mb-5">
                     <div className="flex items-center gap-4">
-                      <div className={`w-14 h-14 rounded-2xl bg-gradient-to-br ${avatarColor} flex items-center justify-center text-white shadow-md text-2xl font-black`}>
-                        {isArturo ? "AW" : "CC"}
+                      <div className={`w-14 h-14 rounded-2xl bg-gradient-to-br ${meta.avatarGradient} flex items-center justify-center text-white shadow-md text-2xl font-black`}>
+                        {meta.shortCode}
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
@@ -583,7 +617,7 @@ export default function DigitalWorkersPage() {
                     <span>Neo ERP Assistant</span>
                     <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
                   </div>
-                  <div className="text-[11px] text-slate-400">Arturo WMS & Clara Compras</div>
+                  <div className="text-[11px] text-slate-400">Arturo WMS, Clara Compras & Dante TI</div>
                 </div>
               </div>
               <button
@@ -647,7 +681,7 @@ export default function DigitalWorkersPage() {
                 type="text"
                 value={simMessage}
                 onChange={(e) => setSimMessage(e.target.value)}
-                placeholder="Escribe tu mensaje a Arturo o Clara..."
+                placeholder="Escribe tu mensaje a Arturo, Clara o Dante..."
                 className="flex-1 bg-[#2a3942] border-none text-white text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 placeholder-slate-400"
               />
               <button

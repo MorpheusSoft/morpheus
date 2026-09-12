@@ -1,4 +1,3 @@
-
 using MorpheusSyncAgent.Workers;
 
 namespace MorpheusSyncAgent;
@@ -12,6 +11,10 @@ public class Program
         string? runName = null;
         string? date = null;
         string? desc = null;
+        string? fromStr = null;
+        string? toStr = null;
+        string? monthsStr = null;
+        string? batchSizeStr = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -28,6 +31,26 @@ public class Program
             else if (args[i] == "--desc" && i + 1 < args.Length)
             {
                 desc = args[i + 1];
+                i++;
+            }
+            else if (args[i] == "--from" && i + 1 < args.Length)
+            {
+                fromStr = args[i + 1];
+                i++;
+            }
+            else if (args[i] == "--to" && i + 1 < args.Length)
+            {
+                toStr = args[i + 1];
+                i++;
+            }
+            else if (args[i] == "--months" && i + 1 < args.Length)
+            {
+                monthsStr = args[i + 1];
+                i++;
+            }
+            else if (args[i] == "--batch-size" && i + 1 < args.Length)
+            {
+                batchSizeStr = args[i + 1];
                 i++;
             }
         }
@@ -57,6 +80,7 @@ public class Program
             builder.Services.AddTransient<InventoryMovementsWorker>();
             builder.Services.AddTransient<SalesExtractorWorker>();
             builder.Services.AddTransient<SupplierProductsExtractorWorker>();
+            builder.Services.AddTransient<HeartbeatWorker>();
             
             var host = builder.Build();
             
@@ -95,7 +119,35 @@ public class Program
                 else if (runName.Equals("sales", StringComparison.OrdinalIgnoreCase))
                 {
                     var worker = host.Services.GetRequiredService<SalesExtractorWorker>();
-                    await worker.RunOnceAsync();
+                    
+                    int batch = 500;
+                    if (!string.IsNullOrEmpty(batchSizeStr) && int.TryParse(batchSizeStr, out int b) && b > 0)
+                    {
+                        batch = b;
+                    }
+
+                    DateTime? fromDt = null;
+                    DateTime? toDt = null;
+
+                    if (!string.IsNullOrEmpty(fromStr) && DateTime.TryParse(fromStr, out DateTime f)) fromDt = f;
+                    if (!string.IsNullOrEmpty(toStr) && DateTime.TryParse(toStr, out DateTime t)) toDt = t;
+                    
+                    if (!fromDt.HasValue && !string.IsNullOrEmpty(monthsStr) && int.TryParse(monthsStr, out int m) && m > 0)
+                    {
+                        fromDt = DateTime.Today.AddMonths(-m);
+                        toDt = DateTime.Now;
+                    }
+
+                    if (fromDt.HasValue)
+                    {
+                        var targetTo = toDt ?? DateTime.Now;
+                        await worker.RunHistoricalAsync(fromDt.Value, targetTo, batch);
+                    }
+                    else
+                    {
+                        // Por defecto si no se especifican fechas: últimos 3 meses
+                        await worker.RunHistoricalAsync(DateTime.Today.AddMonths(-3), DateTime.Now, batch);
+                    }
                 }
                 else if (runName.Equals("supplier-products", StringComparison.OrdinalIgnoreCase))
                 {
@@ -122,15 +174,24 @@ public class Program
         }
         else
         {
-            // Registrar los Workers (Hilos de fondo) exclusivos para Morpheus/Stellar
-            builder.Services.AddHostedService<ProductMasterExtractorWorker>();
-            builder.Services.AddHostedService<ProductBarcodesExtractorWorker>();
-            // Removed: builder.Services.AddHostedService<InventoryBaselineWorker>();
-            builder.Services.AddHostedService<InventoryMovementsWorker>();
-            builder.Services.AddHostedService<SalesExtractorWorker>();
-            builder.Services.AddHostedService<SupplierProductsExtractorWorker>();
-            builder.Services.AddHostedService<SuppliersExtractorWorker>();
-            builder.Services.AddHostedService<CategoryExtractorWorker>();
+            // Registrar instancias Singleton para que HeartbeatWorker pueda invocarlas remotamente
+            builder.Services.AddSingleton<SalesExtractorWorker>();
+            builder.Services.AddSingleton<ProductMasterExtractorWorker>();
+            builder.Services.AddSingleton<ProductBarcodesExtractorWorker>();
+            builder.Services.AddSingleton<InventoryMovementsWorker>();
+            builder.Services.AddSingleton<SupplierProductsExtractorWorker>();
+            builder.Services.AddSingleton<SuppliersExtractorWorker>();
+            builder.Services.AddSingleton<CategoryExtractorWorker>();
+            builder.Services.AddSingleton<HeartbeatWorker>();
+
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<HeartbeatWorker>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<SalesExtractorWorker>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<ProductMasterExtractorWorker>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<ProductBarcodesExtractorWorker>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<InventoryMovementsWorker>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<SupplierProductsExtractorWorker>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<SuppliersExtractorWorker>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<CategoryExtractorWorker>());
 
             var host = builder.Build();
             host.Run();

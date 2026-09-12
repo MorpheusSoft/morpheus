@@ -13,4 +13,5 @@ public class DirectExtractorConfig
     public int IntervalMinutes { get; set; }
     public string TargetApiUrl { get; set; } = string.Empty;
     public ExportMode ExportMode { get; set; }
+    public int BatchSize { get; set; } = 500;
 }

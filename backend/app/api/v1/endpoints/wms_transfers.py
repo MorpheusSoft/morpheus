@@ -91,7 +91,8 @@ def list_transfers(facility_id: Optional[int] = None, db: Session = Depends(get_
     q = db.query(StockPicking).filter(
         (StockPicking.origin_document.like("Solicitud Reabastecimiento%")) |
         (StockPicking.origin_document.like("Transferencia Directa%")) |
-        (StockPicking.origin_document.like("Despacho Directo%"))
+        (StockPicking.origin_document.like("Despacho Directo%")) |
+        (StockPicking.origin_document.like("Reubicación%"))
     )
     if facility_id:
         q = q.filter((StockPicking.facility_id == facility_id) | (StockPicking.dest_facility_id == facility_id))
@@ -144,6 +145,9 @@ def list_transfers(facility_id: Optional[int] = None, db: Session = Depends(get_
             "created_by_name": created_by_name,
             "shipped_by_name": shipped_by_name,
             "received_by_name": received_by_name,
+            "notes": p.notes or "",
+            "is_kiosk": ("Kiosk" in (p.origin_document or "")) or ("REUB-OFF" in (p.name or "")),
+            "has_discrepancy": ("[DISCREPANCIA-OFFLINE]" in (p.notes or "")),
             "lines_count": len(p.moves),
             "lines": lines_detail
         })
