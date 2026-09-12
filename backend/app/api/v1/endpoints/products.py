@@ -101,11 +101,13 @@ def delete_variant(
 def read_products_selector(
     db: Session = Depends(deps.get_db),
     limit: int = 1000,
-    q: Optional[str] = None
+    q: Optional[str] = None,
+    category_id: Optional[int] = None
 ) -> Any:
     """
     Ultra-lightweight endpoint for fast UI dropdown selectors and barcode lookups.
-    Returns variant_id, sku, name, uom_base, cost, and all associated barcodes in <150ms.
+    Returns variant_id, sku, name, uom_base, cost, category_id, and all associated barcodes in <150ms.
+    Supports filtering by category hierarchy (includes all descendant categories).
     """
     from sqlalchemy import or_
     query = db.query(
@@ -116,8 +118,14 @@ def read_products_selector(
         ProductVariant.average_cost,
         ProductVariant.standard_cost,
         Product.name.label("product_name"),
-        Product.uom_base.label("prod_uom")
+        Product.uom_base.label("prod_uom"),
+        Product.category_id.label("category_id")
     ).join(Product, Product.id == ProductVariant.product_id)
+
+    if category_id:
+        from app.api.v1.endpoints.inventory_session import get_all_descendant_category_ids
+        descendant_cat_ids = get_all_descendant_category_ids(db, category_id)
+        query = query.filter(Product.category_id.in_(descendant_cat_ids))
 
     if q:
         clean_q = q.strip()
@@ -165,6 +173,7 @@ def read_products_selector(
             "variant_id": r.variant_id,
             "sku": sku_code,
             "name": prod_name,
+            "category_id": r.category_id,
             "uom_base": r.prod_uom or "UND",
             "cost": float(r.average_cost or r.standard_cost or 0.0),
             "label": display_label,

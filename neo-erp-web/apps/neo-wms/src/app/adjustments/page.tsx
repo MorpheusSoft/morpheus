@@ -69,6 +69,8 @@ export default function WmsAdjustmentsPage() {
   // MANAGE SESSION MODAL STATE
   const [manageSessionDialogVisible, setManageSessionDialogVisible] = useState(false);
   const [selectedSession, setSelectedSession] = useState<any>(null);
+  const [sessionScopedProducts, setSessionScopedProducts] = useState<any[]>([]);
+  const [loadingSessionProducts, setLoadingSessionProducts] = useState(false);
   const [countingProdId, setCountingProdId] = useState<number | null>(null);
   const [countingBarcodeInput, setCountingBarcodeInput] = useState('');
   const countingQtyInputRef = useRef<any>(null);
@@ -80,6 +82,16 @@ export default function WmsAdjustmentsPage() {
   const [validatingSession, setValidatingSession] = useState(false);
   const [aiAuditResult, setAiAuditResult] = useState<any>(null);
   const [loadingAiAudit, setLoadingAiAudit] = useState(false);
+
+  // Helper para saber si la sesión activa está acotada a una categoría específica
+  const isSessionCategoryScoped = Boolean(
+    selectedSession &&
+    (selectedSession.scope_type === 'CYCLIC' || selectedSession.scope_type === 'CATEGORY') &&
+    selectedSession.scope_value &&
+    !isNaN(Number(selectedSession.scope_value))
+  );
+  const availableCountingProducts = isSessionCategoryScoped ? sessionScopedProducts : products;
+
 
   // Formateador jerárquico recursivo para TreeSelect de PrimeReact
   const formatCategoryTreeNodes = (nodes: any[]): any[] => {
@@ -128,26 +140,52 @@ export default function WmsAdjustmentsPage() {
   const handleBarcodeScanOrLookup = (codeToSearch: string) => {
     const clean = codeToSearch.trim().toLowerCase();
     if (!clean) return;
-    const found = products.find(p => 
-      p.sku.toLowerCase() === clean ||
+
+    // 1. Buscar primero en los productos del alcance actual (sesión cíclica o catálogo general)
+    const foundInScope = availableCountingProducts.find(p => 
+      (p.sku && p.sku.toLowerCase() === clean) ||
       (p.primary_barcode && p.primary_barcode.toLowerCase() === clean) ||
       (p.barcodes && p.barcodes.some((b: string) => b.toLowerCase() === clean)) ||
-      p.name.toLowerCase().includes(clean)
+      (p.name && p.name.toLowerCase().includes(clean))
     );
-    if (found) {
-      setCountingProdId(found.value);
+
+    if (foundInScope) {
+      setCountingProdId(foundInScope.value);
       setCountingBarcodeInput('');
-      toast.current?.show({ severity: 'success', summary: 'Producto Identificado', detail: `${found.name} (${found.sku})`, life: 2500 });
+      toast.current?.show({ severity: 'success', summary: 'Producto Identificado', detail: `${foundInScope.name} (${foundInScope.sku})`, life: 2500 });
       setTimeout(() => {
         if (countingQtyInputRef.current) {
           const inputEl = countingQtyInputRef.current.getInput ? countingQtyInputRef.current.getInput() : countingQtyInputRef.current;
           if (inputEl && inputEl.focus) inputEl.focus();
         }
       }, 100);
-    } else {
-      toast.current?.show({ severity: 'warn', summary: 'Código no Encontrado', detail: `No se halló ningún producto con código o barra: "${codeToSearch}"`, life: 3500 });
+      return;
     }
+
+    // 2. Si es conteo cíclico y no se halló en el alcance, verificar si existe en otra categoría del catálogo global
+    if (isSessionCategoryScoped) {
+      const foundInGlobal = products.find(p => 
+        (p.sku && p.sku.toLowerCase() === clean) ||
+        (p.primary_barcode && p.primary_barcode.toLowerCase() === clean) ||
+        (p.barcodes && p.barcodes.some((b: string) => b.toLowerCase() === clean)) ||
+        (p.name && p.name.toLowerCase().includes(clean))
+      );
+
+      if (foundInGlobal) {
+        toast.current?.show({
+          severity: 'warn',
+          summary: '⚠️ Producto Fuera de Alcance',
+          detail: `El producto "${foundInGlobal.name}" (${foundInGlobal.sku}) pertenece a otra categoría y no forma parte del conteo de "${selectedSession?.category_name || 'categoría seleccionada'}".`,
+          life: 5000
+        });
+        return;
+      }
+    }
+
+    // 3. No encontrado en ningún catálogo
+    toast.current?.show({ severity: 'warn', summary: 'Código no Encontrado', detail: `No se halló ningún producto con código o barra: "${codeToSearch}"`, life: 3500 });
   };
+
 
   // LOAD DATA
   const fetchAdjustments = async () => {
@@ -587,7 +625,8 @@ export default function WmsAdjustmentsPage() {
   const handleOpenSessionDetail = async (sessionId: number) => {
     try {
       const res = await api.get(`/inventory-session/${sessionId}`);
-      setSelectedSession(res.data);
+      const sessionData = res.data;
+      setSelectedSession(sessionData);
       setCountingProdId(null);
       setCountingQty(0);
       setCountingSheetNo('');
@@ -595,10 +634,30 @@ export default function WmsAdjustmentsPage() {
       setCountingNotes('');
       setAiAuditResult(null);
       setManageSessionDialogVisible(true);
-      if (res.data.state === 'REVIEW' || res.data.state === 'DONE') {
+
+      // Si la sesión está acotada por categoría (CYCLIC / CATEGORY)
+      const hasCategoryScope = (sessionData.scope_type === 'CYCLIC' || sessionData.scope_type === 'CATEGORY') && sessionData.scope_value && !isNaN(Number(sessionData.scope_value));
+      if (hasCategoryScope) {
+        setLoadingSessionProducts(true);
+        try {
+          const prodRes = await api.get(`/products/selector?category_id=${sessionData.scope_value}&limit=2000`);
+          const pList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.data || []);
+          setSessionScopedProducts(pList);
+        } catch (err) {
+          console.error("Error fetching scoped products for session:", err);
+          setSessionScopedProducts([]);
+        } finally {
+          setLoadingSessionProducts(false);
+        }
+      } else {
+        setSessionScopedProducts([]);
+      }
+
+      if (sessionData.state === 'REVIEW' || sessionData.state === 'DONE') {
         handleRunAIAudit(sessionId);
       }
-    } catch (e: any) {
+    } catch (e) {
+      console.error(e);
       toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo cargar el detalle de la toma física.' });
     }
   };
@@ -611,25 +670,26 @@ export default function WmsAdjustmentsPage() {
       setSelectedSession(res.data);
       toast.current?.show({
         severity: 'info',
-        summary: 'Transición de Fase',
-        detail: targetState === 'REVIEW' ? 'Conteo Ciego cerrado. Fase de Análisis & Cotejo iniciada.' : 'Fase actualizada.'
+        summary: 'Fase Actualizada',
+        detail: `La toma física avanzó a estado: ${targetState}`
       });
+      fetchSessions();
       if (targetState === 'REVIEW') {
         handleRunAIAudit(selectedSession.id);
       }
-      fetchSessions();
     } catch (e: any) {
-      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'Fallo al avanzar fase de sesión.' });
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'No se pudo cambiar de fase.' });
     }
   };
 
-  // RUN AI AUDIT ASSISTANT
+  // AUDIT WITH CLARA AI
   const handleRunAIAudit = async (sessionId: number) => {
     setLoadingAiAudit(true);
     try {
       const res = await api.post(`/inventory-session/${sessionId}/ai-audit`);
       setAiAuditResult(res.data);
-    } catch (e) {
+      toast.current?.show({ severity: 'success', summary: 'Análisis IA Completado', detail: 'Métricas de precisión y cotejo generadas con éxito.' });
+    } catch (e: any) {
       console.error(e);
     }
     setLoadingAiAudit(false);
@@ -643,7 +703,7 @@ export default function WmsAdjustmentsPage() {
     }
     setSavingCount(true);
     try {
-      const prod = products.find(p => p.value === countingProdId);
+      const prod = availableCountingProducts.find(p => p.value === countingProdId) || products.find(p => p.value === countingProdId);
       const sanitizedQty = sanitizeQuantity(countingQty, prod?.uom_base);
 
       const res = await api.post(`/inventory-session/${selectedSession.id}/count`, {
@@ -662,6 +722,7 @@ export default function WmsAdjustmentsPage() {
     }
     setSavingCount(false);
   };
+
 
   // CONSOLIDATE & CLOSE PHYSICAL INVENTORY SESSION
   const handleValidateSession = async (sessionId: number) => {
@@ -1719,6 +1780,30 @@ export default function WmsAdjustmentsPage() {
                   <span className="text-[10px] text-indigo-600 font-medium">🙈 Las cantidades teóricas están ocultas para preservar la imparcialidad del operador.</span>
                 </div>
 
+                {/* Banner de Alcance de Conteo Cíclico */}
+                {isSessionCategoryScoped && (
+                  <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-2.5 w-2.5 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                      </span>
+                      <span className="font-bold text-amber-900">
+                        🎯 Conteo Cíclico Filtrado por Categoría: &quot;{selectedSession.category_name || 'HARINAS'}&quot;
+                      </span>
+                      <span className="text-amber-800 bg-amber-100/90 border border-amber-200 px-2 py-0.5 rounded font-mono font-bold text-[11px]">
+                        {loadingSessionProducts ? 'Cargando catálogo...' : `${availableCountingProducts.length} productos habilitados`}
+                      </span>
+                    </div>
+                    {availableCountingProducts.length === 0 && !loadingSessionProducts && (
+                      <span className="text-rose-600 font-bold text-[11px] flex items-center gap-1">
+                        <i className="pi pi-exclamation-triangle"></i>
+                        No hay productos registrados en esta categoría o sus subcategorías.
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {/* Buscador Rápido por Código de Barras / Escáner */}
                 <div className="bg-white p-3 rounded-xl border border-indigo-100 shadow-sm flex flex-col sm:flex-row items-center gap-3">
                   <div className="flex items-center gap-2 text-indigo-700 text-xs font-bold shrink-0">
@@ -1735,7 +1820,11 @@ export default function WmsAdjustmentsPage() {
                           handleBarcodeScanOrLookup(countingBarcodeInput);
                         }
                       }}
-                      placeholder="Escanee con pistola o ingrese cualquier código (EAN, DUN, Stellar, SKU) y presione Enter..."
+                      placeholder={
+                        isSessionCategoryScoped
+                          ? `Escanee código de barra de ${selectedSession.category_name || 'la categoría'}...`
+                          : "Escanee con pistola o ingrese cualquier código (EAN, DUN, Stellar, SKU) y presione Enter..."
+                      }
                       className="text-xs p-inputtext-sm w-full font-mono pl-8"
                     />
                     <i className="pi pi-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
@@ -1752,14 +1841,28 @@ export default function WmsAdjustmentsPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
                   <div className="md:col-span-2 flex flex-col gap-1">
-                    <label className="text-[11px] font-bold text-slate-700">Producto / SKU *</label>
+                    <label className="text-[11px] font-bold text-slate-700">
+                      Producto / SKU *
+                      {isSessionCategoryScoped && (
+                        <span className="text-amber-700 font-semibold text-[10px] ml-2">
+                          (Solo {selectedSession.category_name || 'categoría'})
+                        </span>
+                      )}
+                    </label>
                     <Dropdown
                       value={countingProdId}
-                      options={products}
+                      options={availableCountingProducts}
                       optionLabel="label"
                       optionValue="value"
                       onChange={e => setCountingProdId(e.value)}
-                      placeholder="Buscar por Código de Barra, SKU o Nombre..."
+                      placeholder={
+                        loadingSessionProducts
+                          ? "Cargando catálogo de la categoría..."
+                          : isSessionCategoryScoped
+                          ? `Buscar en ${selectedSession.category_name || 'categoría'} (${availableCountingProducts.length} productos)...`
+                          : "Buscar por Código de Barra, SKU o Nombre..."
+                      }
+                      disabled={loadingSessionProducts}
                       filter
                       filterBy="label,search_key,sku,name,barcodes_str"
                       filterMatchMode="contains"
@@ -1771,22 +1874,23 @@ export default function WmsAdjustmentsPage() {
 
                   <div className="flex flex-col gap-1">
                     <label className="text-[11px] font-bold text-slate-700">
-                      Cantidad Contada Real * {countingProdId && `(${products.find(p => p.value === countingProdId)?.uom_base || 'UND'})`}
+                      Cantidad Contada Real * {countingProdId && `(${availableCountingProducts.find(p => p.value === countingProdId)?.uom_base || 'UND'})`}
                     </label>
                     <InputNumber
                       ref={countingQtyInputRef}
                       value={countingQty}
                       onValueChange={e => {
-                        const prod = products.find(p => p.value === countingProdId);
+                        const prod = availableCountingProducts.find(p => p.value === countingProdId);
                         setCountingQty(sanitizeQuantity(e.value || 0, prod?.uom_base));
                       }}
                       min={0}
-                      minFractionDigits={getUomDecimals(products.find(p => p.value === countingProdId)?.uom_base)}
-                      maxFractionDigits={getUomDecimals(products.find(p => p.value === countingProdId)?.uom_base)}
-                      step={isWeightUom(products.find(p => p.value === countingProdId)?.uom_base) ? 0.001 : 1}
+                      minFractionDigits={getUomDecimals(availableCountingProducts.find(p => p.value === countingProdId)?.uom_base)}
+                      maxFractionDigits={getUomDecimals(availableCountingProducts.find(p => p.value === countingProdId)?.uom_base)}
+                      step={isWeightUom(availableCountingProducts.find(p => p.value === countingProdId)?.uom_base) ? 0.001 : 1}
                       className="text-xs w-full p-inputtext-sm font-bold"
                     />
                   </div>
+
 
                   <div className="flex flex-col gap-1">
                     <label className="text-[11px] font-bold text-slate-700">Planilla / Hoja #</label>

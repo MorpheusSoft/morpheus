@@ -130,8 +130,17 @@ def get_inventory_session(
             line.difference_qty = None
             line.is_anomaly = False
             line.anomaly_reason = None
+
+    if session.scope_type in ('CATEGORY', 'CYCLIC') and session.scope_value and session.scope_value.isdigit():
+        cat_id = int(session.scope_value)
+        setattr(session, 'category_id', cat_id)
+        cat_obj = db.query(Category).filter(Category.id == cat_id).first()
+        if cat_obj:
+            setattr(session, 'category_name', cat_obj.name)
+        setattr(session, 'valid_category_ids', get_all_descendant_category_ids(db, cat_id))
             
     return session
+
 
 @router.post("/", response_model=schemas.InventorySession)
 def create_inventory_session(
@@ -188,7 +197,17 @@ def create_inventory_session(
 
     db.commit()
     db.refresh(db_obj)
+
+    if db_obj.scope_type in ('CATEGORY', 'CYCLIC') and db_obj.scope_value and db_obj.scope_value.isdigit():
+        cat_id = int(db_obj.scope_value)
+        setattr(db_obj, 'category_id', cat_id)
+        cat_obj = db.query(Category).filter(Category.id == cat_id).first()
+        if cat_obj:
+            setattr(db_obj, 'category_name', cat_obj.name)
+        setattr(db_obj, 'valid_category_ids', get_all_descendant_category_ids(db, cat_id))
+
     return db_obj
+
 
 
 @router.post("/{id}/count", response_model=schemas.InventorySession)
@@ -209,6 +228,18 @@ def record_line_count(
     prod = variant.product if (variant and hasattr(variant, 'product')) else None
     uom = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
     validate_quantity_uom(line_in.counted_qty, uom, item_label=prod.name if prod else f"Variante #{line_in.product_variant_id}")
+
+    # Validar que el producto pertenezca a la categoría asignada si es conteo cíclico
+    if session.scope_type in ('CATEGORY', 'CYCLIC') and session.scope_value and session.scope_value.isdigit():
+        scope_cat_id = int(session.scope_value)
+        valid_cat_ids = get_all_descendant_category_ids(db, scope_cat_id)
+        if prod and prod.category_id not in valid_cat_ids:
+            cat_obj = db.query(Category).filter(Category.id == scope_cat_id).first()
+            cat_label = cat_obj.name if cat_obj else f"#{scope_cat_id}"
+            raise HTTPException(
+                status_code=400,
+                detail=f"El producto '{prod.name}' no pertenece a la categoría '{cat_label}' configurada para esta toma física cíclica."
+            )
 
     # Buscar línea existente o crear nueva
     existing_line = db.query(InventoryLine).filter(
@@ -242,7 +273,17 @@ def record_line_count(
 
     db.commit()
     db.refresh(session)
+
+    if session.scope_type in ('CATEGORY', 'CYCLIC') and session.scope_value and session.scope_value.isdigit():
+        cat_id = int(session.scope_value)
+        setattr(session, 'category_id', cat_id)
+        cat_obj = db.query(Category).filter(Category.id == cat_id).first()
+        if cat_obj:
+            setattr(session, 'category_name', cat_obj.name)
+        setattr(session, 'valid_category_ids', get_all_descendant_category_ids(db, cat_id))
+
     return session
+
 
 @router.post("/{id}/lines/bulk", response_model=schemas.InventorySession)
 def bulk_upload_lines(

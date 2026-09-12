@@ -53,6 +53,8 @@ class InventorySessionBase(BaseModel):
     scope_type: Optional[str] = "GENERAL"
     scope_value: Optional[str] = None
     category_id: Optional[int] = None
+    category_name: Optional[str] = None
+    valid_category_ids: Optional[List[int]] = None
     location_id: Optional[int] = None
 
 class InventorySessionCreate(InventorySessionBase):
