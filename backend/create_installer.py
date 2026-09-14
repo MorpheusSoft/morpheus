@@ -212,6 +212,7 @@ Write-Host "=========================================================" -Foregrou
 # 1. Detener procesos o servicios previos si estan corriendo para liberar los archivos .exe
 Write-Host "`n[1/4] Verificando y liberando procesos en ejecucion..." -ForegroundColor Yellow
 Get-Process -Name "MorpheusConfigurador", "MorpheusSyncAgent" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name "mmc" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 if (Get-Service -Name "NeoAgentSync" -ErrorAction SilentlyContinue) {
     Stop-Service -Name "NeoAgentSync" -Force -ErrorAction SilentlyContinue
 }
@@ -262,6 +263,8 @@ if (Test-Path $agentExe) {
     }
     & sc.exe description "NeoAgentSync" "Integrador con Stellar" | Out-Null
     Write-Host "  -> Servicio Windows 'NEO Agent Sync' registrado con descripcion 'Integrador con Stellar' [OK]." -ForegroundColor Green
+    Start-Service -Name "NeoAgentSync" -ErrorAction SilentlyContinue
+    Write-Host "  -> Servicio Windows 'NEO Agent Sync' iniciado exitosamente [OK]." -ForegroundColor Green
 }
 
 Write-Host "[4/4] Abriendo MorpheusConfigurador.exe actualizado..." -ForegroundColor Green
