@@ -116,6 +116,10 @@ class UserBase(BaseModel):
     full_name: Optional[str] = None
     is_active: Optional[bool] = True
     is_superuser: Optional[bool] = False
+    phone_number: Optional[str] = None
+    is_phone_verified: Optional[bool] = False
+    telegram_chat_id: Optional[int] = None
+    telegram_username: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str

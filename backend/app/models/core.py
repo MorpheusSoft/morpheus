@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, ForeignKey, DateTime, Text, Numeric
+from sqlalchemy import Boolean, Column, Integer, String, ForeignKey, DateTime, Text, Numeric, BigInteger
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -40,8 +40,11 @@ class User(Base):
     phone_number = Column(String(30))
     is_phone_verified = Column(Boolean, default=False)
     pairing_pin = Column(String(10))
+    telegram_chat_id = Column(BigInteger, unique=True, index=True, nullable=True)
+    telegram_username = Column(String(100), nullable=True)
     avatar_url = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 
     roles = relationship("Role", secondary="core.user_roles", backref="users")
     facilities = relationship("Facility", secondary="core.user_facilities", backref="users")

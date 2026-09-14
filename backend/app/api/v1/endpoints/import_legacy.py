@@ -303,7 +303,7 @@ def import_inventory_baseline(
     session: Session = Depends(deps.get_db)
 ):
     print("Iniciando carga de foto inicial de Inventario...")
-    from app.models.inventory import InventorySession, InventoryLine
+    from app.models.inventory import InventorySession, InventoryLine, StoreDepositMapping
     from datetime import datetime
     
     # Pre-cache variants based on STELLAR_CODE
@@ -314,6 +314,10 @@ def import_inventory_baseline(
     fac = resolve_facility(session, getattr(first_item, 'facility_id', None), getattr(first_item, 'facility_code', None))
     fac_id = fac.id if fac else 10
     fac_name = fac.name if fac else f"Sucursal #{fac_id}"
+    
+    # Pre-cache deposit mappings for this facility
+    mappings_db = session.query(StoreDepositMapping).filter(StoreDepositMapping.facility_id == fac_id).all()
+    dep_map = {m.external_deposit_code.strip(): m for m in mappings_db}
     
     inv_session = InventorySession(
         name=f"Baseline Legacy {fac_name} {datetime.now().strftime('%Y-%m-%d %H:%M')}",
@@ -326,6 +330,7 @@ def import_inventory_baseline(
     
     count = 0
     not_found = 0
+    ignored_no_affects = 0
     for b in baseline_in:
         stellar_code = b.c_codArticulo.strip()
         variant_id = variant_map.get(stellar_code)
@@ -333,10 +338,20 @@ def import_inventory_baseline(
         if not variant_id:
             not_found += 1
             continue
+
+        dep_code = (b.c_deposito or "").strip()
+        loc_id = None
+        if dep_code in dep_map:
+            mapping = dep_map[dep_code]
+            if not mapping.affects_inventory:
+                ignored_no_affects += 1
+                continue
+            loc_id = mapping.location_id
             
         line = InventoryLine(
             session_id=inv_session.id,
             product_variant_id=variant_id,
+            location_id=loc_id,
             counted_qty=b.Cantidad
         )
         session.add(line)
@@ -349,8 +364,8 @@ def import_inventory_baseline(
     inv_session.date_end = datetime.now()
     session.commit()
     
-    print(f"✅ ¡Carga de Inventario Baseline terminada! Insertados: {count}, No encontrados: {not_found}")
-    return {"message": "Success", "imported": count, "not_found": not_found}
+    print(f"✅ ¡Carga de Inventario Baseline terminada! Insertados: {count}, No encontrados: {not_found}, Omitidos por no afectar stock: {ignored_no_affects}")
+    return {"message": "Success", "imported": count, "not_found": not_found, "ignored_no_affects": ignored_no_affects}
 
 class LegacyInventoryMovement(BaseModel):
     facility_id: Optional[int] = 1
@@ -370,7 +385,7 @@ def import_inventory_movements(
     movements_in: List[LegacyInventoryMovement],
     session: Session = Depends(deps.get_db)
 ):
-    from app.models.inventory import StockPicking, StockMove, Warehouse, Location
+    from app.models.inventory import StockPicking, StockMove, Warehouse, Location, StoreDepositMapping
     from datetime import datetime
     
     # Pre-cache variants based on STELLAR_CODE
@@ -404,39 +419,53 @@ def import_inventory_movements(
         fac = resolve_facility(session, facility_id, facility_code)
         resolved_fac_id = fac.id if fac else (facility_id or 1)
 
-        # Resolve locations based on warehouse code
+        # Check StoreDepositMapping
+        mapping = session.query(StoreDepositMapping).filter(
+            StoreDepositMapping.facility_id == resolved_fac_id,
+            StoreDepositMapping.external_deposit_code == deposito.strip()
+        ).first()
+
+        if mapping and not mapping.affects_inventory:
+            # Depósito documental/servicios: no afecta existencias físicas en Kardex
+            continue
+
         loc_src_id = 1
         loc_dest_id = 1
-        
-        wh = session.query(Warehouse).filter_by(facility_id=resolved_fac_id, code=deposito.strip()).first()
-        if not wh:
-            wh = Warehouse(
-                name=f"Almacén {deposito.strip()}",
-                code=deposito.strip(),
-                facility_id=resolved_fac_id
-            )
-            session.add(wh)
-            session.flush()
-            internal_loc = Location(
-                name=f"ALM-{deposito.strip()}/STOCK",
-                code=f"ALM-{deposito.strip()}/STOCK",
-                warehouse_id=wh.id,
-                usage="INTERNAL"
-            )
-            session.add(internal_loc)
-            session.flush()
+
+        if mapping:
+            internal_loc_id = mapping.location_id
         else:
-            internal_loc = session.query(Location).filter_by(warehouse_id=wh.id, usage='INTERNAL').first()
-            if not internal_loc:
-                internal_loc = session.query(Location).filter_by(warehouse_id=wh.id).first()
-                
-        if internal_loc:
-            if is_in:
-                loc_src_id = 1 # Proveedores / Virtual
-                loc_dest_id = internal_loc.id
+            # Fallback a búsqueda directa de almacén por código
+            wh = session.query(Warehouse).filter_by(facility_id=resolved_fac_id, code=deposito.strip()).first()
+            if not wh:
+                wh = Warehouse(
+                    name=f"Almacén {deposito.strip()}",
+                    code=deposito.strip(),
+                    facility_id=resolved_fac_id
+                )
+                session.add(wh)
+                session.flush()
+                internal_loc = Location(
+                    name=f"ALM-{deposito.strip()}/STOCK",
+                    code=f"ALM-{deposito.strip()}/STOCK",
+                    warehouse_id=wh.id,
+                    usage="INTERNAL"
+                )
+                session.add(internal_loc)
+                session.flush()
+                internal_loc_id = internal_loc.id
             else:
-                loc_src_id = internal_loc.id
-                loc_dest_id = 1 # Proveedores / Virtual
+                internal_loc = session.query(Location).filter_by(warehouse_id=wh.id, usage='INTERNAL').first()
+                if not internal_loc:
+                    internal_loc = session.query(Location).filter_by(warehouse_id=wh.id).first()
+                internal_loc_id = internal_loc.id if internal_loc else 1
+                
+        if is_in:
+            loc_src_id = 1 # Proveedores / Virtual
+            loc_dest_id = internal_loc_id
+        else:
+            loc_src_id = internal_loc_id
+            loc_dest_id = 1 # Proveedores / Virtual
                     
         picking = StockPicking(
             facility_id=resolved_fac_id,

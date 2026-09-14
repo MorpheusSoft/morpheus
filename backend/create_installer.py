@@ -168,7 +168,7 @@ pause
         f.write(bat_uninstall)
 
     readme = """===========================================================
-  MORPHEUS SYNC AGENT - APLICACION OFICIAL DE TIENDAS (C#)
+  NEO SYNC AGENT - APLICACION OFICIAL DE TIENDAS (C#)
 ===========================================================
 
 INSTRUCCIONES DE USO:
@@ -177,11 +177,11 @@ INSTRUCCIONES DE USO:
    👉 MorpheusConfigurador.exe
 
 2. Desde la aplicacion podras:
-   - Pestaña 4: Seleccionar tu tienda (Patio Trigal, Cumboto, etc.) y probar conexion SQL.
-   - Pestaña 3: Registrar el servicio de Windows (NEO Agent Sync) y crear icono en el Escritorio.
-   - Pestaña 1: Resetear estado local (Fase 2) y sembrar maestros 1 al 5 (Fase 3).
-   - Pestaña 2: Sincronizar ventas historicas y movimientos (Kardex).
-   - Pestaña 3: Iniciar el servicio para que opere en segundo plano.
+   - Pestaña 5: Conexiones & Tienda (configurar SQL local y enlace con Neo ERP).
+   - Pestaña 2: Mapeo de Depósitos (detectar depósitos en Stellar y emparejarlos con Neo ERP).
+   - Pestaña 1: Puesta a Punto (resetear estado y sembrar catálogo y Baseline).
+   - Pestaña 3: Sincronizar a Voluntad (ventas históricas y movimientos Kardex).
+   - Pestaña 4: Servicio en Fondo (registrar e iniciar el servicio 'NEO Agent Sync').
 
 Solucion 100% nativa en C# (.NET). Sin scripts ni ventanas intermedias.
 ===========================================================

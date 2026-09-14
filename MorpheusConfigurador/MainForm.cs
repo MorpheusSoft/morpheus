@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.ServiceProcess;
 using System.Text.Json;
@@ -22,7 +24,8 @@ public class MainForm : Form
 
     // Controls
     private Label lblServiceStatus = null!;
-    
+    private TabControl tabControl = null!;
+
     // Tab 1: Puesta a Punto
     private Button btnResetLocalState = null!;
     private Label lblResetStatus = null!;
@@ -35,12 +38,25 @@ public class MainForm : Form
     private RadioButton rbBaselineCustom = null!;
     private TextBox txtBaselineDate = null!;
     private Button btnSyncBaseline = null!;
+    private Button btnGoToDeposits = null!;
     
     private Label lblLastSuppliers = null!;
     private Label lblLastBarcodes = null!;
     private Label lblLastCosts = null!;
     private Label lblLastBaseline = null!;
     private Label lblLastSales = null!;
+
+    // Tab 2: Mapeo de Depósitos (Stellar -> Neo)
+    private TabPage tabDeposits = null!;
+    private DataGridView dgvDeposits = null!;
+    private Button btnDetectDeposits = null!;
+    private Button btnFetchCloudDeposits = null!;
+    private Button btnAddDepositRow = null!;
+    private Button btnRemoveDepositRow = null!;
+    private Button btnSaveDepositsToCloud = null!;
+    private Label lblDepositStatus = null!;
+    private List<WarehouseOption> _availableWarehouses = new();
+    private bool _depositsConfigured = false;
 
     // Tab 2: Ventas y Movimientos
     private RadioButton rbSales30Days = null!;
@@ -107,9 +123,9 @@ public class MainForm : Form
 
     private void InitializeComponent()
     {
-        this.Text = "Morpheus Sync Agent - Panel de Control Oficial";
-        this.Size = new Size(880, 720);
-        this.MinimumSize = new Size(820, 680);
+        this.Text = "Neo Sync Agent - Panel de Control Oficial";
+        this.Size = new Size(920, 740);
+        this.MinimumSize = new Size(860, 700);
         this.StartPosition = FormStartPosition.CenterScreen;
         this.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
         this.BackColor = Color.FromArgb(15, 23, 42); // Slate-900
@@ -126,7 +142,7 @@ public class MainForm : Form
 
         var lblLogo = new Label
         {
-            Text = "M",
+            Text = "N",
             Font = new Font("Segoe UI", 16f, FontStyle.Bold),
             ForeColor = Color.White,
             BackColor = Color.FromArgb(99, 102, 241), // Indigo-500
@@ -138,7 +154,7 @@ public class MainForm : Form
 
         var lblTitle = new Label
         {
-            Text = "Morpheus Sync Agent",
+            Text = "Neo Sync Agent",
             Font = new Font("Segoe UI", 13f, FontStyle.Bold),
             ForeColor = Color.White,
             AutoSize = true,
@@ -148,7 +164,7 @@ public class MainForm : Form
 
         var lblSubTitle = new Label
         {
-            Text = "Panel de Control y Enlace POS Tienda a Nube Morpheus",
+            Text = "Panel de Control y Enlace POS Tienda a Neo ERP",
             Font = new Font("Segoe UI", 8.5f),
             ForeColor = Color.FromArgb(148, 163, 184),
             AutoSize = true,
@@ -164,7 +180,7 @@ public class MainForm : Form
             BackColor = Color.FromArgb(51, 65, 85),
             TextAlign = ContentAlignment.MiddleCenter,
             Size = new Size(160, 32),
-            Location = new Point(680, 18),
+            Location = new Point(720, 18),
             Anchor = AnchorStyles.Top | AnchorStyles.Right
         };
         pnlHeader.Controls.Add(lblServiceStatus);
@@ -182,36 +198,42 @@ public class MainForm : Form
         this.Controls.Add(statusStrip);
 
         // TabControl
-        var tabControl = new TabControl
+        tabControl = new TabControl
         {
             Dock = DockStyle.Fill,
-            Padding = new Point(14, 8),
-            Font = new Font("Segoe UI", 10f, FontStyle.Bold)
+            Padding = new Point(12, 8),
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold)
         };
 
         // Tab 1: Puesta a Punto
-        var tab1 = new TabPage("1. Puesta a Punto (Fases 2 y 3)");
+        var tab1 = new TabPage("1. Puesta a Punto");
         tab1.BackColor = Color.FromArgb(15, 23, 42);
         BuildTab1(tab1);
         tabControl.TabPages.Add(tab1);
 
-        // Tab 2: Sincronizar a Voluntad
-        var tab2 = new TabPage("2. Sincronizar a Voluntad");
-        tab2.BackColor = Color.FromArgb(15, 23, 42);
-        BuildTab2(tab2);
-        tabControl.TabPages.Add(tab2);
+        // Tab 2: Mapeo de Depósitos (Stellar -> Neo)
+        tabDeposits = new TabPage("2. Mapeo de Depósitos");
+        tabDeposits.BackColor = Color.FromArgb(15, 23, 42);
+        BuildTabDeposits(tabDeposits);
+        tabControl.TabPages.Add(tabDeposits);
 
-        // Tab 3: Servicio Segundo Plano
-        var tab3 = new TabPage("3. Servicio en Fondo");
+        // Tab 3: Sincronizar a Voluntad
+        var tab3 = new TabPage("3. Sincronizar a Voluntad");
         tab3.BackColor = Color.FromArgb(15, 23, 42);
-        BuildTab3(tab3);
+        BuildTab2(tab3);
         tabControl.TabPages.Add(tab3);
 
-        // Tab 4: Conexiones & Tienda
-        var tab4 = new TabPage("4. Conexiones & Tienda");
+        // Tab 4: Servicio Segundo Plano
+        var tab4 = new TabPage("4. Servicio en Fondo");
         tab4.BackColor = Color.FromArgb(15, 23, 42);
-        BuildTab4(tab4);
+        BuildTab3(tab4);
         tabControl.TabPages.Add(tab4);
+
+        // Tab 5: Conexiones & Tienda
+        var tab5 = new TabPage("5. Conexiones & Tienda");
+        tab5.BackColor = Color.FromArgb(15, 23, 42);
+        BuildTab4(tab5);
+        tabControl.TabPages.Add(tab5);
 
         this.Controls.Add(tabControl);
         tabControl.BringToFront();
@@ -280,7 +302,7 @@ public class MainForm : Form
 
         rbBaselineToday = new RadioButton 
         { 
-            Text = "Hoy (Inventario Vivo)", 
+            Text = "Hoy (Vivo)", 
             Checked = true, 
             Location = new Point(14, 34), 
             AutoSize = true, 
@@ -291,8 +313,8 @@ public class MainForm : Form
 
         rbBaselineCustom = new RadioButton 
         { 
-            Text = "A fecha de corte:", 
-            Location = new Point(220, 34), 
+            Text = "Fecha:", 
+            Location = new Point(125, 34), 
             AutoSize = true, 
             ForeColor = Color.White,
             Cursor = Cursors.Hand
@@ -302,7 +324,7 @@ public class MainForm : Form
         txtBaselineDate = new TextBox 
         { 
             Text = DateTime.Today.ToString("yyyy-MM-dd"), 
-            Location = new Point(365, 32), 
+            Location = new Point(190, 32), 
             Width = 95, 
             BackColor = Color.FromArgb(15, 23, 42), 
             ForeColor = Color.White,
@@ -310,15 +332,20 @@ public class MainForm : Form
         };
         pnlBaseline.Controls.Add(txtBaselineDate);
 
-        btnSyncBaseline = CreateButton("Sincronizar Inventario (Baseline)", 495, 26, 260, 36, Color.FromArgb(16, 185, 129));
+        btnGoToDeposits = CreateButton("⚙ Mapeo Depósitos", 300, 26, 175, 36, Color.FromArgb(99, 102, 241));
+        btnGoToDeposits.Click += (s, e) => { tabControl.SelectedTab = tabDeposits; };
+        pnlBaseline.Controls.Add(btnGoToDeposits);
+
+        btnSyncBaseline = CreateButton("Sincronizar Inventario (Baseline)", 490, 26, 265, 36, Color.FromArgb(16, 185, 129));
         btnSyncBaseline.Click += BtnSyncBaseline_Click;
         pnlBaseline.Controls.Add(btnSyncBaseline);
 
         void UpdateBaselineLayout()
         {
             rbBaselineToday.Location = new Point(14, 34);
-            rbBaselineCustom.Location = new Point(rbBaselineToday.Right + 25, 34);
-            txtBaselineDate.Location = new Point(rbBaselineCustom.Right + 8, 31);
+            rbBaselineCustom.Location = new Point(rbBaselineToday.Right + 12, 34);
+            txtBaselineDate.Location = new Point(rbBaselineCustom.Right + 6, 31);
+            btnGoToDeposits.Location = new Point(txtBaselineDate.Right + 12, 26);
             btnSyncBaseline.Location = new Point(pnlBaseline.Width - btnSyncBaseline.Width - 14, 26);
         }
 
@@ -374,6 +401,618 @@ public class MainForm : Form
 
         panel.Controls.Add(gbState);
         page.Controls.Add(panel);
+    }
+
+    private void BuildTabDeposits(TabPage page)
+    {
+        var panel = new Panel { AutoScroll = true, Dock = DockStyle.Fill, Padding = new Padding(16) };
+
+        var gbDeposits = CreateGroupBox("Mapeo de Depósitos de Tienda (Stellar POS -> Neo ERP)", 16, 12, 850, 600, Color.FromArgb(56, 189, 248));
+        gbDeposits.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+
+        var lblDesc = new Label
+        {
+            Text = "Asocia cada depósito de tu base de datos local (Stellar POS) con su Almacén y Ubicación física en Neo ERP antes de sincronizar el Inventario Inicial (Baseline) o las ventas. Define si las operaciones de cada depósito descuentan existencias físicas en el Kardex.",
+            Font = new Font("Segoe UI", 9f),
+            ForeColor = Color.FromArgb(148, 163, 184),
+            Location = new Point(16, 26),
+            Size = new Size(818, 36),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+        };
+        gbDeposits.Controls.Add(lblDesc);
+
+        // Botones de acción
+        btnDetectDeposits = CreateButton("1. Detectar Depósitos (Stellar)", 16, 68, 220, 36, Color.FromArgb(217, 119, 6));
+        btnDetectDeposits.Click += async (s, e) => await DetectDepositsFromSqlAsync();
+        gbDeposits.Controls.Add(btnDetectDeposits);
+
+        btnFetchCloudDeposits = CreateButton("2. Consultar Neo ERP", 244, 68, 180, 36, Color.FromArgb(2, 132, 199));
+        btnFetchCloudDeposits.Click += async (s, e) => await FetchDepositsFromCloudAsync(showMessages: true);
+        gbDeposits.Controls.Add(btnFetchCloudDeposits);
+
+        btnAddDepositRow = CreateButton("➕ Agregar Fila", 432, 68, 115, 36, Color.FromArgb(51, 65, 85));
+        btnAddDepositRow.Click += (s, e) => AddManualDepositRow();
+        gbDeposits.Controls.Add(btnAddDepositRow);
+
+        btnRemoveDepositRow = CreateButton("🗑 Eliminar Fila", 555, 68, 115, 36, Color.FromArgb(71, 85, 105));
+        btnRemoveDepositRow.Click += (s, e) => RemoveSelectedDepositRow();
+        gbDeposits.Controls.Add(btnRemoveDepositRow);
+
+        btnSaveDepositsToCloud = CreateButton("💾 3. Guardar en Neo ERP", 678, 68, 156, 36, Color.FromArgb(16, 185, 129));
+        btnSaveDepositsToCloud.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        btnSaveDepositsToCloud.Click += async (s, e) => await SaveDepositsToCloudAsync();
+        gbDeposits.Controls.Add(btnSaveDepositsToCloud);
+
+        // Status Label
+        lblDepositStatus = new Label
+        {
+            Text = "Estado: Presiona '2. Consultar Neo ERP' para cargar almacenes o '1. Detectar Depósitos' desde Stellar.",
+            Location = new Point(18, 112),
+            Size = new Size(818, 22),
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            ForeColor = Color.FromArgb(203, 213, 225),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+        };
+        gbDeposits.Controls.Add(lblDepositStatus);
+
+        // DataGridView
+        dgvDeposits = new DataGridView
+        {
+            Location = new Point(16, 140),
+            Size = new Size(818, 390),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+            BackgroundColor = Color.FromArgb(15, 23, 42),
+            ForeColor = Color.White,
+            GridColor = Color.FromArgb(51, 65, 85),
+            BorderStyle = BorderStyle.FixedSingle,
+            CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
+            RowHeadersVisible = false,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = true,
+            AutoGenerateColumns = false,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            MultiSelect = false,
+            Font = new Font("Segoe UI", 9f),
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+        };
+
+        dgvDeposits.EnableHeadersVisualStyles = false;
+        dgvDeposits.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(30, 41, 59);
+        dgvDeposits.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
+        dgvDeposits.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+        dgvDeposits.ColumnHeadersHeight = 34;
+
+        dgvDeposits.DefaultCellStyle.BackColor = Color.FromArgb(15, 23, 42);
+        dgvDeposits.DefaultCellStyle.ForeColor = Color.FromArgb(241, 245, 249);
+        dgvDeposits.DefaultCellStyle.SelectionBackColor = Color.FromArgb(99, 102, 241);
+        dgvDeposits.DefaultCellStyle.SelectionForeColor = Color.White;
+        dgvDeposits.RowTemplate.Height = 30;
+
+        // Columnas
+        var colCode = new DataGridViewTextBoxColumn
+        {
+            Name = "colExternalCode",
+            HeaderText = "Cód. Stellar",
+            FillWeight = 12,
+            MinimumWidth = 85,
+            ReadOnly = false
+        };
+
+        var colName = new DataGridViewTextBoxColumn
+        {
+            Name = "colExternalName",
+            HeaderText = "Descripción Local (Stellar)",
+            FillWeight = 23,
+            MinimumWidth = 140,
+            ReadOnly = false
+        };
+
+        var colWh = new DataGridViewComboBoxColumn
+        {
+            Name = "colWarehouse",
+            HeaderText = "Almacén en Neo ERP",
+            FillWeight = 25,
+            MinimumWidth = 150,
+            FlatStyle = FlatStyle.Flat
+        };
+        colWh.DefaultCellStyle.BackColor = Color.FromArgb(30, 41, 59);
+        colWh.DefaultCellStyle.ForeColor = Color.White;
+
+        var colLoc = new DataGridViewComboBoxColumn
+        {
+            Name = "colLocation",
+            HeaderText = "Ubicación en Neo ERP",
+            FillWeight = 25,
+            MinimumWidth = 150,
+            FlatStyle = FlatStyle.Flat
+        };
+        colLoc.DefaultCellStyle.BackColor = Color.FromArgb(30, 41, 59);
+        colLoc.DefaultCellStyle.ForeColor = Color.White;
+
+        var colAffects = new DataGridViewCheckBoxColumn
+        {
+            Name = "colAffectsInventory",
+            HeaderText = "¿Afecta Kardex?",
+            FillWeight = 12,
+            MinimumWidth = 85,
+            FlatStyle = FlatStyle.Flat
+        };
+
+        var colStat = new DataGridViewTextBoxColumn
+        {
+            Name = "colStatus",
+            HeaderText = "Estado en Nube",
+            FillWeight = 15,
+            MinimumWidth = 110,
+            ReadOnly = true
+        };
+
+        dgvDeposits.Columns.AddRange(new DataGridViewColumn[] { colCode, colName, colWh, colLoc, colAffects, colStat });
+
+        dgvDeposits.DataError += (s, e) => { e.Cancel = true; };
+
+        dgvDeposits.CurrentCellDirtyStateChanged += (s, e) =>
+        {
+            if (dgvDeposits.IsCurrentCellDirty)
+            {
+                dgvDeposits.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            }
+        };
+
+        dgvDeposits.CellValueChanged += DgvDeposits_CellValueChanged;
+
+        dgvDeposits.CellBeginEdit += (s, e) =>
+        {
+            if (e.ColumnIndex == dgvDeposits.Columns["colLocation"]!.Index && e.RowIndex >= 0)
+            {
+                var row = dgvDeposits.Rows[e.RowIndex];
+                var wh = row.Cells["colWarehouse"].Value as WarehouseOption;
+                if (wh != null && wh.Locations.Count > 0)
+                {
+                    var locCell = (DataGridViewComboBoxCell)row.Cells["colLocation"];
+                    locCell.Items.Clear();
+                    foreach (var l in wh.Locations) locCell.Items.Add(l);
+                }
+            }
+        };
+
+        dgvDeposits.CellEndEdit += (s, e) =>
+        {
+            if (e.ColumnIndex == dgvDeposits.Columns["colLocation"]!.Index && e.RowIndex >= 0)
+            {
+                var row = dgvDeposits.Rows[e.RowIndex];
+                var locCell = (DataGridViewComboBoxCell)row.Cells["colLocation"];
+                var currentVal = locCell.Value;
+                locCell.Items.Clear();
+                foreach (var w in _availableWarehouses)
+                {
+                    foreach (var l in w.Locations) locCell.Items.Add(l);
+                }
+                locCell.Value = currentVal;
+            }
+        };
+
+        gbDeposits.Controls.Add(dgvDeposits);
+
+        // Nota al pie
+        var lblTip = new Label
+        {
+            Text = "💡 Tip: Marca '¿Afecta Kardex?' para depósitos donde las ventas descuentan existencia física real. Si un depósito es de servicios o merma no inventariable, desmárcalo para registrar la venta solo documentalmente.",
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = Color.FromArgb(148, 163, 184),
+            Location = new Point(16, 540),
+            Size = new Size(818, 48),
+            Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+        };
+        gbDeposits.Controls.Add(lblTip);
+
+        panel.Controls.Add(gbDeposits);
+        page.Controls.Add(panel);
+    }
+
+    private void DgvDeposits_CellValueChanged(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.RowIndex >= dgvDeposits.Rows.Count) return;
+        var row = dgvDeposits.Rows[e.RowIndex];
+
+        int colWhIndex = dgvDeposits.Columns["colWarehouse"]!.Index;
+        int colLocIndex = dgvDeposits.Columns["colLocation"]!.Index;
+
+        if (e.ColumnIndex == colWhIndex)
+        {
+            var selectedWh = row.Cells[colWhIndex].Value as WarehouseOption;
+            if (selectedWh == null && row.Cells[colWhIndex].Value is string whStr)
+            {
+                selectedWh = _availableWarehouses.FirstOrDefault(w => w.ToString() == whStr || w.Name == whStr);
+            }
+
+            if (selectedWh != null)
+            {
+                var locCell = (DataGridViewComboBoxCell)row.Cells[colLocIndex];
+                locCell.Items.Clear();
+                foreach (var loc in selectedWh.Locations)
+                {
+                    locCell.Items.Add(loc);
+                }
+
+                var currentLoc = locCell.Value as LocationOption;
+                if (currentLoc == null || currentLoc.WarehouseId != selectedWh.Id)
+                {
+                    locCell.Value = selectedWh.Locations.FirstOrDefault();
+                }
+            }
+        }
+        else if (e.ColumnIndex == dgvDeposits.Columns["colExternalCode"]!.Index || 
+                 e.ColumnIndex == dgvDeposits.Columns["colExternalName"]!.Index ||
+                 e.ColumnIndex == dgvDeposits.Columns["colAffectsInventory"]!.Index)
+        {
+            int colStatIndex = dgvDeposits.Columns["colStatus"]!.Index;
+            string currentStatus = row.Cells[colStatIndex].Value?.ToString() ?? "";
+            if (currentStatus.StartsWith("✔"))
+            {
+                row.Cells[colStatIndex].Value = "Modificado (Sin guardar)";
+            }
+        }
+    }
+
+    private async Task DetectDepositsFromSqlAsync()
+    {
+        try
+        {
+            lblDepositStatus.Text = "Detectando depósitos en SQL Server local...";
+            lblDepositStatus.ForeColor = Color.FromArgb(245, 158, 11);
+            lblStatusText.Text = "Consultando MA_DEPOSITOS en SQL Server...";
+
+            if (string.IsNullOrWhiteSpace(txtSqlServer.Text) || string.IsNullOrWhiteSpace(txtSqlDb.Text))
+            {
+                MessageBox.Show("Por favor configura primero los datos del servidor SQL en la pestaña '5. Conexiones & Tienda'.", "Configuración Requerida", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_availableWarehouses.Count == 0)
+            {
+                await FetchDepositsFromCloudAsync(showMessages: false);
+            }
+
+            string connStr = $"Server={txtSqlServer.Text.Trim()};Database={txtSqlDb.Text.Trim()};User Id={txtSqlUser.Text.Trim()};Password={txtSqlPass.Text.Trim()};TrustServerCertificate=True;Connect Timeout=8;";
+
+            var detected = new List<(string Code, string Name)>();
+
+            await Task.Run(() =>
+            {
+                using var conn = new SqlConnection(connStr);
+                conn.Open();
+
+                string sql = @"
+IF OBJECT_ID('MA_DEPOSITOS', 'U') IS NOT NULL
+BEGIN
+    SELECT DISTINCT RTRIM(c_CodArma) AS c_deposito, RTRIM(ISNULL(c_DesArma, 'Depósito ' + c_CodArma)) AS descripcion
+    FROM MA_DEPOSITOS WITH (NOLOCK)
+    WHERE c_CodArma IS NOT NULL AND RTRIM(c_CodArma) <> ''
+    ORDER BY c_deposito;
+END
+ELSE IF OBJECT_ID('tr_inventario', 'U') IS NOT NULL
+BEGIN
+    SELECT DISTINCT RTRIM(c_deposito) AS c_deposito, ('Depósito ' + RTRIM(c_deposito)) AS descripcion
+    FROM tr_inventario WITH (NOLOCK)
+    WHERE c_deposito IS NOT NULL AND RTRIM(c_deposito) <> ''
+    ORDER BY c_deposito;
+END
+";
+                using var cmd = new SqlCommand(sql, conn);
+                using var rdr = cmd.ExecuteReader();
+                while (rdr.Read())
+                {
+                    string c = rdr["c_deposito"]?.ToString()?.Trim() ?? "";
+                    string d = rdr["descripcion"]?.ToString()?.Trim() ?? "";
+                    if (!string.IsNullOrEmpty(c))
+                    {
+                        detected.Add((c, string.IsNullOrEmpty(d) ? $"Depósito {c}" : d));
+                    }
+                }
+            });
+
+            if (detected.Count == 0)
+            {
+                lblDepositStatus.Text = "No se encontraron depósitos en la base de datos SQL Server.";
+                lblDepositStatus.ForeColor = Color.FromArgb(245, 158, 11);
+                MessageBox.Show("No se encontraron registros en MA_DEPOSITOS ni en tr_inventario en el servidor SQL.", "Sin Resultados", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            int addedCount = 0;
+            var defaultWh = _availableWarehouses.FirstOrDefault();
+            var defaultLoc = defaultWh?.Locations.FirstOrDefault();
+
+            foreach (var item in detected)
+            {
+                DataGridViewRow? existingRow = null;
+                foreach (DataGridViewRow r in dgvDeposits.Rows)
+                {
+                    if (string.Equals(r.Cells["colExternalCode"].Value?.ToString()?.Trim(), item.Code, StringComparison.OrdinalIgnoreCase))
+                    {
+                        existingRow = r;
+                        break;
+                    }
+                }
+
+                if (existingRow == null)
+                {
+                    int rowIndex = dgvDeposits.Rows.Add();
+                    var newRow = dgvDeposits.Rows[rowIndex];
+                    newRow.Cells["colExternalCode"].Value = item.Code;
+                    newRow.Cells["colExternalName"].Value = item.Name;
+
+                    if (defaultWh != null)
+                    {
+                        newRow.Cells["colWarehouse"].Value = defaultWh;
+                        newRow.Cells["colLocation"].Value = defaultLoc;
+                    }
+
+                    newRow.Cells["colAffectsInventory"].Value = true;
+                    newRow.Cells["colStatus"].Value = "Detectado Local (Pendiente)";
+                    addedCount++;
+                }
+                else
+                {
+                    if (string.IsNullOrEmpty(existingRow.Cells["colExternalName"].Value?.ToString()))
+                    {
+                        existingRow.Cells["colExternalName"].Value = item.Name;
+                    }
+                }
+            }
+
+            lblDepositStatus.Text = $"[OK] Se detectaron {detected.Count} depósitos locales ({addedCount} nuevos añadidos a la grilla).";
+            lblDepositStatus.ForeColor = Color.FromArgb(16, 185, 129);
+            lblStatusText.Text = $"Detección de depósitos completada: {detected.Count} encontrados.";
+        }
+        catch (Exception ex)
+        {
+            lblDepositStatus.Text = $"Error al detectar depósitos: {ex.Message}";
+            lblDepositStatus.ForeColor = Color.FromArgb(239, 68, 68);
+            MessageBox.Show($"Error conectando a SQL Server para detectar depósitos:\n{ex.Message}", "Error de Detección", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private async Task FetchDepositsFromCloudAsync(bool showMessages = true)
+    {
+        try
+        {
+            lblDepositStatus.Text = "Consultando depósitos y almacenes en Neo ERP...";
+            lblDepositStatus.ForeColor = Color.FromArgb(245, 158, 11);
+            lblStatusText.Text = "Consultando API de depósitos en Neo ERP...";
+
+            string baseUrl = txtCloudUrl.Text.TrimEnd('/');
+            int facId = GetSelectedFacilityId();
+
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            string url = $"{baseUrl}/api/v1/store-agent/{facId}/deposits";
+            var resp = await http.GetAsync(url);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                lblDepositStatus.Text = $"Error consultando Neo ERP (HTTP {(int)resp.StatusCode}).";
+                lblDepositStatus.ForeColor = Color.FromArgb(239, 68, 68);
+                if (showMessages)
+                {
+                    MessageBox.Show($"No se pudo obtener la configuración de depósitos desde Neo ERP.\nCódigo HTTP: {resp.StatusCode}", "Error Nube", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                return;
+            }
+
+            var json = await resp.Content.ReadAsStringAsync();
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var data = JsonSerializer.Deserialize<FacilityDepositResponse>(json, options);
+
+            if (data == null) return;
+
+            _availableWarehouses = data.AvailableWarehouses ?? new();
+
+            var colWh = (DataGridViewComboBoxColumn)dgvDeposits.Columns["colWarehouse"]!;
+            var colLoc = (DataGridViewComboBoxColumn)dgvDeposits.Columns["colLocation"]!;
+
+            colWh.Items.Clear();
+            colLoc.Items.Clear();
+
+            foreach (var w in _availableWarehouses)
+            {
+                colWh.Items.Add(w);
+                foreach (var l in w.Locations)
+                {
+                    l.WarehouseId = w.Id;
+                    colLoc.Items.Add(l);
+                }
+            }
+
+            dgvDeposits.Rows.Clear();
+
+            if (data.Mappings != null && data.Mappings.Count > 0)
+            {
+                foreach (var m in data.Mappings)
+                {
+                    int rIdx = dgvDeposits.Rows.Add();
+                    var row = dgvDeposits.Rows[rIdx];
+
+                    row.Cells["colExternalCode"].Value = m.ExternalDepositCode;
+                    row.Cells["colExternalName"].Value = m.ExternalDepositName;
+
+                    var matchedWh = _availableWarehouses.FirstOrDefault(w => w.Id == m.WarehouseId);
+                    if (matchedWh != null)
+                    {
+                        row.Cells["colWarehouse"].Value = matchedWh;
+                        var matchedLoc = matchedWh.Locations.FirstOrDefault(l => l.Id == m.LocationId);
+                        row.Cells["colLocation"].Value = matchedLoc ?? matchedWh.Locations.FirstOrDefault();
+                    }
+
+                    row.Cells["colAffectsInventory"].Value = m.AffectsInventory;
+                    row.Cells["colStatus"].Value = m.AutoDiscovered ? "⚡ Auto-detectado" : "✔ Guardado en Nube";
+                }
+
+                _depositsConfigured = true;
+                lblDepositStatus.Text = $"[OK] {data.Mappings.Count} depósitos cargados desde Neo ERP para sede {data.FacilityName}.";
+                lblDepositStatus.ForeColor = Color.FromArgb(16, 185, 129);
+                lblStatusText.Text = $"Mapeo de depósitos sincronizado desde Neo ERP ({data.Mappings.Count} depósitos).";
+            }
+            else
+            {
+                _depositsConfigured = false;
+                lblDepositStatus.Text = $"La sede '{data.FacilityName}' no tiene depósitos configurados aún en Neo ERP. Haz clic en '1. Detectar Depósitos (Stellar)'.";
+                lblDepositStatus.ForeColor = Color.FromArgb(245, 158, 11);
+                lblStatusText.Text = "Sin depósitos configurados en la nube.";
+            }
+
+            if (showMessages)
+            {
+                MessageBox.Show($"Se consultaron con éxito los almacenes de Neo ERP.\n\nSede: {data.FacilityName}\nAlmacenes disponibles: {_availableWarehouses.Count}\nDepósitos mapeados: {data.Mappings?.Count ?? 0}", "Neo ERP Conectado", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            lblDepositStatus.Text = $"Error al consultar Neo ERP: {ex.Message}";
+            lblDepositStatus.ForeColor = Color.FromArgb(239, 68, 68);
+            if (showMessages)
+            {
+                MessageBox.Show($"Error conectando con la API de Neo ERP:\n{ex.Message}", "Error de Conexión Nube", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+    }
+
+    private async Task SaveDepositsToCloudAsync()
+    {
+        if (dgvDeposits.Rows.Count == 0)
+        {
+            MessageBox.Show("No hay depósitos en la grilla para guardar.\nUsa '1. Detectar Depósitos (Stellar)' o '➕ Agregar Fila' primero.", "Sin Datos", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        string baseUrl = txtCloudUrl.Text.TrimEnd('/');
+        int facId = GetSelectedFacilityId();
+
+        lblDepositStatus.Text = "Guardando mapeo de depósitos en Neo ERP...";
+        lblDepositStatus.ForeColor = Color.FromArgb(245, 158, 11);
+        lblStatusText.Text = "Enviando mapeo de depósitos a Neo ERP...";
+
+        int saved = 0;
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+
+        try
+        {
+            foreach (DataGridViewRow row in dgvDeposits.Rows)
+            {
+                string code = row.Cells["colExternalCode"].Value?.ToString()?.Trim() ?? "";
+                string name = row.Cells["colExternalName"].Value?.ToString()?.Trim() ?? "";
+                var wh = row.Cells["colWarehouse"].Value as WarehouseOption;
+                var loc = row.Cells["colLocation"].Value as LocationOption;
+                bool affects = (bool)(row.Cells["colAffectsInventory"].Value ?? true);
+
+                if (string.IsNullOrEmpty(code))
+                {
+                    MessageBox.Show("Hay filas con el código de depósito vacío. Por favor complétalo o elimínalo.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                if (wh == null)
+                {
+                    MessageBox.Show($"El depósito '{code}' no tiene un Almacén de Neo ERP seleccionado.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                if (loc == null)
+                {
+                    MessageBox.Show($"El depósito '{code}' no tiene una Ubicación de Neo ERP seleccionada.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var payload = new
+                {
+                    external_deposit_code = code,
+                    external_deposit_name = name,
+                    warehouse_id = wh.Id,
+                    location_id = loc.Id,
+                    affects_inventory = affects
+                };
+
+                string json = JsonSerializer.Serialize(payload);
+                var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+
+                string url = $"{baseUrl}/api/v1/store-agent/{facId}/deposits";
+                var resp = await http.PostAsync(url, content);
+
+                if (resp.IsSuccessStatusCode)
+                {
+                    row.Cells["colStatus"].Value = "✔ Guardado en Nube";
+                    saved++;
+                }
+                else
+                {
+                    string err = await resp.Content.ReadAsStringAsync();
+                    row.Cells["colStatus"].Value = $"❌ Error ({resp.StatusCode})";
+                    MessageBox.Show($"Error guardando depósito '{code}':\nHTTP {resp.StatusCode}\n{err}", "Error al Guardar", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+            }
+
+            _depositsConfigured = true;
+            lblDepositStatus.Text = $"[OK] ¡Éxito! Se guardaron {saved} depósitos en Neo ERP.";
+            lblDepositStatus.ForeColor = Color.FromArgb(16, 185, 129);
+            lblStatusText.Text = $"Mapeo de depósitos guardado ({saved} depósitos).";
+
+            MessageBox.Show($"¡Mapeo de depósitos guardado exitosamente en Neo ERP!\n\nSe configuraron {saved} depósitos para la sede seleccionada.\nAhora la tienda puede sincronizar el Inventario Inicial (Baseline) y las Ventas con total precisión.", "Depósitos Guardados", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            lblDepositStatus.Text = $"Error guardando depósitos: {ex.Message}";
+            lblDepositStatus.ForeColor = Color.FromArgb(239, 68, 68);
+            MessageBox.Show($"Error de red o servidor guardando depósitos:\n{ex.Message}", "Error de Conexión", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void AddManualDepositRow()
+    {
+        if (_availableWarehouses.Count == 0)
+        {
+            MessageBox.Show("Por favor haz clic en '2. Consultar Neo ERP' primero para cargar los almacenes disponibles.", "Almacenes Requeridos", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var defaultWh = _availableWarehouses.FirstOrDefault();
+        var defaultLoc = defaultWh?.Locations.FirstOrDefault();
+
+        int idx = dgvDeposits.Rows.Add();
+        var row = dgvDeposits.Rows[idx];
+        row.Cells["colExternalCode"].Value = "";
+        row.Cells["colExternalName"].Value = "Nuevo Depósito";
+
+        if (defaultWh != null)
+        {
+            row.Cells["colWarehouse"].Value = defaultWh;
+            row.Cells["colLocation"].Value = defaultLoc;
+        }
+
+        row.Cells["colAffectsInventory"].Value = true;
+        row.Cells["colStatus"].Value = "Nuevo (Sin Guardar)";
+
+        dgvDeposits.CurrentCell = row.Cells["colExternalCode"];
+        dgvDeposits.BeginEdit(true);
+    }
+
+    private void RemoveSelectedDepositRow()
+    {
+        if (dgvDeposits.SelectedRows.Count > 0)
+        {
+            var row = dgvDeposits.SelectedRows[0];
+            string code = row.Cells["colExternalCode"].Value?.ToString() ?? "";
+            var res = MessageBox.Show($"¿Deseas remover la fila del depósito '{code}' de la lista?", "Confirmar", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (res == DialogResult.Yes)
+            {
+                dgvDeposits.Rows.Remove(row);
+            }
+        }
+        else if (dgvDeposits.CurrentCell != null)
+        {
+            int rIdx = dgvDeposits.CurrentCell.RowIndex;
+            dgvDeposits.Rows.RemoveAt(rIdx);
+        }
     }
 
     private void BuildTab2(TabPage page)
@@ -676,6 +1315,8 @@ public class MainForm : Form
     private void CmbStores_SelectedIndexChanged(object? s, EventArgs e)
     {
         txtCustomStoreId.Visible = (cmbStores.SelectedIndex == cmbStores.Items.Count - 1);
+        _depositsConfigured = false;
+        _ = FetchDepositsFromCloudAsync(showMessages: false);
     }
 
     private int GetSelectedFacilityId()
@@ -1002,8 +1643,54 @@ public class MainForm : Form
         Process.Start(psi);
     }
 
-    private void BtnSyncBaseline_Click(object? sender, EventArgs e)
+    private async void BtnSyncBaseline_Click(object? sender, EventArgs e)
     {
+        int facId = GetSelectedFacilityId();
+        string baseUrl = txtCloudUrl.Text.TrimEnd('/');
+
+        if (!_depositsConfigured)
+        {
+            try
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                var resp = await http.GetAsync($"{baseUrl}/api/v1/store-agent/{facId}/deposits");
+                if (resp.IsSuccessStatusCode)
+                {
+                    var json = await resp.Content.ReadAsStringAsync();
+                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    var data = JsonSerializer.Deserialize<FacilityDepositResponse>(json, options);
+                    if (data != null && data.Mappings != null && data.Mappings.Count > 0)
+                    {
+                        _depositsConfigured = true;
+                    }
+                }
+            }
+            catch {}
+        }
+
+        if (!_depositsConfigured)
+        {
+            var dlg = MessageBox.Show(
+                "⚠ ADVERTENCIA: Esta tienda aún no tiene configurado el Mapeo de Depósitos en Neo ERP.\n\n" +
+                "Para garantizar que el Inventario Inicial (Baseline) ingrese al Almacén y Ubicación correctos en Kardex, " +
+                "se recomienda configurar y guardar el mapeo de depósitos antes de continuar.\n\n" +
+                "¿Deseas ir ahora a la pestaña '2. Mapeo de Depósitos' para revisarlo?",
+                "Mapeo de Depósitos Pendiente",
+                MessageBoxButtons.YesNoCancel,
+                MessageBoxIcon.Warning
+            );
+
+            if (dlg == DialogResult.Yes)
+            {
+                tabControl.SelectedTab = tabDeposits;
+                return;
+            }
+            else if (dlg == DialogResult.Cancel)
+            {
+                return;
+            }
+        }
+
         string date = rbBaselineToday.Checked ? "now" : txtBaselineDate.Text.Trim();
         RunExtractor("baseline", $"--date {date}");
     }
@@ -1179,7 +1866,7 @@ public class MainForm : Form
             string? facCode = doc["StoreFacilityCode"]?.ToString();
             SelectFacilityByIdOrCode(facId, facCode);
 
-            // Cargar sedes dinámicamente en segundo plano
+            // Cargar sedes dinámicamente en segundo plano y luego consultar depósitos
             _ = Task.Run(async () =>
             {
                 var liveFacilities = await FetchFacilitiesFromCloudAsync(txtCloudUrl.Text.Trim());
@@ -1191,6 +1878,12 @@ public class MainForm : Form
                         SelectFacilityByIdOrCode(facId, facCode);
                     });
                 }
+
+                await Task.Delay(200);
+                this.Invoke(new Action(async () =>
+                {
+                    await FetchDepositsFromCloudAsync(showMessages: false);
+                }));
             });
 
             var de = doc["DirectExtractors"];
@@ -1427,5 +2120,51 @@ public class FacilityOption
     public string Name { get; set; } = string.Empty;
 
     public override string ToString() => $"[{Code}] {Name} (ID: {Id})";
+}
+
+public class FacilityDepositResponse
+{
+    public int FacilityId { get; set; }
+    public string FacilityName { get; set; } = string.Empty;
+    public List<CloudDepositItem> Mappings { get; set; } = new();
+    public List<WarehouseOption> AvailableWarehouses { get; set; } = new();
+}
+
+public class CloudDepositItem
+{
+    public int Id { get; set; }
+    public int FacilityId { get; set; }
+    public string ExternalDepositCode { get; set; } = string.Empty;
+    public string ExternalDepositName { get; set; } = string.Empty;
+    public int WarehouseId { get; set; }
+    public string WarehouseName { get; set; } = string.Empty;
+    public string WarehouseCode { get; set; } = string.Empty;
+    public int LocationId { get; set; }
+    public string LocationName { get; set; } = string.Empty;
+    public string LocationCode { get; set; } = string.Empty;
+    public bool AffectsInventory { get; set; } = true;
+    public bool IsActive { get; set; } = true;
+    public bool AutoDiscovered { get; set; } = false;
+}
+
+public class WarehouseOption
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Code { get; set; } = string.Empty;
+    public List<LocationOption> Locations { get; set; } = new();
+
+    public override string ToString() => string.IsNullOrWhiteSpace(Code) ? Name : $"[{Code}] {Name}";
+}
+
+public class LocationOption
+{
+    public int Id { get; set; }
+    public int WarehouseId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Code { get; set; } = string.Empty;
+    public string? Usage { get; set; }
+
+    public override string ToString() => string.IsNullOrWhiteSpace(Code) ? Name : $"[{Code}] {Name}";
 }
 

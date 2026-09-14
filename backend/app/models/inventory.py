@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, ForeignKey, DateTime, Text, Numeric, BigInteger, Date, Float
+from sqlalchemy import Boolean, Column, Integer, String, ForeignKey, DateTime, Text, Numeric, BigInteger, Date, Float, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
@@ -9,12 +9,15 @@ from app.db.base_class import Base
 # =================
 class Warehouse(Base):
     __tablename__ = "warehouses"
-    __table_args__ = {"schema": "inv"}
+    __table_args__ = (
+        UniqueConstraint("facility_id", "code", name="warehouses_facility_code_key"),
+        {"schema": "inv"}
+    )
     
     id = Column(Integer, primary_key=True, index=True)
     facility_id = Column(Integer, ForeignKey("core.facilities.id"))
     name = Column(String, nullable=False)
-    code = Column(String, unique=True, nullable=False)
+    code = Column(String, nullable=False)
     is_scrap = Column(Boolean, default=False)
     is_transit = Column(Boolean, default=False)
     requires_dock_staging = Column(Boolean, default=False, server_default='false')
@@ -602,4 +605,29 @@ class VendorSwapExecution(Base):
     executed_by = relationship("User", foreign_keys=[executed_by_id])
     stock_move_out = relationship("StockMove", foreign_keys=[stock_move_out_id])
     stock_move_in = relationship("StockMove", foreign_keys=[stock_move_in_id])
+
+
+class StoreDepositMapping(Base):
+    __tablename__ = "store_deposit_mappings"
+    __table_args__ = (
+        UniqueConstraint("facility_id", "external_deposit_code", name="uq_facility_external_deposit"),
+        {"schema": "inv"}
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    facility_id = Column(Integer, ForeignKey("core.facilities.id", ondelete="CASCADE"), nullable=False, index=True)
+    external_deposit_code = Column(String(50), nullable=False)
+    external_deposit_name = Column(String(100), nullable=True)
+    warehouse_id = Column(Integer, ForeignKey("inv.warehouses.id", ondelete="RESTRICT"), nullable=False)
+    location_id = Column(Integer, ForeignKey("inv.locations.id", ondelete="RESTRICT"), nullable=False)
+    affects_inventory = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    auto_discovered = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    facility = relationship("Facility")
+    warehouse = relationship("Warehouse")
+    location = relationship("Location")
+
 

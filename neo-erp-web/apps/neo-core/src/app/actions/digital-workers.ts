@@ -101,3 +101,14 @@ export async function simulateWhatsApp(phoneNumber: string, message: string) {
   if (!res.ok) throw new Error("Failed to simulate WhatsApp message")
   return res.json()
 }
+
+export async function simulateTelegram(chatId: number, text: string, agentCode: string = "DANTE_IT") {
+  const res = await fetch(`${API_URL}/telegram/simulate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text, agent_code: agentCode }),
+    cache: 'no-store'
+  })
+  if (!res.ok) throw new Error("Failed to simulate Telegram message")
+  return res.json()
+}

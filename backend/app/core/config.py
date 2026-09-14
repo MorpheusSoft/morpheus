@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     WHATSAPP_PHONE_NUMBER_ID: Optional[str] = None
     WHATSAPP_ACCESS_TOKEN: Optional[str] = None
     
+    # TELEGRAM BOT CONFIGURATION (Dante TI & Digital Workers)
+    TELEGRAM_DANTE_BOT_TOKEN: Optional[str] = None
+    TELEGRAM_DANTE_BOT_USERNAME: str = "dante_neo_erp_bot"
+    TELEGRAM_DANTE_WEBHOOK_SECRET: Optional[str] = None
+    TELEGRAM_ALERT_GROUP_ID: Optional[str] = None
+    
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
         return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"

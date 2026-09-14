@@ -64,6 +64,8 @@ class FacilityAgentStatusSchema(BaseModel):
     last_heartbeat: Optional[datetime] = None
     agent_version: Optional[str] = None
     sql_server_status: Optional[str] = None
+    last_synced_sale_time: Optional[datetime] = None
+    last_stellar_sale_time: Optional[datetime] = None
     sales_today_count: Optional[int] = 0
     sales_today_amount: Optional[float] = 0.0
     lag_minutes: Optional[int] = 0

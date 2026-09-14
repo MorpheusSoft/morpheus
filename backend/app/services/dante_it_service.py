@@ -9,6 +9,7 @@ from app.models.digital_workers import DigitalWorker, DigitalWorkerActionLog
 from app.models.core import Facility
 from app.models.sales import Document
 from app.models.sync_telemetry import StoreSyncTelemetry
+from app.models.store_agent_control import StoreAgentCommand
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,22 @@ def audit_store_sync_heartbeats(db: Session, worker: Optional[DigitalWorker] = N
                             status="COMPLETED"
                         )
                         db.add(log_entry)
+
+                        # Despacho proactivo inmediato a Telegram
+                        try:
+                            from app.services.telegram_client import send_telegram_alert_sync
+                            tg_alert = (
+                                f"🚨 *[Dante TI - Alerta de Conectividad]*\n\n"
+                                f"La sucursal *{fac.name}* (`{fac.code}`) ha perdido conectividad con la nube.\n\n"
+                                f"• *Desfase:* {int(diff_minutes)} minutos sin latido\n"
+                                f"• *Último contacto:* {latest.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+                                f"• *Estado SQL Server:* {latest.sql_server_status or 'DESCONOCIDO'}\n"
+                                f"• *Versión Agente:* v{latest.agent_version or 'N/A'}\n\n"
+                                f"⚡ _Sugerencia: Verificar enlace de red de la tienda o estado del servicio NeoAgentSync._"
+                            )
+                            send_telegram_alert_sync(text=tg_alert, db=db, agent_code="DANTE_IT")
+                        except Exception as tg_err:
+                            logger.error(f"[DANTE TI] Error despachando alerta a Telegram: {tg_err}")
 
                 incidents.append({"facility": fac.name, "status": "OFFLINE", "lag_minutes": int(diff_minutes)})
             else:
@@ -268,3 +285,118 @@ def reconcile_daily_sales_totals(
 
     db.commit()
     return reconciliations
+
+
+def auto_remediate_sales_lag(db: Session, worker: Optional[DigitalWorker] = None) -> List[Dict[str, Any]]:
+    """
+    Habilidad: it_auto_remediate_sales_lag
+    Supervisa proactivamente el desfase entre la última venta sincronizada y la actualidad.
+    Si detecta un retraso (> 60 min o varios días) con la tienda online y SQL Server conectado:
+    Crea y despacha automáticamente una orden SYNC_HISTORICAL o FORCE_SYNC_SALES hacia el agente.
+    """
+    worker_id = worker.id if worker else None
+    facilities = db.query(Facility).filter(Facility.is_active == True).all()
+    actions_taken = []
+
+    for fac in facilities:
+        latest = db.query(StoreSyncTelemetry).filter(
+            StoreSyncTelemetry.facility_id == fac.id
+        ).order_by(StoreSyncTelemetry.created_at.desc()).first()
+
+        if not latest:
+            continue
+
+        # Verificar si la tienda está en línea y su SQL Server local está conectado
+        is_online = False
+        now = datetime.now(latest.created_at.tzinfo) if latest.created_at else datetime.utcnow()
+        if latest.created_at:
+            is_online = (now - latest.created_at).total_seconds() <= 300
+
+        if not is_online or latest.sql_server_status != 'CONNECTED':
+            continue
+
+        # Verificar si hay desfase en la marca de agua
+        last_synced = latest.last_synced_sale_time
+        if not last_synced:
+            continue
+
+        # Si el desfase es mayor a 60 minutos
+        diff_hours = (now - last_synced).total_seconds() / 3600.0
+        if diff_hours < 1.0:
+            continue
+
+        # Verificar si ya existe una orden activa en cola para no duplicar
+        active_cmd = db.query(StoreAgentCommand).filter(
+            StoreAgentCommand.facility_id == fac.id,
+            StoreAgentCommand.command_type.in_(["FORCE_SYNC_SALES", "SYNC_HISTORICAL"]),
+            StoreAgentCommand.status.in_(["PENDING", "SENT", "RUNNING"])
+        ).first()
+
+        if active_cmd:
+            logger.info(f"⏳ [Dante TI] Tienda '{fac.name}' ya tiene orden #{active_cmd.id} ({active_cmd.command_type}) en cola.")
+            continue
+
+        # Crear orden de auto-remediación
+        if diff_hours > 24:
+            cmd_type = "SYNC_HISTORICAL"
+            params = {
+                "from": last_synced.strftime("%Y-%m-%d %H:%M:%S"),
+                "to": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "start_date": last_synced.strftime("%Y-%m-%d"),
+                "end_date": now.strftime("%Y-%m-%d"),
+                "batch_size": 500,
+                "dispatched_by": "Dante (Agente TI Autónomo)"
+            }
+            summary = (
+                f"⚡ [Dante TI] AUTO-REMEDIACIÓN: Tienda '{fac.name}' presenta desfase de {int(diff_hours)} horas "
+                f"(última venta sincronizada: {last_synced.strftime('%Y-%m-%d %H:%M')}). "
+                f"Orden SYNC_HISTORICAL despachada automáticamente hacia NeoAgentSync."
+            )
+        else:
+            cmd_type = "FORCE_SYNC_SALES"
+            params = {
+                "dispatched_by": "Dante (Agente TI Autónomo)"
+            }
+            summary = (
+                f"⚡ [Dante TI] AUTO-REMEDIACIÓN: Tienda '{fac.name}' presenta desfase de {int(diff_hours)} horas. "
+                f"Orden FORCE_SYNC_SALES despachada automáticamente hacia NeoAgentSync."
+            )
+
+        cmd = StoreAgentCommand(
+            facility_id=fac.id,
+            command_type=cmd_type,
+            parameters=params,
+            status="PENDING"
+        )
+        db.add(cmd)
+        db.flush()
+
+        logger.info(summary)
+        if worker_id:
+            log_entry = DigitalWorkerActionLog(
+                worker_id=worker_id,
+                facility_id=fac.id,
+                action_type="AUTO_SYNC_LAG_REMEDIATION",
+                severity="WARNING",
+                summary=summary,
+                details={
+                    "command_id": cmd.id,
+                    "command_type": cmd_type,
+                    "parameters": params,
+                    "lag_hours": round(diff_hours, 1),
+                    "last_synced": last_synced.isoformat()
+                },
+                status="COMPLETED"
+            )
+            db.add(log_entry)
+
+        actions_taken.append({
+            "facility": fac.name,
+            "command_id": cmd.id,
+            "command_type": cmd_type,
+            "lag_hours": diff_hours
+        })
+
+    db.commit()
+    return actions_taken
+

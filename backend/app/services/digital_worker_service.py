@@ -28,15 +28,16 @@ from app.agents.skills.purchases_skills import (
 from app.services.dante_it_service import (
     audit_store_sync_heartbeats,
     detect_sales_consecutive_gaps,
-    reconcile_daily_sales_totals
+    reconcile_daily_sales_totals,
+    auto_remediate_sales_lag
 )
 
 logger = logging.getLogger(__name__)
 
 SKILL_DISPATCHER = {
     # Arturo WMS
-    'negative_stock_auditor': audit_negative_stock,
-    'dock_returns_and_scrap_monitor': audit_dock_returns_and_scrap,
+    'negative_stock_watchdog': audit_negative_stock,
+    'dock_returns_and_scrap_guard': audit_dock_returns_and_scrap,
     '3way_unreconciled_watchdog': audit_unreconciled_orders,
 
     # Clara Compras
@@ -54,6 +55,7 @@ SKILL_DISPATCHER = {
     'it_sync_heartbeat_monitor': audit_store_sync_heartbeats,
     'it_sales_gap_detector': detect_sales_consecutive_gaps,
     'it_daily_sales_reconciliation': reconcile_daily_sales_totals,
+    'it_auto_remediate_sales_lag': auto_remediate_sales_lag,
 }
 
 def run_worker_cycle(agent_code: str, db: Session) -> Dict[str, Any]:

@@ -62,6 +62,20 @@ def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
             StoreAgentCommand.status.in_(["PENDING", "SENT", "RUNNING"])
         ).scalar() or 0
 
+        # Sanitizar anomalías de fechas futuras en Stellar (ej. transacciones con año espurio)
+        stellar_time = latest.last_stellar_sale_time if latest else None
+        synced_sale_time = latest.last_synced_sale_time if latest else None
+        lag_minutes = latest.lag_minutes if latest else 0
+
+        if stellar_time and stellar_time.year > now.year + 1:
+            stellar_time = None
+            if synced_sale_time:
+                stz = synced_sale_time if synced_sale_time.tzinfo else synced_sale_time.replace(tzinfo=timezone.utc)
+                diff_sale = (now - stz).total_seconds() / 60
+                lag_minutes = max(0, int(diff_sale))
+            else:
+                lag_minutes = 0
+
         results.append(FacilityAgentStatusSchema(
             facility_id=fac.id,
             facility_name=fac.name,
@@ -70,9 +84,11 @@ def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
             last_heartbeat=latest.created_at if latest else None,
             agent_version=latest.agent_version if latest else None,
             sql_server_status=latest.sql_server_status if latest else None,
+            last_synced_sale_time=synced_sale_time,
+            last_stellar_sale_time=stellar_time,
             sales_today_count=latest.sales_today_count if latest else 0,
             sales_today_amount=float(latest.sales_today_amount or 0.0) if latest else 0.0,
-            lag_minutes=latest.lag_minutes if latest else 0,
+            lag_minutes=lag_minutes,
             config=StoreAgentConfigSchema.from_orm(cfg),
             pending_commands_count=pending_count
         ))

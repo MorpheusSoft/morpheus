@@ -85,3 +85,101 @@ def get_authenticated_user_by_phone(phone_number: str, db: Session) -> Optional[
         User.phone_number == clean_phone,
         User.is_phone_verified == True
     ).first()
+
+
+def pair_telegram_by_pin(
+    chat_id: int,
+    pin: str,
+    db: Session,
+    username: Optional[str] = None,
+    agent_code: str = "DANTE_IT"
+) -> Dict[str, Any]:
+    """
+    Vincula una cuenta / chat de Telegram con un Usuario / Supervisor del ERP mediante un PIN de 6 dígitos.
+    """
+    clean_pin = pin.strip().replace(" ", "").replace("-", "").upper().replace("VINCULAR_", "").replace("LINK_", "")
+
+    user = db.query(User).filter(User.pairing_pin == clean_pin).first()
+    if not user:
+        return {
+            "success": False,
+            "message": "❌ El PIN de vinculación ingresado es inválido o ha expirado. Por favor genera un nuevo PIN desde el módulo de Usuarios Digitales en Neo ERP."
+        }
+
+    # Asignar Telegram chat_id y username
+    user.telegram_chat_id = chat_id
+    if username:
+        user.telegram_username = username.lstrip("@")
+    user.pairing_pin = None  # Consumir PIN de un solo uso
+    db.commit()
+    db.refresh(user)
+
+    # Identificar trabajador digital asociado
+    worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == agent_code).first()
+    if not worker:
+        worker = db.query(DigitalWorker).first()
+
+    # Registrar o actualizar la conversación en el canal Telegram
+    if worker:
+        conv = db.query(DigitalWorkerConversation).filter(
+            DigitalWorkerConversation.worker_id == worker.id,
+            DigitalWorkerConversation.channel == "TELEGRAM",
+            DigitalWorkerConversation.external_sender_id == str(chat_id)
+        ).first()
+
+        if not conv:
+            conv = DigitalWorkerConversation(
+                worker_id=worker.id,
+                channel="TELEGRAM",
+                external_sender_id=str(chat_id),
+                sender_user_id=user.id,
+                is_authenticated=True,
+                context_data={
+                    "user_email": user.email,
+                    "full_name": user.full_name,
+                    "telegram_username": username
+                }
+            )
+            db.add(conv)
+        else:
+            conv.is_authenticated = True
+            conv.sender_user_id = user.id
+            if conv.context_data:
+                conv.context_data["telegram_username"] = username
+
+        db.commit()
+
+    worker_title = worker.display_title if worker else "Dante TI"
+    
+    greeting = (
+        f"🛡️ *¡Telegram Vinculado Exitosamente!*\n\n"
+        f"Hola *{user.full_name}*, tu cuenta de Telegram ha sido autenticada en *Neo ERP*.\n"
+        f"Soy *{worker_title}*.\n\n"
+        f"Desde aquí puedo responderte de inmediato sobre la salud de la plataforma:\n"
+        f"• `/estado` o `/tiendas`: Ver latidos y conectividad de sucursales físicas\n"
+        f"• `/cuadratura`: Conciliación de ventas Stellar vs Neo ERP\n"
+        f"• `/correlatividad`: Auditoría de saltos en tickets fiscales\n"
+        f"• `/remediar`: Auto-remediar desfases de sincronización\n\n"
+        f"También recibirás alertas proactivas instantáneas si alguna tienda pierde conexión.\n\n"
+        f"¿En qué puedo ayudarte hoy?"
+    )
+
+    return {
+        "success": True,
+        "user_id": user.id,
+        "full_name": user.full_name,
+        "telegram_chat_id": chat_id,
+        "telegram_username": username,
+        "worker_name": worker_title,
+        "message": greeting
+    }
+
+
+def get_authenticated_user_by_telegram(chat_id: int, db: Session) -> Optional[User]:
+    """
+    Busca si el remitente de Telegram está registrado y autenticado en Neo ERP.
+    """
+    return db.query(User).filter(
+        User.telegram_chat_id == chat_id,
+        User.is_active == True
+    ).first()

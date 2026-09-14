@@ -82,6 +82,8 @@ class DigitalWorkerUserSummary(BaseModel):
     phone_number: Optional[str] = None
     is_phone_verified: Optional[bool] = False
     pairing_pin: Optional[str] = None
+    telegram_chat_id: Optional[int] = None
+    telegram_username: Optional[str] = None
     avatar_url: Optional[str] = None
 
     class Config:

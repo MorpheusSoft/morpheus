@@ -68,20 +68,57 @@ public class HeartbeatWorker : BackgroundService
             using var connection = new SqlConnection(connectionString);
             await connection.OpenAsync(stoppingToken);
 
-            string query = @"
-                SELECT 
-                    MAX(f_Fecha + CONVERT(TIME, f_Hora)) AS last_sale,
-                    COUNT(CASE WHEN f_Fecha = CAST(GETDATE() AS DATE) THEN 1 END) AS count_today,
-                    ISNULL(SUM(CASE WHEN f_Fecha = CAST(GETDATE() AS DATE) THEN Total ELSE 0 END), 0) AS amount_today
-                FROM VAD20.dbo.MA_PAGOS WITH (NOLOCK);
+            string basicQuery = @"
+                BEGIN TRY
+                    SELECT 
+                        MAX(f_Fecha + CONVERT(TIME, f_Hora)) AS last_sale,
+                        COUNT(DISTINCT CASE WHEN f_Fecha = CAST(GETDATE() AS DATE) THEN c_Numero END) AS count_today
+                    FROM VAD20.dbo.MA_PAGOS WITH (NOLOCK)
+                    WHERE f_Fecha <= DATEADD(day, 1, GETDATE());
+                END TRY
+                BEGIN CATCH
+                    SELECT 
+                        MAX(f_Fecha + CONVERT(TIME, f_Hora)) AS last_sale,
+                        COUNT(DISTINCT CASE WHEN f_Fecha = CAST(GETDATE() AS DATE) THEN c_Numero END) AS count_today
+                    FROM dbo.MA_PAGOS WITH (NOLOCK)
+                    WHERE f_Fecha <= DATEADD(day, 1, GETDATE());
+                END CATCH
             ";
 
-            var result = await connection.QueryFirstOrDefaultAsync(query);
+            var result = await connection.QueryFirstOrDefaultAsync(basicQuery);
             if (result != null)
             {
                 if (result.last_sale != null) lastStellarSale = (DateTime)result.last_sale;
                 salesTodayCount = Convert.ToInt32(result.count_today ?? 0);
-                salesTodayAmount = Convert.ToDecimal(result.amount_today ?? 0);
+            }
+
+            if (salesTodayCount > 0)
+            {
+                try
+                {
+                    string amountQuery = @"
+                        BEGIN TRY
+                            SELECT ISNULL(SUM(t.Cantidad * t.Precio), 0) AS amount_today
+                            FROM VAD20.dbo.MA_PAGOS f WITH (NOLOCK)
+                            INNER JOIN VAD20.dbo.MA_TRANSACCION t WITH (NOLOCK)
+                                ON f.c_Caja = t.c_Caja AND f.c_Sucursal = t.c_Localidad AND f.c_Numero = t.c_Numero
+                            WHERE f.f_Fecha = CAST(GETDATE() AS DATE);
+                        END TRY
+                        BEGIN CATCH
+                            SELECT ISNULL(SUM(t.Cantidad * t.Precio), 0) AS amount_today
+                            FROM dbo.MA_PAGOS f WITH (NOLOCK)
+                            INNER JOIN dbo.MA_TRANSACCION t WITH (NOLOCK)
+                                ON f.c_Caja = t.c_Caja AND f.c_Sucursal = t.c_Localidad AND f.c_Numero = t.c_Numero
+                            WHERE f.f_Fecha = CAST(GETDATE() AS DATE);
+                        END CATCH
+                    ";
+                    var amt = await connection.ExecuteScalarAsync<decimal?>(amountQuery);
+                    salesTodayAmount = amt ?? 0;
+                }
+                catch (Exception exAmt)
+                {
+                    _logger.LogDebug("No se pudo calcular monto acumulado del día: {Msg}", exAmt.Message);
+                }
             }
         }
         catch (Exception ex)
@@ -213,7 +250,11 @@ public class HeartbeatWorker : BackgroundService
                     if (cmd.Parameters.ValueKind == JsonValueKind.Object)
                     {
                         if (cmd.Parameters.TryGetProperty("from", out var f) && DateTime.TryParse(f.GetString(), out var pf)) from = pf;
+                        else if (cmd.Parameters.TryGetProperty("start_date", out var s) && DateTime.TryParse(s.GetString(), out var ps)) from = ps;
+
                         if (cmd.Parameters.TryGetProperty("to", out var t) && DateTime.TryParse(t.GetString(), out var pt)) to = pt;
+                        else if (cmd.Parameters.TryGetProperty("end_date", out var e) && DateTime.TryParse(e.GetString(), out var pe)) to = pe;
+
                         if (cmd.Parameters.TryGetProperty("batch_size", out var b)) batchSize = b.GetInt32();
                     }
 

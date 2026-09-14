@@ -7,7 +7,7 @@ from app.api.v1.endpoints import (
     pricing_sessions, companies, roles, users, sync, inventory_valuation, b2b,
     labels, import_legacy, print_templates, promotions, sales_report, returns,
     digital_workers, whatsapp, sell_out, inventory_intelligence, wms_offline_sync,
-    sync_sales, store_agent_control
+    sync_sales, store_agent_control, store_deposit_mapping, telegram
 )
 
 from app.api.v1.endpoints import public_orders
@@ -61,6 +61,8 @@ api_router.include_router(wms_offline_sync.router, prefix="/wms/sync", tags=["wm
 api_router.include_router(import_legacy.router, prefix="/import", tags=["import"])
 api_router.include_router(sync_sales.router, tags=["sync sales and telemetry"])
 api_router.include_router(store_agent_control.router, prefix="/store-agent", tags=["store agent control"])
+api_router.include_router(store_deposit_mapping.router, prefix="/store-agent", tags=["store deposit mappings"])
+api_router.include_router(telegram.router, prefix="/telegram", tags=["telegram"])
 
 
 

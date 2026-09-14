@@ -14,7 +14,8 @@ from app.schemas.sync_sales import (
 from app.models.sales import Document, DocumentLine, Customer, DocumentType, DocumentState
 from app.models.inventory import (
     Product, ProductVariant, ProductBarcode, Category,
-    StockPicking, StockMove, Warehouse, Location, InventorySession
+    StockPicking, StockMove, Warehouse, Location, InventorySession,
+    StoreDepositMapping
 )
 from app.models.core import Facility
 from app.models.sync_telemetry import StoreSyncTelemetry
@@ -71,13 +72,27 @@ def import_sales_batch(
         session.flush()
     customer_cache["J-000000000"] = generic_customer.id
 
-    # Caché de ubicaciones de almacén
-    loc_cache = {}
-    def get_warehouse_location_id(fac_id: int, dep_code: str) -> int:
+    # Caché de resolución de depósitos de tienda a ubicaciones de Neo ERP
+    deposit_cache = {}
+    def resolve_deposit_destination(fac_id: int, raw_dep_code: Optional[str]) -> tuple:
+        dep_code = (raw_dep_code or "01").strip()
         key = (fac_id, dep_code)
-        if key in loc_cache:
-            return loc_cache[key]
+        if key in deposit_cache:
+            return deposit_cache[key]
         
+        # 1. Buscar en tabla formal de mapeo de depósitos
+        mapping = session.query(StoreDepositMapping).filter(
+            StoreDepositMapping.facility_id == fac_id,
+            StoreDepositMapping.external_deposit_code == dep_code,
+            StoreDepositMapping.is_active == True
+        ).first()
+
+        if mapping:
+            res = (mapping.location_id, mapping.affects_inventory)
+            deposit_cache[key] = res
+            return res
+
+        # 2. Si no existe mapeo formal, buscar almacén existente por código
         wh = session.query(Warehouse).filter_by(facility_id=fac_id, code=dep_code).first()
         if not wh:
             wh = Warehouse(
@@ -87,6 +102,11 @@ def import_sales_batch(
             )
             session.add(wh)
             session.flush()
+
+        loc = session.query(Location).filter_by(warehouse_id=wh.id, usage='INTERNAL').first()
+        if not loc:
+            loc = session.query(Location).filter_by(warehouse_id=wh.id).first()
+        if not loc:
             loc = Location(
                 name=f"ALM-{dep_code}/STOCK",
                 code=f"ALM-{dep_code}/STOCK",
@@ -95,17 +115,27 @@ def import_sales_batch(
             )
             session.add(loc)
             session.flush()
-            loc_cache[key] = loc.id
-            return loc.id
-        else:
-            loc = session.query(Location).filter_by(warehouse_id=wh.id, usage='INTERNAL').first()
-            if not loc:
-                loc = session.query(Location).filter_by(warehouse_id=wh.id).first()
-            if loc:
-                loc_cache[key] = loc.id
-                return loc.id
-        loc_cache[key] = 1
-        return 1
+
+        # 3. Auto-descubrimiento: registrar en StoreDepositMapping para alertar al admin
+        try:
+            new_mapping = StoreDepositMapping(
+                facility_id=fac_id,
+                external_deposit_code=dep_code,
+                external_deposit_name=f"Depósito {dep_code} (Auto-detectado)",
+                warehouse_id=wh.id,
+                location_id=loc.id,
+                affects_inventory=True,
+                is_active=True,
+                auto_discovered=True
+            )
+            session.add(new_mapping)
+            session.flush()
+        except Exception:
+            session.rollback()
+
+        res = (loc.id, True)
+        deposit_cache[key] = res
+        return res
 
     baseline_cutoff_cache = {}
     def get_baseline_cutoff(f_id: int) -> datetime:
@@ -278,21 +308,22 @@ def import_sales_batch(
 
             # Si NO es histórico, generamos el movimiento de inventario (Kardex)
             if not doc_is_historical and picking:
-                loc_src_id = get_warehouse_location_id(fac_id, line_in.deposit_code or "01")
-                loc_dest_id = 2 # Clientes (VIRT_CUSTOMER)
+                loc_src_id, affects_inv = resolve_deposit_destination(fac_id, line_in.deposit_code)
+                if affects_inv and loc_src_id:
+                    loc_dest_id = 2 # Clientes (VIRT_CUSTOMER)
 
-                move = StockMove(
-                    picking_id=picking.id,
-                    product_id=variant_id,
-                    quantity_demand=abs(qty),
-                    quantity_done=abs(qty),
-                    uom_id='UND',
-                    location_src_id=loc_src_id,
-                    location_dest_id=loc_dest_id,
-                    state='DONE',
-                    reference=f"POS Sale C{reg_code}-{doc_num}"
-                )
-                session.add(move)
+                    move = StockMove(
+                        picking_id=picking.id,
+                        product_id=variant_id,
+                        quantity_demand=abs(qty),
+                        quantity_done=abs(qty),
+                        uom_id='UND',
+                        location_src_id=loc_src_id,
+                        location_dest_id=loc_dest_id,
+                        state='DONE',
+                        reference=f"POS Sale C{reg_code}-{doc_num}"
+                    )
+                    session.add(move)
 
         processed_count += 1
 

@@ -151,22 +151,29 @@ def generate_pairing_pin(
     current_user: User = Depends(get_current_active_user)
 ):
     """
-    Genera un nuevo PIN de vinculación de 6 dígitos para asociar WhatsApp de un supervisor a este Usuario Digital.
+    Genera un nuevo PIN de vinculación de 6 dígitos para asociar WhatsApp o Telegram de un supervisor humano a este Usuario Digital.
     """
     worker = get_worker_by_id(worker_id, db)
-    if not worker or not worker.user:
-        raise HTTPException(status_code=404, detail="Usuario Digital no encontrado o sin usuario base asociado")
+    if not worker:
+        raise HTTPException(status_code=404, detail="Usuario Digital no encontrado")
 
     new_pin = f"{random.randint(100000, 999999)}"
-    worker.user.pairing_pin = new_pin
-    worker.user.is_phone_verified = False
+    current_user.pairing_pin = new_pin
     db.commit()
-    db.refresh(worker.user)
+    db.refresh(current_user)
+
+    telegram_bot = "dante_neo_erp_bot"
+    if worker.channel_config and isinstance(worker.channel_config, dict):
+        tg_conf = worker.channel_config.get("telegram", {})
+        if isinstance(tg_conf, dict) and tg_conf.get("bot_username"):
+            telegram_bot = tg_conf.get("bot_username")
 
     return {
         "worker_id": worker.id,
         "agent_code": worker.agent_code,
         "display_title": worker.display_title,
         "pairing_pin": new_pin,
-        "instructions": f"Para vincular su WhatsApp, envíe un mensaje al número corporativo con el texto: 'Vincular {new_pin}'"
+        "telegram_bot_username": telegram_bot,
+        "telegram_deep_link": f"https://t.me/{telegram_bot}?start=VINCULAR_{new_pin}",
+        "instructions": f"Para vincular Telegram abra t.me/{telegram_bot}?start=VINCULAR_{new_pin} o envíe '/vincular {new_pin}'. Para WhatsApp envíe 'Vincular {new_pin}'."
     }

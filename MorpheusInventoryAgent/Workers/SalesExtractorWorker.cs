@@ -256,24 +256,23 @@ public class SalesExtractorWorker : BackgroundService
                 f.c_Concepto AS doc_type,
                 (f.f_Fecha + CONVERT(TIME, f.f_Hora)) AS doc_date,
                 ISNULL(f.c_Rif, 'J-000000000') AS customer_tax_id,
-                ISNULL(f.c_Nombre, 'Cliente Contado') AS customer_name,
-                f.Subtotal AS subtotal,
-                f.Impuesto AS tax_amount,
-                f.Total AS total_amount,
+                'Cliente Contado' AS customer_name,
                 df.cu_DocumentoFiscal AS fiscal_number,
                 df.cu_SerialImpresora AS fiscal_serial,
                 t.Cod_Principal AS sku_code,
                 t.Cantidad AS quantity,
                 t.Precio AS unit_price,
-                t.Subtotal AS line_subtotal,
-                t.Impuesto AS line_tax,
-                t.Total AS line_total,
-                t.c_deposito AS deposit_code
+                (t.Cantidad * t.Precio) AS line_subtotal,
+                ISNULL(t.Impuesto, 0) AS line_tax,
+                ((t.Cantidad * t.Precio) + ISNULL(t.Impuesto, 0)) AS line_total,
+                ISNULL(c.C_CODDEPOSITO, '01') AS deposit_code
             FROM VAD20.dbo.MA_PAGOS f WITH (NOLOCK)
             INNER JOIN VAD20.dbo.MA_TRANSACCION t WITH (NOLOCK)
                 ON f.c_Caja = t.c_Caja 
                AND f.c_Sucursal = t.c_Localidad 
                AND f.c_Numero = t.c_Numero
+            LEFT JOIN VAD20.dbo.MA_CAJA c WITH (NOLOCK)
+                ON c.C_Codigo = f.c_Caja
             LEFT JOIN VAD20.dbo.MA_DOCUMENTOS_FISCAL df WITH (NOLOCK)
                 ON df.cu_Localidad = f.c_Sucursal 
                AND df.cu_DocumentoTipo = f.c_Concepto 
@@ -284,7 +283,16 @@ public class SalesExtractorWorker : BackgroundService
         ";
 
         using var connection = new SqlConnection(connectionString);
-        var rows = (await connection.QueryAsync(query, new { FacilityId = facilityId, FacilityCode = facilityCode, FromDate = fromDate, ToDate = toDate }, commandTimeout: 300)).ToList();
+        List<dynamic> rows;
+        try
+        {
+            rows = (await connection.QueryAsync(query, new { FacilityId = facilityId, FacilityCode = facilityCode, FromDate = fromDate, ToDate = toDate }, commandTimeout: 300)).ToList();
+        }
+        catch (SqlException ex) when (ex.Message.Contains("VAD20"))
+        {
+            string fallbackQuery = query.Replace("VAD20.dbo.", "dbo.");
+            rows = (await connection.QueryAsync(fallbackQuery, new { FacilityId = facilityId, FacilityCode = facilityCode, FromDate = fromDate, ToDate = toDate }, commandTimeout: 300)).ToList();
+        }
 
         var documentsMap = new Dictionary<string, SalesBatchDocumentDto>();
 
@@ -293,6 +301,10 @@ public class SalesExtractorWorker : BackgroundService
             string reg = (r.register_code ?? "01").ToString().Trim();
             string num = r.document_number.ToString().Trim();
             string docKey = $"{reg}_{num}";
+
+            decimal lineSubtotal = Convert.ToDecimal(r.line_subtotal ?? 0);
+            decimal lineTax = Convert.ToDecimal(r.line_tax ?? 0);
+            decimal lineTotal = Convert.ToDecimal(r.line_total ?? 0);
 
             if (!documentsMap.TryGetValue(docKey, out var doc))
             {
@@ -305,10 +317,10 @@ public class SalesExtractorWorker : BackgroundService
                     DocType = (r.doc_type ?? "FAC").ToString().Trim(),
                     DocDate = ((DateTime)r.doc_date).ToString("yyyy-MM-dd HH:mm:ss"),
                     CustomerTaxId = (r.customer_tax_id ?? "J-000000000").ToString().Trim(),
-                    CustomerName = (r.customer_name ?? "Cliente Contado").ToString().Trim(),
-                    Subtotal = Convert.ToDecimal(r.subtotal),
-                    TaxAmount = Convert.ToDecimal(r.tax_amount),
-                    TotalAmount = Convert.ToDecimal(r.total_amount),
+                    CustomerName = "Cliente Contado",
+                    Subtotal = 0,
+                    TaxAmount = 0,
+                    TotalAmount = 0,
                     FiscalNumber = r.fiscal_number?.ToString(),
                     FiscalSerial = r.fiscal_serial?.ToString(),
                     Lines = new List<SalesBatchLineDto>()
@@ -316,14 +328,18 @@ public class SalesExtractorWorker : BackgroundService
                 documentsMap[docKey] = doc;
             }
 
+            doc.Subtotal += lineSubtotal;
+            doc.TaxAmount += lineTax;
+            doc.TotalAmount += lineTotal;
+
             doc.Lines.Add(new SalesBatchLineDto
             {
                 SkuCode = r.sku_code.ToString().Trim(),
-                Quantity = Convert.ToDecimal(r.quantity),
-                UnitPrice = Convert.ToDecimal(r.unit_price),
-                Subtotal = Convert.ToDecimal(r.line_subtotal),
-                TaxAmount = Convert.ToDecimal(r.line_tax),
-                Total = Convert.ToDecimal(r.line_total),
+                Quantity = Convert.ToDecimal(r.quantity ?? 0),
+                UnitPrice = Convert.ToDecimal(r.unit_price ?? 0),
+                Subtotal = lineSubtotal,
+                TaxAmount = lineTax,
+                Total = lineTotal,
                 DepositCode = (r.deposit_code ?? "01").ToString().Trim()
             });
         }

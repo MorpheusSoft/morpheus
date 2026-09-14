@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import api from "@/lib/api";
 import {
   getDigitalWorkers,
   getDigitalSkills,
@@ -9,7 +10,8 @@ import {
   getDigitalWorkerActions,
   generatePairingPin,
   updateDigitalWorker,
-  simulateWhatsApp
+  simulateWhatsApp,
+  simulateTelegram
 } from "@/app/actions/digital-workers";
 
 const getWorkerMeta = (agentCode: string) => {
@@ -20,27 +22,30 @@ const getWorkerMeta = (agentCode: string) => {
       icon: "pi-box",
       colorClass: "bg-blue-600 text-white shadow-sm",
       badgeColor: "bg-blue-50 text-blue-700",
-      avatarGradient: "from-blue-600 to-cyan-600 border-blue-200"
+      avatarGradient: "from-blue-600 to-cyan-600 border-blue-200",
+      defaultChannel: "WHATSAPP"
     };
   }
-  if (agentCode === "CLARA_PURCHASING") {
+  if (agentCode === "CLARA_COMPRAS" || agentCode === "CLARA_PURCHASING") {
     return {
       name: "Clara (Compras)",
       shortCode: "CC",
       icon: "pi-shopping-cart",
       colorClass: "bg-purple-600 text-white shadow-sm",
       badgeColor: "bg-purple-50 text-purple-700",
-      avatarGradient: "from-purple-600 to-pink-600 border-purple-200"
+      avatarGradient: "from-purple-600 to-pink-600 border-purple-200",
+      defaultChannel: "WHATSAPP"
     };
   }
   if (agentCode === "DANTE_IT") {
     return {
-      name: "Dante (TI & Sync)",
+      name: "Dante (TI & Infraestructura)",
       shortCode: "DT",
       icon: "pi-shield",
       colorClass: "bg-indigo-600 text-white shadow-sm",
       badgeColor: "bg-indigo-50 text-indigo-700",
-      avatarGradient: "from-indigo-600 to-emerald-600 border-indigo-200"
+      avatarGradient: "from-indigo-600 to-sky-600 border-indigo-200",
+      defaultChannel: "TELEGRAM"
     };
   }
   return {
@@ -49,13 +54,15 @@ const getWorkerMeta = (agentCode: string) => {
     icon: "pi-android",
     colorClass: "bg-slate-800 text-white shadow-sm",
     badgeColor: "bg-slate-50 text-slate-700",
-    avatarGradient: "from-slate-700 to-indigo-700 border-slate-200"
+    avatarGradient: "from-slate-700 to-indigo-700 border-slate-200",
+    defaultChannel: "TELEGRAM"
   };
 };
 
 export default function DigitalWorkersPage() {
   const [workers, setWorkers] = useState<any[]>([]);
   const [skillsCatalog, setSkillsCatalog] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   
   // Execution state
@@ -67,17 +74,23 @@ export default function DigitalWorkersPage() {
   const [logs, setLogs] = useState<any[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
 
-  // WhatsApp Pairing Modal
+  // Pairing Modal (Multichannel: Telegram & WhatsApp)
   const [pairingModalWorker, setPairingModalWorker] = useState<any | null>(null);
+  const [pairingChannel, setPairingChannel] = useState<"TELEGRAM" | "WHATSAPP">("TELEGRAM");
   const [generatedPin, setGeneratedPin] = useState<string | null>(null);
   const [generatingPin, setGeneratingPin] = useState(false);
+  const [telegramDeepLink, setTelegramDeepLink] = useState<string | null>(null);
+  const [telegramBotUsername, setTelegramBotUsername] = useState<string>("dante_neo_erp_bot");
+  const [copiedPin, setCopiedPin] = useState(false);
 
-  // WhatsApp Simulator Modal
+  // Simulator Modal (Telegram & WhatsApp)
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
+  const [simulatorChannel, setSimulatorChannel] = useState<"TELEGRAM" | "WHATSAPP">("TELEGRAM");
   const [simPhone, setSimPhone] = useState("584121112233");
-  const [simMessage, setSimMessage] = useState("Arturo, ¿cuáles son los productos con saldo negativo?");
+  const [simChatId, setSimChatId] = useState(12345678);
+  const [simMessage, setSimMessage] = useState("/estado");
   const [simChat, setSimChat] = useState<any[]>([
-    { sender: "system", text: "Simulador de canal WhatsApp para agentes autónomos. Puedes escribir consultas directas o comandos de vinculación como 'Vincular <PIN>'." }
+    { sender: "system", text: "Simulador multicanal de Neo ERP. Prueba la interacción de Dante TI por Telegram o Arturo y Clara por WhatsApp." }
   ]);
   const [simSending, setSimSending] = useState(false);
 
@@ -90,6 +103,14 @@ export default function DigitalWorkersPage() {
       ]);
       setWorkers(workersData);
       setSkillsCatalog(skillsData);
+
+      // Obtener datos del usuario logueado para verificar estado de vinculación
+      try {
+        const userRes = await api.get('/users/me');
+        setCurrentUser(userRes.data);
+      } catch (err) {
+        console.warn("No se pudo obtener el usuario autenticado:", err);
+      }
     } catch (e) {
       console.error("Error fetching digital workers data:", e);
     } finally {
@@ -104,7 +125,6 @@ export default function DigitalWorkersPage() {
   const handleToggleSkill = async (workerId: number, skillId: number, currentEnabled: boolean) => {
     try {
       await toggleDigitalSkill(workerId, skillId, !currentEnabled);
-      // Optimistic update
       setWorkers(prev => prev.map(w => {
         if (w.id === workerId) {
           return {
@@ -161,18 +181,35 @@ export default function DigitalWorkersPage() {
     }
   };
 
-  const openPairingModal = (worker: any) => {
+  const openPairingModal = (worker: any, channel: "TELEGRAM" | "WHATSAPP" = "TELEGRAM") => {
     setPairingModalWorker(worker);
-    setGeneratedPin(worker.user?.pairing_pin || null);
+    setPairingChannel(channel);
+    setGeneratedPin(null);
+    setTelegramDeepLink(null);
+    setCopiedPin(false);
+
+    const tgBot = worker.channel_config?.telegram?.bot_username || "dante_neo_erp_bot";
+    setTelegramBotUsername(tgBot);
   };
 
   const handleGeneratePin = async () => {
     if (!pairingModalWorker) return;
     setGeneratingPin(true);
+    setCopiedPin(false);
     try {
       const res = await generatePairingPin(pairingModalWorker.id);
       setGeneratedPin(res.pairing_pin);
-      fetchData();
+      if (res.telegram_deep_link) {
+        setTelegramDeepLink(res.telegram_deep_link);
+      }
+      if (res.telegram_bot_username) {
+        setTelegramBotUsername(res.telegram_bot_username);
+      }
+      // Actualizar perfil de usuario
+      try {
+        const userRes = await api.get('/users/me');
+        setCurrentUser(userRes.data);
+      } catch {}
     } catch (e: any) {
       alert("Error generando PIN: " + e.message);
     } finally {
@@ -180,23 +217,40 @@ export default function DigitalWorkersPage() {
     }
   };
 
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedPin(true);
+    setTimeout(() => setCopiedPin(false), 2500);
+  };
+
   const handleSendSimulatorMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!simMessage.trim() || simSending) return;
 
     const userText = simMessage;
-    setSimChat(prev => [...prev, { sender: "user", text: userText }]);
+    setSimChat(prev => [...prev, { sender: "user", text: userText, channel: simulatorChannel }]);
     setSimMessage("");
     setSimSending(true);
 
     try {
-      const res = await simulateWhatsApp(simPhone, userText);
-      setSimChat(prev => [...prev, {
-        sender: "bot",
-        text: res.reply || "Sin respuesta",
-        tool: res.tool,
-        worker: res.worker_name
-      }]);
+      if (simulatorChannel === "TELEGRAM") {
+        const res = await simulateTelegram(simChatId, userText, workerFilter !== "ALL" ? workerFilter : "DANTE_IT");
+        setSimChat(prev => [...prev, {
+          sender: "bot",
+          text: res.reply || "Sin respuesta",
+          channel: "TELEGRAM",
+          worker: res.bot_username || "Dante TI"
+        }]);
+      } else {
+        const res = await simulateWhatsApp(simPhone, userText);
+        setSimChat(prev => [...prev, {
+          sender: "bot",
+          text: res.reply || "Sin respuesta",
+          channel: "WHATSAPP",
+          tool: res.tool,
+          worker: res.worker_name
+        }]);
+      }
     } catch (err: any) {
       setSimChat(prev => [...prev, { sender: "error", text: "Error conectando con el servicio: " + err.message }]);
     } finally {
@@ -216,12 +270,26 @@ export default function DigitalWorkersPage() {
             <h1 className="text-3xl font-extrabold text-slate-800 tracking-tight">Usuarios Digitales (AI Workers)</h1>
           </div>
           <p className="text-slate-500 mt-2 text-sm">
-            Ecosistema de agentes cognitivos y autónomos que supervisan inventarios, generan sugerencias de compras y responden en WhatsApp.
+            Ecosistema multicanal de agentes cognitivos y autónomos de <strong>Neo ERP</strong>. Supervisan almacenes, cuadratura fiscal y se comunican vía Telegram y WhatsApp.
           </p>
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setIsSimulatorOpen(true)}
+            onClick={() => {
+              setSimulatorChannel("TELEGRAM");
+              setIsSimulatorOpen(true);
+            }}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-sm font-semibold rounded-xl shadow-sm transition-all shadow-sky-600/20 active:scale-95"
+          >
+            <i className="pi pi-send text-sm"></i>
+            <span>Simulador Telegram</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setSimulatorChannel("WHATSAPP");
+              setIsSimulatorOpen(true);
+            }}
             className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-xl shadow-sm transition-all shadow-emerald-600/20 active:scale-95"
           >
             <i className="pi pi-whatsapp text-lg"></i>
@@ -284,7 +352,7 @@ export default function DigitalWorkersPage() {
       {loading ? (
         <div className="bg-white border border-slate-200 rounded-3xl p-16 text-center text-slate-400 shadow-sm">
           <i className="pi pi-spinner animate-spin text-4xl mb-4 text-purple-600"></i>
-          <p className="font-medium text-slate-600">Conectando con la red neuronal de agentes...</p>
+          <p className="font-medium text-slate-600">Conectando con la red neuronal de agentes de Neo ERP...</p>
         </div>
       ) : workers.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-3xl p-16 text-center text-slate-500 shadow-sm">
@@ -298,6 +366,7 @@ export default function DigitalWorkersPage() {
             .filter((worker) => workerFilter === "ALL" || worker.agent_code === workerFilter)
             .map((worker) => {
             const meta = getWorkerMeta(worker.agent_code);
+            const isDante = worker.agent_code === "DANTE_IT";
 
             return (
               <div
@@ -356,7 +425,7 @@ export default function DigitalWorkersPage() {
                       <span className="text-[11px] text-slate-400">Modelo: {worker.model_name || "gemini-2.5-flash"}</span>
                     </div>
 
-                    <div className="max-h-[380px] overflow-y-auto pr-1 space-y-2 custom-scrollbar">
+                    <div className="max-h-[340px] overflow-y-auto pr-1 space-y-2 custom-scrollbar">
                       {worker.worker_skills?.map((ws: any) => (
                         <div
                           key={ws.id}
@@ -388,32 +457,79 @@ export default function DigitalWorkersPage() {
                     </div>
                   </div>
 
-                  {/* WhatsApp Status Bar */}
-                  <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
-                        <i className="pi pi-whatsapp text-sm"></i>
-                      </div>
-                      <div>
-                        <div className="font-bold text-slate-700">Canal WhatsApp</div>
-                        <div className="text-[11px] text-slate-500">
-                          {worker.user?.is_phone_verified ? (
-                            <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                              <i className="pi pi-check text-[10px]"></i> Conectado ({worker.user?.phone_number})
-                            </span>
-                          ) : (
-                            <span className="text-amber-600 font-medium">No vinculado / Pendiente</span>
-                          )}
-                        </div>
-                      </div>
+                  {/* Multichannel Communication Section */}
+                  <div className="space-y-2.5 pt-2 border-t border-slate-100">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                      Canales de Comunicación y Alertas
                     </div>
 
-                    <button
-                      onClick={() => openPairingModal(worker)}
-                      className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] font-bold text-slate-700 shadow-2xs transition-all"
-                    >
-                      {worker.user?.is_phone_verified ? "Re-Vincular PIN" : "Generar PIN"}
-                    </button>
+                    {/* Telegram Channel Bar */}
+                    <div className={`p-3.5 rounded-2xl border flex items-center justify-between text-xs transition-all ${
+                      isDante ? "bg-sky-50/50 border-sky-200/80" : "bg-slate-50 border-slate-200"
+                    }`}>
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-sky-500 text-white flex items-center justify-center font-bold shadow-sm shadow-sky-500/20">
+                          <i className="pi pi-send text-xs"></i>
+                        </div>
+                        <div>
+                          <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                            <span>Telegram Bot</span>
+                            {isDante && (
+                              <span className="bg-sky-100 text-sky-700 text-[10px] font-bold px-1.5 py-0.2 rounded-md">
+                                Oficial TI
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {currentUser?.telegram_chat_id ? (
+                              <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                                <i className="pi pi-check text-[10px]"></i> Conectado {currentUser.telegram_username ? `(@${currentUser.telegram_username})` : `(ID: ${currentUser.telegram_chat_id})`}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">
+                                @{worker.channel_config?.telegram?.bot_username || "dante_neo_erp_bot"}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => openPairingModal(worker, "TELEGRAM")}
+                        className="px-3 py-1.5 bg-white hover:bg-sky-50 border border-sky-200 text-sky-700 rounded-lg text-[11px] font-bold shadow-2xs transition-all flex items-center gap-1"
+                      >
+                        <i className="pi pi-link text-[10px]"></i>
+                        <span>{currentUser?.telegram_chat_id ? "Re-Vincular" : "Vincular Telegram"}</span>
+                      </button>
+                    </div>
+
+                    {/* WhatsApp Channel Bar */}
+                    <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                          <i className="pi pi-whatsapp text-sm"></i>
+                        </div>
+                        <div>
+                          <div className="font-bold text-slate-700">WhatsApp</div>
+                          <div className="text-[11px] text-slate-500">
+                            {currentUser?.is_phone_verified ? (
+                              <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                                <i className="pi pi-check text-[10px]"></i> Conectado ({currentUser.phone_number})
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 font-normal">No vinculado</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => openPairingModal(worker, "WHATSAPP")}
+                        className="px-3 py-1.5 bg-white hover:bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-[11px] font-bold shadow-2xs transition-all"
+                      >
+                        {currentUser?.is_phone_verified ? "Re-Vincular" : "Vincular WhatsApp"}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -542,18 +658,23 @@ export default function DigitalWorkersPage() {
         </div>
       )}
 
-      {/* WhatsApp Pairing Modal */}
+      {/* Multichannel Pairing Modal (Telegram / WhatsApp) */}
       {pairingModalWorker && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-md w-full p-6 animate-in fade-in zoom-in-95">
+            {/* Modal Header */}
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold">
-                  <i className="pi pi-whatsapp text-xl"></i>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-sm ${
+                  pairingChannel === "TELEGRAM" ? "bg-sky-500 shadow-sky-500/20" : "bg-emerald-600 shadow-emerald-600/20"
+                }`}>
+                  <i className={`pi ${pairingChannel === "TELEGRAM" ? "pi-send" : "pi-whatsapp"} text-lg`}></i>
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-800">Vincular Dispositivo WhatsApp</h3>
-                  <p className="text-xs text-slate-400">{pairingModalWorker.display_title}</p>
+                  <h3 className="font-bold text-slate-800">
+                    Vincular con {pairingModalWorker.display_title}
+                  </h3>
+                  <p className="text-xs text-slate-400">Emparejamiento seguro por PIN de un solo uso</p>
                 </div>
               </div>
               <button
@@ -564,77 +685,226 @@ export default function DigitalWorkersPage() {
               </button>
             </div>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center my-4">
-              <p className="text-xs text-slate-500 mb-2">PIN DE EMPAREJAMIENTO DE 6 DÍGITOS</p>
+            {/* Channel Tabs */}
+            <div className="flex bg-slate-100 p-1 rounded-xl mb-4 text-xs font-bold">
+              <button
+                onClick={() => {
+                  setPairingChannel("TELEGRAM");
+                  setCopiedPin(false);
+                }}
+                className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                  pairingChannel === "TELEGRAM"
+                    ? "bg-white text-sky-700 shadow-2xs"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <i className="pi pi-send text-xs"></i>
+                <span>Telegram (Recomendado)</span>
+              </button>
+              <button
+                onClick={() => {
+                  setPairingChannel("WHATSAPP");
+                  setCopiedPin(false);
+                }}
+                className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                  pairingChannel === "WHATSAPP"
+                    ? "bg-white text-emerald-700 shadow-2xs"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <i className="pi pi-whatsapp text-xs"></i>
+                <span>WhatsApp</span>
+              </button>
+            </div>
+
+            {/* PIN Display */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center my-3">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                PIN de Vinculación Personal
+              </p>
               <div className="text-3xl font-black font-mono tracking-widest text-indigo-600 select-all py-1">
                 {generatedPin || "------"}
               </div>
-              <p className="text-[11px] text-slate-400 mt-2">
-                {generatedPin ? "Válido para un solo uso. Expira tras la vinculación." : "Presione generar para crear un nuevo código."}
+              <p className="text-[11px] text-slate-400 mt-1">
+                {generatedPin
+                  ? "Este PIN es de uso único y vincula tu usuario de Neo ERP con este canal."
+                  : "Presiona 'Generar PIN' para obtener tu código de vinculación."}
               </p>
             </div>
 
-            <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-2xl text-xs text-indigo-900 leading-relaxed mb-6">
-              <strong>Instrucciones:</strong>
-              <ol className="list-decimal pl-4 mt-1 space-y-1">
-                <li>Abre WhatsApp en tu teléfono.</li>
-                <li>Envía un mensaje al número corporativo con: <strong>Vincular {generatedPin || "XXXXXX"}</strong></li>
-                <li>El asistente confirmará la sesión de inmediato.</li>
-              </ol>
-            </div>
+            {/* Step-by-Step Instructions */}
+            {pairingChannel === "TELEGRAM" ? (
+              <div className="p-3.5 bg-sky-50/70 border border-sky-100 rounded-2xl text-xs text-sky-950 leading-relaxed mb-5">
+                <strong className="text-sky-900 block mb-1">Pasos para conectar con Telegram:</strong>
+                <ol className="list-decimal pl-4 space-y-1 text-slate-600">
+                  <li>Haz clic en el botón <strong>Abrir en Telegram</strong> abajo.</li>
+                  <li>
+                    O en Telegram busca a <strong>@{telegramBotUsername}</strong> y envía:
+                    <br />
+                    <code className="bg-sky-100/70 text-sky-800 px-1 py-0.5 rounded font-mono text-[11px]">
+                      /vincular {generatedPin || "XXXXXX"}
+                    </code>
+                  </li>
+                  <li>Dante confirmará tu sesión y activará tus reportes automáticos.</li>
+                </ol>
+              </div>
+            ) : (
+              <div className="p-3.5 bg-emerald-50/70 border border-emerald-100 rounded-2xl text-xs text-emerald-950 leading-relaxed mb-5">
+                <strong className="text-emerald-900 block mb-1">Pasos para conectar con WhatsApp:</strong>
+                <ol className="list-decimal pl-4 space-y-1 text-slate-600">
+                  <li>Abre WhatsApp en tu teléfono móvil.</li>
+                  <li>
+                    Envía un mensaje al número corporativo con el texto:
+                    <br />
+                    <code className="bg-emerald-100/70 text-emerald-800 px-1 py-0.5 rounded font-mono text-[11px]">
+                      Vincular {generatedPin || "XXXXXX"}
+                    </code>
+                  </li>
+                  <li>El asistente confirmará la sesión de inmediato.</li>
+                </ol>
+              </div>
+            )}
 
-            <div className="flex items-center justify-between gap-3">
-              <button
-                onClick={handleGeneratePin}
-                disabled={generatingPin}
-                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
-              >
-                {generatingPin ? "Generando..." : "Generar Nuevo PIN"}
-              </button>
-              <button
-                onClick={() => setPairingModalWorker(null)}
-                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold text-xs transition-all"
-              >
-                Listo
-              </button>
+            {/* Action Buttons */}
+            <div className="space-y-2">
+              {generatedPin && pairingChannel === "TELEGRAM" && (
+                <a
+                  href={telegramDeepLink || `https://t.me/${telegramBotUsername}?start=VINCULAR_${generatedPin}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 bg-sky-500 hover:bg-sky-600 text-white rounded-xl font-bold text-xs shadow-sm shadow-sky-500/20 transition-all flex items-center justify-center gap-2"
+                >
+                  <i className="pi pi-external-link"></i>
+                  <span>Abrir en Telegram (@{telegramBotUsername})</span>
+                </a>
+              )}
+
+              {generatedPin && (
+                <button
+                  onClick={() => copyToClipboard(
+                    pairingChannel === "TELEGRAM" ? `/vincular ${generatedPin}` : `Vincular ${generatedPin}`
+                  )}
+                  className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold text-xs transition-all flex items-center justify-center gap-2"
+                >
+                  <i className={`pi ${copiedPin ? "pi-check text-emerald-600" : "pi-copy"}`}></i>
+                  <span>{copiedPin ? "¡Comando copiado!" : "Copiar Comando de Vinculación"}</span>
+                </button>
+              )}
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={handleGeneratePin}
+                  disabled={generatingPin}
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
+                >
+                  {generatingPin ? "Generando..." : (generatedPin ? "Regenerar PIN" : "Generar PIN")}
+                </button>
+                <button
+                  onClick={() => setPairingModalWorker(null)}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold text-xs transition-all"
+                >
+                  Cerrar
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* WhatsApp Simulator Modal */}
+      {/* Multichannel Simulator Modal (Telegram & WhatsApp) */}
       {isSimulatorOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0b141a] text-slate-100 rounded-3xl shadow-2xl border border-slate-800 max-w-lg w-full max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95">
-            {/* WhatsApp Header */}
-            <div className="bg-[#202c33] p-4 flex items-center justify-between border-b border-[#2a3942]">
+          <div className={`rounded-3xl shadow-2xl border max-w-lg w-full max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 transition-all ${
+            simulatorChannel === "TELEGRAM"
+              ? "bg-[#17212b] border-[#242f3d] text-slate-100"
+              : "bg-[#0b141a] border-slate-800 text-slate-100"
+          }`}>
+            {/* Header */}
+            <div className={`p-4 flex items-center justify-between border-b ${
+              simulatorChannel === "TELEGRAM"
+                ? "bg-[#242f3d] border-[#1e2a38]"
+                : "bg-[#202c33] border-[#2a3942]"
+            }`}>
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold">
-                  <i className="pi pi-android text-lg"></i>
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold ${
+                  simulatorChannel === "TELEGRAM" ? "bg-sky-500" : "bg-emerald-600"
+                }`}>
+                  <i className={`pi ${simulatorChannel === "TELEGRAM" ? "pi-send" : "pi-whatsapp"} text-lg`}></i>
                 </div>
                 <div>
                   <div className="font-bold text-sm text-white flex items-center gap-2">
-                    <span>Neo ERP Assistant</span>
+                    <span>{simulatorChannel === "TELEGRAM" ? "Dante TI (@dante_neo_erp_bot)" : "Neo Assistant (WhatsApp)"}</span>
                     <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
                   </div>
-                  <div className="text-[11px] text-slate-400">Arturo WMS, Clara Compras & Dante TI</div>
+                  <div className="text-[11px] text-slate-400">
+                    {simulatorChannel === "TELEGRAM" ? "Canal Oficial de Infraestructura y Sincronización" : "Arturo WMS & Clara Compras"}
+                  </div>
                 </div>
               </div>
-              <button
-                onClick={() => setIsSimulatorOpen(false)}
-                className="w-8 h-8 rounded-full hover:bg-[#374248] text-slate-400 hover:text-white flex items-center justify-center"
-              >
-                <i className="pi pi-times"></i>
-              </button>
+
+              <div className="flex items-center gap-2">
+                {/* Switcher */}
+                <div className="flex bg-black/20 p-0.5 rounded-lg text-[10px] font-bold">
+                  <button
+                    onClick={() => setSimulatorChannel("TELEGRAM")}
+                    className={`px-2.5 py-1 rounded-md transition-all ${
+                      simulatorChannel === "TELEGRAM" ? "bg-sky-500 text-white" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    Telegram
+                  </button>
+                  <button
+                    onClick={() => setSimulatorChannel("WHATSAPP")}
+                    className={`px-2.5 py-1 rounded-md transition-all ${
+                      simulatorChannel === "WHATSAPP" ? "bg-emerald-600 text-white" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    WhatsApp
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setIsSimulatorOpen(false)}
+                  className="w-8 h-8 rounded-full hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center"
+                >
+                  <i className="pi pi-times"></i>
+                </button>
+              </div>
             </div>
 
+            {/* Quick Chips for Dante TI Telegram */}
+            {simulatorChannel === "TELEGRAM" && (
+              <div className="bg-[#1e2a38] px-3 py-2 border-b border-[#242f3d] flex items-center gap-1.5 overflow-x-auto text-[11px] custom-scrollbar">
+                <span className="text-slate-400 font-bold text-[10px] uppercase mr-1">Comandos:</span>
+                {[
+                  { label: "/estado", text: "/estado" },
+                  { label: "/cuadratura", text: "/cuadratura" },
+                  { label: "/correlatividad", text: "/correlatividad" },
+                  { label: "/remediar", text: "/remediar" },
+                  { label: "¿Cómo van los latidos?", text: "¿Cómo van los latidos de las tiendas?" }
+                ].map((chip, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setSimMessage(chip.text)}
+                    className="whitespace-nowrap px-2 py-0.5 bg-[#2b394a] hover:bg-[#344558] text-sky-300 rounded-md font-mono text-[10px] transition-all"
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Chat Body */}
-            <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-[#0b141a] custom-scrollbar text-xs">
+            <div className={`flex-1 p-4 overflow-y-auto space-y-3 custom-scrollbar text-xs ${
+              simulatorChannel === "TELEGRAM" ? "bg-[#0e1621]" : "bg-[#0b141a]"
+            }`}>
               {simChat.map((msg, i) => {
                 if (msg.sender === "system") {
                   return (
                     <div key={i} className="text-center my-2">
-                      <span className="bg-[#182229] text-[#8696a0] px-3 py-1 rounded-lg text-[10px]">
+                      <span className={`px-3 py-1 rounded-lg text-[10px] ${
+                        simulatorChannel === "TELEGRAM" ? "bg-[#182533] text-[#708499]" : "bg-[#182229] text-[#8696a0]"
+                      }`}>
                         {msg.text}
                       </span>
                     </div>
@@ -644,7 +914,11 @@ export default function DigitalWorkersPage() {
                 if (msg.sender === "user") {
                   return (
                     <div key={i} className="flex justify-end">
-                      <div className="bg-[#005c4b] text-[#e9edef] rounded-2xl rounded-tr-none px-3.5 py-2 max-w-[85%] shadow-sm whitespace-pre-line leading-relaxed">
+                      <div className={`rounded-2xl rounded-tr-none px-3.5 py-2 max-w-[85%] shadow-sm whitespace-pre-line leading-relaxed ${
+                        simulatorChannel === "TELEGRAM"
+                          ? "bg-[#2b5278] text-[#ffffff]"
+                          : "bg-[#005c4b] text-[#e9edef]"
+                      }`}>
                         {msg.text}
                       </div>
                     </div>
@@ -653,9 +927,15 @@ export default function DigitalWorkersPage() {
 
                 return (
                   <div key={i} className="flex justify-start">
-                    <div className="bg-[#202c33] text-[#d1d7db] rounded-2xl rounded-tl-none px-3.5 py-2 max-w-[85%] shadow-sm whitespace-pre-line leading-relaxed border border-[#2a3942]/60">
+                    <div className={`rounded-2xl rounded-tl-none px-3.5 py-2 max-w-[85%] shadow-sm whitespace-pre-line leading-relaxed border ${
+                      simulatorChannel === "TELEGRAM"
+                        ? "bg-[#182533] text-[#e3e8ed] border-[#242f3d]"
+                        : "bg-[#202c33] text-[#d1d7db] border-[#2a3942]/60"
+                    }`}>
                       {msg.worker && (
-                        <div className="text-[10px] text-emerald-400 font-bold mb-1">
+                        <div className={`text-[10px] font-bold mb-1 ${
+                          simulatorChannel === "TELEGRAM" ? "text-sky-400" : "text-emerald-400"
+                        }`}>
                           {msg.worker}
                         </div>
                       )}
@@ -667,8 +947,10 @@ export default function DigitalWorkersPage() {
 
               {simSending && (
                 <div className="flex justify-start">
-                  <div className="bg-[#202c33] text-slate-400 rounded-2xl rounded-tl-none px-3.5 py-2 text-[11px] flex items-center gap-2">
-                    <i className="pi pi-spin pi-spinner text-emerald-400"></i>
+                  <div className={`rounded-2xl rounded-tl-none px-3.5 py-2 text-[11px] flex items-center gap-2 ${
+                    simulatorChannel === "TELEGRAM" ? "bg-[#182533] text-sky-400" : "bg-[#202c33] text-emerald-400"
+                  }`}>
+                    <i className="pi pi-spin pi-spinner"></i>
                     <span>Consultando bases de datos y procesando herramientas...</span>
                   </div>
                 </div>
@@ -676,18 +958,37 @@ export default function DigitalWorkersPage() {
             </div>
 
             {/* Input Bar */}
-            <form onSubmit={handleSendSimulatorMessage} className="p-3 bg-[#202c33] border-t border-[#2a3942] flex items-center gap-2">
+            <form
+              onSubmit={handleSendSimulatorMessage}
+              className={`p-3 border-t flex items-center gap-2 ${
+                simulatorChannel === "TELEGRAM"
+                  ? "bg-[#17212b] border-[#242f3d]"
+                  : "bg-[#202c33] border-[#2a3942]"
+              }`}
+            >
               <input
                 type="text"
                 value={simMessage}
                 onChange={(e) => setSimMessage(e.target.value)}
-                placeholder="Escribe tu mensaje a Arturo, Clara o Dante..."
-                className="flex-1 bg-[#2a3942] border-none text-white text-xs px-4 py-2.5 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 placeholder-slate-400"
+                placeholder={
+                  simulatorChannel === "TELEGRAM"
+                    ? "Escribe /estado, /cuadratura o una consulta a Dante..."
+                    : "Escribe tu mensaje a Arturo o Clara..."
+                }
+                className={`flex-1 border-none text-white text-xs px-4 py-2.5 rounded-xl focus:outline-none placeholder-slate-400 ${
+                  simulatorChannel === "TELEGRAM"
+                    ? "bg-[#242f3d] focus:ring-1 focus:ring-sky-500"
+                    : "bg-[#2a3942] focus:ring-1 focus:ring-emerald-500"
+                }`}
               />
               <button
                 type="submit"
                 disabled={simSending || !simMessage.trim()}
-                className="w-10 h-10 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center transition-all disabled:opacity-40"
+                className={`w-10 h-10 rounded-xl text-white flex items-center justify-center transition-all disabled:opacity-40 ${
+                  simulatorChannel === "TELEGRAM"
+                    ? "bg-sky-500 hover:bg-sky-600"
+                    : "bg-emerald-600 hover:bg-emerald-500"
+                }`}
               >
                 <i className="pi pi-send text-sm"></i>
               </button>

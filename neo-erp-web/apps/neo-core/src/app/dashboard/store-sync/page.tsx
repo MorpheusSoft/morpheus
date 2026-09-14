@@ -8,7 +8,9 @@ import {
   createStoreAgentCommand,
   FacilityAgentStatus,
   StoreAgentConfig,
-  StoreAgentCommand
+  StoreAgentCommand,
+  StoreDepositMapping,
+  WarehouseOption
 } from "@/app/actions/store-agent";
 
 export default function StoreSyncDashboardPage() {
@@ -17,6 +19,9 @@ export default function StoreSyncDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
+
+  // Tab state: 'control' | 'deposits'
+  const [activeTab, setActiveTab] = useState<'control' | 'deposits'>('control');
 
   // Configuration edit state
   const [configForm, setConfigForm] = useState<Partial<StoreAgentConfig>>({});
@@ -27,6 +32,25 @@ export default function StoreSyncDashboardPage() {
   const [executingCmd, setExecutingCmd] = useState<string | null>(null);
   const [commands, setCommands] = useState<StoreAgentCommand[]>([]);
   const [loadingCommands, setLoadingCommands] = useState(false);
+
+  // Deposit mapping state
+  const [depositMappings, setDepositMappings] = useState<StoreDepositMapping[]>([]);
+  const [availableWarehouses, setAvailableWarehouses] = useState<WarehouseOption[]>([]);
+  const [loadingDeposits, setLoadingDeposits] = useState(false);
+  const [savingDepositId, setSavingDepositId] = useState<number | null>(null);
+  const [depositSuccessMsg, setDepositSuccessMsg] = useState<string | null>(null);
+  const [depositErrorMsg, setDepositErrorMsg] = useState<string | null>(null);
+
+  // New deposit modal state
+  const [showCreateDepositModal, setShowCreateDepositModal] = useState(false);
+  const [creatingDeposit, setCreatingDeposit] = useState(false);
+  const [newDepositForm, setNewDepositForm] = useState({
+    external_deposit_code: '',
+    external_deposit_name: '',
+    warehouse_id: 0,
+    location_id: 0,
+    affects_inventory: true
+  });
 
   // Modal states
   const [showHistoricalModal, setShowHistoricalModal] = useState(false);
@@ -46,10 +70,22 @@ export default function StoreSyncDashboardPage() {
     else setRefreshing(true);
 
     try {
-      const data = await getStoreFacilities();
-      setFacilities(data);
+      let data: FacilityAgentStatus[] = [];
+      try {
+        const res = await fetch("/api/store-agent/facilities", { cache: "no-store" });
+        if (res.ok) {
+          data = await res.json();
+        }
+      } catch (httpErr) {
+        console.warn("HTTP route fetch failed, falling back to Server Action:", httpErr);
+      }
 
-      if (data.length > 0) {
+      if (!data || data.length === 0) {
+        data = await getStoreFacilities();
+      }
+
+      if (Array.isArray(data) && data.length > 0) {
+        setFacilities(data);
         setSelectedFacilityId(prev => {
           if (prev && data.some(f => f.facility_id === prev)) return prev;
           return data[0].facility_id;
@@ -66,14 +102,159 @@ export default function StoreSyncDashboardPage() {
   const fetchCommandsHistory = useCallback(async (facilityId: number) => {
     setLoadingCommands(true);
     try {
-      const cmds = await getStoreAgentCommands(facilityId, 25);
-      setCommands(cmds);
+      let cmds: StoreAgentCommand[] = [];
+      try {
+        const res = await fetch(`/api/store-agent/${facilityId}/commands?limit=25`, { cache: "no-store" });
+        if (res.ok) {
+          cmds = await res.json();
+        }
+      } catch (httpErr) {
+        console.warn("HTTP commands fetch failed, falling back to Server Action:", httpErr);
+      }
+
+      if (!cmds || cmds.length === 0) {
+        cmds = await getStoreAgentCommands(facilityId, 25);
+      }
+      setCommands(cmds || []);
     } catch (err) {
       console.error("Error loading commands:", err);
     } finally {
       setLoadingCommands(false);
     }
   }, []);
+
+  const fetchDepositMappings = useCallback(async (facilityId: number) => {
+    setLoadingDeposits(true);
+    setDepositErrorMsg(null);
+    try {
+      const res = await fetch(`/api/store-agent/${facilityId}/deposits`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        setDepositMappings(data.mappings || []);
+        setAvailableWarehouses(data.available_warehouses || []);
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Error cargando mapeos' }));
+        setDepositErrorMsg(err.error || 'Error cargando mapeos');
+      }
+    } catch (err: any) {
+      console.error('Error loading deposit mappings:', err);
+      setDepositErrorMsg(err.message || 'Error de conexión');
+    } finally {
+      setLoadingDeposits(false);
+    }
+  }, []);
+
+  const handleUpdateDepositRow = (mappingId: number, field: string, value: any) => {
+    setDepositMappings(prev => prev.map(m => {
+      if (m.id !== mappingId) return m;
+      const updated = { ...m, [field]: value };
+      if (field === 'warehouse_id') {
+        const targetWh = availableWarehouses.find(w => w.id === value);
+        if (targetWh && targetWh.locations.length > 0) {
+          updated.location_id = targetWh.locations[0].id;
+          updated.warehouse_name = targetWh.name;
+          updated.warehouse_code = targetWh.code;
+          updated.location_name = targetWh.locations[0].name;
+          updated.location_code = targetWh.locations[0].code;
+        }
+      } else if (field === 'location_id') {
+        const targetWh = availableWarehouses.find(w => w.id === m.warehouse_id);
+        const targetLoc = targetWh?.locations.find(l => l.id === value);
+        if (targetLoc) {
+          updated.location_name = targetLoc.name;
+          updated.location_code = targetLoc.code;
+        }
+      }
+      return updated;
+    }));
+  };
+
+  const handleSaveDepositRow = async (mapping: StoreDepositMapping) => {
+    if (!selectedFacilityId) return;
+    setSavingDepositId(mapping.id);
+    setDepositSuccessMsg(null);
+    setDepositErrorMsg(null);
+
+    try {
+      const res = await fetch(`/api/store-agent/${selectedFacilityId}/deposits?mappingId=${mapping.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          external_deposit_name: mapping.external_deposit_name,
+          warehouse_id: mapping.warehouse_id,
+          location_id: mapping.location_id,
+          affects_inventory: mapping.affects_inventory,
+          is_active: mapping.is_active
+        })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Error actualizando depósito' }));
+        throw new Error(err.error || 'Error al guardar el mapeo');
+      }
+
+      const updated = await res.json();
+      setDepositMappings(prev => prev.map(m => m.id === updated.id ? updated : m));
+      setDepositSuccessMsg(`Mapeo del depósito ${mapping.external_deposit_code} guardado.`);
+      setTimeout(() => setDepositSuccessMsg(null), 5000);
+    } catch (err: any) {
+      setDepositErrorMsg(err.message || 'Error al guardar');
+    } finally {
+      setSavingDepositId(null);
+    }
+  };
+
+  const handleDeleteDeposit = async (mappingId: number) => {
+    if (!selectedFacilityId) return;
+    const target = depositMappings.find(m => m.id === mappingId);
+    if (!target) return;
+    if (!confirm(`¿Estás seguro de eliminar el mapeo del depósito ${target.external_deposit_code}?`)) return;
+
+    try {
+      const res = await fetch(`/api/store-agent/${selectedFacilityId}/deposits?mappingId=${mappingId}`, {
+        method: 'DELETE'
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Error eliminando depósito' }));
+        throw new Error(err.error || 'Error al eliminar');
+      }
+      setDepositMappings(prev => prev.filter(m => m.id !== mappingId));
+      setDepositSuccessMsg(`Mapeo del depósito ${target.external_deposit_code} eliminado.`);
+      setTimeout(() => setDepositSuccessMsg(null), 5000);
+    } catch (err: any) {
+      setDepositErrorMsg(err.message || 'Error al eliminar');
+    }
+  };
+
+  const handleCreateDepositSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedFacilityId) return;
+    setCreatingDeposit(true);
+    setDepositErrorMsg(null);
+    setDepositSuccessMsg(null);
+
+    try {
+      const res = await fetch(`/api/store-agent/${selectedFacilityId}/deposits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newDepositForm)
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Error asociando depósito' }));
+        throw new Error(err.error || 'Error al asociar depósito');
+      }
+
+      await fetchDepositMappings(selectedFacilityId);
+      setShowCreateDepositModal(false);
+      setDepositSuccessMsg(`Depósito ${newDepositForm.external_deposit_code} asociado exitosamente.`);
+      setTimeout(() => setDepositSuccessMsg(null), 5000);
+    } catch (err: any) {
+      setDepositErrorMsg(err.message || 'Error al crear mapeo');
+    } finally {
+      setCreatingDeposit(false);
+    }
+  };
 
   // Initial load
   useEffect(() => {
@@ -85,8 +266,9 @@ export default function StoreSyncDashboardPage() {
     if (selectedFacility?.config) {
       setConfigForm({ ...selectedFacility.config });
       fetchCommandsHistory(selectedFacility.facility_id);
+      fetchDepositMappings(selectedFacility.facility_id);
     }
-  }, [selectedFacilityId, selectedFacility, fetchCommandsHistory]);
+  }, [selectedFacilityId, selectedFacility, fetchCommandsHistory, fetchDepositMappings]);
 
   // Auto-refresh interval (every 15 seconds)
   useEffect(() => {
@@ -149,6 +331,8 @@ export default function StoreSyncDashboardPage() {
   const handleConfirmHistorical = async () => {
     setShowHistoricalModal(false);
     await handleRunCommand('SYNC_HISTORICAL', {
+      from: historicalParams.startDate,
+      to: historicalParams.endDate,
       start_date: historicalParams.startDate,
       end_date: historicalParams.endDate,
       batch_size: Number(historicalParams.batchSize)
@@ -176,7 +360,27 @@ export default function StoreSyncDashboardPage() {
     const diffMin = Math.round(diffSec / 60);
     if (diffMin < 60) return `Hace ${diffMin} min`;
     const diffHours = Math.round(diffMin / 60);
-    return `Hace ${diffHours} h`;
+    if (diffHours < 24) return `Hace ${diffHours} h`;
+    const diffDays = Math.round(diffHours / 24);
+    return `Hace ${diffDays} d`;
+  };
+
+  const formatExactDateTime = (dateStr: string | null) => {
+    if (!dateStr) return "Sin datos registrados";
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleString("es-VE", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true
+      });
+    } catch {
+      return dateStr;
+    }
   };
 
   return (
@@ -281,14 +485,51 @@ export default function StoreSyncDashboardPage() {
       )}
 
       {selectedFacility && (
-        <div className="space-y-8">
-          {/* Top Row: Store Health Live Card & Remote Control Pad */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Live Health & Telemetry (1 Col) */}
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
+        <div className="space-y-6">
+          {/* Navigation Tabs */}
+          <div className="flex items-center gap-3 border-b border-slate-200 pb-px">
+            <button
+              onClick={() => setActiveTab('control')}
+              className={`flex items-center gap-2 px-5 py-3 text-xs font-bold border-b-2 transition-all ${
+                activeTab === 'control'
+                  ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50 rounded-t-xl'
+                  : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-t-xl'
+              }`}
+            >
+              <i className="pi pi-desktop text-sm"></i>
+              <span>Telemetría y Control Remoto</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setActiveTab('deposits');
+                if (selectedFacilityId) fetchDepositMappings(selectedFacilityId);
+              }}
+              className={`flex items-center gap-2 px-5 py-3 text-xs font-bold border-b-2 transition-all ${
+                activeTab === 'deposits'
+                  ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50 rounded-t-xl'
+                  : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-t-xl'
+              }`}
+            >
+              <i className="pi pi-box text-sm"></i>
+              <span>Mapeo de Depósitos (Stellar ➔ Neo)</span>
+              {depositMappings.filter(m => m.auto_discovered).length > 0 && (
+                <span className="ml-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-500 text-white font-extrabold animate-pulse">
+                  {depositMappings.filter(m => m.auto_discovered).length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {activeTab === 'control' && (
+            <div className="space-y-8">
+              {/* Top Row: Store Health Live Card & Remote Control Pad */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Live Health & Telemetry (1 Col) */}
+                <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
                     <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white text-xl font-bold shadow-md ${
                       selectedFacility.is_online
                         ? "bg-gradient-to-br from-emerald-500 to-teal-600 shadow-emerald-500/20"
@@ -357,7 +598,28 @@ export default function StoreSyncDashboardPage() {
                     <span className={`text-xs font-bold ${
                       selectedFacility.lag_minutes > 15 ? 'text-amber-600' : 'text-slate-700'
                     }`}>
-                      {selectedFacility.lag_minutes} min
+                      {selectedFacility.lag_minutes > 1000 ? `${Math.round(selectedFacility.lag_minutes / 60)} h` : `${selectedFacility.lag_minutes} min`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Sincronización de Datos (Marca de Agua / Última Venta Sincronizada) */}
+                <div className="mt-3.5 p-3.5 bg-gradient-to-r from-indigo-50/80 to-blue-50/80 border border-indigo-100 rounded-2xl">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <i className="pi pi-database text-xs text-indigo-600"></i>
+                      Última Venta Sincronizada
+                    </span>
+                    <span className="text-[10px] font-bold text-indigo-500">
+                      {formatRelativeTime(selectedFacility.last_synced_sale_time)}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xs font-mono font-bold text-indigo-950">
+                      {formatExactDateTime(selectedFacility.last_synced_sale_time)}
+                    </span>
+                    <span className="text-[10px] font-semibold text-indigo-600 bg-white/70 px-2 py-0.5 rounded-md border border-indigo-100">
+                      Stellar ➔ Neo ERP
                     </span>
                   </div>
                 </div>
@@ -780,7 +1042,376 @@ export default function StoreSyncDashboardPage() {
         </div>
       )}
 
-      {/* Historical Load Modal */}
+        {/* Deposit Mapping Tab View */}
+        {activeTab === 'deposits' && (
+          <div className="space-y-6">
+            <div className="bg-white border border-slate-200 rounded-3xl p-7 shadow-sm">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-6 border-b border-slate-100">
+                <div>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center font-bold">
+                      <i className="pi pi-box text-lg"></i>
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-bold text-slate-800">
+                        Mapeo de Depósitos: {selectedFacility.facility_name}
+                      </h2>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Asocia los códigos de Stellar POS (<code className="font-mono text-indigo-700">c_deposito</code>) con los almacenes y ubicaciones de Neo ERP
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => {
+                      const firstWh = availableWarehouses[0];
+                      setNewDepositForm({
+                        external_deposit_code: '',
+                        external_deposit_name: '',
+                        warehouse_id: firstWh?.id || 0,
+                        location_id: firstWh?.locations[0]?.id || 0,
+                        affects_inventory: true
+                      });
+                      setShowCreateDepositModal(true);
+                    }}
+                    className="py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-indigo-600/20 inline-flex items-center gap-2"
+                  >
+                    <i className="pi pi-plus"></i>
+                    <span>Asociar Nuevo Depósito</span>
+                  </button>
+
+                  <button
+                    onClick={() => fetchDepositMappings(selectedFacility.facility_id)}
+                    disabled={loadingDeposits}
+                    className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all"
+                    title="Refrescar depósitos"
+                  >
+                    <i className={`pi pi-sync ${loadingDeposits ? 'animate-spin' : ''}`}></i>
+                  </button>
+                </div>
+              </div>
+
+              {/* Notifications */}
+              {depositSuccessMsg && (
+                <div className="mt-4 p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <i className="pi pi-check-circle text-emerald-600"></i>
+                    <span>{depositSuccessMsg}</span>
+                  </div>
+                  <button onClick={() => setDepositSuccessMsg(null)} className="text-emerald-500 hover:text-emerald-700">
+                    <i className="pi pi-times"></i>
+                  </button>
+                </div>
+              )}
+
+              {depositErrorMsg && (
+                <div className="mt-4 p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <i className="pi pi-exclamation-triangle text-rose-600"></i>
+                    <span>{depositErrorMsg}</span>
+                  </div>
+                  <button onClick={() => setDepositErrorMsg(null)} className="text-rose-500 hover:text-rose-700">
+                    <i className="pi pi-times"></i>
+                  </button>
+                </div>
+              )}
+
+              {/* Auto-discovered warning */}
+              {depositMappings.some(m => m.auto_discovered) && (
+                <div className="mt-4 p-4 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl flex items-start gap-3 text-xs text-amber-900">
+                  <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+                    <i className="pi pi-bell text-base"></i>
+                  </div>
+                  <div>
+                    <h4 className="font-bold">Depósitos detectados automáticamente en ventas</h4>
+                    <p className="text-amber-700 mt-0.5">
+                      Se han registrado ventas en cajas con códigos de depósito no mapeados previamente. Se les asignó una ubicación provisional para no detener la facturación. Por favor verifique el almacén y la ubicación de destino y guarde los cambios.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Table */}
+              <div className="mt-6 overflow-x-auto">
+                {loadingDeposits ? (
+                  <div className="py-12 text-center text-slate-400">
+                    <i className="pi pi-spinner animate-spin text-2xl text-indigo-600 mb-2"></i>
+                    <p className="text-xs">Cargando mapeo de depósitos...</p>
+                  </div>
+                ) : depositMappings.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400">
+                    <i className="pi pi-inbox text-3xl mb-2"></i>
+                    <p className="text-xs">No hay depósitos configurados para esta sucursal.</p>
+                  </div>
+                ) : (
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                        <th className="pb-3 px-3">Código Stellar</th>
+                        <th className="pb-3 px-3">Descripción Depósito</th>
+                        <th className="pb-3 px-3">Almacén Neo ERP</th>
+                        <th className="pb-3 px-3">Ubicación de Stock</th>
+                        <th className="pb-3 px-3">Impacto en Kardex</th>
+                        <th className="pb-3 px-3">Estado</th>
+                        <th className="pb-3 px-3 text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {depositMappings.map((m) => {
+                        const isSaving = savingDepositId === m.id;
+                        const whOptions = availableWarehouses;
+                        const selectedWh = whOptions.find(w => w.id === m.warehouse_id) || whOptions[0];
+                        const locOptions = selectedWh?.locations || [];
+
+                        return (
+                          <tr key={m.id} className="hover:bg-slate-50/70 transition-colors">
+                            {/* Código Stellar */}
+                            <td className="py-3.5 px-3">
+                              <span className="font-mono text-xs font-bold bg-slate-100 text-slate-800 px-2.5 py-1 rounded-lg border border-slate-200">
+                                {m.external_deposit_code}
+                              </span>
+                            </td>
+
+                            {/* Nombre / Descripción editable */}
+                            <td className="py-3.5 px-3">
+                              <input
+                                type="text"
+                                value={m.external_deposit_name || ''}
+                                onChange={(e) => handleUpdateDepositRow(m.id, 'external_deposit_name', e.target.value)}
+                                placeholder="Ej. Almacén Principal"
+                                className="text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg w-full max-w-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-700"
+                              />
+                            </td>
+
+                            {/* Almacén Neo ERP */}
+                            <td className="py-3.5 px-3">
+                              <select
+                                value={m.warehouse_id}
+                                onChange={(e) => handleUpdateDepositRow(m.id, 'warehouse_id', Number(e.target.value))}
+                                className="text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-700"
+                              >
+                                {whOptions.map(w => (
+                                  <option key={w.id} value={w.id}>
+                                    {w.name} ({w.code})
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+
+                            {/* Ubicación de Stock */}
+                            <td className="py-3.5 px-3">
+                              <select
+                                value={m.location_id}
+                                onChange={(e) => handleUpdateDepositRow(m.id, 'location_id', Number(e.target.value))}
+                                className="text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-700"
+                              >
+                                {locOptions.map(l => (
+                                  <option key={l.id} value={l.id}>
+                                    {l.name} ({l.code})
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+
+                            {/* Impacto en Kardex */}
+                            <td className="py-3.5 px-3">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateDepositRow(m.id, 'affects_inventory', !m.affects_inventory)}
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all ${
+                                  m.affects_inventory
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                                    : "bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200"
+                                }`}
+                              >
+                                <i className={`pi ${m.affects_inventory ? 'pi-check text-[10px]' : 'pi-ban text-[10px]'}`}></i>
+                                <span>{m.affects_inventory ? "Descarga Stock" : "Solo Documental"}</span>
+                              </button>
+                            </td>
+
+                            {/* Estado */}
+                            <td className="py-3.5 px-3">
+                              {m.auto_discovered ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                                  <i className="pi pi-exclamation-triangle text-[9px]"></i>
+                                  Auto-detectado
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-slate-50 text-slate-600 border border-slate-200">
+                                  <i className="pi pi-check-circle text-emerald-600 text-[9px]"></i>
+                                  Confirmado
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Acciones */}
+                            <td className="py-3.5 px-3 text-right">
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  onClick={() => handleSaveDepositRow(m)}
+                                  disabled={isSaving}
+                                  className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-all border border-indigo-200 flex items-center gap-1"
+                                  title="Guardar cambios de esta fila"
+                                >
+                                  <i className={`pi ${isSaving ? 'pi-spinner animate-spin' : 'pi-save'} text-[11px]`}></i>
+                                  <span>{isSaving ? 'Guardando...' : 'Guardar'}</span>
+                                </button>
+
+                                <button
+                                  onClick={() => handleDeleteDeposit(m.id)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                                  title="Eliminar mapeo"
+                                >
+                                  <i className="pi pi-trash text-xs"></i>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    )}
+
+    {/* Create Deposit Mapping Modal */}
+    {showCreateDepositModal && (
+      <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-md w-full p-6 animate-in fade-in zoom-in-95">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
+                <i className="pi pi-box text-xl"></i>
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-800">Asociar Nuevo Depósito</h3>
+                <p className="text-xs text-slate-400">{selectedFacility?.facility_name}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowCreateDepositModal(false)}
+              className="w-8 h-8 rounded-full hover:bg-slate-100 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
+            >
+              <i className="pi pi-times"></i>
+            </button>
+          </div>
+
+          <form onSubmit={handleCreateDepositSubmit} className="space-y-4 text-xs">
+            <div>
+              <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Código Depósito en Stellar POS *
+              </label>
+              <input
+                type="text"
+                required
+                value={newDepositForm.external_deposit_code}
+                onChange={(e) => setNewDepositForm({ ...newDepositForm, external_deposit_code: e.target.value })}
+                placeholder="Ej: 1004, 04, PISO-01"
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl font-mono text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">Debe coincidir con la columna c_deposito de MA_TRANSACCION.</p>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Descripción / Nombre
+              </label>
+              <input
+                type="text"
+                value={newDepositForm.external_deposit_name}
+                onChange={(e) => setNewDepositForm({ ...newDepositForm, external_deposit_name: e.target.value })}
+                placeholder="Ej: Almacén Refrigerados, Piso 2"
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Almacén Destino en Neo ERP *
+              </label>
+              <select
+                required
+                value={newDepositForm.warehouse_id}
+                onChange={(e) => {
+                  const whId = Number(e.target.value);
+                  const targetWh = availableWarehouses.find(w => w.id === whId);
+                  setNewDepositForm({
+                    ...newDepositForm,
+                    warehouse_id: whId,
+                    location_id: targetWh?.locations[0]?.id || 0
+                  });
+                }}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              >
+                <option value={0} disabled>Seleccione un almacén...</option>
+                {availableWarehouses.map(w => (
+                  <option key={w.id} value={w.id}>{w.name} ({w.code})</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Ubicación Interna de Stock *
+              </label>
+              <select
+                required
+                value={newDepositForm.location_id}
+                onChange={(e) => setNewDepositForm({ ...newDepositForm, location_id: Number(e.target.value) })}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              >
+                <option value={0} disabled>Seleccione una ubicación...</option>
+                {availableWarehouses.find(w => w.id === newDepositForm.warehouse_id)?.locations.map(l => (
+                  <option key={l.id} value={l.id}>{l.name} ({l.code})</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="pt-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newDepositForm.affects_inventory}
+                  onChange={(e) => setNewDepositForm({ ...newDepositForm, affects_inventory: e.target.checked })}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                />
+                <span className="font-semibold text-slate-700">Afectar Inventario (Descargar existencia en Kardex)</span>
+              </label>
+              <p className="text-[11px] text-slate-400 ml-6 mt-0.5">
+                Si se desmarca, las ventas de este depósito se registran sin mover stock físico.
+              </p>
+            </div>
+
+            <div className="pt-4 flex items-center justify-end gap-2 border-t border-slate-100 mt-6">
+              <button
+                type="button"
+                onClick={() => setShowCreateDepositModal(false)}
+                className="px-4 py-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl font-bold transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={creatingDeposit || !newDepositForm.external_deposit_code || !newDepositForm.warehouse_id || !newDepositForm.location_id}
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl font-bold transition-all shadow-sm shadow-indigo-600/20 flex items-center gap-2 disabled:opacity-50"
+              >
+                <i className={`pi ${creatingDeposit ? 'pi-spinner animate-spin' : 'pi-check'}`}></i>
+                <span>{creatingDeposit ? 'Guardando...' : 'Asociar Depósito'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
+
+    {/* Historical Load Modal */}
       {showHistoricalModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-md w-full p-6 animate-in fade-in zoom-in-95">
