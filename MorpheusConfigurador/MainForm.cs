@@ -1866,25 +1866,38 @@ END
             string? facCode = doc["StoreFacilityCode"]?.ToString();
             SelectFacilityByIdOrCode(facId, facCode);
 
-            // Cargar sedes dinámicamente en segundo plano y luego consultar depósitos
-            _ = Task.Run(async () =>
+            // Cargar sedes dinámicamente en segundo plano al mostrarse la ventana
+            this.Shown += (s, e) =>
             {
-                var liveFacilities = await FetchFacilitiesFromCloudAsync(txtCloudUrl.Text.Trim());
-                if (liveFacilities != null && liveFacilities.Count > 0)
+                _ = Task.Run(async () =>
                 {
-                    this.Invoke(() =>
+                    try
                     {
-                        PopulateStoresComboBox(liveFacilities);
-                        SelectFacilityByIdOrCode(facId, facCode);
-                    });
-                }
+                        var liveFacilities = await FetchFacilitiesFromCloudAsync(txtCloudUrl.Text.Trim());
+                        if (liveFacilities != null && liveFacilities.Count > 0 && this.IsHandleCreated)
+                        {
+                            this.BeginInvoke(() =>
+                            {
+                                PopulateStoresComboBox(liveFacilities);
+                                SelectFacilityByIdOrCode(facId, facCode);
+                            });
+                        }
 
-                await Task.Delay(200);
-                this.Invoke(new Action(async () =>
-                {
-                    await FetchDepositsFromCloudAsync(showMessages: false);
-                }));
-            });
+                        await Task.Delay(200);
+                        if (this.IsHandleCreated)
+                        {
+                            this.BeginInvoke(new Action(async () =>
+                            {
+                                await FetchDepositsFromCloudAsync(showMessages: false);
+                            }));
+                        }
+                    }
+                    catch
+                    {
+                        // Fallback silencioso si no hay conexión al iniciar
+                    }
+                });
+            };
 
             var de = doc["DirectExtractors"];
             if (de != null)
