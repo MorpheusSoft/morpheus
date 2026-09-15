@@ -485,15 +485,16 @@ export default function WmsLocationsPage() {
 
     setCreatingLocation(true);
     try {
+      const parsedCapacity = typeof newLocCapacity === 'number' ? newLocCapacity : (parseFloat(String(newLocCapacity).replace(',', '.')) || 100.0);
       await api.post('/locations/', {
         warehouse_id: newLocWarehouseId,
         name: newLocName.trim(),
         code: newLocCode.trim().toUpperCase(),
-        capacity_volume: newLocCapacity || 100.0,
-        location_type: newLocType,
+        capacity_volume: parsedCapacity,
+        location_type: (newLocType || 'SHELF').toUpperCase(),
         usage: 'INTERNAL'
       });
-      toast.current?.show({ severity: 'success', summary: 'Ubicación Creada', detail: `Ubicación ${newLocName} registrada con capacidad de ${newLocCapacity} m³.` });
+      toast.current?.show({ severity: 'success', summary: 'Ubicación Creada', detail: `Ubicación ${newLocName} registrada con capacidad de ${parsedCapacity} m³.` });
       setNewLocDialogVisible(false);
       setNewLocName('');
       setNewLocCode('');
@@ -505,11 +506,16 @@ export default function WmsLocationsPage() {
     setCreatingLocation(false);
   };
 
-  const getLocationTypeSeverity = (type: string) => {
+  const getLocationTypeSeverity = (type: string): 'success' | 'info' | 'warning' | 'danger' | 'secondary' | 'contrast' => {
     switch (type) {
       case 'DOCK': return 'warning';
       case 'LOSS': return 'danger';
       case 'SHELF': return 'info';
+      case 'PICKING': return 'success';
+      case 'PRODUCTION': return 'contrast';
+      case 'INTERNAL': return 'info';
+      case 'ROW': return 'secondary';
+      case 'BIN': return 'info';
       default: return 'secondary';
     }
   };
@@ -607,9 +613,14 @@ export default function WmsLocationsPage() {
 
   const locationTypeOptions = [
     { label: 'Estante / Rack (SHELF)', value: 'SHELF' },
-    { label: 'Muelle Descarga (DOCK)', value: 'DOCK' },
-    { label: 'Merma / Dañados (LOSS)', value: 'LOSS' },
-    { label: 'Ubicación Interna (INTERNAL)', value: 'INTERNAL' }
+    { label: 'Zona de Picking / Nivel Piso (PICKING)', value: 'PICKING' },
+    { label: 'Pasillo / Fila (ROW)', value: 'ROW' },
+    { label: 'Bin / Gaveta (BIN)', value: 'BIN' },
+    { label: 'Muelle de Carga / Descarga (DOCK)', value: 'DOCK' },
+    { label: 'Área de Merma / Averías (LOSS)', value: 'LOSS' },
+    { label: 'Área de Producción (PRODUCTION)', value: 'PRODUCTION' },
+    { label: 'Ubicación de Tránsito (TRANSIT)', value: 'TRANSIT' },
+    { label: 'Ubicación Interna General (INTERNAL)', value: 'INTERNAL' }
   ];
 
   return (

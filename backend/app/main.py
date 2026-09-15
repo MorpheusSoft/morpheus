@@ -60,6 +60,20 @@ def init_bot_log_db():
         with engine.connect() as conn:
             conn.execute(text("CREATE SCHEMA IF NOT EXISTS pur;"))
             conn.execute(text("CREATE SCHEMA IF NOT EXISTS inv;"))
+            conn.execute(text("""
+                DO $$
+                BEGIN
+                    ALTER TABLE inv.locations DROP CONSTRAINT IF EXISTS locations_location_type_check;
+                    ALTER TABLE inv.locations ADD CONSTRAINT locations_location_type_check 
+                        CHECK (location_type IN ('SHELF', 'DOCK', 'PICKING', 'TRANSIT', 'SUPPLIER', 'CUSTOMER', 'LOSS', 'PRODUCTION', 'INTERNAL', 'ROW', 'BIN', 'TABLE', 'ZONE'));
+                    
+                    ALTER TABLE inv.locations DROP CONSTRAINT IF EXISTS locations_usage_check;
+                    ALTER TABLE inv.locations ADD CONSTRAINT locations_usage_check 
+                        CHECK (usage IN ('INTERNAL', 'EXTERNAL', 'TRANSIT', 'SCRAP'));
+                EXCEPTION WHEN OTHERS THEN
+                    NULL;
+                END $$;
+            """))
             conn.commit()
         Base.metadata.create_all(bind=engine, tables=[
             MRPBotLog.__table__,

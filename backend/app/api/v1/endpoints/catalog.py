@@ -1,6 +1,7 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app.api import deps
 from app.models.inventory import Category, Warehouse, Location
 from app.models.core import Tribute, Facility, Company, Currency
@@ -255,6 +256,9 @@ def read_locations(
         
     return query.offset(skip).limit(limit).all()
 
+VALID_LOCATION_TYPES = {'SHELF', 'DOCK', 'PICKING', 'TRANSIT', 'SUPPLIER', 'CUSTOMER', 'LOSS', 'PRODUCTION', 'INTERNAL', 'ROW', 'BIN', 'TABLE', 'ZONE'}
+VALID_USAGES = {'INTERNAL', 'EXTERNAL', 'TRANSIT', 'SCRAP'}
+
 @router.post("/locations/", response_model=schemas.Location)
 def create_location(
     *,
@@ -266,20 +270,36 @@ def create_location(
         if not wh:
             raise HTTPException(status_code=404, detail="Almacén no encontrado")
             
+    raw_type = (location_in.location_type or 'SHELF').strip().upper()
+    if raw_type not in VALID_LOCATION_TYPES:
+        raw_type = 'SHELF'
+        
+    raw_usage = (location_in.usage or 'INTERNAL').strip().upper()
+    if raw_usage not in VALID_USAGES:
+        raw_usage = 'INTERNAL'
+
     db_obj = Location(
-        name=location_in.name,
-        code=location_in.code,
+        name=location_in.name.strip(),
+        code=location_in.code.strip().upper(),
         warehouse_id=location_in.warehouse_id,
         parent_id=location_in.parent_id,
-        location_type=location_in.location_type,
-        usage=location_in.usage,
+        location_type=raw_type,
+        usage=raw_usage,
         capacity_volume=location_in.capacity_volume or 100.0,
         is_blocked=False
     )
-    db.add(db_obj)
-    db.commit()
-    db.refresh(db_obj)
-    return db_obj
+    try:
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        return db_obj
+    except IntegrityError as e:
+        db.rollback()
+        error_detail = str(e.orig) if hasattr(e, 'orig') else str(e)
+        raise HTTPException(status_code=400, detail=f"Error de integridad al registrar ubicación: {error_detail}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al registrar la ubicación: {str(e)}")
 
 @router.put("/locations/{location_id}", response_model=schemas.Location)
 def update_location(
@@ -297,13 +317,29 @@ def update_location(
         wh = db.query(Warehouse).filter(Warehouse.id == update_data["warehouse_id"]).first()
         if not wh:
             raise HTTPException(status_code=404, detail="Almacén no encontrado")
+
+    if "location_type" in update_data and update_data["location_type"]:
+        raw_type = update_data["location_type"].strip().upper()
+        update_data["location_type"] = raw_type if raw_type in VALID_LOCATION_TYPES else 'SHELF'
+
+    if "usage" in update_data and update_data["usage"]:
+        raw_usage = update_data["usage"].strip().upper()
+        update_data["usage"] = raw_usage if raw_usage in VALID_USAGES else 'INTERNAL'
             
     for field, value in update_data.items():
         setattr(location, field, value)
         
-    db.commit()
-    db.refresh(location)
-    return location
+    try:
+        db.commit()
+        db.refresh(location)
+        return location
+    except IntegrityError as e:
+        db.rollback()
+        error_detail = str(e.orig) if hasattr(e, 'orig') else str(e)
+        raise HTTPException(status_code=400, detail=f"Error de integridad al actualizar ubicación: {error_detail}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al actualizar la ubicación: {str(e)}")
 
 @router.delete("/locations/{location_id}", response_model=schemas.Location)
 def delete_location(
