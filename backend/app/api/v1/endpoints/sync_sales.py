@@ -14,7 +14,7 @@ from app.schemas.sync_sales import (
 from app.models.sales import Document, DocumentLine, Customer, DocumentType, DocumentState
 from app.models.inventory import (
     Product, ProductVariant, ProductBarcode, Category,
-    StockPicking, StockMove, Warehouse, Location, InventorySession,
+    StockPicking, StockPickingType, StockMove, Warehouse, Location, InventorySession,
     StoreDepositMapping
 )
 from app.models.core import Facility
@@ -48,6 +48,22 @@ def import_sales_batch(
     """
     if not payload.documents:
         return {"message": "No documents in batch", "processed": 0, "duplicates": 0, "autocreated": 0}
+
+    # Verificar si el envío de ventas está pausado remotamente desde la consola web
+    first_doc = payload.documents[0] if payload.documents else None
+    fac_id_to_check = getattr(payload, 'facility_id', None) or (first_doc.facility_id if first_doc else None)
+    fac_code_to_check = getattr(payload, 'facility_code', None) or (first_doc.facility_code if first_doc else None)
+    target_fac = resolve_facility(session, fac_id_to_check, fac_code_to_check)
+    if target_fac:
+        cfg = session.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == target_fac.id).first()
+        if cfg and not cfg.sales_enabled and not payload.is_historical:
+            return {
+                "message": f"Sincronización de ventas pausada remotamente desde Neo ERP Web para la sede {target_fac.name}.",
+                "processed": 0,
+                "duplicates": 0,
+                "autocreated": 0,
+                "paused": True
+            }
 
     # 1. Pre-cargar mapeo de variantes existentes por código de barra y STELLAR_CODE
     all_barcodes = session.query(ProductBarcode.barcode, ProductBarcode.product_variant_id).all()
@@ -237,10 +253,15 @@ def import_sales_batch(
             picking_name = f"POS-{fac_id}-C{reg_code}-{doc_num}"[:45]
             picking = session.query(StockPicking).filter(StockPicking.name == picking_name).first()
             if not picking:
+                pt = session.query(StockPickingType).filter(StockPickingType.code == 'DELIVERY').first()
+                if not pt:
+                    pt = StockPickingType(id=2, name="Despachos a Clientes", code="DELIVERY", sequence_prefix="OUT")
+                    session.add(pt)
+                    session.flush()
                 picking = StockPicking(
                     facility_id=fac_id,
                     name=picking_name,
-                    picking_type_id=2, # Salida por venta
+                    picking_type_id=pt.id, # Salida por venta
                     origin_document=f"C{reg_code}-{doc_num}",
                     status='DONE',
                     scheduled_date=doc_date,
@@ -310,7 +331,20 @@ def import_sales_batch(
             if not doc_is_historical and picking:
                 loc_src_id, affects_inv = resolve_deposit_destination(fac_id, line_in.deposit_code)
                 if affects_inv and loc_src_id:
-                    loc_dest_id = 2 # Clientes (VIRT_CUSTOMER)
+                    cust_loc = session.query(Location).filter(Location.code == 'CUSTOMER').first()
+                    if not cust_loc:
+                        src_loc = session.query(Location).filter(Location.id == loc_src_id).first()
+                        src_wh_id = src_loc.warehouse_id if src_loc else 1
+                        cust_loc = Location(
+                            warehouse_id=src_wh_id,
+                            name="Ubicación Clientes / Consumo",
+                            code="CUSTOMER",
+                            usage="CUSTOMER",
+                            location_type="CUSTOMER"
+                        )
+                        session.add(cust_loc)
+                        session.flush()
+                    loc_dest_id = cust_loc.id
 
                     move = StockMove(
                         picking_id=picking.id,
