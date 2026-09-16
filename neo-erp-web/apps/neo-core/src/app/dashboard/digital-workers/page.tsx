@@ -199,15 +199,40 @@ export default function DigitalWorkersPage() {
     }
   };
 
-  const openPairingModal = (worker: any, channel: "TELEGRAM" | "WHATSAPP" = "TELEGRAM") => {
+  const openPairingModal = async (worker: any, channel: "TELEGRAM" | "WHATSAPP" = "TELEGRAM") => {
     setPairingModalWorker(worker);
     setPairingChannel(channel);
-    setGeneratedPin(null);
-    setTelegramDeepLink(null);
     setCopiedPin(false);
 
-    const tgBot = worker.channel_config?.telegram?.bot_username || "dante_neo_erp_bot";
+    const tgBot = worker.channel_config?.telegram?.bot_username || "neo_dante_it_bot";
     setTelegramBotUsername(tgBot);
+
+    // Si el usuario ya tiene un PIN guardado, lo cargamos
+    if (currentUser?.pairing_pin) {
+      setGeneratedPin(currentUser.pairing_pin);
+      setTelegramDeepLink(`https://t.me/${tgBot}?start=VINCULAR_${currentUser.pairing_pin}`);
+    } else {
+      // Auto-generar PIN inmediatamente para que el usuario no tenga que hacer clics extras
+      setGeneratingPin(true);
+      try {
+        const res = await generatePairingPin(worker.id);
+        setGeneratedPin(res.pairing_pin);
+        if (res.telegram_deep_link) {
+          setTelegramDeepLink(res.telegram_deep_link);
+        }
+        if (res.telegram_bot_username) {
+          setTelegramBotUsername(res.telegram_bot_username);
+        }
+        try {
+          const userRes = await api.get('/users/me');
+          setCurrentUser(userRes.data);
+        } catch {}
+      } catch (e: any) {
+        console.warn("Error generando PIN automático:", e);
+      } finally {
+        setGeneratingPin(false);
+      }
+    }
   };
 
   const handleGeneratePin = async () => {
