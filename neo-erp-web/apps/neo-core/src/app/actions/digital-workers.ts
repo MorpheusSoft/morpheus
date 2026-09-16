@@ -3,7 +3,7 @@
 import { cookies } from "next/headers"
 import { revalidatePath } from "next/cache"
 
-const API_URL = "http://127.0.0.1:8000/api/v1"
+const API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1"
 
 async function getAuthHeaders() {
   const cookieStore = await cookies()
@@ -112,3 +112,69 @@ export async function simulateTelegram(chatId: number, text: string, agentCode: 
   if (!res.ok) throw new Error("Failed to simulate Telegram message")
   return res.json()
 }
+
+export async function getWorkerTelegramConfig(workerId: number) {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_URL}/digital-workers/${workerId}/channel-config/telegram`, {
+    headers,
+    cache: 'no-store'
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || "Error al obtener la configuración de Telegram")
+  }
+  return res.json()
+}
+
+export async function saveWorkerTelegramConfig(
+  workerId: number,
+  payload: {
+    token: string
+    bot_username?: string
+    enabled?: boolean
+    auto_register_webhook?: boolean
+    custom_webhook_url?: string
+  }
+) {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_URL}/digital-workers/${workerId}/channel-config/telegram`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload)
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || "Error al guardar el token y registrar webhook en Telegram")
+  }
+  revalidatePath("/dashboard/digital-workers")
+  return res.json()
+}
+
+export async function testWorkerTelegramToken(workerId: number, token: string) {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_URL}/digital-workers/${workerId}/channel-config/telegram/test`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ token })
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || "Error probando token con Telegram")
+  }
+  return res.json()
+}
+
+export async function deleteWorkerTelegramWebhook(workerId: number) {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_URL}/digital-workers/${workerId}/channel-config/telegram/delete-webhook`, {
+    method: "POST",
+    headers
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || "Error al desvincular webhook de Telegram")
+  }
+  revalidatePath("/dashboard/digital-workers")
+  return res.json()
+}
+

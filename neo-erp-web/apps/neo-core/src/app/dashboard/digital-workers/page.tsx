@@ -11,7 +11,11 @@ import {
   generatePairingPin,
   updateDigitalWorker,
   simulateWhatsApp,
-  simulateTelegram
+  simulateTelegram,
+  getWorkerTelegramConfig,
+  saveWorkerTelegramConfig,
+  testWorkerTelegramToken,
+  deleteWorkerTelegramWebhook
 } from "@/app/actions/digital-workers";
 
 const getWorkerMeta = (agentCode: string) => {
@@ -82,6 +86,20 @@ export default function DigitalWorkersPage() {
   const [telegramDeepLink, setTelegramDeepLink] = useState<string | null>(null);
   const [telegramBotUsername, setTelegramBotUsername] = useState<string>("dante_neo_erp_bot");
   const [copiedPin, setCopiedPin] = useState(false);
+
+  // Telegram Bot Config Modal
+  const [configModalWorker, setConfigModalWorker] = useState<any | null>(null);
+  const [configToken, setConfigToken] = useState("");
+  const [configEnabled, setConfigEnabled] = useState(true);
+  const [configAutoWebhook, setConfigAutoWebhook] = useState(true);
+  const [configCustomWebhookUrl, setConfigCustomWebhookUrl] = useState("");
+  const [showToken, setShowToken] = useState(false);
+  const [loadingConfig, setLoadingConfig] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [testingConfig, setTestingConfig] = useState(false);
+  const [liveBotInfo, setLiveBotInfo] = useState<any | null>(null);
+  const [configFeedback, setConfigFeedback] = useState<{ type: "success" | "error" | "info", message: string } | null>(null);
+
 
   // Simulator Modal (Telegram & WhatsApp)
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
@@ -216,6 +234,120 @@ export default function DigitalWorkersPage() {
       setGeneratingPin(false);
     }
   };
+
+  const openTelegramConfigModal = async (worker: any) => {
+    setConfigModalWorker(worker);
+    setConfigFeedback(null);
+    setShowToken(false);
+    setLiveBotInfo(null);
+    setLoadingConfig(true);
+
+    const defaultWebhook = `https://api.qa.morpheussoft.net/api/v1/telegram/${worker.agent_code.toLowerCase()}/webhook`;
+    setConfigCustomWebhookUrl(defaultWebhook);
+
+    try {
+      const tgStatus = await getWorkerTelegramConfig(worker.id);
+      const savedToken = worker.channel_config?.telegram?.token || "";
+      setConfigToken(savedToken);
+      setConfigEnabled(worker.channel_config?.telegram?.enabled !== false);
+      if (tgStatus.webhook_url) {
+        setConfigCustomWebhookUrl(tgStatus.webhook_url);
+      }
+      if (tgStatus.bot_id) {
+        setLiveBotInfo({
+          id: tgStatus.bot_id,
+          username: tgStatus.bot_username,
+          first_name: tgStatus.bot_first_name,
+          webhook_url: tgStatus.webhook_url,
+          webhook_registered: tgStatus.webhook_registered,
+          webhook_info: tgStatus.webhook_info
+        });
+      }
+    } catch (e: any) {
+      console.warn("Error cargando configuración existente:", e);
+      const savedToken = worker.channel_config?.telegram?.token || "";
+      setConfigToken(savedToken);
+    } finally {
+      setLoadingConfig(false);
+    }
+  };
+
+  const handleTestToken = async () => {
+    if (!configToken.trim()) {
+      setConfigFeedback({ type: "error", message: "Ingresa un Bot Token para probar." });
+      return;
+    }
+    setTestingConfig(true);
+    setConfigFeedback(null);
+    try {
+      const res = await testWorkerTelegramToken(configModalWorker.id, configToken.trim());
+      if (res.success && res.bot) {
+        setLiveBotInfo(res.bot);
+        setConfigFeedback({
+          type: "success",
+          message: `✅ Token válido: Bot identificado como "${res.bot.first_name}" (@${res.bot.username}).`
+        });
+      } else {
+        setConfigFeedback({
+          type: "error",
+          message: `❌ Error en Telegram API: ${res.error || "Token inválido"}`
+        });
+      }
+    } catch (e: any) {
+      setConfigFeedback({ type: "error", message: `❌ ${e.message || "Error probando token"}` });
+    } finally {
+      setTestingConfig(false);
+    }
+  };
+
+  const handleSaveTelegramConfig = async () => {
+    if (!configToken.trim()) {
+      setConfigFeedback({ type: "error", message: "El Bot Token es obligatorio." });
+      return;
+    }
+    setSavingConfig(true);
+    setConfigFeedback(null);
+    try {
+      const res = await saveWorkerTelegramConfig(configModalWorker.id, {
+        token: configToken.trim(),
+        enabled: configEnabled,
+        auto_register_webhook: configAutoWebhook,
+        custom_webhook_url: configCustomWebhookUrl.trim()
+      });
+      
+      setConfigFeedback({
+        type: "success",
+        message: `🎉 ¡Guardado exitosamente! Bot "${res.bot?.first_name}" (@${res.bot?.username}) enlazado${res.webhook?.registered ? " con Webhook activo en Telegram." : "."}`
+      });
+      setLiveBotInfo(res.bot);
+      await fetchData();
+    } catch (e: any) {
+      setConfigFeedback({ type: "error", message: `❌ ${e.message || "Error al guardar configuración"}` });
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  const handleDeleteWebhook = async () => {
+    if (!window.confirm("¿Seguro que deseas desvincular el webhook de Telegram? El bot dejará de recibir mensajes automáticos.")) return;
+    setSavingConfig(true);
+    try {
+      await deleteWorkerTelegramWebhook(configModalWorker.id);
+      setConfigFeedback({
+        type: "info",
+        message: "Webhook eliminado exitosamente. El bot ahora está en modo sondeo o inactivo."
+      });
+      if (liveBotInfo) {
+        setLiveBotInfo({ ...liveBotInfo, webhook_registered: false, webhook_url: null });
+      }
+      await fetchData();
+    } catch (e: any) {
+      setConfigFeedback({ type: "error", message: `❌ ${e.message || "Error eliminando webhook"}` });
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -472,35 +604,56 @@ export default function DigitalWorkersPage() {
                           <i className="pi pi-send text-xs"></i>
                         </div>
                         <div>
-                          <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                          <div className="font-bold text-slate-800 flex items-center gap-1.5 flex-wrap">
                             <span>Telegram Bot</span>
                             {isDante && (
                               <span className="bg-sky-100 text-sky-700 text-[10px] font-bold px-1.5 py-0.2 rounded-md">
                                 Oficial TI
                               </span>
                             )}
+                            {worker.channel_config?.telegram?.token ? (
+                              <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold px-1.5 py-0.2 rounded-md flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                Conectado
+                              </span>
+                            ) : (
+                              <span className="bg-slate-100 text-slate-500 text-[10px] font-medium px-1.5 py-0.2 rounded-md">
+                                Sin Token
+                              </span>
+                            )}
                           </div>
-                          <div className="text-[11px] text-slate-500">
+                          <div className="text-[11px] text-slate-500 mt-0.5">
                             {currentUser?.telegram_chat_id ? (
                               <span className="text-emerald-600 font-semibold flex items-center gap-1">
                                 <i className="pi pi-check text-[10px]"></i> Conectado {currentUser.telegram_username ? `(@${currentUser.telegram_username})` : `(ID: ${currentUser.telegram_chat_id})`}
                               </span>
                             ) : (
                               <span className="text-slate-500">
-                                @{worker.channel_config?.telegram?.bot_username || "dante_neo_erp_bot"}
+                                @{worker.channel_config?.telegram?.bot_username || (isDante ? "neo_dante_it_bot" : "bot")}
                               </span>
                             )}
                           </div>
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => openPairingModal(worker, "TELEGRAM")}
-                        className="px-3 py-1.5 bg-white hover:bg-sky-50 border border-sky-200 text-sky-700 rounded-lg text-[11px] font-bold shadow-2xs transition-all flex items-center gap-1"
-                      >
-                        <i className="pi pi-link text-[10px]"></i>
-                        <span>{currentUser?.telegram_chat_id ? "Re-Vincular" : "Vincular Telegram"}</span>
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => openTelegramConfigModal(worker)}
+                          title="Configurar Token y Webhook del Bot de Telegram"
+                          className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-bold shadow-2xs transition-all flex items-center gap-1"
+                        >
+                          <i className="pi pi-cog text-[11px] text-slate-500"></i>
+                          <span>Configurar Bot</span>
+                        </button>
+
+                        <button
+                          onClick={() => openPairingModal(worker, "TELEGRAM")}
+                          className="px-3 py-1.5 bg-white hover:bg-sky-50 border border-sky-200 text-sky-700 rounded-lg text-[11px] font-bold shadow-2xs transition-all flex items-center gap-1"
+                        >
+                          <i className="pi pi-link text-[10px]"></i>
+                          <span>{currentUser?.telegram_chat_id ? "Re-Vincular" : "Vincular"}</span>
+                        </button>
+                      </div>
                     </div>
 
                     {/* WhatsApp Channel Bar */}
@@ -993,6 +1146,223 @@ export default function DigitalWorkersPage() {
                 <i className="pi pi-send text-sm"></i>
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Telegram Channel Configuration Modal */}
+      {configModalWorker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-xl w-full border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="p-6 bg-gradient-to-r from-sky-600 via-sky-700 to-indigo-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-white/15 backdrop-blur-md flex items-center justify-center text-white border border-white/20 shadow-inner">
+                  <i className="pi pi-send text-2xl"></i>
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg leading-tight flex items-center gap-2">
+                    <span>Configurar Bot de Telegram</span>
+                  </h3>
+                  <p className="text-xs text-sky-100 mt-0.5">
+                    {configModalWorker.display_title} ({configModalWorker.agent_code})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setConfigModalWorker(null)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+              >
+                <i className="pi pi-times text-xs"></i>
+              </button>
+            </div>
+
+            {/* Content Body */}
+            <div className="p-6 space-y-5 overflow-y-auto flex-1">
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Configura el token de la API de Telegram provisto por <strong>@BotFather</strong>. El sistema validará las credenciales directamente con los servidores de Telegram y registrará automáticamente el Webhook oficial sin tener que editar ningún archivo de configuración en el servidor.
+              </p>
+
+              {/* Feedback Alert */}
+              {configFeedback && (
+                <div className={`p-3.5 rounded-xl text-xs font-medium border flex items-start gap-2 ${
+                  configFeedback.type === "success" 
+                    ? "bg-emerald-50 text-emerald-800 border-emerald-200" 
+                    : configFeedback.type === "error"
+                    ? "bg-rose-50 text-rose-800 border-rose-200"
+                    : "bg-sky-50 text-sky-800 border-sky-200"
+                }`}>
+                  <i className={`pi ${
+                    configFeedback.type === "success" ? "pi-check-circle" : configFeedback.type === "error" ? "pi-exclamation-triangle" : "pi-info-circle"
+                  } mt-0.5 text-sm`}></i>
+                  <span className="flex-1">{configFeedback.message}</span>
+                </div>
+              )}
+
+              {/* Bot API Token Input */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
+                  <span>Token HTTP API (Telegram BotFather)</span>
+                  <span className="text-[11px] font-normal text-slate-400">Requerido</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showToken ? "text" : "password"}
+                    value={configToken}
+                    onChange={(e) => setConfigToken(e.target.value)}
+                    placeholder="8940269345:AAHbK_NoIFfvzpKBIom0EAdD0TbX3vsMF_8"
+                    className="w-full text-xs font-mono px-3.5 py-2.5 pr-28 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all text-slate-800"
+                  />
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowToken(!showToken)}
+                      className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/60 transition-colors"
+                      title={showToken ? "Ocultar token" : "Mostrar token"}
+                    >
+                      <i className={`pi ${showToken ? "pi-eye-slash" : "pi-eye"} text-xs`}></i>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestToken}
+                      disabled={testingConfig || !configToken.trim()}
+                      className="px-2.5 py-1 text-[10px] font-bold bg-sky-100 text-sky-700 hover:bg-sky-200 rounded-md transition-colors disabled:opacity-40"
+                    >
+                      {testingConfig ? "Probando..." : "Probar"}
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Obtén o regenera este token hablando con <strong>@BotFather</strong> en Telegram con el comando <code className="bg-slate-100 px-1 py-0.5 rounded text-slate-600">/token</code>.
+                </p>
+              </div>
+
+              {/* Live Bot Info Card */}
+              {liveBotInfo && (
+                <div className="p-4 bg-sky-50/70 border border-sky-200/80 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      <span className="font-bold text-xs text-sky-950">Bot Identificado en Telegram</span>
+                    </div>
+                    <span className="text-[10px] bg-sky-200/70 text-sky-800 px-2 py-0.5 rounded-md font-bold">
+                      ID: {liveBotInfo.id}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span className="text-slate-500 text-[11px]">Nombre:</span>
+                      <div className="font-bold text-slate-800">{liveBotInfo.first_name || liveBotInfo.name}</div>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 text-[11px]">Username:</span>
+                      <div className="font-bold text-sky-700">
+                        <a 
+                          href={`https://t.me/${(liveBotInfo.username || "").replace("@", "")}`} 
+                          target="_blank" 
+                          rel="noreferrer"
+                          className="hover:underline flex items-center gap-1"
+                        >
+                          @{liveBotInfo.username}
+                          <i className="pi pi-external-link text-[10px]"></i>
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                  {liveBotInfo.webhook_registered && (
+                    <div className="pt-2 border-t border-sky-200/60 flex items-center justify-between text-[11px]">
+                      <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                        <i className="pi pi-check text-[10px]"></i> Webhook oficial registrado
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleDeleteWebhook}
+                        disabled={savingConfig}
+                        className="text-rose-600 hover:text-rose-800 hover:underline text-[10px] font-medium"
+                      >
+                        Desvincular Webhook
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Webhook URL configuration */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
+                  <span>URL del Webhook (Recepción de Mensajes)</span>
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">HTTPS</span>
+                </label>
+                <input
+                  type="text"
+                  value={configCustomWebhookUrl}
+                  onChange={(e) => setConfigCustomWebhookUrl(e.target.value)}
+                  placeholder="https://api.qa.morpheussoft.net/api/v1/telegram/dante_it/webhook"
+                  className="w-full text-xs font-mono px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all text-slate-800"
+                />
+                <p className="text-[11px] text-slate-400">
+                  Esta es la dirección pública donde Telegram envía los eventos entrantes hacia Neo ERP.
+                </p>
+              </div>
+
+              {/* Options */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <label className="flex items-center gap-3 cursor-pointer p-2 hover:bg-slate-50 rounded-xl transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={configAutoWebhook}
+                    onChange={(e) => setConfigAutoWebhook(e.target.checked)}
+                    className="w-4 h-4 rounded text-sky-600 border-slate-300 focus:ring-sky-500"
+                  />
+                  <div>
+                    <div className="text-xs font-bold text-slate-700">Registrar Webhook automáticamente en Telegram</div>
+                    <div className="text-[11px] text-slate-400">Llama a Telegram setWebhook al guardar para activar la mensajería en vivo de inmediato.</div>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-3 cursor-pointer p-2 hover:bg-slate-50 rounded-xl transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={configEnabled}
+                    onChange={(e) => setConfigEnabled(e.target.checked)}
+                    className="w-4 h-4 rounded text-sky-600 border-slate-300 focus:ring-sky-500"
+                  />
+                  <div>
+                    <div className="text-xs font-bold text-slate-700">Canal de Telegram Habilitado</div>
+                    <div className="text-[11px] text-slate-400">Permite procesar comandos y enviar alertas proactivas a supervisores vinculados.</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Footer Actions */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setConfigModalWorker(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-800 hover:bg-slate-200/60 rounded-xl transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveTelegramConfig}
+                disabled={savingConfig || !configToken.trim()}
+                className="px-5 py-2 text-xs font-bold text-white bg-sky-600 hover:bg-sky-500 rounded-xl shadow-md shadow-sky-600/20 transition-all flex items-center gap-2 disabled:opacity-40"
+              >
+                {savingConfig ? (
+                  <>
+                    <i className="pi pi-spin pi-spinner text-xs"></i>
+                    <span>Guardando y Enlazando...</span>
+                  </>
+                ) : (
+                  <>
+                    <i className="pi pi-check text-xs"></i>
+                    <span>Guardar y Registrar Webhook</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

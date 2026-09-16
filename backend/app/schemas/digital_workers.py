@@ -108,3 +108,25 @@ class WorkerRunResponse(BaseModel):
     status: str
     agent_code: str
     summary: Dict[str, Any]
+
+class TelegramChannelConfigRequest(BaseModel):
+    token: str
+    bot_username: Optional[str] = None
+    enabled: Optional[bool] = True
+    auto_register_webhook: Optional[bool] = True
+    custom_webhook_url: Optional[str] = None
+
+class TelegramChannelTestRequest(BaseModel):
+    token: str
+
+class TelegramChannelStatusResponse(BaseModel):
+    is_configured: bool
+    enabled: bool = False
+    bot_id: Optional[int] = None
+    bot_username: Optional[str] = None
+    bot_first_name: Optional[str] = None
+    webhook_url: Optional[str] = None
+    webhook_registered: bool = False
+    webhook_info: Optional[Dict[str, Any]] = None
+    updated_at: Optional[str] = None
+

@@ -15,50 +15,70 @@ def get_bot_token(agent_code: str = "DANTE_IT", db: Optional[Session] = None) ->
     """
     Obtiene el Token HTTP API de Telegram para el agente solicitado.
     Busca por prioridad:
-    1. channel_config en la base de datos para ese agente.
+    1. channel_config en la base de datos para ese agente (usando db o creando sesión efímera).
     2. Variable de configuración en settings (ej. TELEGRAM_DANTE_BOT_TOKEN).
     3. Variable de entorno del sistema.
     """
-    if db:
-        try:
+    clean_code = (agent_code or "DANTE_IT").upper()
+    try:
+        if db:
             from app.models.digital_workers import DigitalWorker
-            worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == agent_code).first()
+            worker = db.query(DigitalWorker).filter(
+                (DigitalWorker.agent_code == clean_code) |
+                (DigitalWorker.agent_code == f"{clean_code}_IT") |
+                (DigitalWorker.agent_code == "DANTE_IT" if "DANTE" in clean_code else False)
+            ).first()
             if worker and worker.channel_config and isinstance(worker.channel_config, dict):
                 tg = worker.channel_config.get("telegram", {})
                 if isinstance(tg, dict) and tg.get("token"):
-                    return tg.get("token")
-        except Exception as e:
-            logger.warning(f"Error consultando token de Telegram en BD para {agent_code}: {e}")
+                    return tg.get("token").strip()
+        else:
+            from app.api.deps import SessionLocal
+            with SessionLocal() as session:
+                return get_bot_token(clean_code, db=session)
+    except Exception as e:
+        logger.warning(f"Error consultando token de Telegram en BD para {agent_code}: {e}")
 
     # Fallback a settings / variables de entorno
-    if agent_code == "DANTE_IT":
+    if "DANTE" in clean_code:
         token = settings.TELEGRAM_DANTE_BOT_TOKEN or os.getenv("TELEGRAM_DANTE_BOT_TOKEN")
         if token:
-            return token
+            return token.strip()
 
     # Fallback genérico
-    return os.getenv(f"TELEGRAM_{agent_code}_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
+    env_token = os.getenv(f"TELEGRAM_{clean_code}_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
+    return env_token.strip() if env_token else None
 
 
 def get_bot_username(agent_code: str = "DANTE_IT", db: Optional[Session] = None) -> str:
     """
-    Retorna el username del bot en Telegram (ej: dante_neo_erp_bot).
+    Retorna el username del bot en Telegram (ej: neo_dante_it_bot).
     """
-    if db:
-        try:
+    clean_code = (agent_code or "DANTE_IT").upper()
+    try:
+        if db:
             from app.models.digital_workers import DigitalWorker
-            worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == agent_code).first()
+            worker = db.query(DigitalWorker).filter(
+                (DigitalWorker.agent_code == clean_code) |
+                (DigitalWorker.agent_code == f"{clean_code}_IT") |
+                (DigitalWorker.agent_code == "DANTE_IT" if "DANTE" in clean_code else False)
+            ).first()
             if worker and worker.channel_config and isinstance(worker.channel_config, dict):
                 tg = worker.channel_config.get("telegram", {})
                 if isinstance(tg, dict) and tg.get("bot_username"):
-                    return tg.get("bot_username")
-        except Exception:
-            pass
+                    return tg.get("bot_username").strip().replace("@", "")
+        else:
+            from app.api.deps import SessionLocal
+            with SessionLocal() as session:
+                return get_bot_username(clean_code, db=session)
+    except Exception:
+        pass
 
-    if agent_code == "DANTE_IT":
-        return settings.TELEGRAM_DANTE_BOT_USERNAME or os.getenv("TELEGRAM_DANTE_BOT_USERNAME") or "dante_neo_erp_bot"
+    if "DANTE" in clean_code:
+        fallback = settings.TELEGRAM_DANTE_BOT_USERNAME or os.getenv("TELEGRAM_DANTE_BOT_USERNAME") or "neo_dante_it_bot"
+        return fallback.strip().replace("@", "")
 
-    return f"{agent_code.lower()}_neo_erp_bot"
+    return f"{clean_code.lower()}_neo_erp_bot"
 
 
 async def send_telegram_message(
@@ -203,12 +223,13 @@ async def set_telegram_webhook(
     webhook_url: str,
     secret_token: Optional[str] = None,
     bot_token: Optional[str] = None,
-    agent_code: str = "DANTE_IT"
+    agent_code: str = "DANTE_IT",
+    db: Optional[Session] = None
 ) -> Dict[str, Any]:
     """
     Registra la URL del webhook en los servidores de Telegram.
     """
-    token = bot_token or get_bot_token(agent_code)
+    token = bot_token or get_bot_token(agent_code, db=db)
     if not token:
         return {"ok": False, "description": "Token no encontrado"}
 
@@ -226,14 +247,35 @@ async def set_telegram_webhook(
         return resp.json()
 
 
+async def delete_telegram_webhook(
+    drop_pending_updates: bool = False,
+    bot_token: Optional[str] = None,
+    agent_code: str = "DANTE_IT",
+    db: Optional[Session] = None
+) -> Dict[str, Any]:
+    """
+    Elimina el webhook configurado en Telegram para volver a modo sondeo (polling) o pausar el bot.
+    """
+    token = bot_token or get_bot_token(agent_code, db=db)
+    if not token:
+        return {"ok": False, "description": "Token no encontrado"}
+
+    url = f"{TELEGRAM_API_BASE}/bot{token}/deleteWebhook"
+    payload = {"drop_pending_updates": drop_pending_updates}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(url, json=payload)
+        return resp.json()
+
+
 async def get_telegram_webhook_info(
     bot_token: Optional[str] = None,
-    agent_code: str = "DANTE_IT"
+    agent_code: str = "DANTE_IT",
+    db: Optional[Session] = None
 ) -> Dict[str, Any]:
     """
     Consulta el estado del webhook actual configurado en Telegram.
     """
-    token = bot_token or get_bot_token(agent_code)
+    token = bot_token or get_bot_token(agent_code, db=db)
     if not token:
         return {"ok": False, "description": "Token no encontrado"}
 
@@ -245,12 +287,13 @@ async def get_telegram_webhook_info(
 
 async def get_bot_me(
     bot_token: Optional[str] = None,
-    agent_code: str = "DANTE_IT"
+    agent_code: str = "DANTE_IT",
+    db: Optional[Session] = None
 ) -> Dict[str, Any]:
     """
     Verifica la validez del token y devuelve la identidad del bot.
     """
-    token = bot_token or get_bot_token(agent_code)
+    token = bot_token or get_bot_token(agent_code, db=db)
     if not token:
         return {"ok": False, "description": "Token no encontrado"}
 
