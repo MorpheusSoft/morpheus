@@ -13,9 +13,17 @@ from sqlalchemy import desc
 
 from app.core.config import settings
 from app.api.deps import get_db, get_current_active_superuser
-from app.models.core import User, Facility
+from app.models.core import User, Facility, Supplier
+from app.models.purchasing import PurchaseOrder
 from app.models.digital_workers import DigitalWorker, DigitalWorkerConversation, DigitalWorkerMessage, DigitalWorkerActionLog
 from app.models.sync_telemetry import StoreSyncTelemetry
+from app.agents.whatsapp_agent import (
+    execute_stock_lookup,
+    execute_negative_stock_lookup,
+    execute_unreconciled_orders_lookup,
+    execute_returns_lookup,
+    diagnose_stockouts
+)
 from app.services.telegram_client import (
     send_telegram_message,
     set_telegram_webhook,
@@ -53,68 +61,122 @@ class SetWebhookRequest(BaseModel):
     secret_token: Optional[str] = None
 
 
-def call_dante_gemini(user_name: str, user_question: str, db: Session, worker: Optional[DigitalWorker] = None) -> str:
+def call_worker_gemini(
+    user_name: str,
+    user_question: str,
+    db: Session,
+    worker: Optional[DigitalWorker] = None,
+    agent_code: str = "DANTE_IT"
+) -> str:
     """
-    Invoca a Gemini con el rol, personalidad y contexto operativo de Dante TI.
+    Invoca a Gemini con el rol, personalidad y contexto operativo de cada Usuario Digital (Dante, Clara, Arturo).
     """
     api_key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    worker_title = worker.display_title if worker else agent_code
+    clean_code = (agent_code or "").upper()
+
     if not api_key:
         return (
-            f"🤖 *Dante TI*: Recibí tu consulta: \"{user_question}\".\n\n"
+            f"🤖 *{worker_title}*: Recibí tu consulta: \"{user_question}\".\n\n"
             f"Para consultas analíticas avanzadas, configura la clave `GEMINI_API_KEY` en el entorno.\n"
-            f"Puedes usar los comandos directos: `/estado`, `/cuadratura`, `/correlatividad` o `/remediar`."
+            f"Puedes usar los comandos directos disponibles en `/ayuda`."
         )
 
-    # Recopilar telemetría reciente de tiendas
-    telemetry_data = []
-    facilities = db.query(Facility).filter(Facility.is_active == True).all()
-    for fac in facilities:
-        latest = db.query(StoreSyncTelemetry).filter(
-            StoreSyncTelemetry.facility_id == fac.id
-        ).order_by(desc(StoreSyncTelemetry.created_at)).first()
-        
-        if latest:
-            telemetry_data.append({
-                "facility": fac.name,
-                "code": fac.code,
-                "last_heartbeat": latest.created_at.strftime("%Y-%m-%d %H:%M:%S") if latest.created_at else "N/A",
-                "sql_server": latest.sql_server_status,
-                "agent_version": latest.agent_version,
-                "sales_today_count": latest.sales_today_count,
-                "sales_today_amount": latest.sales_today_amount,
-                "last_sale_time": latest.last_synced_sale_time.strftime("%Y-%m-%d %H:%M:%S") if latest.last_synced_sale_time else "N/A"
-            })
-        else:
-            telemetry_data.append({
-                "facility": fac.name,
-                "code": fac.code,
-                "status": "SIN_CONEXION_PREVIA"
-            })
+    context_data: Dict[str, Any] = {}
 
-    system_prompt = (
-        worker.system_prompt if worker else
-        "Eres Dante TI, Guardián Autónomo de Sincronización e Infraestructura de Neo ERP. "
-        "Tu personalidad es técnica, analítica, concisa, proactiva y ejecutiva. "
-        "Supervisas la sincronización de tiendas físicas (Stellar POS hacia Neo ERP), conectividad SQL Server y cuadratura fiscal."
-    )
+    if "CLARA" in clean_code:
+        # Contexto de Compras: ODCs pendientes de conciliar, devoluciones, proveedores, quiebres
+        try:
+            unreconciled = execute_unreconciled_orders_lookup(db)
+            returns = execute_returns_lookup(db)
+            suppliers = [
+                {"id": s.id, "name": s.name, "lead_time_days": getattr(s, "lead_time_days", 7)}
+                for s in db.query(Supplier).limit(8).all()
+            ]
+            stockouts = diagnose_stockouts(db)
+            context_data = {
+                "ordenes_pendientes_conciliacion": unreconciled[:5],
+                "devoluciones_en_muelle": returns[:5],
+                "proveedores_activos": suppliers,
+                "quiebres_y_sugeridos": stockouts[:5]
+            }
+        except Exception as e:
+            logger.warning(f"Error recopilando contexto para Clara: {e}")
+
+        system_prompt = (
+            worker.system_prompt if worker else
+            "Eres Clara, Analista Estratégica de Compras y Rentabilidad de Neo ERP. "
+            "Supervisas órdenes de compra, conciliación 3-way match, reposición, rotación y rentabilidad con proveedores."
+        )
+
+    elif "ARTURO" in clean_code:
+        # Contexto de WMS: existencias negativas, devoluciones, almacenes
+        try:
+            negative = execute_negative_stock_lookup(db)
+            returns = execute_returns_lookup(db)
+            facilities = [{"id": f.id, "name": f.name, "code": f.code} for f in db.query(Facility).filter(Facility.is_active == True).all()]
+            context_data = {
+                "existencias_negativas": negative[:8],
+                "devoluciones_pendientes": returns[:5],
+                "almacenes_activos": facilities
+            }
+        except Exception as e:
+            logger.warning(f"Error recopilando contexto para Arturo: {e}")
+
+        system_prompt = (
+            worker.system_prompt if worker else
+            "Eres Arturo, Supervisor Autónomo de Almacenes de Neo ERP. "
+            "Supervisas la exactitud de inventario, stock físico en almacenes, existencias negativas y recepciones."
+        )
+
+    else:
+        # Contexto de Dante TI: telemetría de tiendas, latidos, SQL Server, ventas
+        try:
+            telemetry_data = []
+            facilities = db.query(Facility).filter(Facility.is_active == True).all()
+            for fac in facilities:
+                latest = db.query(StoreSyncTelemetry).filter(
+                    StoreSyncTelemetry.facility_id == fac.id
+                ).order_by(desc(StoreSyncTelemetry.created_at)).first()
+                if latest:
+                    telemetry_data.append({
+                        "facility": fac.name,
+                        "code": fac.code,
+                        "last_heartbeat": latest.created_at.strftime("%Y-%m-%d %H:%M:%S") if latest.created_at else "N/A",
+                        "sql_server": latest.sql_server_status,
+                        "agent_version": latest.agent_version,
+                        "sales_today_count": latest.sales_today_count,
+                        "sales_today_amount": latest.sales_today_amount,
+                        "last_sale_time": latest.last_synced_sale_time.strftime("%Y-%m-%d %H:%M:%S") if latest.last_synced_sale_time else "N/A"
+                    })
+                else:
+                    telemetry_data.append({"facility": fac.name, "code": fac.code, "status": "SIN_CONEXION_PREVIA"})
+            context_data = {"telemetria_sucursales": telemetry_data}
+        except Exception as e:
+            logger.warning(f"Error recopilando contexto para Dante TI: {e}")
+
+        system_prompt = (
+            worker.system_prompt if worker else
+            "Eres Dante TI, Guardián Autónomo de Sincronización e Infraestructura de Neo ERP. "
+            "Tu personalidad es técnica, analítica, concisa, proactiva y ejecutiva. "
+            "Supervisas la sincronización de tiendas físicas (Stellar POS hacia Neo ERP), conectividad SQL Server y cuadratura fiscal."
+        )
 
     prompt = (
         f"{system_prompt}\n\n"
         f"Estás respondiendo por Telegram al supervisor {user_name}.\n"
         f"Pregunta del usuario: \"{user_question}\"\n\n"
-        f"Contexto operativo en vivo de sucursales:\n"
-        f"{json.dumps(telemetry_data, ensure_ascii=False, indent=2)}\n\n"
+        f"Contexto operativo en vivo del sistema Neo ERP:\n"
+        f"{json.dumps(context_data, ensure_ascii=False, indent=2)}\n\n"
         f"Instrucciones:\n"
-        f"- Responde con claridad en español profesional y conciso.\n"
-        f"- Usa formato limpio de Telegram (*negrita*, viñetas •, emojis técnicos 🟢, 🔴, ⚠️, ⚡).\n"
-        f"- Basa tu respuesta en los datos provistos y sé preciso con fechas, tiendas o montos."
+        f"- Responde con claridad en español profesional, conciso y cordial.\n"
+        f"- Usa formato limpio de Telegram (*negrita*, viñetas •, emojis operativos).\n"
+        f"- Basa tu respuesta en los datos provistos y sé preciso con nombres, códigos, montos o cantidades."
     )
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}]
-        }
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -125,10 +187,10 @@ def call_dante_gemini(user_name: str, user_question: str, db: Session, worker: O
             data = json.loads(resp.read().decode("utf-8"))
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as e:
-        logger.error(f"[DANTE GEMINI ERROR] Error invocando modelo de IA: {e}")
+        logger.error(f"[{clean_code} GEMINI ERROR] Error invocando modelo de IA: {e}")
         return (
-            f"🛡️ *Dante TI*: No pude conectar con el motor cognitivo ({str(e)}).\n"
-            f"Sin embargo, puedes ejecutar diagnósticos directos usando `/estado`, `/cuadratura` o `/correlatividad`."
+            f"🤖 *{worker_title}*: No pude conectar con el motor cognitivo ({str(e)}).\n"
+            f"Sin embargo, puedes consultar información directa usando `/ayuda`."
         )
 
 
@@ -168,23 +230,59 @@ async def process_telegram_message(
 
     # 2. Comando /start (bienvenida y menú de ayuda)
     if raw_text == "/start" or raw_text.startswith("/start@") or raw_text.lower() in ["/help", "/ayuda", "ayuda", "help"]:
-        worker_title = worker.display_title if worker else "Dante TI"
-        return (
-            f"🛡️ *¡Hola {first_name}! Soy {worker_title}*\n"
-            f"*Guardián Autónomo de Sincronización e Infraestructura* de *Neo ERP*.\n\n"
-            f"Superviso en tiempo real la conectividad de tiendas físicas, latidos de agentes de sincronización y cuadratura fiscal.\n\n"
-            f"📌 *Comandos Disponibles:*\n"
-            f"• `/estado` o `/tiendas`: Diagnóstico de latidos y conectividad de sucursales\n"
-            f"• `/cuadratura`: Conciliación matemática de ventas Stellar vs Neo ERP\n"
-            f"• `/correlatividad`: Detección de saltos en numeración fiscal de cajas\n"
-            f"• `/remediar`: Auto-remediar desfases de sincronización de ventas\n"
-            f"• `/vincular <PIN>`: Vincular este chat con tu usuario de Neo ERP\n\n"
-            f"💬 *Consultas en lenguaje natural:*\n"
-            f"Puedes hacerme cualquier pregunta técnica directa, por ejemplo:\n"
-            f"_• \"¿Cómo están las cajas en Tucacas?\"_\n"
-            f"_• \"¿A qué hora fue la última venta de Maracay?\"_\n"
-            f"_• \"¿Hay alertas críticas en el sistema?\"_"
-        )
+        worker_title = worker.display_title if worker else clean_agent_code
+
+        if "CLARA" in clean_agent_code:
+            return (
+                f"💜 *¡Hola {first_name}! Soy {worker_title}*\n"
+                f"*Analista Estratégica de Compras y Rentabilidad* de *Neo ERP*.\n\n"
+                f"Superviso órdenes de compra, conciliación 3-way match, abastecimiento y acuerdos comerciales.\n\n"
+                f"📌 *Comandos Disponibles:*\n"
+                f"• `/odc` o `/ordenes`: Órdenes de compra abiertas y su estado\n"
+                f"• `/conciliacion`: ODCs pendientes de conciliar vs recepción física y factura\n"
+                f"• `/sugeridos`: Diagnóstico de quiebres de stock y sugeridos de compra\n"
+                f"• `/proveedores`: Proveedores registrados y condiciones de despacho\n"
+                f"• `/devoluciones`: Devoluciones pendientes en muelle\n"
+                f"• `/vincular <PIN>`: Vincular este chat con tu usuario de Neo ERP\n\n"
+                f"💬 *Consultas en lenguaje natural:*\n"
+                f"Puedes preguntarme por ejemplo:\n"
+                f"_• \"¿Qué órdenes de compra están pendientes de conciliar?\"_\n"
+                f"_• \"¿Cuáles productos tienen riesgo de quiebre?\"_\n"
+                f"_• \"¿Cómo está el abastecimiento de Harina PAN?\"_"
+            )
+        elif "ARTURO" in clean_agent_code:
+            return (
+                f"📦 *¡Hola {first_name}! Soy {worker_title}*\n"
+                f"*Supervisor Autónomo de Almacenes* de *Neo ERP*.\n\n"
+                f"Superviso el inventario físico, recepciones en muelle, existencias negativas y transferencias.\n\n"
+                f"📌 *Comandos Disponibles:*\n"
+                f"• `/negativos`: Detección de inventario negativo por almacén\n"
+                f"• `/devoluciones`: Devoluciones a proveedores pendientes de despacho\n"
+                f"• `/stock <producto>`: Consulta de existencia en tiempo real\n"
+                f"• `/vincular <PIN>`: Vincular este chat con tu usuario de Neo ERP\n\n"
+                f"💬 *Consultas en lenguaje natural:*\n"
+                f"Puedes preguntarme por ejemplo:\n"
+                f"_• \"¿Hay existencia negativa en Patio Trigal?\"_\n"
+                f"_• \"Consultar stock de Azúcar Montalbán\"_\n"
+                f"_• \"¿Qué devoluciones tenemos en muelle?\"_"
+            )
+        else:
+            return (
+                f"🛡️ *¡Hola {first_name}! Soy {worker_title}*\n"
+                f"*Guardián Autónomo de Sincronización e Infraestructura* de *Neo ERP*.\n\n"
+                f"Superviso en tiempo real la conectividad de tiendas físicas, latidos de agentes de sincronización y cuadratura fiscal.\n\n"
+                f"📌 *Comandos Disponibles:*\n"
+                f"• `/estado` o `/tiendas`: Diagnóstico de latidos y conectividad de sucursales\n"
+                f"• `/cuadratura`: Conciliación matemática de ventas Stellar vs Neo ERP\n"
+                f"• `/correlatividad`: Detección de saltos en numeración fiscal de cajas\n"
+                f"• `/remediar`: Auto-remediar desfases de sincronización de ventas\n"
+                f"• `/vincular <PIN>`: Vincular este chat con tu usuario de Neo ERP\n\n"
+                f"💬 *Consultas en lenguaje natural:*\n"
+                f"Puedes hacerme cualquier pregunta técnica directa, por ejemplo:\n"
+                f"_• \"¿Cómo están las cajas en Tucacas?\"_\n"
+                f"_• \"¿A qué hora fue la última venta de Maracay?\"_\n"
+                f"_• \"¿Hay alertas críticas en el sistema?\"_"
+            )
 
     # 3. Verificación de Autenticación
     # En chats privados se requiere vinculación previa.
@@ -251,6 +349,92 @@ async def process_telegram_message(
     if "@" in lower_text:
         lower_text = re.sub(r"@[a-zA-Z0-9_]+", "", lower_text).strip()
 
+    # === COMANDOS DE CLARA (COMPRAS) ===
+    if "CLARA" in clean_agent_code:
+        if lower_text in ["/odc", "/ordenes", "odc", "ordenes", "ordenes de compra"]:
+            orders = db.query(PurchaseOrder).order_by(PurchaseOrder.id.desc()).limit(8).all()
+            if not orders:
+                return "📋 *Órdenes de Compra*: No se encontraron órdenes registradas en el sistema."
+            lines = ["📋 *Órdenes de Compra Recientes:*\n"]
+            for o in orders:
+                s_name = "Proveedor"
+                if o.supplier:
+                    s_name = o.supplier.name
+                lines.append(f"• *{o.reference or f'ODC-{o.id}'}* | {s_name} | Total: ${float(o.total_amount or 0):,.2f} | Estado: `{o.status}`")
+            return "\n".join(lines)
+
+        if lower_text in ["/conciliacion", "/conciliar", "conciliacion", "conciliar"]:
+            unrec = execute_unreconciled_orders_lookup(db)
+            if not unrec:
+                return "🎯 *Conciliación 3-Way*: Todas las órdenes de compra recibidas están 100% conciliadas con sus facturas."
+            lines = ["⚠️ *Órdenes Pendientes de Conciliar (3-Way Match):*\n"]
+            for u in unrec:
+                lines.append(f"• *{u['order_number']}* ({u['supplier']}) | Monto: ${u['total_usd']:,.2f} | Estado: `{u['status']}`")
+            return "\n".join(lines)
+
+        if lower_text in ["/sugeridos", "/quiebres", "sugeridos", "quiebres"]:
+            so = diagnose_stockouts(db)
+            if not so:
+                return "✅ *Abastecimiento*: No se detectaron productos en quiebre crítico de stock en este momento."
+            lines = ["🚨 *Quiebres y Sugeridos de Compra:* \n"]
+            for item in so[:8]:
+                lines.append(f"• *{item['product_name']}* (`{item['sku']}`): Stock={item['stock_qty']} | Sugerido: *+{item['suggested_reorder_qty']}* unid.")
+            return "\n".join(lines)
+
+        if lower_text in ["/proveedores", "proveedores"]:
+            sups = db.query(Supplier).filter(Supplier.is_active == True).limit(10).all()
+            if not sups:
+                return "🏢 *Proveedores*: No hay proveedores activos registrados."
+            lines = ["🏢 *Catálogo de Proveedores Principales:*\n"]
+            for s in sups:
+                lead = getattr(s, "lead_time_days", 7) or 7
+                lines.append(f"• *{s.name}* (`{s.code or s.tax_id or 'N/A'}`) | Lead time: {lead} días")
+            return "\n".join(lines)
+
+        if lower_text in ["/devoluciones", "devoluciones"]:
+            rets = execute_returns_lookup(db)
+            if not rets:
+                return "📦 *Devoluciones*: No hay devoluciones a proveedores pendientes en muelle."
+            lines = ["📦 *Devoluciones Pendientes a Proveedores:*\n"]
+            for r in rets:
+                lines.append(f"• *{r['return_number']}* | Estado: `{r['status']}` | Motivo: {r['reason']}")
+            return "\n".join(lines)
+
+    # === COMANDOS DE ARTURO (ALMACÉN) ===
+    if "ARTURO" in clean_agent_code:
+        if lower_text in ["/negativos", "negativos", "existencia negativa"]:
+            negs = execute_negative_stock_lookup(db)
+            if not negs:
+                return "✅ *Inventario*: No hay existencias negativas en ninguno de los almacenes."
+            lines = ["⚠️ *Existencias Negativas Detectadas en Almacén:*\n"]
+            for n in negs[:10]:
+                lines.append(f"• *{n['facility']}*: {n['product']} (`{n['sku']}`) -> *{n['quantity_negative']}*")
+            return "\n".join(lines)
+
+        if lower_text in ["/devoluciones", "devoluciones"]:
+            rets = execute_returns_lookup(db)
+            if not rets:
+                return "📦 *Devoluciones*: No hay devoluciones pendientes en muelle."
+            lines = ["📦 *Devoluciones en Muelle:*\n"]
+            for r in rets:
+                lines.append(f"• *{r['return_number']}* | Estado: `{r['status']}` | Motivo: {r['reason']}")
+            return "\n".join(lines)
+
+        if lower_text.startswith("/stock") or lower_text.startswith("stock"):
+            query_item = re.sub(r"^/stock\s*|^stock\s*", "", raw_text, flags=re.IGNORECASE).strip()
+            if not query_item:
+                return "🔍 Por favor indica qué producto buscar. Ejemplo: `/stock Harina PAN`"
+            results = execute_stock_lookup(query_item, db)
+            if not results:
+                return f"🔍 No se encontraron productos que coincidan con '{query_item}'."
+            lines = [f"📦 *Existencias para '{query_item}':*\n"]
+            for item in results:
+                lines.append(f"• *{item['product_name']}* (`{item['sku']}`):")
+                for s in item["stock_by_facility"]:
+                    lines.append(f"   - {s['facility']}: *{s['on_hand']}* unid.")
+            return "\n".join(lines)
+
+    # === COMANDOS DE DANTE (TI & INFRAESTRUCTURA) ===
     # COMANDO: /estado o /tiendas
     if lower_text in ["/estado", "/tiendas", "estado", "tiendas", "status"] or (
         any(w in lower_text for w in ["latido", "latidos", "conectividad"]) and
@@ -365,11 +549,12 @@ async def process_telegram_message(
         return "\n".join(lines)
 
     # 5. Consulta en Lenguaje Natural con Inteligencia Artificial (Gemini)
-    ai_reply = call_dante_gemini(
+    ai_reply = call_worker_gemini(
         user_name=user_name,
         user_question=raw_text,
         db=db,
-        worker=worker
+        worker=worker,
+        agent_code=clean_agent_code
     )
 
     # Registrar mensaje saliente
