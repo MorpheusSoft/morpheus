@@ -146,8 +146,11 @@ def call_worker_gemini(
                         "sql_server": latest.sql_server_status,
                         "agent_version": latest.agent_version,
                         "sales_today_count": latest.sales_today_count,
-                        "sales_today_amount": latest.sales_today_amount,
-                        "last_sale_time": latest.last_synced_sale_time.strftime("%Y-%m-%d %H:%M:%S") if latest.last_synced_sale_time else "N/A"
+                        "sales_today_amount": float(latest.sales_today_amount or 0),
+                        "last_sale_time": latest.last_synced_sale_time.strftime("%Y-%m-%d %H:%M:%S") if latest.last_synced_sale_time else "N/A",
+                        "pending_queue_count": latest.pending_queue_count,
+                        "lag_minutes": latest.lag_minutes,
+                        "status": latest.status
                     })
                 else:
                     telemetry_data.append({"facility": fac.name, "code": fac.code, "status": "SIN_CONEXION_PREVIA"})
@@ -162,24 +165,25 @@ def call_worker_gemini(
             "Supervisas la sincronización de tiendas físicas (Stellar POS hacia Neo ERP), conectividad SQL Server y cuadratura fiscal."
         )
 
-    prompt = (
-        f"{system_prompt}\n\n"
-        f"Estás respondiendo por Telegram al supervisor {user_name}.\n"
-        f"Pregunta del usuario: \"{user_question}\"\n\n"
-        f"Contexto operativo en vivo del sistema Neo ERP:\n"
-        f"{json.dumps(context_data, ensure_ascii=False, indent=2)}\n\n"
-        f"Instrucciones:\n"
-        f"- Responde con claridad en español profesional, conciso y cordial.\n"
-        f"- Usa formato limpio de Telegram (*negrita*, viñetas •, emojis operativos).\n"
-        f"- Basa tu respuesta en los datos provistos y sé preciso con nombres, códigos, montos o cantidades."
-    )
-
     try:
+        context_json_str = json.dumps(context_data, ensure_ascii=False, indent=2, default=str)
+        prompt = (
+            f"{system_prompt}\n\n"
+            f"Estás respondiendo por Telegram al supervisor {user_name}.\n"
+            f"Pregunta del usuario: \"{user_question}\"\n\n"
+            f"Contexto operativo en vivo del sistema Neo ERP:\n"
+            f"{context_json_str}\n\n"
+            f"Instrucciones:\n"
+            f"- Responde con claridad en español profesional, conciso y cordial.\n"
+            f"- Usa formato limpio de Telegram (*negrita*, viñetas •, emojis operativos).\n"
+            f"- Basa tu respuesta en los datos provistos y sé preciso con nombres, códigos, montos o cantidades."
+        )
+
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
         payload = {"contents": [{"parts": [{"text": prompt}]}]}
         req = urllib.request.Request(
             url,
-            data=json.dumps(payload).encode("utf-8"),
+            data=json.dumps(payload, default=str).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST"
         )
@@ -187,10 +191,10 @@ def call_worker_gemini(
             data = json.loads(resp.read().decode("utf-8"))
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as e:
-        logger.error(f"[{clean_code} GEMINI ERROR] Error invocando modelo de IA: {e}")
+        logger.error(f"[{clean_code} GEMINI ERROR] Error invocando modelo de IA: {e}", exc_info=True)
         return (
             f"🤖 *{worker_title}*: No pude conectar con el motor cognitivo ({str(e)}).\n"
-            f"Sin embargo, puedes consultar información directa usando `/ayuda`."
+            f"Sin embargo, puedes consultar información directa usando `/ayuda` o comandos rápidos como `/estado`."
         )
 
 
@@ -678,6 +682,14 @@ async def generic_telegram_webhook(
         )
     except Exception as err:
         logger.error(f"[TELEGRAM ERROR {clean_code}] {err}", exc_info=True)
+        try:
+            await send_telegram_message(
+                chat_id=chat_id,
+                text="⚠️ Disculpa, ocurrió un inconveniente interno procesando tu consulta. Por favor intenta de nuevo en unos momentos o usa `/ayuda`.",
+                agent_code=clean_code
+            )
+        except Exception:
+            pass
 
     return {"status": "ok"}
 
