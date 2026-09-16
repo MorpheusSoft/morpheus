@@ -9,12 +9,13 @@ from datetime import datetime
 from fastapi import APIRouter, Request, Response, Depends, HTTPException, Header, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 
 from app.core.config import settings
 from app.api.deps import get_db, get_current_active_superuser
 from app.models.core import User, Facility, Supplier
 from app.models.purchasing import PurchaseOrder
+from app.models.sales import Document
 from app.models.digital_workers import DigitalWorker, DigitalWorkerConversation, DigitalWorkerMessage, DigitalWorkerActionLog
 from app.models.sync_telemetry import StoreSyncTelemetry
 from app.agents.whatsapp_agent import (
@@ -130,11 +131,42 @@ def call_worker_gemini(
         )
 
     else:
-        # Contexto de Dante TI: telemetría de tiendas, latidos, SQL Server, ventas
+        # Contexto de Dante TI: telemetría de tiendas, latidos, SQL Server, ventas e histórico de facturación
         try:
+            # 1. Auditoría histórica de facturas sincronizadas por sucursal
+            doc_stats = db.query(
+                Document.facility_id,
+                func.min(Document.created_at).label("min_date"),
+                func.max(Document.created_at).label("max_date"),
+                func.count(Document.id).label("total_docs"),
+                func.count(func.distinct(Document.register_code)).label("total_registers")
+            ).group_by(Document.facility_id).all()
+
+            fac_historical_map = {}
+            for s in doc_stats:
+                first_doc = db.query(
+                    Document.document_number,
+                    Document.total_amount,
+                    Document.register_code
+                ).filter(
+                    Document.facility_id == s.facility_id,
+                    Document.created_at == s.min_date
+                ).first()
+
+                fac_historical_map[s.facility_id] = {
+                    "total_documentos_historicos": s.total_docs,
+                    "primera_factura_fecha": s.min_date.strftime("%Y-%m-%d %H:%M:%S") if s.min_date else "N/A",
+                    "primera_factura_numero": first_doc.document_number if first_doc else "N/A",
+                    "primera_factura_monto": float(first_doc.total_amount or 0) if first_doc else 0,
+                    "primera_factura_caja": first_doc.register_code if first_doc else "N/A",
+                    "ultima_factura_fecha": s.max_date.strftime("%Y-%m-%d %H:%M:%S") if s.max_date else "N/A",
+                    "total_cajas_activas": s.total_registers
+                }
+
             telemetry_data = []
             facilities = db.query(Facility).filter(Facility.is_active == True).all()
             for fac in facilities:
+                hist = fac_historical_map.get(fac.id)
                 latest = db.query(StoreSyncTelemetry).filter(
                     StoreSyncTelemetry.facility_id == fac.id
                 ).order_by(desc(StoreSyncTelemetry.created_at)).first()
@@ -150,11 +182,36 @@ def call_worker_gemini(
                         "last_sale_time": latest.last_synced_sale_time.strftime("%Y-%m-%d %H:%M:%S") if latest.last_synced_sale_time else "N/A",
                         "pending_queue_count": latest.pending_queue_count,
                         "lag_minutes": latest.lag_minutes,
-                        "status": latest.status
+                        "status": latest.status,
+                        "historico_sincronizacion": hist if hist else "Sin facturas sincronizadas registradas aún"
                     })
                 else:
-                    telemetry_data.append({"facility": fac.name, "code": fac.code, "status": "SIN_CONEXION_PREVIA"})
-            context_data = {"telemetria_sucursales": telemetry_data}
+                    telemetry_data.append({
+                        "facility": fac.name,
+                        "code": fac.code,
+                        "status": "SIN_CONEXION_PREVIA",
+                        "historico_sincronizacion": hist if hist else "Sin facturas sincronizadas registradas aún"
+                    })
+            context_data = {"telemetria_y_sincronizacion_sucursales": telemetry_data}
+
+            # Búsqueda puntual si el usuario preguntó por un número de documento específico
+            doc_matches = re.findall(r'\b\d{5,12}\b', user_question)
+            if doc_matches:
+                found_docs = []
+                for d_num in doc_matches[:3]:
+                    d_row = db.query(Document).filter(Document.document_number == d_num).first()
+                    if d_row:
+                        fac_row = db.query(Facility).filter(Facility.id == d_row.facility_id).first()
+                        found_docs.append({
+                            "numero": d_row.document_number,
+                            "tipo": str(d_row.type.value if hasattr(d_row.type, 'value') else d_row.type),
+                            "fecha": d_row.created_at.strftime("%Y-%m-%d %H:%M:%S") if d_row.created_at else "N/A",
+                            "monto": float(d_row.total_amount or 0),
+                            "caja": d_row.register_code,
+                            "sucursal": fac_row.name if fac_row else f"ID {d_row.facility_id}"
+                        })
+                if found_docs:
+                    context_data["documentos_encontrados_por_numero"] = found_docs
         except Exception as e:
             logger.warning(f"Error recopilando contexto para Dante TI: {e}")
 
@@ -163,6 +220,12 @@ def call_worker_gemini(
             "Eres Dante TI, Guardián Autónomo de Sincronización e Infraestructura de Neo ERP. "
             "Tu personalidad es técnica, analítica, concisa, proactiva y ejecutiva. "
             "Supervisas la sincronización de tiendas físicas (Stellar POS hacia Neo ERP), conectividad SQL Server y cuadratura fiscal."
+        )
+        system_prompt += (
+            "\nTienes acceso completo tanto a la telemetría en tiempo real como a la auditoría histórica de sincronización "
+            "de facturas de cada tienda (fecha de inicio/primera factura sincronizada con número y caja emisora, última factura, "
+            "volumen total de documentos y cajas registradoras detectadas). Usa estos datos para responder con total precisión "
+            "a preguntas sobre fechas, facturas históricas, estados y sincronización."
         )
 
     try:
@@ -279,10 +342,12 @@ async def process_telegram_message(
                 f"• `/estado` o `/tiendas`: Diagnóstico de latidos y conectividad de sucursales\n"
                 f"• `/cuadratura`: Conciliación matemática de ventas Stellar vs Neo ERP\n"
                 f"• `/correlatividad`: Detección de saltos en numeración fiscal de cajas\n"
+                f"• `/historial`: Auditoría histórica de facturas sincronizadas y cajas por tienda\n"
                 f"• `/remediar`: Auto-remediar desfases de sincronización de ventas\n"
                 f"• `/vincular <PIN>`: Vincular este chat con tu usuario de Neo ERP\n\n"
                 f"💬 *Consultas en lenguaje natural:*\n"
                 f"Puedes hacerme cualquier pregunta técnica directa, por ejemplo:\n"
+                f"_• \"¿Cuál es la primera fecha de factura que tenemos en Belisa?\"_\n"
                 f"_• \"¿Cómo están las cajas en Tucacas?\"_\n"
                 f"_• \"¿A qué hora fue la última venta de Maracay?\"_\n"
                 f"_• \"¿Hay alertas críticas en el sistema?\"_"
@@ -550,6 +615,36 @@ async def process_telegram_message(
             lines.append(f"• *{a['facility']}*: Despachada orden `{a['command_type']}` (Desfase: {a['lag_hours']:.1f}h)")
 
         lines.append("\n_Las órdenes serán procesadas automáticamente por NeoAgentSync en el próximo ciclo de sondeo._")
+        return "\n".join(lines)
+
+    # COMANDO: /historial o /facturas
+    if lower_text in ["/historial", "historial", "/facturas", "facturas", "/auditoria", "auditoria"]:
+        doc_stats = db.query(
+            Document.facility_id,
+            func.min(Document.created_at).label("min_date"),
+            func.max(Document.created_at).label("max_date"),
+            func.count(Document.id).label("total_docs"),
+            func.count(func.distinct(Document.register_code)).label("total_registers")
+        ).group_by(Document.facility_id).all()
+
+        lines = ["📚 *Historial y Auditoría de Facturación Sincronizada:*\n"]
+        for s in doc_stats:
+            fac = db.query(Facility).filter(Facility.id == s.facility_id).first()
+            fac_name = fac.name if fac else f"Sede #{s.facility_id}"
+            first_doc = db.query(Document).filter(
+                Document.facility_id == s.facility_id,
+                Document.created_at == s.min_date
+            ).first()
+            lines.append(
+                f"🏛️ *{fac_name}*:\n"
+                f"   • *Total facturas sincronizadas:* {s.total_docs:,}\n"
+                f"   • *Primera factura:* #{first_doc.document_number if first_doc else 'N/A'} (Fecha: {s.min_date.strftime('%d/%m/%Y %H:%M:%S') if s.min_date else 'N/A'})\n"
+                f"   • *Caja de origen:* `{first_doc.register_code if first_doc else 'N/A'}` | Monto: ${float(first_doc.total_amount or 0):,.2f}\n"
+                f"   • *Última factura:* {s.max_date.strftime('%d/%m/%Y %H:%M:%S') if s.max_date else 'N/A'}\n"
+                f"   • *Cajas activas detectadas:* {s.total_registers} estaciones\n"
+            )
+        if not doc_stats:
+            lines.append("No se registran facturas sincronizadas en el repositorio central de Neo ERP.")
         return "\n".join(lines)
 
     # 5. Consulta en Lenguaje Natural con Inteligencia Artificial (Gemini)
