@@ -934,7 +934,7 @@ export default function DigitalWorkersPage() {
                       /vincular {generatedPin || "XXXXXX"}
                     </code>
                   </li>
-                  <li>Dante confirmará tu sesión y activará tus reportes automáticos.</li>
+                  <li>{selectedWorker?.display_title || 'El asistente'} confirmará tu sesión y activará tus reportes automáticos.</li>
                 </ol>
               </div>
             ) : (

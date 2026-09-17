@@ -99,8 +99,24 @@ def pair_telegram_by_pin(
     """
     clean_pin = pin.strip().replace(" ", "").replace("-", "").upper().replace("VINCULAR_", "").replace("LINK_", "")
 
+    # Verificar si el remitente ya está previamente vinculado con este chat_id
+    existing_user = db.query(User).filter(User.telegram_chat_id == chat_id, User.is_active == True).first()
+
     user = db.query(User).filter(User.pairing_pin == clean_pin).first()
     if not user:
+        if existing_user:
+            worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == agent_code).first()
+            worker_title = worker.display_title if worker else "Asistente Digital"
+            return {
+                "success": True,
+                "user_id": existing_user.id,
+                "full_name": existing_user.full_name,
+                "message": (
+                    f"✅ *¡Tu cuenta ya está vinculada y activa!*\n\n"
+                    f"Hola *{existing_user.full_name}*, tu cuenta de Telegram ya está autenticada en *Neo ERP* para interactuar con *{worker_title}*.\n\n"
+                    f"No necesitas ingresar un nuevo PIN. Puedes escribir `/ayuda` para ver las funciones disponibles o hacerme tus consultas directamente."
+                )
+            }
         return {
             "success": False,
             "message": "❌ El PIN de vinculación ingresado es inválido o ha expirado. Por favor genera un nuevo PIN desde el módulo de Usuarios Digitales en Neo ERP."
@@ -149,20 +165,60 @@ def pair_telegram_by_pin(
 
         db.commit()
 
-    worker_title = worker.display_title if worker else "Dante TI"
-    
-    greeting = (
-        f"🛡️ *¡Telegram Vinculado Exitosamente!*\n\n"
-        f"Hola *{user.full_name}*, tu cuenta de Telegram ha sido autenticada en *Neo ERP*.\n"
-        f"Soy *{worker_title}*.\n\n"
-        f"Desde aquí puedo responderte de inmediato sobre la salud de la plataforma:\n"
-        f"• `/estado` o `/tiendas`: Ver latidos y conectividad de sucursales físicas\n"
-        f"• `/cuadratura`: Conciliación de ventas Stellar vs Neo ERP\n"
-        f"• `/correlatividad`: Auditoría de saltos en tickets fiscales\n"
-        f"• `/remediar`: Auto-remediar desfases de sincronización\n\n"
-        f"También recibirás alertas proactivas instantáneas si alguna tienda pierde conexión.\n\n"
-        f"¿En qué puedo ayudarte hoy?"
-    )
+    worker_title = worker.display_title if worker else "Asistente Digital"
+    clean_code = (agent_code or "").upper()
+
+    if "CLARA" in clean_code:
+        greeting = (
+            f"💜 *¡Telegram Vinculado Exitosamente!*\n\n"
+            f"Hola *{user.full_name}*, tu cuenta de Telegram ha sido autenticada en *Neo ERP*.\n"
+            f"Soy *{worker_title}* (Analista Estratégica de Compras y Rentabilidad).\n\n"
+            f"Desde aquí puedo apoyarte con:\n"
+            f"• `/producto <nombre o sku>`: Ficha 360° (costos, stock multitienda, rotación y proveedor)\n"
+            f"• `/crear_odc <proveedor>`: Generar ODC borrador sugerida (MRP) o personalizada\n"
+            f"• `/sugeridos`: Quiebres de stock y sugeridos de compra\n"
+            f"• `/odc`: Órdenes de compra recientes y su estado\n"
+            f"• `/conciliacion`: Conciliación de facturas 3-way match\n\n"
+            f"¿En qué puedo ayudarte hoy con compras y abastecimiento?"
+        )
+    elif "ARTURO" in clean_code:
+        greeting = (
+            f"📦 *¡Telegram Vinculado Exitosamente!*\n\n"
+            f"Hola *{user.full_name}*, tu cuenta de Telegram ha sido autenticada en *Neo ERP*.\n"
+            f"Soy *{worker_title}* (Supervisor Autónomo de Almacenes).\n\n"
+            f"Desde aquí superviso el inventario físico y almacenes:\n"
+            f"• `/negativos`: Existencias negativas detectadas\n"
+            f"• `/stock <producto>`: Consulta de existencia en tiempo real\n"
+            f"• `/devoluciones`: Devoluciones a proveedores en muelle\n\n"
+            f"¿Qué almacén o stock deseas verificar?"
+        )
+    elif "VALERIA" in clean_code or "PRICING" in clean_code:
+        greeting = (
+            f"💎 *¡Telegram Vinculado Exitosamente!*\n\n"
+            f"Hola *{user.full_name}*, tu cuenta de Telegram ha sido autenticada en *Neo ERP*.\n"
+            f"Soy *{worker_title}* (Estratega de Precios, Costos y Rentabilidad).\n\n"
+            f"Desde aquí protejo los márgenes y la coherencia de precios:\n"
+            f"• `/margen_critico`: Alerta de venta a pérdida o margen < 15%\n"
+            f"• `/precio <producto>`: Consulta inmediata de costo de reposición, PVP y margen\n"
+            f"• `/sesiones`: Sesiones de precios en borrador por publicar\n"
+            f"• `/aumentos`: Alzas recientes de costo de proveedores\n"
+            f"• `/discrepancias`: Chequeo de precios desalineados entre tiendas\n\n"
+            f"¿Qué precio o costo deseas revisar?"
+        )
+    else:
+        greeting = (
+            f"🛡️ *¡Telegram Vinculado Exitosamente!*\n\n"
+            f"Hola *{user.full_name}*, tu cuenta de Telegram ha sido autenticada en *Neo ERP*.\n"
+            f"Soy *{worker_title}*.\n\n"
+            f"Desde aquí puedo responderte de inmediato sobre la salud de la plataforma:\n"
+            f"• `/estado` o `/tiendas`: Ver latidos y conectividad de sucursales físicas\n"
+            f"• `/cuadratura`: Conciliación de ventas Stellar vs Neo ERP\n"
+            f"• `/correlatividad`: Auditoría de saltos en tickets fiscales\n"
+            f"• `/historial`: Historial de sincronización y cajas activas\n"
+            f"• `/remediar`: Auto-remediar desfases de sincronización\n\n"
+            f"También recibirás alertas proactivas instantáneas si alguna tienda pierde conexión.\n\n"
+            f"¿En qué puedo ayudarte hoy?"
+        )
 
     return {
         "success": True,
