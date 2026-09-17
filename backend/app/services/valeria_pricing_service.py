@@ -20,6 +20,7 @@ from app.models.inventory import (
     Category
 )
 from app.models.core import Facility, SystemSettings
+from app.models.purchasing import PurchaseOrder
 
 logger = logging.getLogger(__name__)
 
