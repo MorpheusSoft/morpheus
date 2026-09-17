@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { cookies } from 'next/headers';
+import { SessionGuard } from '@/components/auth/SessionGuard';
 
 export default async function AppSwitcher() {
   const cookieStore = await cookies();
@@ -54,7 +55,8 @@ export default async function AppSwitcher() {
   ];
 
   return (
-    <div className="min-h-screen flex flex-col justify-center items-center p-6 sm:p-12 relative overflow-hidden bg-slate-50">
+    <SessionGuard>
+      <div className="min-h-screen flex flex-col justify-center items-center p-6 sm:p-12 relative overflow-hidden bg-slate-50">
       {/* Decorative background blobs */}
       <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-400 rounded-full mix-blend-multiply filter blur-[100px] opacity-30 animate-pulse"></div>
       <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-400 rounded-full mix-blend-multiply filter blur-[100px] opacity-30 animate-pulse" style={{ animationDelay: '2s' }}></div>
@@ -127,5 +129,6 @@ export default async function AppSwitcher() {
 
       </div>
     </div>
+    </SessionGuard>
   );
 }
