@@ -934,7 +934,7 @@ export default function DigitalWorkersPage() {
                       /vincular {generatedPin || "XXXXXX"}
                     </code>
                   </li>
-                  <li>{selectedWorker?.display_title || 'El asistente'} confirmará tu sesión y activará tus reportes automáticos.</li>
+                  <li>{pairingModalWorker?.display_title || 'El asistente'} confirmará tu sesión y activará tus reportes automáticos.</li>
                 </ol>
               </div>
             ) : (
@@ -949,7 +949,7 @@ export default function DigitalWorkersPage() {
                       Vincular {generatedPin || "XXXXXX"}
                     </code>
                   </li>
-                  <li>El asistente confirmará la sesión de inmediato.</li>
+                  <li>{pairingModalWorker?.display_title || 'El asistente'} confirmará la sesión de inmediato.</li>
                 </ol>
               </div>
             )}
