@@ -143,7 +143,7 @@ def generate_user_pairing_link(
     user.pairing_pin = pin
     db.commit()
 
-    workers = db.query(DigitalWorker).filter(DigitalWorker.is_active == True).all()
+    workers = db.query(DigitalWorker).all()
     bot_links = {}
     for w in workers:
         uname = get_bot_username(w.agent_code, db=db)

@@ -479,7 +479,7 @@ async def process_telegram_message(
             db.commit()
 
             # Asegurar conversación en todos los asistentes digitales
-            all_workers = db.query(DigitalWorker).filter(DigitalWorker.is_active == True).all()
+            all_workers = db.query(DigitalWorker).all()
             for w in all_workers:
                 conv = db.query(DigitalWorkerConversation).filter(
                     DigitalWorkerConversation.worker_id == w.id,

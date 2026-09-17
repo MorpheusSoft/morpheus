@@ -137,7 +137,7 @@ def pair_telegram_by_pin(
         worker = db.query(DigitalWorker).first()
 
     # Registrar o actualizar la conversación en el canal Telegram para TODOS los trabajadores activos
-    all_workers = db.query(DigitalWorker).filter(DigitalWorker.is_active == True).all()
+    all_workers = db.query(DigitalWorker).all()
     for w in all_workers:
         conv = db.query(DigitalWorkerConversation).filter(
             DigitalWorkerConversation.worker_id == w.id,
