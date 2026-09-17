@@ -20,18 +20,6 @@ export function AppTopbar() {
 
       {/* Right side icons */}
       <div className="flex items-center gap-4">
-        
-        {/* IA Oracle Button */}
-        <button 
-          className="group relative flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 hover:border-indigo-300 hover:shadow-md hover:shadow-indigo-500/10 transition-all duration-300 active:scale-95"
-          title="Invocar a Oráculo AI"
-        >
-          <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-purple-600 opacity-0 group-hover:opacity-10 rounded-xl transition-opacity duration-300"></div>
-          <span className="font-semibold text-sm text-indigo-900 group-hover:animate-pulse">Oráculo</span>
-        </button>
-
-        {/* Divider */}
-        <div className="w-[1px] h-8 bg-gray-200 mx-1"></div>
 
         {/* Global App Switcher */}
         <AppSwitcher />
