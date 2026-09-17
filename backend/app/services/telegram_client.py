@@ -196,6 +196,7 @@ def send_telegram_alert_sync(
     if db:
         try:
             from app.models.core import User
+            from app.models.digital_workers import DigitalWorkerConversation
             supervisors = db.query(User.telegram_chat_id).filter(
                 User.telegram_chat_id.isnot(None),
                 User.is_active == True
@@ -203,6 +204,14 @@ def send_telegram_alert_sync(
             for (chat_id,) in supervisors:
                 if chat_id:
                     target_chats.add(str(chat_id))
+
+            conv_chats = db.query(DigitalWorkerConversation.external_sender_id).filter(
+                DigitalWorkerConversation.channel == "TELEGRAM",
+                DigitalWorkerConversation.is_authenticated == True
+            ).all()
+            for (cid,) in conv_chats:
+                if cid:
+                    target_chats.add(str(cid))
         except Exception as e:
             logger.warning(f"Error consultando usuarios vinculados de Telegram: {e}")
 
