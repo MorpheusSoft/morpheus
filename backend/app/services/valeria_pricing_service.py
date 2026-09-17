@@ -245,11 +245,13 @@ def lookup_product_price_and_cost(
             margin_pct = ((pvp - ref_cost) / pvp * 100.0) if pvp > 0 else 0.0
 
             # Precios por sede
+            fac_map = {f.id: f.name for f in db.query(Facility).all()}
             fac_prices = []
             for fp in v.facility_prices:
-                if fp.is_active and fp.facility:
+                if fp.is_active:
+                    fac_name = fac_map.get(fp.facility_id, f"Sede #{fp.facility_id}")
                     fac_prices.append({
-                        "facility": fp.facility.name,
+                        "facility": fac_name,
                         "sales_price": float(fp.sales_price or 0),
                         "target_utility_pct": float(fp.target_utility_pct) if fp.target_utility_pct else None
                     })
