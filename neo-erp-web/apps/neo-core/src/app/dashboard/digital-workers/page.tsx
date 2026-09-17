@@ -52,6 +52,17 @@ const getWorkerMeta = (agentCode: string) => {
       defaultChannel: "TELEGRAM"
     };
   }
+  if (agentCode === "VALERIA_PRICING" || agentCode.includes("VALERIA") || agentCode.includes("PRICING")) {
+    return {
+      name: "Valeria (Precios & Costos)",
+      shortCode: "VP",
+      icon: "pi-percentage",
+      colorClass: "bg-emerald-600 text-white shadow-sm",
+      badgeColor: "bg-emerald-50 text-emerald-700",
+      avatarGradient: "from-emerald-600 to-teal-600 border-emerald-200",
+      defaultChannel: "TELEGRAM"
+    };
+  }
   return {
     name: agentCode,
     shortCode: agentCode.slice(0, 2).toUpperCase(),

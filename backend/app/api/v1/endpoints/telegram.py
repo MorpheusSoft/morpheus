@@ -43,6 +43,13 @@ from app.services.dante_it_service import (
     reconcile_daily_sales_totals,
     auto_remediate_sales_lag
 )
+from app.services.valeria_pricing_service import (
+    audit_critical_margins,
+    audit_recent_cost_spikes,
+    audit_pending_pricing_sessions,
+    audit_cross_store_price_discrepancies,
+    lookup_product_price_and_cost
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +135,34 @@ def call_worker_gemini(
             worker.system_prompt if worker else
             "Eres Arturo, Supervisor Autónomo de Almacenes de Neo ERP. "
             "Supervisas la exactitud de inventario, stock físico en almacenes, existencias negativas y recepciones."
+        )
+
+    elif "VALERIA" in clean_code or "PRICING" in clean_code:
+        # Contexto de Valeria: márgenes críticos, sesiones pendientes, alzas de costo y PVP
+        try:
+            crit_margins = audit_critical_margins(db, min_margin_pct=15.0, limit=8)
+            cost_spikes = audit_recent_cost_spikes(db, limit=6)
+            pending_sess = audit_pending_pricing_sessions(db, limit=5)
+            cross_prices = audit_cross_store_price_discrepancies(db, limit=5)
+            context_data = {
+                "productos_margen_critico_o_perdida": crit_margins,
+                "alzas_recientes_costos_proveedores": cost_spikes,
+                "sesiones_fijacion_precios_pendientes": pending_sess,
+                "discrepancias_precios_sucursales": cross_prices
+            }
+
+            # Si el usuario preguntó por un producto específico, incluir su ficha completa
+            prod_lookup = lookup_product_price_and_cost(user_question, db)
+            if prod_lookup:
+                context_data["productos_consultados_en_vivo"] = prod_lookup
+        except Exception as e:
+            logger.warning(f"Error recopilando contexto para Valeria Pricing: {e}")
+
+        system_prompt = (
+            worker.system_prompt if worker else
+            "Eres Valeria, Estratega Autónoma de Precios, Costos y Rentabilidad Comercial de Neo ERP. "
+            "Tu personalidad es analítica, ágil, orientada al margen y a la protección del flujo financiero. "
+            "Supervisas márgenes mínimos, alzas de costo de proveedores, sesiones de fijación de precios y habladores de anaquel."
         )
 
     else:
@@ -333,6 +368,24 @@ async def process_telegram_message(
                 f"_• \"Consultar stock de Azúcar Montalbán\"_\n"
                 f"_• \"¿Qué devoluciones tenemos en muelle?\"_"
             )
+        elif "VALERIA" in clean_agent_code or "PRICING" in clean_agent_code:
+            return (
+                f"💎 *¡Hola {first_name}! Soy {worker_title}*\n"
+                f"*Estratega Autónoma de Precios, Costos y Rentabilidad* de *Neo ERP*.\n\n"
+                f"Superviso en tiempo real la protección de márgenes comerciales, alzas de costos de proveedores, sesiones de fijación de precios y consistencia en anaquel.\n\n"
+                f"📌 *Comandos Disponibles:*\n"
+                f"• `/margen_critico`: Alerta de productos vendiéndose a pérdida o con margen < 15%\n"
+                f"• `/sesiones`: Sesiones de fijación de precios en borrador pendientes por aplicar\n"
+                f"• `/aumentos`: Productos con alzas recientes de costo y cálculo de caída de margen\n"
+                f"• `/discrepancias`: Detección de precios desalineados entre tiendas físicas\n"
+                f"• `/precio <producto>`: Consulta inmediata de costo reposición, PVP y margen\n"
+                f"• `/vincular <PIN>`: Vincular este chat con tu usuario de Neo ERP\n\n"
+                f"💬 *Consultas en lenguaje natural:*\n"
+                f"Puedes preguntarme directamente:\n"
+                f"_• \"¿Qué productos están en venta a pérdida hoy?\"_\n"
+                f"_• \"¿A cómo tenemos el costo y PVP del Arroz Mary?\"_\n"
+                f"_• \"¿Hay sesiones de precios pendientes por publicar?\"_"
+            )
         else:
             return (
                 f"🛡️ *¡Hola {first_name}! Soy {worker_title}*\n"
@@ -501,6 +554,83 @@ async def process_telegram_message(
                 lines.append(f"• *{item['product_name']}* (`{item['sku']}`):")
                 for s in item["stock_by_facility"]:
                     lines.append(f"   - {s['facility']}: *{s['on_hand']}* unid.")
+            return "\n".join(lines)
+
+    # === COMANDOS DE VALERIA (PRECIOS Y COSTOS) ===
+    if "VALERIA" in clean_agent_code or "PRICING" in clean_agent_code:
+        if lower_text in ["/margen_critico", "margen critico", "margen_critico", "perdida", "venta a perdida", "/perdida"]:
+            crits = audit_critical_margins(db, min_margin_pct=15.0, limit=10)
+            if not crits:
+                return "✅ *Escudo de Margen*: No se detectaron productos vendiéndose a pérdida ni con margen crítico (< 15%)."
+            lines = ["🛡️ *Alerta de Margen Crítico y Venta a Pérdida:*\n"]
+            for c in crits:
+                icon = "🔴 PÉRDIDA" if c["is_negative"] else "🟡 BAJO"
+                lines.append(
+                    f"• *{c['product_name']}* (`{c['sku']}`):\n"
+                    f"   - Estado: *{icon}* | Margen: *{c['margin_pct']}%*\n"
+                    f"   - Costo: ${c['cost']:,.4f} | PVP: ${c['sales_price']:,.4f}\n"
+                )
+            return "\n".join(lines)
+
+        if lower_text in ["/sesiones", "sesiones", "/sesion", "sesiones de precio", "sesiones pendientes"]:
+            sess = audit_pending_pricing_sessions(db)
+            if not sess:
+                return "✅ *Sesiones de Precios*: No hay sesiones en borrador pendientes por aprobar ni aplicar."
+            lines = ["📑 *Sesiones de Fijación de Precios Pendientes (DRAFT):*\n"]
+            for s in sess:
+                lines.append(
+                    f"• *Sesión #{s['id']} - {s['name']}*:\n"
+                    f"   - Proveedor/Origen: {s['supplier']} ({s['source_type']})\n"
+                    f"   - Líneas a actualizar: *{s['lines_count']} productos*\n"
+                    f"   - Creada: {s['created_at']}\n"
+                )
+            return "\n".join(lines)
+
+        if lower_text in ["/aumentos", "aumentos", "alzas", "alzas de costo"]:
+            spikes = audit_recent_cost_spikes(db)
+            if not spikes:
+                return "✅ *Vigilante de Costos*: No se registran aumentos recientes de costo en sesiones de precios."
+            lines = ["📈 *Alzas Recientes de Costo de Proveedores:*\n"]
+            for sp in spikes:
+                lines.append(
+                    f"• *{sp['product_name']}* (`{sp['sku']}`):\n"
+                    f"   - Costo: ${sp['old_cost']:,.4f} ➡️ *${sp['new_cost']:,.4f}* (+{sp['cost_increase_pct']}%)\n"
+                    f"   - PVP Actual: ${sp['current_pvp']:,.4f} (Caída de margen: -{sp['margin_drop_pct']}%)\n"
+                )
+            return "\n".join(lines)
+
+        if lower_text in ["/discrepancias", "discrepancias", "precios tiendas", "precios sedes"]:
+            disc = audit_cross_store_price_discrepancies(db)
+            if not disc:
+                return "✅ *Consistencia de Precios*: Precios 100% homologados entre todas las tiendas físicas activas."
+            lines = ["⚖️ *Discrepancias de Precios Detectadas Entre Sucursales:*\n"]
+            for d in disc:
+                lines.append(f"• *{d['product_name']}* (`{d['sku']}`): Rango ${d['min_price']:,.2f} a ${d['max_price']:,.2f}")
+                for sp in d["store_prices"]:
+                    lines.append(f"   - {sp['facility']}: ${sp['price']:,.2f}")
+            return "\n".join(lines)
+
+        if lower_text.startswith("/precio") or lower_text.startswith("precio") or lower_text.startswith("/costo") or lower_text.startswith("costo"):
+            query_prod = re.sub(r"^/(precio|costo)\s*|^(precio|costo)\s*", "", raw_text, flags=re.IGNORECASE).strip()
+            if not query_prod:
+                return "🔍 Por favor indica qué producto consultar. Ejemplo: `/precio Harina PAN` o `/precio 75912345`"
+            prods = lookup_product_price_and_cost(query_prod, db)
+            if not prods:
+                return f"🔍 No encontré productos que coincidan con '{query_prod}'."
+            lines = [f"🏷️ *Ficha de Costo y Precio para '{query_prod}':*\n"]
+            for p in prods:
+                m_color = "🔴" if p["is_negative"] else ("🟡" if p["margin_pct"] < 20 else "🟢")
+                lines.append(
+                    f"• *{p['product_name']}* (`{p['sku']}`):\n"
+                    f"   - Categoría: {p['category']}\n"
+                    f"   - Costo Reposición: *${p['replacement_cost']:,.4f}* (Prom: ${p['average_cost']:,.4f})\n"
+                    f"   - PVP Maestro: *${p['sales_price']:,.4f}*\n"
+                    f"   - Margen Estimado: {m_color} *{p['margin_pct']}%*\n"
+                )
+                if p["facility_prices"]:
+                    lines.append("   - *Precios por Tienda:*")
+                    for fp in p["facility_prices"]:
+                        lines.append(f"     ▪ {fp['facility']}: ${fp['sales_price']:,.2f}")
             return "\n".join(lines)
 
     # === COMANDOS DE DANTE (TI & INFRAESTRUCTURA) ===
