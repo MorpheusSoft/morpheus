@@ -430,7 +430,95 @@ async def process_telegram_message(
     # En chats privados se requiere vinculación previa.
     # En grupos se permite si el grupo está configurado o si hay un usuario autenticado.
     user = get_authenticated_user_by_telegram(chat_id, db)
-    
+
+    # 3.1. Chequeo de seguridad: Si el usuario vinculado fue desactivado en Neo ERP
+    if not user:
+        # Verificar si este chat_id o conversación pertenecía a un usuario que ahora está INACTIVO
+        deactivated_user = db.query(User).filter(
+            User.telegram_chat_id == chat_id,
+            User.is_active == False
+        ).first()
+        if not deactivated_user:
+            deactivated_conv = db.query(DigitalWorkerConversation).filter(
+                DigitalWorkerConversation.channel == "TELEGRAM",
+                DigitalWorkerConversation.external_sender_id == str(chat_id),
+                DigitalWorkerConversation.sender_user_id.isnot(None)
+            ).first()
+            if deactivated_conv and deactivated_conv.sender_user_id:
+                deactivated_user = db.query(User).filter(
+                    User.id == deactivated_conv.sender_user_id,
+                    User.is_active == False
+                ).first()
+
+        if deactivated_user:
+            return (
+                f"⛔ *Acceso Revocado*\n\n"
+                f"Hola *{deactivated_user.full_name}*, tu cuenta de usuario en *Neo ERP* se encuentra actualmente desactivada o suspendida.\n\n"
+                f"Por políticas de seguridad corporativa, tu acceso a los asistentes digitales ha sido cancelado de inmediato. Si consideras que se trata de un error, por favor contacta al administrador del sistema."
+            )
+
+    # 3.2. Auto-vinculación transparente si el Administrador ya registró el @username en Neo Core > Usuarios
+    if chat_type == "private" and not user and username:
+        clean_uname = username.lstrip("@").strip().lower()
+        pre_registered_user = db.query(User).filter(
+            func.lower(User.telegram_username) == clean_uname
+        ).first()
+
+        if pre_registered_user:
+            if not pre_registered_user.is_active:
+                return (
+                    f"⛔ *Acceso Denegado*\n\n"
+                    f"El usuario de Telegram `@{username.lstrip('@')}` está asociado a *{pre_registered_user.full_name}* en *Neo ERP*, pero dicha cuenta se encuentra actualmente desactivada o suspendida.\n\n"
+                    f"Por favor contacta al administrador del sistema."
+                )
+
+            # Auto-vincular de inmediato este chat_id
+            logger.info(f"[TELEGRAM AUTO-PAIR] Auto-vinculando Telegram @{username} (chat_id: {chat_id}) al usuario {pre_registered_user.full_name} (ID: {pre_registered_user.id})")
+            if not pre_registered_user.telegram_chat_id:
+                pre_registered_user.telegram_chat_id = chat_id
+            db.commit()
+
+            # Asegurar conversación en todos los asistentes digitales
+            all_workers = db.query(DigitalWorker).filter(DigitalWorker.is_active == True).all()
+            for w in all_workers:
+                conv = db.query(DigitalWorkerConversation).filter(
+                    DigitalWorkerConversation.worker_id == w.id,
+                    DigitalWorkerConversation.channel == "TELEGRAM",
+                    DigitalWorkerConversation.external_sender_id == str(chat_id)
+                ).first()
+                if not conv:
+                    conv = DigitalWorkerConversation(
+                        worker_id=w.id,
+                        channel="TELEGRAM",
+                        external_sender_id=str(chat_id),
+                        sender_user_id=pre_registered_user.id,
+                        is_authenticated=True,
+                        context_data={
+                            "user_email": pre_registered_user.email,
+                            "full_name": pre_registered_user.full_name,
+                            "telegram_username": username.lstrip("@")
+                        }
+                    )
+                    db.add(conv)
+                else:
+                    conv.is_authenticated = True
+                    conv.sender_user_id = pre_registered_user.id
+                    if conv.context_data:
+                        conv.context_data["telegram_username"] = username.lstrip("@")
+            db.commit()
+
+            user = pre_registered_user
+
+            # Si el mensaje inicial fue /start o saludo, dar la bienvenida oficial
+            if raw_text.startswith("/start") or raw_text.lower() in ["/help", "/ayuda", "hola", "buenos dias", "buenas"]:
+                worker_title = worker.display_title if worker else "Asistente Digital Neo"
+                return (
+                    f"🎉 *¡Bienvenido {user.full_name}!*\n\n"
+                    f"Tu cuenta de Telegram (`@{username.lstrip('@')}`) ha sido vinculada exitosamente a *Neo ERP*.\n"
+                    f"Soy *{worker_title}*.\n\n"
+                    f"A partir de este momento puedes interactuar conmigo directamente. Escribe `/ayuda` para ver mis comandos o hazme cualquier consulta en lenguaje natural."
+                )
+
     if chat_type == "private" and not user:
         # Verificar si el usuario mandó solo un número de 6 dígitos
         if raw_text.isdigit() and len(raw_text) == 6:
@@ -443,15 +531,13 @@ async def process_telegram_message(
             )
             return result["message"]
 
+        worker_title = worker.display_title if worker else "Asistente Digital"
         return (
             f"🔒 *Acceso no autenticado*\n\n"
-            f"Tu chat de Telegram (`{chat_id}`) no está vinculado a ningún supervisor de *Neo ERP*.\n\n"
-            f"Para vincular tu cuenta:\n"
-            f"1. Inicia sesión en Neo ERP > *Neo Core* > *Usuarios Digitales*.\n"
-            f"2. En la tarjeta de *{worker.display_title if worker else 'Dante TI'}*, haz clic en *Vincular Telegram*.\n"
-            f"3. Genera tu PIN de 6 dígitos.\n"
-            f"4. Envía por aquí el comando: `/vincular <TU_PIN>`\n"
-            f"   (o abre el enlace directo provisto por el sistema)."
+            f"Tu chat de Telegram (`{chat_id}`) no está vinculado a ningún usuario activo de *Neo ERP*.\n\n"
+            f"📌 *¿Cómo obtener acceso?*\n"
+            f"1. Solicita al Administrador del sistema que agregue tu usuario de Telegram (`@{username or 'tu_usuario'}`) en tu ficha de **Neo Core > Usuarios**.\n"
+            f"2. O si tienes un PIN de invitación de 6 dígitos, envíalo por aquí con: `/vincular <TU_PIN>`"
         )
 
     # Registrar mensaje en historial de conversación

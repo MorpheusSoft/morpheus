@@ -66,3 +66,24 @@ export async function updateUser(id: number, data: any) {
   revalidatePath("/dashboard/users")
   return res.json()
 }
+
+export async function generateUserPairingLink(userId: number) {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_URL}/users/${userId}/pairing-link`, {
+    method: "POST",
+    headers,
+  })
+  if (!res.ok) {
+     const error = await res.json()
+     let errorMessage = "Failed to generate pairing link";
+     if (error.detail) {
+        if (Array.isArray(error.detail)) {
+            errorMessage = error.detail[0].msg;
+        } else {
+            errorMessage = error.detail;
+        }
+     }
+     throw new Error(errorMessage)
+  }
+  return res.json()
+}

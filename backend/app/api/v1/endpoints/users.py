@@ -37,12 +37,17 @@ def create_user(
         raise HTTPException(status_code=400, detail="The user with this email already exists in the system.")
     
     hashed_password = get_password_hash(user_in.password)
+    clean_tg = user_in.telegram_username.strip().lstrip("@") if user_in.telegram_username else None
+    clean_phone = user_in.phone_number.strip().replace(" ", "").replace("-", "") if user_in.phone_number else None
     user = User(
         email=user_in.email,
         hashed_password=hashed_password,
         full_name=user_in.full_name,
         is_active=user_in.is_active,
         is_superuser=user_in.is_superuser,
+        telegram_username=clean_tg,
+        phone_number=clean_phone,
+        is_phone_verified=bool(clean_phone)
     )
     
     if user_in.role_ids:
@@ -87,6 +92,15 @@ def update_user(
         
     if user_in.password:
         user.hashed_password = get_password_hash(user_in.password)
+
+    if user_in.telegram_username is not None:
+        clean_tg = user_in.telegram_username.strip().lstrip("@") if user_in.telegram_username.strip() else None
+        user.telegram_username = clean_tg
+
+    if user_in.phone_number is not None:
+        clean_phone = user_in.phone_number.strip().replace(" ", "").replace("-", "") if user_in.phone_number.strip() else None
+        user.phone_number = clean_phone
+        user.is_phone_verified = bool(clean_phone)
         
     if user_in.role_ids is not None:
         roles = db.query(Role).filter(Role.id.in_(user_in.role_ids)).all()
@@ -104,3 +118,49 @@ def update_user(
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Database error details: {str(e)}")
     return user
+
+
+@router.post("/{user_id}/pairing-link")
+def generate_user_pairing_link(
+    user_id: int,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Genera un PIN de vinculación y enlaces directos de Telegram/WhatsApp para un usuario específico.
+    Permite que el Administrador invite a directores o gerentes sin que ellos entren a la web.
+    """
+    import random
+    from app.models.digital_workers import DigitalWorker
+    from app.services.telegram_client import get_bot_username
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    # Generar PIN de 6 dígitos
+    pin = f"{random.randint(100000, 999999)}"
+    user.pairing_pin = pin
+    db.commit()
+
+    workers = db.query(DigitalWorker).filter(DigitalWorker.is_active == True).all()
+    bot_links = {}
+    for w in workers:
+        uname = get_bot_username(w.agent_code, db=db)
+        if uname:
+            bot_links[w.agent_code] = {
+                "worker_name": w.display_title,
+                "bot_username": uname,
+                "deep_link": f"https://t.me/{uname}?start=VINCULAR_{pin}",
+                "channel_command": f"/vincular {pin}"
+            }
+
+    return {
+        "user_id": user.id,
+        "full_name": user.full_name,
+        "email": user.email,
+        "pairing_pin": pin,
+        "telegram_username": user.telegram_username,
+        "phone_number": user.phone_number,
+        "bot_links": bot_links
+    }

@@ -131,6 +131,8 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     password: Optional[str] = None
     is_active: Optional[bool] = None
+    phone_number: Optional[str] = None
+    telegram_username: Optional[str] = None
     role_ids: Optional[List[int]] = None
     facility_ids: Optional[List[int]] = None
 
