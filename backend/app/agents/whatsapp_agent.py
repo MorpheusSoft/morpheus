@@ -14,6 +14,12 @@ from app.models.purchasing import PurchaseOrder
 from app.models.digital_workers import DigitalWorker, DigitalWorkerConversation, DigitalWorkerMessage
 from app.services.device_pairing_service import pair_device_by_pin, get_authenticated_user_by_phone
 from app.services.mrp_bot_service import diagnose_stockouts, generate_supplier_po_draft
+from app.services.clara_purchases_service import (
+    lookup_purchasing_product_360,
+    format_product_360_telegram,
+    parse_order_intent,
+    create_supplier_po_from_chat
+)
 
 logger = logging.getLogger(__name__)
 
@@ -242,44 +248,24 @@ def process_incoming_whatsapp_message(sender_phone: str, message_text: str, db: 
 
     if is_create_po:
         tool_executed = "generate_supplier_order"
-        suppliers = db.query(Supplier).filter(Supplier.is_active == True).all()
-        matched_supplier = None
-        for s in suppliers:
-            s_name_lower = s.name.lower()
-            if s_name_lower in lower_text:
-                matched_supplier = s
-                break
-            # Palabras significativas del nombre (mínimo 4 letras)
-            words = [w for w in re.findall(r'\b[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}\b', s_name_lower)]
-            if any(w in lower_text for w in words):
-                matched_supplier = s
-                break
-
-        if matched_supplier:
-            try:
-                po_res = generate_supplier_po_draft(
-                    db=db,
-                    supplier_id=matched_supplier.id,
-                    facility_id=first_facility_id,
-                    notes=f"Generado vía WhatsApp por instrucción de {user.full_name}"
-                )
-                data_context = po_res
-                reply_text = (
-                    f"✅ *Orden de Compra Borrador Creada*\n\n"
-                    f"He generado la orden *{po_res['order_reference']}* para *{matched_supplier.name}* en *{po_res['facility_name']}*.\n\n"
-                    f"• Total Estimado: *${po_res['total_amount']:,.2f} USD*\n"
-                    f"• Renglones: *{po_res['lines_count']} ítems calculados*\n"
-                    f"• Estado: `DRAFT` (Borrador)\n\n"
-                    f"_Ya está disponible en Neo ERP para revisión y firma._"
-                )
-            except Exception as ex:
-                reply_text = f"⚠️ *No se pudo generar la orden*: {str(ex)}"
+        sup_query, custom_items = parse_order_intent(raw_text)
+        if sup_query:
+            po_res = create_supplier_po_from_chat(
+                db=db,
+                supplier_query=sup_query,
+                user_name=user.full_name,
+                facility_id=first_facility_id,
+                custom_items=custom_items,
+                channel="WhatsApp"
+            )
+            data_context = po_res
+            reply_text = po_res.get("message") or f"⚠️ {po_res.get('error')}"
         else:
             reply_text = (
                 f"❓ No logré identificar al proveedor en tu instrucción.\n\n"
-                f"Por favor especifícalo con su nombre, por ejemplo:\n"
-                f"• *'Clara, genera la orden para Cervecería Polar'*\n"
-                f"• *'Prepara el borrador de Distribuidora Alimentos'*"
+                f"Por favor especifícalo con su nombre o código, por ejemplo:\n"
+                f"• *'Clara, genera la orden para Alimentos Polar'*\n"
+                f"• *'Clara, crea orden para Alimentos Polar con 50 bultos de Harina Pan y 20 Primor'*"
             )
 
     elif is_purchase_stockout:
@@ -396,25 +382,35 @@ def process_incoming_whatsapp_message(sender_phone: str, message_text: str, db: 
                 + "\n".join(lines)
             )
 
-    elif any(w in lower_text for w in ["stock", "existencia", "cuanto hay", "cuánto hay", "disponible", "tienes"]):
-        tool_executed = "query_stock"
+    elif any(w in lower_text for w in ["producto", "articulo", "artículo", "costo", "costos", "precio", "margen", "rotacion", "rotación", "runway", "cobertura", "stock", "existencia", "cuanto hay", "cuánto hay", "disponible", "tienes"]):
         # Extraer término de búsqueda eliminando palabras comunes y signos de puntuación
-        clean_query = re.sub(r"(?:\b(?:stock|existencias?|cu[aá]nt[oa]s?|tenemos|tienes|queda|hay|de|del|el|la|los|las|un|una|unos|unas)\b|[¿\?!¡,])", " ", lower_text)
+        clean_query = re.sub(r"(?:\b(?:producto|articulo|artículo|costos?|precios?|márgenes?|margen|rotaci[oó]n|runway|cobertura|stock|existencias?|cu[aá]nt[oa]s?|tenemos|tienes|queda|hay|de|del|el|la|los|las|un|una|unos|unas)\b|[¿\?!¡,])", " ", lower_text)
         clean_query = " ".join(clean_query.split())
         if not clean_query:
-            clean_query = "a"  # Búsqueda general
-            
-        stock_results = execute_stock_lookup(clean_query, db, limit=5)
-        data_context = {"query": clean_query, "results": stock_results}
-        
-        if not stock_results:
-            reply_text = f"🔍 No encontré productos que coincidan con *'{clean_query}'* en el catálogo del ERP."
+            clean_query = "a"
+
+        # Si la intención es de compras o el agente activo es Clara, entregar Ficha 360°
+        if "CLARA" in agent_code or any(w in lower_text for w in ["producto", "articulo", "artículo", "costo", "costos", "precio", "margen", "rotacion", "rotación", "runway", "cobertura", "compra", "comprar"]):
+            prods_360 = lookup_purchasing_product_360(clean_query, db, limit=4)
+            if prods_360:
+                tool_executed = "purchasing_product_360"
+                data_context = {"query": clean_query, "results": prods_360}
+                blocks = [format_product_360_telegram(p) for p in prods_360]
+                reply_text = f"📋 *Ficha 360° de Compras para '{clean_query}':*\n\n" + "\n\n───────────────\n\n".join(blocks)
+            else:
+                reply_text = f"🔍 No encontré productos que coincidan con *'{clean_query}'* en el catálogo del ERP."
         else:
-            blocks = []
-            for r in stock_results:
-                facs = ", ".join([f"{f['facility']}: *{f['available']:.0f}* disp" for f in r["stock_by_facility"]]) or "Sin stock físico"
-                blocks.append(f"📦 *{r['product_name']}* (`{r['sku']}`)\n   └ {facs}")
-            reply_text = f"📊 *Consulta de Existencias para '{clean_query}':*\n\n" + "\n\n".join(blocks)
+            tool_executed = "query_stock"
+            stock_results = execute_stock_lookup(clean_query, db, limit=5)
+            data_context = {"query": clean_query, "results": stock_results}
+            if not stock_results:
+                reply_text = f"🔍 No encontré productos que coincidan con *'{clean_query}'* en el catálogo del ERP."
+            else:
+                blocks = []
+                for r in stock_results:
+                    facs = ", ".join([f"{f['facility']}: *{f['available']:.0f}* disp" for f in r["stock_by_facility"]]) or "Sin stock físico"
+                    blocks.append(f"📦 *{r['product_name']}* (`{r['sku']}`)\n   └ {facs}")
+                reply_text = f"📊 *Consulta de Existencias para '{clean_query}':*\n\n" + "\n\n".join(blocks)
 
     else:
         tool_executed = "general_assistance"

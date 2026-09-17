@@ -50,6 +50,12 @@ from app.services.valeria_pricing_service import (
     audit_cross_store_price_discrepancies,
     lookup_product_price_and_cost
 )
+from app.services.clara_purchases_service import (
+    lookup_purchasing_product_360,
+    format_product_360_telegram,
+    parse_order_intent,
+    create_supplier_po_from_chat
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,13 +114,24 @@ def call_worker_gemini(
                 "proveedores_activos": suppliers,
                 "quiebres_y_sugeridos": stockouts[:5]
             }
+
+            # Si el usuario preguntó por un producto específico, incluir su ficha técnica 360° en vivo
+            prod_lookup = lookup_purchasing_product_360(user_question, db, limit=3)
+            if prod_lookup:
+                context_data["productos_consultados_en_vivo"] = prod_lookup
         except Exception as e:
             logger.warning(f"Error recopilando contexto para Clara: {e}")
 
         system_prompt = (
             worker.system_prompt if worker else
             "Eres Clara, Analista Estratégica de Compras y Rentabilidad de Neo ERP. "
-            "Supervisas órdenes de compra, conciliación 3-way match, reposición, rotación y rentabilidad con proveedores."
+            "Supervisas órdenes de compra, abastecimiento, inventario, quiebres de stock, rotación de productos, costos y relaciones con proveedores."
+        )
+        system_prompt += (
+            "\nTienes acceso a la ficha 360° de productos (costos de reposición, promedio, estándar, PVP, margen %, "
+            "stock por tienda, rotación diaria en unidades y días de cobertura/runway). "
+            "Si el usuario te solicita crear una orden de compra o consultar sugeridos, indícale claramente cómo generarla "
+            "o confírmale los datos con precisión ejecutiva."
         )
 
     elif "ARTURO" in clean_code:
@@ -340,7 +357,9 @@ async def process_telegram_message(
                 f"*Analista Estratégica de Compras y Rentabilidad* de *Neo ERP*.\n\n"
                 f"Superviso órdenes de compra, conciliación 3-way match, abastecimiento y acuerdos comerciales.\n\n"
                 f"📌 *Comandos Disponibles:*\n"
-                f"• `/odc` o `/ordenes`: Órdenes de compra abiertas y su estado\n"
+                f"• `/producto <nombre o sku>`: Ficha 360° de compra (costos, stock por tienda, rotación y proveedor)\n"
+                f"• `/crear_odc <proveedor>`: Generar ODC borrador sugerida (MRP) o con ítems específicos\n"
+                f"• `/odc` o `/ordenes`: Órdenes de compra recientes y su estado\n"
                 f"• `/conciliacion`: ODCs pendientes de conciliar vs recepción física y factura\n"
                 f"• `/sugeridos`: Diagnóstico de quiebres de stock y sugeridos de compra\n"
                 f"• `/proveedores`: Proveedores registrados y condiciones de despacho\n"
@@ -348,9 +367,10 @@ async def process_telegram_message(
                 f"• `/vincular <PIN>`: Vincular este chat con tu usuario de Neo ERP\n\n"
                 f"💬 *Consultas en lenguaje natural:*\n"
                 f"Puedes preguntarme por ejemplo:\n"
-                f"_• \"¿Qué órdenes de compra están pendientes de conciliar?\"_\n"
-                f"_• \"¿Cuáles productos tienen riesgo de quiebre?\"_\n"
-                f"_• \"¿Cómo está el abastecimiento de Harina PAN?\"_"
+                f"_• \"Ficha de compra de Harina PAN\"_\n"
+                f"_• \"Clara, genera una orden de compra para Alimentos Polar\"_\n"
+                f"_• \"Crea orden para Alimentos Polar con 50 Harina Pan y 20 Primor\"_\n"
+                f"_• \"¿Cuáles productos tienen riesgo de quiebre?\"_"
             )
         elif "ARTURO" in clean_agent_code:
             return (
@@ -521,6 +541,53 @@ async def process_telegram_message(
             for r in rets:
                 lines.append(f"• *{r['return_number']}* | Estado: `{r['status']}` | Motivo: {r['reason']}")
             return "\n".join(lines)
+
+        # COMANDO: /producto <nombre o sku>
+        if lower_text.startswith("/producto") or lower_text.startswith("producto") or lower_text.startswith("/articulo") or lower_text.startswith("articulo"):
+            query_prod = re.sub(r"^/(?:producto|articulo)\s*|^(?:producto|articulo)\s*", "", raw_text, flags=re.IGNORECASE).strip()
+            if not query_prod:
+                return "🔍 Por favor indica qué producto consultar. Ejemplo: `/producto Harina PAN` o `/producto PRD-114675`"
+            prods = lookup_purchasing_product_360(query_prod, db)
+            if not prods:
+                return f"🔍 No encontré productos que coincidan con '{query_prod}' en el catálogo de compras."
+            blocks = [format_product_360_telegram(p) for p in prods]
+            return f"📋 *Ficha 360° de Compras para '{query_prod}':*\n\n" + "\n\n───────────────\n\n".join(blocks)
+
+        # COMANDO O LENGUAJE NATURAL: /crear_odc o crear orden de compra
+        is_create_po = (
+            lower_text.startswith("/crear_odc") or
+            lower_text.startswith("/crear_orden") or
+            lower_text.startswith("/odc_crear") or
+            (
+                any(w in lower_text for w in ["genera", "generar", "crea", "crear", "haz", "hacer", "prepara", "preparar", "emitir"]) and
+                any(w in lower_text for w in ["odc", "orden de compra", "pedido de compra", "orden"])
+            )
+        )
+        if is_create_po:
+            sup_query, custom_items = parse_order_intent(raw_text)
+            if not sup_query:
+                return (
+                    "❓ Por favor indica el proveedor para generar la orden de compra.\n\n"
+                    "Ejemplos:\n"
+                    "• `/crear_odc Alimentos Polar` (Modo sugerido MRP por quiebres)\n"
+                    "• `/crear_odc Alimentos Polar | 50 Harina Pan, 20 Primor` (Modo con renglones específicos)\n"
+                    "• *\"Clara, genera una orden de compra para Alimentos Polar\"*"
+                )
+            target_fac_id = user.facilities[0].id if (user and user.facilities) else 1
+            po_result = create_supplier_po_from_chat(
+                db=db,
+                supplier_query=sup_query,
+                user_name=user_name,
+                facility_id=target_fac_id,
+                custom_items=custom_items,
+                channel="Telegram"
+            )
+            if po_result.get("success"):
+                return po_result["message"]
+            elif po_result.get("no_deficit"):
+                return po_result["message"]
+            else:
+                return f"⚠️ *No se pudo generar la orden*: {po_result.get('error', 'Error desconocido')}"
 
     # === COMANDOS DE ARTURO (ALMACÉN) ===
     if "ARTURO" in clean_agent_code:
