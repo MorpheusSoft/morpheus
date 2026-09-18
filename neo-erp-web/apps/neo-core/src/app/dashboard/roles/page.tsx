@@ -5,50 +5,118 @@ import { getRoles, createRole, updateRole } from "@/app/actions/roles";
 
 const initialPermissions: any = {
   neo_core: {
-      companies: { read: false, write: false, delete: false, approve: false },
-      users: { read: false, write: false, delete: false, approve: false },
-      roles: { read: false, write: false, delete: false, approve: false },
-      facilities: { read: false, write: false, delete: false, approve: false },
-      currencies: { read: false, write: false, delete: false, approve: false },
-      jobs: { read: false, write: false, delete: false, approve: false },
+    companies: { read: false, write: false, delete: false, approve: false },
+    users: { read: false, write: false, delete: false, approve: false },
+    roles: { read: false, write: false, delete: false, approve: false },
+    facilities: { read: false, write: false, delete: false, approve: false },
+    currencies: { read: false, write: false, delete: false, approve: false },
+    digital_workers: { read: false, write: false, delete: false, approve: false },
+    store_sync: { read: false, write: false, delete: false, approve: false },
+    jobs: { read: false, write: false, delete: false, approve: false },
+  },
+  neo_wms: {
+    receipts: { read: false, write: false, delete: false, approve: false },
+    locations: { read: false, write: false, delete: false, approve: false },
+    transfers: { read: false, write: false, delete: false, approve: false },
+    shipments: { read: false, write: false, delete: false, approve: false },
+    adjustments: { read: false, write: false, delete: false, approve: false },
+    lots: { read: false, write: false, delete: false, approve: false },
+    returns: { read: false, write: false, delete: false, approve: false },
   },
   neo_inventory: {
-      products: { read: false, write: false, delete: false, approve: false },
-      categories: { read: false, write: false, delete: false, approve: false },
-      warehouses: { read: false, write: false, delete: false, approve: false },
+    products: { read: false, write: false, delete: false, approve: false },
+    categories: { read: false, write: false, delete: false, approve: false },
+    warehouses: { read: false, write: false, delete: false, approve: false },
+    kardex: { read: false, write: false, delete: false, approve: false },
+    valuation: { read: false, write: false, delete: false, approve: false },
+    physical_counts: { read: false, write: false, delete: false, approve: false },
+    labels: { read: false, write: false, delete: false, approve: false },
+    inventory_book: { read: false, write: false, delete: false, approve: false },
   },
   neo_purchases: {
-      suppliers: { read: false, write: false, delete: false, approve: false },
-      orders: { read: false, write: false, delete: false, approve: false },
-      prices: { read: false, write: false, delete: false, approve: false },
+    orders: { read: false, write: false, delete: false, approve: false },
+    requisitions: { read: false, write: false, delete: false, approve: false },
+    suppliers: { read: false, write: false, delete: false, approve: false },
+    buyers: { read: false, write: false, delete: false, approve: false },
+    reconciliation: { read: false, write: false, delete: false, approve: false },
+    sell_out: { read: false, write: false, delete: false, approve: false },
+    dead_stock: { read: false, write: false, delete: false, approve: false },
   },
   neo_pricing: {
-      pricing_metrics: { read: false, write: false, delete: false, approve: false },
-      pricing_costs: { read: false, write: false, delete: false, approve: false },
-      pricing_prices: { read: false, write: false, delete: false, approve: false },
-      pricing_reports: { read: false, write: false, delete: false, approve: false },
+    pricing_costs: { read: false, write: false, delete: false, approve: false },
+    pricing_prices: { read: false, write: false, delete: false, approve: false },
+    pricing_promotions: { read: false, write: false, delete: false, approve: false },
+    pricing_tags: { read: false, write: false, delete: false, approve: false },
+    pricing_kiosk: { read: false, write: false, delete: false, approve: false },
+    pricing_reports: { read: false, write: false, delete: false, approve: false },
   },
-  neo_logistics: {
-      routes: { read: false, write: false, delete: false, approve: false },
-      vehicles: { read: false, write: false, delete: false, approve: false },
-      direct_receipts: { read: false, write: false, delete: false, approve: false },
+  neo_b2b: {
+    b2b_catalog: { read: false, write: false, delete: false, approve: false },
+    b2b_orders: { read: false, write: false, delete: false, approve: false },
+    b2b_approvals: { read: false, write: false, delete: false, approve: false },
   }
 };
 
 const moduleNames: any = {
   neo_core: "Control Maestro (Neo Core)",
-  neo_inventory: "Bodegas e Inventario",
-  neo_purchases: "Compras y Adquisiciones",
-  neo_pricing: "Costos y Precios (Neo Pricing)",
-  neo_logistics: "CENDI y Logística",
+  neo_wms: "Almacén y Operaciones (Neo WMS)",
+  neo_inventory: "Catálogo y Existencias (Neo Inventario)",
+  neo_purchases: "Compras y Adquisiciones (Neo Compras)",
+  neo_pricing: "Costos, Precios y Habladores (Neo Pricing)",
+  neo_b2b: "Portal Mayorista (Neo B2B)",
 };
 
 const featureNames: any = {
-  companies: "Holding y Empresas", users: "Usuarios", roles: "Roles y Seguridad", facilities: "Sucursales", currencies: "Mercado de Divisas", jobs: "Tareas en Segundo Plano (Jobs)",
-  products: "Maestro de Productos", categories: "Categorías", warehouses: "Almacenes",
-  suppliers: "Directorio de Proveedores", orders: "Gestor de Órdenes", prices: "Tarifas de Compra",
-  pricing_metrics: "Métricas y Desviaciones", pricing_costs: "Auditoría de Costos", pricing_prices: "Mesa de Trabajo de Precios", pricing_reports: "Reportes de Precios y Márgenes",
-  routes: "Rutas", vehicles: "Flota de Vehículos", direct_receipts: "Recepciones Directas (Sin ODC)"
+  // Neo Core
+  companies: "Holding y Empresas",
+  users: "Gestión de Usuarios",
+  roles: "Roles y Seguridad",
+  facilities: "Sucursales",
+  currencies: "Mercado de Divisas",
+  digital_workers: "Usuarios Digitales (IA Workers)",
+  store_sync: "Sincronización en Tiendas (Sync Agent)",
+  jobs: "Tareas en Segundo Plano (Jobs)",
+
+  // Neo WMS
+  receipts: "Recepciones de Mercancía (ODC y Directas)",
+  locations: "Mapa de Almacén y Ubicaciones",
+  transfers: "Transferencias Internas",
+  shipments: "Despachos y Salidas",
+  adjustments: "Ajustes de Inventario",
+  lots: "Control de Lotes y Vencimientos",
+  returns: "Devoluciones a Proveedores",
+
+  // Neo Inventario
+  products: "Maestro de Productos y Variantes",
+  categories: "Categorías de Productos",
+  warehouses: "Almacenes y Depósitos",
+  kardex: "Kardex de Movimientos",
+  valuation: "Valoración de Inventario",
+  physical_counts: "Conteos Físicos y Tomas",
+  labels: "Impresión de Códigos de Barra",
+  inventory_book: "Libro de Inventarios",
+
+  // Neo Compras
+  orders: "Gestor de Órdenes de Compra (ODC)",
+  requisitions: "Requisiciones de Compra",
+  suppliers: "Directorio de Proveedores",
+  buyers: "Compradores Asignados",
+  reconciliation: "Conciliación de Facturas (3-Way Match)",
+  sell_out: "Análisis de Sell-Out y Reposición",
+  dead_stock: "Control de Inventario Muerto",
+
+  // Neo Pricing
+  pricing_costs: "Auditoría y Estructura de Costos",
+  pricing_prices: "Mesa de Trabajo de Precios y Márgenes",
+  pricing_promotions: "Ofertas y Promociones",
+  pricing_tags: "Diseño e Impresión de Habladores",
+  pricing_kiosk: "Kiosco Consultor en Tienda",
+  pricing_reports: "Reportes de Precios y Márgenes",
+
+  // Neo B2B
+  b2b_catalog: "Catálogo Mayorista y Carrito",
+  b2b_orders: "Historial de Pedidos B2B",
+  b2b_approvals: "Aprobación de Pedidos y Límites de Crédito",
 };
 
 
@@ -89,11 +157,27 @@ export default function RolesPage() {
   const mergePermissions = (savedPerms: any) => {
     const base = JSON.parse(JSON.stringify(initialPermissions));
     if (!savedPerms) return base;
-    for (const modKey in savedPerms) {
+
+    // Normalización de claves legadas
+    const normalized: any = { ...savedPerms };
+    if (normalized.neo_logistics && !normalized.neo_wms) {
+      normalized.neo_wms = normalized.neo_logistics;
+    }
+    if (normalized.wms && !normalized.neo_wms) {
+      normalized.neo_wms = normalized.wms;
+    }
+    if (normalized.purchasing && !normalized.neo_purchases) {
+      normalized.neo_purchases = normalized.purchasing;
+    }
+    if (normalized.inventory && !normalized.neo_inventory) {
+      normalized.neo_inventory = normalized.inventory;
+    }
+
+    for (const modKey in normalized) {
       if (base[modKey]) {
-        for (const featKey in savedPerms[modKey]) {
+        for (const featKey in normalized[modKey]) {
            if (base[modKey][featKey]) {
-             base[modKey][featKey] = { ...base[modKey][featKey], ...savedPerms[modKey][featKey] };
+             base[modKey][featKey] = { ...base[modKey][featKey], ...normalized[modKey][featKey] };
            }
         }
       }
@@ -139,11 +223,15 @@ export default function RolesPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const finalPermissions = { ...permissions };
+    if (finalPermissions.neo_wms) {
+      finalPermissions.neo_logistics = finalPermissions.neo_wms;
+    }
     const payload = { 
        name, 
        description, 
        can_use_oracle: canUseOracle,
-       permissions,
+       permissions: finalPermissions,
        is_active: isActive
     };
     try {
@@ -188,7 +276,7 @@ export default function RolesPage() {
               <tr>
                 <th className="px-6 py-4 rounded-tl-2xl">Perfiles</th>
                 <th className="px-6 py-4">Descripción</th>
-                <th className="px-6 py-4 text-center">Oráculo AI</th>
+                <th className="px-6 py-4 text-center">Usuario Digital</th>
                 <th className="px-6 py-4 text-center">Estatus</th>
                 <th className="px-6 py-4 text-right rounded-tr-2xl">Acciones</th>
               </tr>
@@ -198,16 +286,20 @@ export default function RolesPage() {
                 <tr key={r.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
                      <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
-                       <i className="pi pi-id-card text-sm"></i>
+                        <i className="pi pi-id-card text-sm"></i>
                      </div>
                      {r.name}
                   </td>
                   <td className="px-6 py-4">{r.description || <span className="text-slate-400 italic">Sin descripción</span>}</td>
                   <td className="px-6 py-4 text-center">
                      {r.can_use_oracle ? (
-                        <span className="text-purple-600 bg-purple-50 p-1.5 rounded-full inline-flex"><i className="pi pi-sparkles"></i></span>
+                        <span className="bg-purple-50 text-purple-700 border border-purple-200 px-2.5 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1.5 shadow-sm">
+                           <i className="pi pi-android text-purple-600"></i> Digital
+                        </span>
                      ) : (
-                        <span className="text-slate-300"><i className="pi pi-times-circle"></i></span>
+                        <span className="bg-slate-50 text-slate-500 border border-slate-200 px-2.5 py-1 rounded-lg text-[11px] font-medium inline-flex items-center gap-1.5">
+                           <i className="pi pi-user text-slate-400"></i> Humano
+                        </span>
                      )}
                   </td>
                   <td className="px-6 py-4 text-center">
@@ -277,12 +369,16 @@ export default function RolesPage() {
 
                        <div className="flex items-center gap-3 bg-gradient-to-r from-purple-50 to-indigo-50 p-4 rounded-xl border border-purple-100">
                           <div className="flex-1">
-                             <p className="font-bold text-slate-800 text-sm flex items-center gap-1"><i className="pi pi-sparkles text-purple-500"></i> IA Oráculo</p>
-                             <p className="text-xs text-slate-500 leading-tight mt-1">Concede token para uso del asistente LLM.</p>
+                             <p className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                                <i className="pi pi-android text-purple-600"></i> Rol para Usuario Digital
+                             </p>
+                             <p className="text-xs text-slate-500 leading-tight mt-1">
+                                Habilita este perfil como rol operativo para agentes autónomos (IA).
+                             </p>
                           </div>
                           <label className="relative inline-flex items-center cursor-pointer">
                             <input type="checkbox" className="sr-only peer" checked={canUseOracle} onChange={(e) => setCanUseOracle(e.target.checked)} />
-                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-500"></div>
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
                           </label>
                        </div>
 

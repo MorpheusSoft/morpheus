@@ -114,7 +114,7 @@ def create_direct_receipt(
     if current_user.roles:
         for r in current_user.roles:
             perms = r.permissions or {}
-            log_perms = perms.get("neo_logistics", {})
+            log_perms = perms.get("neo_wms") or perms.get("neo_logistics", {})
             dr_perms = log_perms.get("direct_receipts", {})
             if dr_perms.get("write") or dr_perms.get("approve") or dr_perms.get("read") or log_perms.get("receipts", {}).get("write"):
                 has_perm = True
@@ -854,7 +854,7 @@ def toggle_batch_quarantine(
     elif current_user.roles:
         for r in current_user.roles:
             perms = r.permissions or {}
-            log_perms = perms.get("neo_logistics", {})
+            log_perms = perms.get("neo_wms") or perms.get("neo_logistics", {})
             lot_perms = log_perms.get("lots", {})
             if lot_perms.get("write") or lot_perms.get("approve") or lot_perms.get("quarantine"):
                 has_perm = True
@@ -1981,7 +1981,7 @@ def approve_inventory_adjustment(
                 can_approve = True
                 break
             perms = r.permissions or {}
-            log_perms = perms.get("neo_logistics", {})
+            log_perms = perms.get("neo_wms") or perms.get("neo_logistics", {})
             adj_perms = log_perms.get("direct_adjustments", {}) or log_perms.get("adjustments", {})
             if adj_perms.get("approve") or adj_perms.get("admin"):
                 can_approve = True
