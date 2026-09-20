@@ -227,7 +227,7 @@ def get_advanced_kardex(
             LEFT JOIN LATERAL (
                 SELECT id, name FROM inv.warehouses WHERE facility_id = d.facility_id ORDER BY id ASC LIMIT 1
             ) w_def ON true
-            WHERE d.type = 'INVOICE' AND d.state = 'CONFIRMED'
+            WHERE d.type = 'INVOICE' AND d.state = 'CONFIRMED' AND (d.is_historical IS FALSE OR d.is_historical IS NULL)
         )
     """
 

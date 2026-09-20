@@ -121,12 +121,12 @@ public class SalesExtractorWorker : BackgroundService
                 for (int i = 0; i < documents.Count; i += batchSize)
                 {
                     var chunk = documents.Skip(i).Take(batchSize).ToList();
-                    bool success = await SendSalesBatchAsync(chunk, isHistorical: false, stoppingToken);
+                    var (success, errorMsg) = await SendSalesBatchAsync(chunk, isHistorical: false, stoppingToken);
 
                     if (!success)
                     {
                         Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"    [ERROR] Fallo enviando lote ({i + 1} al {i + chunk.Count}). Reintentando en 5s...");
+                        Console.WriteLine($"    [ERROR] Fallo enviando lote ({i + 1} al {i + chunk.Count}): {errorMsg}. Reintentando en 5s...");
                         Console.ResetColor();
                         await Task.Delay(5000, stoppingToken);
                         i -= batchSize; // reintentar este lote
@@ -189,10 +189,10 @@ public class SalesExtractorWorker : BackgroundService
         for (int i = 0; i < documents.Count; i += batchSize)
         {
             var chunk = documents.Skip(i).Take(batchSize).ToList();
-            bool success = await SendSalesBatchAsync(chunk, isHistorical: false, stoppingToken);
+            var (success, errorMsg) = await SendSalesBatchAsync(chunk, isHistorical: false, stoppingToken);
             if (!success)
             {
-                throw new Exception("Fallo en transmisión de lote de ventas hacia el servidor central.");
+                throw new InvalidOperationException(errorMsg ?? "Fallo en transmisión de lote de ventas hacia el servidor central.");
             }
             sentCount += chunk.Count;
         }
@@ -228,10 +228,10 @@ public class SalesExtractorWorker : BackgroundService
         for (int i = 0; i < documents.Count; i += batchSize)
         {
             var chunk = documents.Skip(i).Take(batchSize).ToList();
-            bool success = await SendSalesBatchAsync(chunk, isHistorical: false, stoppingToken);
+            var (success, errorMsg) = await SendSalesBatchAsync(chunk, isHistorical: false, stoppingToken);
             if (!success)
             {
-                _logger.LogWarning("Error enviando lote continuo de ventas. Se reintentará en el próximo ciclo.");
+                _logger.LogWarning("Error enviando lote continuo de ventas ({Error}). Se reintentará en el próximo ciclo.", errorMsg);
                 return;
             }
         }
@@ -347,7 +347,7 @@ public class SalesExtractorWorker : BackgroundService
         return documentsMap.Values.ToList();
     }
 
-    private async Task<bool> SendSalesBatchAsync(List<SalesBatchDocumentDto> documents, bool isHistorical, CancellationToken stoppingToken)
+    private async Task<(bool Success, string? ErrorMessage)> SendSalesBatchAsync(List<SalesBatchDocumentDto> documents, bool isHistorical, CancellationToken stoppingToken)
     {
         var targetUrl = ResolveTargetUrl();
 
@@ -368,19 +368,21 @@ public class SalesExtractorWorker : BackgroundService
             var response = await client.PostAsync(targetUrl, content, stoppingToken);
             if (response.IsSuccessStatusCode)
             {
-                return true;
+                return (true, null);
             }
             else
             {
                 var errorBody = await response.Content.ReadAsStringAsync(stoppingToken);
+                string detailMsg = $"HTTP {(int)response.StatusCode} ({response.ReasonPhrase}) en {targetUrl}: {errorBody}";
                 _logger.LogWarning("Fallo en POST a {Url}. Status: {StatusCode}, Error: {Body}", targetUrl, response.StatusCode, errorBody);
-                return false;
+                return (false, detailMsg);
             }
         }
         catch (Exception ex)
         {
+            string netMsg = $"Fallo de conexión al servidor central ({targetUrl}): {ex.Message}";
             _logger.LogError(ex, "Excepción enviando lote de ventas a {Url}", targetUrl);
-            return false;
+            return (false, netMsg);
         }
     }
 
@@ -406,8 +408,15 @@ public class SalesExtractorWorker : BackgroundService
     {
         if (syncState.LastSalesSync.Year == 2000)
         {
-            var cutoffStr = _configuration.GetValue<string>("DirectExtractors:InventoryBaseline:BaselineCutoffDate", "2026-06-07");
-            if (DateTime.TryParse(cutoffStr, out DateTime parsed))
+            var cutoffStr = _configuration.GetValue<string>("DirectExtractors:InventoryBaseline:BaselineCutoffDate", "now");
+            if (string.IsNullOrWhiteSpace(cutoffStr) ||
+                string.Equals(cutoffStr.Trim(), "now", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cutoffStr.Trim(), "today", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cutoffStr.Trim(), "hoy", StringComparison.OrdinalIgnoreCase))
+            {
+                syncState.LastSalesSync = DateTime.Now;
+            }
+            else if (DateTime.TryParse(cutoffStr, out DateTime parsed))
             {
                 syncState.LastSalesSync = parsed.Date.AddDays(1).AddSeconds(-1);
             }

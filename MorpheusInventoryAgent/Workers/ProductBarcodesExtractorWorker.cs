@@ -3,6 +3,7 @@ using System.Text.Json;
 using Dapper;
 using Microsoft.Data.SqlClient;
 using MorpheusSyncAgent.Models;
+using MorpheusSyncAgent.Utils;
 
 namespace MorpheusSyncAgent.Workers;
 
@@ -53,14 +54,20 @@ public class ProductBarcodesExtractorWorker : BackgroundService
             config = new DirectExtractorConfig
             {
                 Enabled = true,
-                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "http://localhost/api") + "/import/products-barcodes-legacy",
-                ExportMode = ExportMode.OnlyWithStock
+                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "https://api.qa.morpheussoft.net/api") + "/v1/import/products-barcodes-legacy",
+                ExportMode = ExportMode.AllMaster
             };
+        }
+        else
+        {
+            // Para la sincronización de catálogos maestros, garantizamos la extracción
+            // de la totalidad de códigos de barra sin filtrarlos por existencia positiva.
+            config.ExportMode = ExportMode.AllMaster;
         }
 
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("=========================================================");
-        Console.WriteLine("  MORPHEUS SYNC AGENT - CODIGOS DE BARRA");
+        Console.WriteLine("  MORPHEUS SYNC AGENT - CÓDIGOS DE BARRA (CATÁLOGO COMPLETO)");
         Console.WriteLine("=========================================================");
         Console.ResetColor();
 
@@ -106,6 +113,10 @@ public class ProductBarcodesExtractorWorker : BackgroundService
             Console.WriteLine($"  [OK] {barcodes.Count:N0} códigos de barra sincronizados exitosamente.");
             Console.ResetColor();
             _logger.LogInformation("Successfully extracted and posted {Count} barcodes.", barcodes.Count);
+
+            var syncState = SyncStateManager.LoadState();
+            syncState.LastBarcodeSync = DateTime.Now;
+            SyncStateManager.SaveState(syncState);
         }
         else
         {

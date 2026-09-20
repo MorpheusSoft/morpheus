@@ -15,6 +15,7 @@ public class Program
         string? toStr = null;
         string? monthsStr = null;
         string? batchSizeStr = null;
+        string? depositStr = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -27,6 +28,14 @@ public class Program
             {
                 date = args[i + 1];
                 i++;
+            }
+            else if (args[i] == "--deposit" || args[i] == "--almacen" || args[i] == "-d")
+            {
+                if (i + 1 < args.Length)
+                {
+                    depositStr = args[i + 1];
+                    i++;
+                }
             }
             else if (args[i] == "--desc" && i + 1 < args.Length)
             {
@@ -94,7 +103,7 @@ public class Program
                 else if (runName.Equals("baseline", StringComparison.OrdinalIgnoreCase))
                 {
                     var worker = host.Services.GetRequiredService<InventoryBaselineWorker>();
-                    await worker.RunOnceAsync(date, desc);
+                    await worker.RunOnceAsync(date, desc, depositStr);
                 }
                 else if (runName.Equals("suppliers", StringComparison.OrdinalIgnoreCase))
                 {

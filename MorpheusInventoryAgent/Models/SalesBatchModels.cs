@@ -123,6 +123,9 @@ public class StoreSyncTelemetryDto
 
     [JsonPropertyName("error_details")]
     public string? ErrorDetails { get; set; }
+
+    [JsonPropertyName("telemetry_metadata")]
+    public Dictionary<string, object>? TelemetryMetadata { get; set; }
 }
 
 public class HistorySyncState

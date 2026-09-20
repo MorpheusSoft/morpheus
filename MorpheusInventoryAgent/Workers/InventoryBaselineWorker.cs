@@ -32,7 +32,7 @@ public class InventoryBaselineWorker : BackgroundService
                 // Only run once if enabled and not done yet
                 if (config != null && config.Enabled && !syncState.BaselineInventoryDone)
                 {
-                    await ProcessExtractionAsync(config, syncState, null, null, stoppingToken);
+                    await ProcessExtractionAsync(config, syncState, null, null, null, stoppingToken);
                 }
                 
                 await Task.Delay(TimeSpan.FromMinutes(config?.IntervalMinutes ?? 60), stoppingToken);
@@ -45,7 +45,7 @@ public class InventoryBaselineWorker : BackgroundService
         }
     }
 
-    public async Task RunOnceAsync(string? date = null, string? desc = null, CancellationToken stoppingToken = default)
+    public async Task RunOnceAsync(string? date = null, string? desc = null, string? deposit = null, CancellationToken stoppingToken = default)
     {
         var syncState = SyncStateManager.LoadState();
         var config = _configuration.GetSection("DirectExtractors:InventoryBaseline").Get<DirectExtractorConfig>();
@@ -60,18 +60,22 @@ public class InventoryBaselineWorker : BackgroundService
 
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("=========================================================");
-        Console.WriteLine("  MORPHEUS SYNC AGENT - INVENTARIO INICIAL (BASELINE)");
+        Console.WriteLine("  NEO SYNC AGENT - INVENTARIO INICIAL (BASELINE)");
+        if (!string.IsNullOrWhiteSpace(deposit))
+        {
+            Console.WriteLine($"  [FILTRO ACTIVO] Depósito: {deposit}");
+        }
         Console.WriteLine("=========================================================");
         Console.ResetColor();
 
-        await ProcessExtractionAsync(config, syncState, date, desc, stoppingToken);
+        await ProcessExtractionAsync(config, syncState, date, desc, deposit, stoppingToken);
         Console.WriteLine("=========================================================\n");
     }
 
-    private async Task ProcessExtractionAsync(DirectExtractorConfig config, SyncState syncState, string? dateOverride = null, string? descOverride = null, CancellationToken stoppingToken = default)
+    private async Task ProcessExtractionAsync(DirectExtractorConfig config, SyncState syncState, string? dateOverride = null, string? descOverride = null, string? depositOverride = null, CancellationToken stoppingToken = default)
     {
         string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
-        var cutoffStr = dateOverride ?? _configuration.GetValue<string>("DirectExtractors:InventoryBaseline:BaselineCutoffDate", "2026-06-07");
+        var cutoffStr = dateOverride ?? _configuration.GetValue<string>("DirectExtractors:InventoryBaseline:BaselineCutoffDate", "now");
         
         DateTime cutoff;
         bool isNow = string.IsNullOrWhiteSpace(cutoffStr)
@@ -101,31 +105,49 @@ public class InventoryBaselineWorker : BackgroundService
             _logger.LogWarning("Formato de fecha inválido '{CutoffStr}', usando momento actual ({Cutoff}).", cutoffStr, cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
         }
         
+        if (!string.IsNullOrWhiteSpace(depositOverride))
+        {
+            Console.WriteLine($"  Filtrando exclusivamente por depósito: '{depositOverride.Trim()}'");
+            _logger.LogInformation("Filtro de depósito activo: {Deposit}", depositOverride.Trim());
+        }
+
         Console.WriteLine("  Consultando existencias consolidadas en SQL Server (puede tomar unos segundos)...");
 
         int facilityId = _configuration.GetValue<int>("StoreFacilityId", 1);
         string facilityCode = _configuration.GetValue<string>("StoreFacilityCode", "");
 
-        string query = @"
-            select @FacilityId as facility_id, @FacilityCode as facility_code, c_deposito, c_codArticulo, sum(case when c_tipoMov='Descargo' then n_cantidad*-1 else n_cantidad end) Cantidad
+        string depositCondition = !string.IsNullOrWhiteSpace(depositOverride) ? " and t.c_deposito = @DepositCode " : "";
+
+        string query = $@"
+            select @FacilityId as facility_id, @FacilityCode as facility_code, t.c_deposito, t.c_codArticulo, sum(case when t.c_tipoMov='Descargo' then t.n_cantidad*-1 else t.n_cantidad end) Cantidad
             from tr_inventario t WITH (NOLOCK)
-            inner join ma_inventario m WITH (NOLOCK) on t.c_concepto = m.c_concepto and t.c_documento=m.c_documento
-            where m.c_status!='ANU' and f_fecha <= @Cutoff
-            group by c_deposito, c_codArticulo";
+            left join ma_inventario mi WITH (NOLOCK) on t.c_concepto = mi.c_concepto and t.c_documento = mi.c_documento
+            left join ma_ventas mv WITH (NOLOCK) on t.c_concepto = mv.c_concepto and t.c_documento = mv.c_documento
+            where (mi.c_status is null or mi.c_status != 'ANU')
+              and (mv.c_status is null or mv.c_status != 'ANU')
+              and coalesce(mi.d_fecha, mv.d_fecha) <= @Cutoff {depositCondition}
+            group by t.c_deposito, t.c_codArticulo";
 
         using var connection = new SqlConnection(connectionString);
-        var baseline = (await connection.QueryAsync(query, new { FacilityId = facilityId, FacilityCode = facilityCode, Cutoff = cutoff }, commandTimeout: 600)).ToList();
+        var baseline = (await connection.QueryAsync(query, new { 
+            FacilityId = facilityId, 
+            FacilityCode = facilityCode, 
+            Cutoff = cutoff,
+            DepositCode = depositOverride?.Trim() 
+        }, commandTimeout: 600)).ToList();
 
         if (!baseline.Any())
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"  [ALERTA] No se encontraron movimientos de inventario antes de {cutoff:yyyy-MM-dd HH:mm:ss}.");
+            string depMsg = !string.IsNullOrWhiteSpace(depositOverride) ? $" para el depósito '{depositOverride}'" : "";
+            Console.WriteLine($"  [ALERTA] No se encontraron movimientos de inventario{depMsg} antes de {cutoff:yyyy-MM-dd HH:mm:ss}.");
             Console.ResetColor();
-            _logger.LogWarning("No se encontraron movimientos de inventario antes de {Cutoff}.", cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
+            _logger.LogWarning("No se encontraron movimientos de inventario{DepositMsg} antes de {Cutoff}.", depMsg, cutoff.ToString("yyyy-MM-dd HH:mm:ss"));
             return;
         }
 
-        Console.WriteLine($"  -> Encontrados {baseline.Count:N0} artículos con saldo. Transmitiendo a la nube QA...");
+        string depLog = !string.IsNullOrWhiteSpace(depositOverride) ? $" para depósito {depositOverride.Trim()}" : "";
+        Console.WriteLine($"  -> Encontrados {baseline.Count:N0} artículos con saldo{depLog}. Transmitiendo a la nube QA...");
 
         var json = JsonSerializer.Serialize(baseline);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -137,10 +159,16 @@ public class InventoryBaselineWorker : BackgroundService
         if (response.IsSuccessStatusCode)
         {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  [OK] {baseline.Count:N0} artículos sembrados exitosamente como Inventario Inicial.");
+            string depSuccess = !string.IsNullOrWhiteSpace(depositOverride) ? $" (Depósito {depositOverride.Trim()})" : "";
+            Console.WriteLine($"  [OK] {baseline.Count:N0} artículos sembrados exitosamente como Inventario Inicial{depSuccess}.");
             Console.ResetColor();
-            _logger.LogInformation("Successfully extracted and posted {Count} baseline inventory records.", baseline.Count);
-            syncState.BaselineInventoryDone = true;
+            _logger.LogInformation("Successfully extracted and posted {Count} baseline inventory records for deposit {Deposit}.", baseline.Count, depositOverride ?? "ALL");
+            
+            // Si fue una extracción general (sin filtro), marcamos Baseline general como terminado
+            if (string.IsNullOrWhiteSpace(depositOverride))
+            {
+                syncState.BaselineInventoryDone = true;
+            }
             if (syncState.LastMovementSync.Year == 2000)
             {
                 syncState.LastMovementSync = cutoff;

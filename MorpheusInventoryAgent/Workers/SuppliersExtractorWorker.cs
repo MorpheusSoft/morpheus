@@ -97,6 +97,10 @@ public class SuppliersExtractorWorker : BackgroundService
             Console.WriteLine($"  [OK] {suppliers.Count:N0} proveedores sincronizados exitosamente.");
             Console.ResetColor();
             _logger.LogInformation("Successfully extracted and posted {Count} suppliers.", suppliers.Count);
+
+            var syncState = SyncStateManager.LoadState();
+            syncState.LastProductSync = DateTime.Now;
+            SyncStateManager.SaveState(syncState);
         }
         else
         {

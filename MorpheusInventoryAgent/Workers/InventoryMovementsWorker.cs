@@ -79,7 +79,7 @@ public class InventoryMovementsWorker : BackgroundService
         // Initialize watermark with cutoff date if this is the first run
         if (syncState.LastMovementSync.Year == 2000)
         {
-            var cutoffStr = _configuration.GetValue<string>("DirectExtractors:InventoryBaseline:BaselineCutoffDate", "2026-06-07");
+            var cutoffStr = _configuration.GetValue<string>("DirectExtractors:InventoryBaseline:BaselineCutoffDate", "now");
             if (string.IsNullOrWhiteSpace(cutoffStr) ||
                 string.Equals(cutoffStr.Trim(), "now", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(cutoffStr.Trim(), "today", StringComparison.OrdinalIgnoreCase) ||
@@ -105,11 +105,11 @@ public class InventoryMovementsWorker : BackgroundService
         string facilityCode = _configuration.GetValue<string>("StoreFacilityCode", "");
         
         string query = @"
-            select @FacilityId as facility_id, @FacilityCode as facility_code, m.c_documento, t.c_concepto, c_tipoMov, f_fecha, c_deposito, c_codArticulo, t.n_cantidad, t.n_costo, t.n_subtotal
+            select @FacilityId as facility_id, @FacilityCode as facility_code, m.c_documento, t.c_concepto, c_tipoMov, m.d_fecha as f_fecha, c_deposito, c_codArticulo, t.n_cantidad, t.n_costo, t.n_subtotal
             from tr_inventario t WITH (NOLOCK)
             inner join ma_inventario m WITH (NOLOCK) on t.c_concepto = m.c_concepto and t.c_documento=m.c_documento
             where m.c_status != 'ANU' and t.c_concepto not in ('VEN','DEV') 
-              and f_fecha >= @LastSyncDate";
+              and m.d_fecha >= @LastSyncDate";
 
         using var connection = new SqlConnection(connectionString);
         var movements = (await connection.QueryAsync(query, new { FacilityId = facilityId, FacilityCode = facilityCode, LastSyncDate = lastSync.Date }, commandTimeout: 180)).ToList();

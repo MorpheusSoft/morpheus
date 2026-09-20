@@ -58,7 +58,7 @@ public class SupplierProductsExtractorWorker : BackgroundService
             config = new DirectExtractorConfig
             {
                 Enabled = true,
-                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "http://localhost/api") + "/import/supplier-products-legacy"
+                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "https://api.qa.morpheussoft.net/api") + "/v1/import/supplier-products-legacy"
             };
         }
 
