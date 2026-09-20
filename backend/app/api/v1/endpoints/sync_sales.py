@@ -1,6 +1,7 @@
 from typing import List, Optional, Any, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -17,11 +18,12 @@ from app.models.inventory import (
     StockPicking, StockPickingType, StockMove, Warehouse, Location, InventorySession,
     StoreDepositMapping
 )
-from app.models.core import Facility
+from app.models.core import Facility, Currency
 from app.models.sync_telemetry import StoreSyncTelemetry
 from app.models.store_agent_control import StoreAgentConfig, StoreAgentCommand
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 def resolve_facility(session: Session, facility_id: Optional[int], facility_code: Optional[str]) -> Optional[Facility]:
     if facility_id and facility_id > 0:
@@ -99,12 +101,25 @@ def import_sales_batch(
         # 1. Buscar en tabla formal de mapeo de depósitos
         mapping = session.query(StoreDepositMapping).filter(
             StoreDepositMapping.facility_id == fac_id,
-            StoreDepositMapping.external_deposit_code == dep_code,
-            StoreDepositMapping.is_active == True
+            StoreDepositMapping.external_deposit_code == dep_code
         ).first()
 
         if mapping:
-            res = (mapping.location_id, mapping.affects_inventory)
+            if not mapping.is_active or not mapping.affects_inventory:
+                res = (None, False)
+            else:
+                res = (mapping.location_id, True)
+            deposit_cache[key] = res
+            return res
+
+        # Si la sucursal ya tiene mapeos guardados formalmente, no auto-descubrir depósitos omitidos
+        has_configured = session.query(StoreDepositMapping).filter(
+            StoreDepositMapping.facility_id == fac_id,
+            StoreDepositMapping.auto_discovered == False
+        ).count() > 0
+
+        if has_configured:
+            res = (None, False)
             deposit_cache[key] = res
             return res
 
@@ -203,7 +218,7 @@ def import_sales_batch(
         # se marcan is_historical = True (no descuentan stock).
         # Ventas posteriores al Baseline se marcan is_historical = False y descuentan stock en Kardex.
         cutoff = get_baseline_cutoff(fac_id)
-        doc_is_historical = (doc_date <= cutoff)
+        doc_is_historical = bool(payload.is_historical or (doc_date <= cutoff))
 
         # Cliente
         cust_rif = (doc_in.customer_tax_id or "J-000000000").strip()
@@ -226,11 +241,17 @@ def import_sales_batch(
         else:
             doc_type = DocumentType.INVOICE
 
+        # Moneda del documento (Stellar emite en Bolívares VES)
+        ves_currency = session.query(Currency).filter(Currency.code == "VES").first()
+        ves_curr_id = ves_currency.id if ves_currency else 2
+        ves_rate = ves_currency.exchange_rate if ves_currency and ves_currency.exchange_rate else Decimal('1.0')
+
         # Crear cabecera Document
         doc = Document(
             facility_id=fac_id,
             customer_id=customer_id,
-            currency_id=1,
+            currency_id=ves_curr_id,
+            exchange_rate=ves_rate,
             type=doc_type,
             state=DocumentState.CONFIRMED,
             register_code=reg_code,
@@ -339,7 +360,7 @@ def import_sales_batch(
                             warehouse_id=src_wh_id,
                             name="Ubicación Clientes / Consumo",
                             code="CUSTOMER",
-                            usage="CUSTOMER",
+                            usage="EXTERNAL",
                             location_type="CUSTOMER"
                         )
                         session.add(cust_loc)
@@ -361,7 +382,16 @@ def import_sales_batch(
 
         processed_count += 1
 
-    session.commit()
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"[SYNC SALES ERROR] Error guardando lote de ventas: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error en servidor central procesando lote de ventas: {str(e)}"
+        )
+
     return {
         "status": "SUCCESS",
         "processed": processed_count,
@@ -378,6 +408,8 @@ def record_heartbeat(
     """
     Registra el latido (Heartbeat) y métricas de salud emitidas por el agente en tienda.
     """
+    now_utc = datetime.now(timezone.utc)
+
     fac = session.query(Facility).filter(Facility.id == telemetry_in.facility_id).first()
     if not fac:
         fac = session.query(Facility).first()
@@ -412,6 +444,22 @@ def record_heartbeat(
         session.commit()
         session.refresh(cfg)
 
+    # Auto-completar comando UPDATE_SOFTWARE si la telemetría reporta la versión objetivo alcanzada
+    if telemetry_in.agent_version:
+        active_updates = session.query(StoreAgentCommand).filter(
+            StoreAgentCommand.facility_id == facility_id,
+            StoreAgentCommand.command_type == 'UPDATE_SOFTWARE',
+            StoreAgentCommand.status.in_(['RUNNING', 'SENT', 'PENDING'])
+        ).all()
+        for upd in active_updates:
+            target_v = (upd.parameters or {}).get("target_version")
+            if target_v and target_v.strip() == telemetry_in.agent_version.strip():
+                upd.status = 'COMPLETED'
+                upd.completed_at = now_utc
+                upd.result_details = {
+                    "message": f"Servicio actualizado y verificado en vivo con versión v{target_v}."
+                }
+
     # Consultar comandos pendientes
     pending_cmds = session.query(StoreAgentCommand).filter(
         StoreAgentCommand.facility_id == facility_id,
@@ -419,7 +467,6 @@ def record_heartbeat(
     ).order_by(StoreAgentCommand.id.asc()).all()
 
     commands_payload = []
-    now_utc = datetime.utcnow()
     for c in pending_cmds:
         c.status = 'SENT'
         c.sent_at = now_utc
@@ -429,8 +476,7 @@ def record_heartbeat(
             "parameters": c.parameters or {}
         })
 
-    if pending_cmds:
-        session.commit()
+    session.commit()
 
     return {
         "status": "OK",
