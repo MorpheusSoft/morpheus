@@ -119,7 +119,7 @@ public class InventoryBaselineWorker : BackgroundService
         string depositCondition = !string.IsNullOrWhiteSpace(depositOverride) ? " and t.c_deposito = @DepositCode " : "";
 
         string query = $@"
-            select @FacilityId as facility_id, @FacilityCode as facility_code, t.c_deposito, t.c_codArticulo, sum(case when t.c_tipoMov='Descargo' then t.n_cantidad*-1 else t.n_cantidad end) Cantidad
+            select @FacilityId as facility_id, @FacilityCode as facility_code, @Cutoff as cutoff_date, t.c_deposito, t.c_codArticulo, sum(case when t.c_tipoMov='Descargo' then t.n_cantidad*-1 else t.n_cantidad end) Cantidad
             from tr_inventario t WITH (NOLOCK)
             left join ma_inventario mi WITH (NOLOCK) on t.c_concepto = mi.c_concepto and t.c_documento = mi.c_documento
             left join ma_ventas mv WITH (NOLOCK) on t.c_concepto = mv.c_concepto and t.c_documento = mv.c_documento

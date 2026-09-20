@@ -77,6 +77,7 @@ def import_products_legacy(
     # Cache existing variants based on STELLAR_CODE to speed up lookups
     stellar_barcodes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
     variant_map = {bc.barcode: bc.variant for bc in stellar_barcodes_db}
+    existing_barcodes_all = set(b[0] for b in session.query(ProductBarcode.barcode).all())
     
     count = 0
     for p in products_in:
@@ -173,14 +174,16 @@ def import_products_legacy(
             session.add(variant)
             session.flush()
             
-            stellar_barcode = ProductBarcode(
-                product_variant_id=variant.id,
-                barcode=legacy_stellar_code,
-                code_type='STELLAR_CODE',
-                uom=uom_base,
-                conversion_factor=1.0
-            )
-            session.add(stellar_barcode)
+            if legacy_stellar_code not in existing_barcodes_all:
+                stellar_barcode = ProductBarcode(
+                    product_variant_id=variant.id,
+                    barcode=legacy_stellar_code,
+                    code_type='STELLAR_CODE',
+                    uom=uom_base,
+                    conversion_factor=1.0
+                )
+                session.add(stellar_barcode)
+                existing_barcodes_all.add(legacy_stellar_code)
             
             facility_price = ProductFacilityPrice(
                 variant_id=variant.id,
@@ -222,6 +225,9 @@ def import_barcodes_legacy(
     stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
     variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
     
+    # Pre-cache existing barcodes in memory to avoid 14,000 DB roundtrips and timeouts
+    existing_barcodes = set(b[0] for b in session.query(ProductBarcode.barcode).all())
+    
     for b in barcodes_in:
         stellar_code = b.c_Codigo.strip()
         alterno = b.c_CodAlterno.strip()
@@ -235,12 +241,7 @@ def import_barcodes_legacy(
             not_found += 1
             continue
             
-        # Check if barcode already exists GLOBALLY to avoid IntegrityError
-        existing = session.query(ProductBarcode).filter(
-            ProductBarcode.barcode == alterno
-        ).first()
-        
-        if not existing:
+        if alterno not in existing_barcodes:
             new_barcode = ProductBarcode(
                 product_variant_id=variant_id,
                 barcode=alterno,
@@ -249,6 +250,7 @@ def import_barcodes_legacy(
                 conversion_factor=b.n_Cantidad or 1.0
             )
             session.add(new_barcode)
+            existing_barcodes.add(alterno)
             count += 1
             
             if count % 1000 == 0:
@@ -293,6 +295,7 @@ def resolve_facility(session: Session, fid: Optional[int] = None, fcode: Optiona
 class LegacyInventoryBaseline(BaseModel):
     facility_id: Optional[int] = None
     facility_code: Optional[str] = None
+    cutoff_date: Optional[str] = None
     c_deposito: str
     c_codArticulo: str
     Cantidad: float
@@ -314,22 +317,55 @@ def import_inventory_baseline(
     fac = resolve_facility(session, getattr(first_item, 'facility_id', None), getattr(first_item, 'facility_code', None))
     fac_id = fac.id if fac else 10
     fac_name = fac.name if fac else f"Sucursal #{fac_id}"
+
+    # Parse cutoff date if provided
+    cutoff_dt = None
+    if first_item and getattr(first_item, 'cutoff_date', None):
+        try:
+            raw_cutoff = str(first_item.cutoff_date).strip()
+            if 'T' in raw_cutoff:
+                cutoff_dt = datetime.fromisoformat(raw_cutoff)
+            else:
+                cutoff_dt = datetime.strptime(raw_cutoff.split('.')[0], '%Y-%m-%d %H:%M:%S')
+        except Exception:
+            cutoff_dt = None
+    
+    effective_date = cutoff_dt or datetime.now()
     
     # Pre-cache deposit mappings for this facility
     mappings_db = session.query(StoreDepositMapping).filter(StoreDepositMapping.facility_id == fac_id).all()
     dep_map = {m.external_deposit_code.strip(): m for m in mappings_db}
     
+    # Detect if items belong to a single specific deposit
+    unique_deposits = {b.c_deposito.strip() for b in baseline_in if b.c_deposito}
+    is_single_deposit = len(unique_deposits) == 1
+    single_deposit_code = list(unique_deposits)[0] if is_single_deposit else None
+
+    date_label = effective_date.strftime('%Y-%m-%d %H:%M')
+    session_name = f"Baseline Apertura {fac_name} {date_label}"
+    scope_type = 'GENERAL'
+    scope_val = None
+
+    if is_single_deposit and single_deposit_code:
+        session_name = f"Baseline Apertura {fac_name} - Depósito {single_deposit_code} ({date_label})"
+        scope_type = 'LOCATION'
+        scope_val = single_deposit_code
+
     inv_session = InventorySession(
-        name=f"Baseline Legacy {fac_name} {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        name=session_name,
         facility_id=fac_id,
         state='DONE',
-        scope_type='GENERAL'
+        date_start=effective_date,
+        date_end=effective_date,
+        scope_type=scope_type,
+        scope_value=scope_val
     )
     session.add(inv_session)
     session.flush()
     
     count = 0
     not_found = 0
+    ignored_inactive = 0
     ignored_no_affects = 0
     for b in baseline_in:
         stellar_code = b.c_codArticulo.strip()
@@ -341,8 +377,11 @@ def import_inventory_baseline(
 
         dep_code = (b.c_deposito or "").strip()
         loc_id = None
-        if dep_code in dep_map:
-            mapping = dep_map[dep_code]
+        if dep_map:
+            mapping = dep_map.get(dep_code)
+            if not mapping or not mapping.is_active:
+                ignored_inactive += 1
+                continue
             if not mapping.affects_inventory:
                 ignored_no_affects += 1
                 continue
@@ -364,8 +403,14 @@ def import_inventory_baseline(
     inv_session.date_end = datetime.now()
     session.commit()
     
-    print(f"✅ ¡Carga de Inventario Baseline terminada! Insertados: {count}, No encontrados: {not_found}, Omitidos por no afectar stock: {ignored_no_affects}")
-    return {"message": "Success", "imported": count, "not_found": not_found, "ignored_no_affects": ignored_no_affects}
+    print(f"✅ ¡Carga de Inventario Baseline terminada! Insertados: {count}, No encontrados: {not_found}, Omitidos inactivos/no mapeados: {ignored_inactive}, Omitidos por no afectar stock: {ignored_no_affects}")
+    return {
+        "message": "Success",
+        "imported": count,
+        "not_found": not_found,
+        "ignored_inactive": ignored_inactive,
+        "ignored_no_affects": ignored_no_affects
+    }
 
 class LegacyInventoryMovement(BaseModel):
     facility_id: Optional[int] = 1
@@ -425,14 +470,18 @@ def import_inventory_movements(
             StoreDepositMapping.external_deposit_code == deposito.strip()
         ).first()
 
-        if mapping and not mapping.affects_inventory:
-            # Depósito documental/servicios: no afecta existencias físicas en Kardex
-            continue
+        facility_mappings_count = session.query(StoreDepositMapping).filter(
+            StoreDepositMapping.facility_id == resolved_fac_id
+        ).count()
 
-        loc_src_id = 1
-        loc_dest_id = 1
-
-        if mapping:
+        if facility_mappings_count > 0:
+            if not mapping or not mapping.is_active or not mapping.affects_inventory:
+                # Si la sede tiene depósitos configurados, ignorar movimientos de depósitos no sincronizados
+                continue
+            internal_loc_id = mapping.location_id
+        elif mapping:
+            if not mapping.affects_inventory:
+                continue
             internal_loc_id = mapping.location_id
         else:
             # Fallback a búsqueda directa de almacén por código
@@ -700,6 +749,9 @@ def import_supplier_products_legacy(
     # 3. Pre-cache packagings by (product_id, name.upper())
     pack_map = {(p.product_id, p.name.upper()): p.id for p in session.query(ProductPackaging).all()}
     
+    # 4. Pre-cache existing SupplierProducts to avoid 10,000 DB queries
+    existing_sps = {(sp.variant_id, sp.supplier_id): sp for sp in session.query(SupplierProduct).all()}
+    
     for sp in supplier_products_in:
         stellar_code = sp.c_Codigo.strip()
         sup_code = sp.c_CodProveedor.strip()
@@ -745,10 +797,7 @@ def import_supplier_products_legacy(
             pack_map[(product_id, pack_name)] = pack_id
             
         # Upsert SupplierProduct
-        existing_sp = session.query(SupplierProduct).filter(
-            SupplierProduct.variant_id == variant_id,
-            SupplierProduct.supplier_id == supplier_id
-        ).first()
+        existing_sp = existing_sps.get((variant_id, supplier_id))
         
         if existing_sp:
             existing_sp.replacement_cost = Decimal(str(sp.costo))
@@ -764,6 +813,7 @@ def import_supplier_products_legacy(
                 is_active=True
             )
             session.add(new_sp)
+            existing_sps[(variant_id, supplier_id)] = new_sp
             
         count += 1
         if count % 500 == 0:
