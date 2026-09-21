@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.models.core import Facility
 from app.models.inventory import Warehouse, Location, StoreDepositMapping
-from app.models.store_agent_control import StoreAgentCommand, StoreSyncTelemetry
+from app.models.store_agent_control import StoreAgentCommand
+from app.models.sync_telemetry import StoreSyncTelemetry
 from app.schemas.store_deposit_mapping import (
     StoreDepositMappingSchema,
     StoreDepositMappingCreate,
