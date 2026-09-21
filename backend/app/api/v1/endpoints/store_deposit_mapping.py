@@ -1,5 +1,6 @@
 from typing import List, Optional, Any
 from datetime import datetime, timezone
+import re
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -23,6 +24,55 @@ router = APIRouter()
 class DiscoveredDepositItem(BaseModel):
     code: str
     name: Optional[str] = None
+
+def is_deposit_for_facility(code_clean: str, name_clean: str, fac: Facility) -> bool:
+    """
+    Determina si un código o depósito de Stellar pertenece efectivamente a esta sucursal (facility).
+    Filtra depósitos foráneos que provengan de otras sedes en cadenas de supermercados multi-sucursal.
+    """
+    digits = re.findall(r'\d+', fac.code or '')
+    branch_code = digits[0].zfill(2) if digits else str(fac.id).zfill(2)
+    
+    # 1. Prefijo estándar de la sucursal (ej: 1001, 1002 para sucursal 10; 0801, 0802 para 08)
+    if code_clean.startswith(branch_code) or code_clean.startswith("00" + branch_code):
+        return True
+        
+    # 2. Códigos conocidos de depósitos de tránsito asignados a cada sede
+    transit_map = {
+        "01": "0004",   # CUMBOTO (T1)
+        "02": "0005",   # JUNCAL (T2)
+        "03": "0006",   # MAYORISTA (T3)
+        "04": "0007",   # PLAZA (T4)
+        "05": "0008",   # CENTRO DISTRIBUCION (T5)
+        "06": "0009",   # LAS LLAVES (T6)
+        "07": "000010", # SAN FELIPE (T7)
+        "08": "0011",   # MARACAY (T8)
+        "09": "0012",   # GUACARA (T9)
+        "10": "0013",   # TUCACAS (T10)
+        "11": "0014",   # PATIO TRIGAL (T11)
+        "12": "0015",   # BELISA (T12)
+        "13": "0016",   # MORON (T13)
+        "14": "0017",   # PLAZA DE TOROS (T14)
+        "15": "0018",   # ISABELICA (T15)
+    }
+    expected_transit = transit_map.get(branch_code)
+    if expected_transit and code_clean == expected_transit:
+        return True
+
+    # 3. Coincidencia por etiqueta de tránsito en el nombre (ej: '(T10)' o 'TRANSITO TUCACAS')
+    name_upper = (name_clean or "").upper()
+    try:
+        b_num = int(branch_code)
+        if f"(T{b_num})" in name_upper or f"T({b_num})" in name_upper:
+            return True
+    except ValueError:
+        pass
+
+    fac_words = [w for w in (fac.name or "").upper().split() if len(w) > 3 and w not in ["CATANIA", "TIENDA", "SUCURSAL", "SEDE"]]
+    if any(w in name_upper for w in fac_words) and "TRANSIT" in name_upper:
+        return True
+
+    return False
 
 def sync_discovered_deposits(db: Session, facility_id: int, deposits: List[Any]) -> List[StoreDepositMapping]:
     """
@@ -49,6 +99,10 @@ def sync_discovered_deposits(db: Session, facility_id: int, deposits: List[Any])
         code_clean = str(raw_code).strip()
         name_clean = str(raw_name).strip() if raw_name else f"Depósito {code_clean}"
         if not code_clean:
+            continue
+
+        # Validar que el depósito pertenezca estrictamente a esta sucursal
+        if not is_deposit_for_facility(code_clean, name_clean, fac):
             continue
 
         # 1. Buscar o crear Warehouse
@@ -150,6 +204,9 @@ def get_facility_deposit_mappings(
 
     mappings = []
     for m in mappings_db:
+        # Si el mapeo corresponde a un depósito foráneo autodescubierto, filtrarlo
+        if m.auto_discovered and not is_deposit_for_facility(m.external_deposit_code, m.external_deposit_name or "", fac):
+            continue
         wh = db.query(Warehouse).filter(Warehouse.id == m.warehouse_id).first()
         loc = db.query(Location).filter(Location.id == m.location_id).first()
         mappings.append(StoreDepositMappingSchema(
@@ -198,7 +255,17 @@ def get_facility_deposit_mappings(
         warehouses_db = [default_wh]
 
     available_warehouses = []
+    digits = re.findall(r'\d+', fac.code or '')
+    branch_code = digits[0].zfill(2) if digits else str(fac.id).zfill(2)
+    all_foreign_prefixes = [f"{i:02d}" for i in range(1, 30) if f"{i:02d}" != branch_code]
+
     for w in warehouses_db:
+        # Excluir almacenes que fueron autogenerados para otras sucursales
+        if w.code != fac.code and not (fac.code and w.code.startswith("CAT-")):
+            if not is_deposit_for_facility(w.code, w.name, fac):
+                if any(w.code.startswith(p) for p in all_foreign_prefixes) or w.code.startswith("00"):
+                    continue
+
         locs_db = db.query(Location).filter(
             Location.warehouse_id == w.id
         ).order_by(Location.name.asc()).all()

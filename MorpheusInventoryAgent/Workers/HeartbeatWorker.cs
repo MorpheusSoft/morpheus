@@ -168,7 +168,7 @@ public class HeartbeatWorker : BackgroundService
         {
             FacilityId = facilityId,
             RegisterCode = "SERVER-STORE",
-            AgentVersion = "2.4.3-neo",
+            AgentVersion = "2.4.4-neo",
             MachineName = Environment.MachineName,
             SqlServerStatus = sqlStatus,
             LastStellarSaleTime = lastStellarSale,
@@ -455,7 +455,7 @@ public class HeartbeatWorker : BackgroundService
 
     private async Task ExecuteSoftwareUpdateAsync(StoreAgentCommandDto cmd, CancellationToken stoppingToken)
     {
-        string targetVersion = "2.4.3-neo";
+        string targetVersion = "2.4.4-neo";
         string packageUrl = ResolveInstallerUrl();
 
         if (cmd.Parameters.ValueKind == JsonValueKind.Object)
@@ -615,12 +615,46 @@ Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue
         string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
         if (string.IsNullOrWhiteSpace(connectionString)) return list;
 
+        int facilityId = _configuration.GetValue<int>("StoreFacilityId", 1);
+        string facilityCode = _configuration.GetValue<string>("StoreFacilityCode", "");
+
         try
         {
             using var conn = new SqlConnection(connectionString);
             await conn.OpenAsync(stoppingToken);
 
-            // 1. Detectar si existe MA_DEPOSITO o MA_DEPOSITOS y sus columnas
+            // 1. Detectar el código de sucursal local en Stellar (ej: '10' para Tucacas, '08' para Maracay)
+            string localBranch = "";
+            try
+            {
+                string detectBranchSql = @"
+                    BEGIN TRY
+                        SELECT TOP 1 RTRIM(c_Sucursal) FROM VAD20.dbo.MA_PAGOS WITH (NOLOCK) WHERE c_Sucursal IS NOT NULL AND c_Sucursal <> '';
+                    END TRY
+                    BEGIN CATCH
+                        SELECT TOP 1 RTRIM(c_Sucursal) FROM dbo.MA_PAGOS WITH (NOLOCK) WHERE c_Sucursal IS NOT NULL AND c_Sucursal <> '';
+                    END CATCH
+                ";
+                var branchVal = await conn.ExecuteScalarAsync<string>(detectBranchSql);
+                localBranch = branchVal?.Trim() ?? "";
+            }
+            catch {}
+
+            if (string.IsNullOrEmpty(localBranch))
+            {
+                if (!string.IsNullOrEmpty(facilityCode))
+                {
+                    localBranch = System.Text.RegularExpressions.Regex.Replace(facilityCode, @"[^\d]", "");
+                }
+                if (string.IsNullOrEmpty(localBranch))
+                {
+                    localBranch = facilityId.ToString("D2");
+                }
+            }
+
+            if (localBranch.Length == 1) localBranch = "0" + localBranch;
+
+            // 2. Detectar si existe MA_DEPOSITO o MA_DEPOSITOS y sus columnas
             string findTableSql = @"
                 SELECT TABLE_NAME, COLUMN_NAME 
                 FROM INFORMATION_SCHEMA.COLUMNS 
@@ -655,22 +689,42 @@ Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue
                                  cols.Contains("c_descrip") ? "c_descrip" :
                                  cols.Contains("c_DesArma") ? "c_DesArma" : "";
 
+                string locCol = cols.Contains("c_codlocalidad") ? "c_codlocalidad" :
+                                cols.Contains("c_localidad") ? "c_localidad" :
+                                cols.Contains("c_sucursal") ? "c_sucursal" : "";
+
                 if (!string.IsNullOrEmpty(codeCol))
                 {
                     string selectDesc = !string.IsNullOrEmpty(descCol) 
                         ? $"RTRIM(ISNULL({descCol}, 'Depósito ' + RTRIM({codeCol}))) AS descripcion" 
                         : $"('Depósito ' + RTRIM({codeCol})) AS descripcion";
 
+                    // Filtrar EXCLUSIVAMENTE los depósitos que corresponden a esta tienda
                     string sql = $@"
                         SELECT DISTINCT 
                             RTRIM({codeCol}) AS c_deposito,
                             {selectDesc}
                         FROM {targetTable} WITH (NOLOCK)
                         WHERE {codeCol} IS NOT NULL AND RTRIM({codeCol}) <> ''
-                        ORDER BY c_deposito
                     ";
 
+                    if (!string.IsNullOrEmpty(locCol) && !string.IsNullOrEmpty(localBranch))
+                    {
+                        sql += $" AND (RTRIM({locCol}) = @LocalBranch OR RTRIM({codeCol}) LIKE @LocalBranch + '%' OR RTRIM({codeCol}) LIKE '00' + @LocalBranch + '%')";
+                    }
+                    else if (!string.IsNullOrEmpty(localBranch))
+                    {
+                        sql += $" AND (RTRIM({codeCol}) LIKE @LocalBranch + '%' OR RTRIM({codeCol}) LIKE '00' + @LocalBranch + '%')";
+                    }
+
+                    sql += " ORDER BY c_deposito";
+
                     using var cmd = new SqlCommand(sql, conn);
+                    if (!string.IsNullOrEmpty(localBranch))
+                    {
+                        cmd.Parameters.AddWithValue("@LocalBranch", localBranch);
+                    }
+
                     using var rdr = await cmd.ExecuteReaderAsync(stoppingToken);
                     while (await rdr.ReadAsync(stoppingToken))
                     {
@@ -684,9 +738,9 @@ Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue
                 }
             }
 
-            if (list.Count == 0)
+            if (list.Count == 0 && !string.IsNullOrEmpty(localBranch))
             {
-                // Fallback a tr_inventario
+                // Fallback a tr_inventario filtrando por la localidad local
                 string fallbackSql = @"
                     IF OBJECT_ID('tr_inventario', 'U') IS NOT NULL
                     BEGIN
@@ -695,10 +749,12 @@ Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue
                             ('Depósito ' + RTRIM(c_deposito)) AS descripcion
                         FROM tr_inventario WITH (NOLOCK)
                         WHERE c_deposito IS NOT NULL AND RTRIM(c_deposito) <> ''
+                          AND (RTRIM(c_deposito) LIKE @LocalBranch + '%' OR RTRIM(c_deposito) LIKE '00' + @LocalBranch + '%')
                         ORDER BY c_deposito;
                     END
                 ";
                 using var cmd = new SqlCommand(fallbackSql, conn);
+                cmd.Parameters.AddWithValue("@LocalBranch", localBranch);
                 using var rdr = await cmd.ExecuteReaderAsync(stoppingToken);
                 while (await rdr.ReadAsync(stoppingToken))
                 {
