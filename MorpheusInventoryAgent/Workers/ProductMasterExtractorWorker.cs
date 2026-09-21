@@ -26,6 +26,13 @@ public class ProductMasterExtractorWorker : BackgroundService
         {
             try
             {
+                if (SyncStateManager.IsSyncPaused())
+                {
+                    _logger.LogDebug("[PAUSA] Sincronización de artículos pausada por administración. En espera...");
+                    await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken);
+                    continue;
+                }
+
                 var config = _configuration.GetSection("DirectExtractors:Products").Get<DirectExtractorConfig>();
                 
                 if (config != null && config.Enabled)

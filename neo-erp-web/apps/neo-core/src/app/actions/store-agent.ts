@@ -26,6 +26,7 @@ export interface StoreAgentConfig {
   categories_enabled: boolean
   sales_enabled: boolean
   historical_enabled: boolean
+  is_sync_paused?: boolean
   config_version: number
   updated_at: string
 }
@@ -47,6 +48,14 @@ export interface FacilityAgentStatus {
   unmapped_barcodes_count: number
   active_alerts_count: number
   config: StoreAgentConfig
+  last_product_sync?: string | null
+  last_barcode_sync?: string | null
+  last_supplier_product_sync?: string | null
+  baseline_inventory_done?: boolean
+  last_movement_sync?: string | null
+  latest_available_version?: string
+  has_update_available?: boolean
+  is_sync_paused?: boolean
 }
 
 export interface StoreAgentCommand {
@@ -117,7 +126,7 @@ export async function updateStoreAgentConfig(facilityId: number, data: Partial<S
 
 export async function createStoreAgentCommand(
   facilityId: number,
-  commandType: 'FORCE_SYNC_SALES' | 'FORCE_SYNC_MASTERS' | 'SYNC_HISTORICAL' | 'RESTART_SERVICE',
+  commandType: 'FORCE_SYNC_SALES' | 'FORCE_SYNC_MASTERS' | 'SYNC_HISTORICAL' | 'SYNC_BASELINE' | 'RESTART_SERVICE' | 'UPDATE_SOFTWARE' | 'PAUSE_SYNC' | 'RESUME_SYNC',
   parameters: Record<string, any> = {}
 ): Promise<StoreAgentCommand> {
   try {
@@ -139,6 +148,44 @@ export async function createStoreAgentCommand(
   } catch (error: any) {
     console.error(`Error in createStoreAgentCommand (${facilityId}):`, error)
     throw new Error(error.message || "Error al encolar el comando remoto")
+  }
+}
+
+export async function pauseAllStores(): Promise<{ status: string; message: string }> {
+  try {
+    const headers = await getAuthHeaders()
+    const res = await fetch(`${API_URL}/store-agent/all/pause`, {
+      method: "POST",
+      headers,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Error pausando sedes" }))
+      throw new Error(err.detail || "Error pausando sedes")
+    }
+    revalidatePath("/dashboard/store-sync")
+    return await res.json()
+  } catch (error: any) {
+    console.error("Error in pauseAllStores:", error)
+    throw new Error(error.message || "Error al pausar todas las sedes")
+  }
+}
+
+export async function resumeAllStores(): Promise<{ status: string; message: string }> {
+  try {
+    const headers = await getAuthHeaders()
+    const res = await fetch(`${API_URL}/store-agent/all/resume`, {
+      method: "POST",
+      headers,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Error reanudando sedes" }))
+      throw new Error(err.detail || "Error reanudando sedes")
+    }
+    revalidatePath("/dashboard/store-sync")
+    return await res.json()
+  } catch (error: any) {
+    console.error("Error in resumeAllStores:", error)
+    throw new Error(error.message || "Error al reanudar todas las sedes")
   }
 }
 
@@ -219,6 +266,7 @@ export async function saveStoreDepositMapping(
     warehouse_id: number
     location_id: number
     affects_inventory?: boolean
+    is_active?: boolean
   }
 ) {
   try {

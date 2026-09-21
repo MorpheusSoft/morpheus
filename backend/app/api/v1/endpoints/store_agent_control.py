@@ -8,6 +8,8 @@ from app.api import deps
 from app.models.core import Facility
 from app.models.sync_telemetry import StoreSyncTelemetry
 from app.models.store_agent_control import StoreAgentConfig, StoreAgentCommand
+from app.models.inventory import Product, ProductBarcode, StoreDepositMapping
+from app.models.purchasing import SupplierProduct
 from app.schemas.store_agent_control import (
     StoreAgentConfigSchema,
     StoreAgentConfigUpdateSchema,
@@ -18,6 +20,8 @@ from app.schemas.store_agent_control import (
 )
 
 router = APIRouter()
+
+LATEST_AGENT_VERSION = "2.3.0-neo"
 
 @router.get("/facilities", response_model=List[FacilityAgentStatusSchema])
 def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
@@ -76,6 +80,48 @@ def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
             else:
                 lag_minutes = 0
 
+        # Extraer marcas de sincronización de catálogo desde telemetría (sync_state.json)
+        meta = latest.telemetry_metadata if latest and latest.telemetry_metadata else {}
+
+        def parse_meta_dt(key):
+            val = meta.get(key)
+            if not val:
+                return None
+            try:
+                if isinstance(val, str):
+                    return datetime.fromisoformat(val.replace("Z", "+00:00"))
+                elif isinstance(val, datetime):
+                    return val
+            except Exception:
+                pass
+            return None
+
+        last_prod = parse_meta_dt("last_product_sync")
+        last_bc = parse_meta_dt("last_barcode_sync")
+        last_sup_prod = parse_meta_dt("last_supplier_product_sync")
+        last_mov = parse_meta_dt("last_movement_sync")
+        baseline_done = bool(meta.get("baseline_done", False))
+
+        # Fallback inteligente contra base de datos si la telemetría aún no reporta las marcas:
+        if not last_prod:
+            last_prod = db.query(func.max(Product.created_at)).scalar()
+        if not last_sup_prod:
+            last_sup_prod = db.query(func.max(SupplierProduct.created_at)).scalar()
+        if not last_bc and last_prod:
+            has_bc = db.query(ProductBarcode.id).filter(ProductBarcode.code_type == 'BARCODE').first()
+            if has_bc:
+                last_bc = last_prod
+        if not baseline_done:
+            has_dep = db.query(StoreDepositMapping.id).filter(
+                StoreDepositMapping.facility_id == fac.id,
+                StoreDepositMapping.is_active == True
+            ).first()
+            if has_dep:
+                baseline_done = True
+
+        current_ver = (latest.agent_version or "").strip() if latest else ""
+        has_update = bool(is_online and current_ver and current_ver != LATEST_AGENT_VERSION)
+
         results.append(FacilityAgentStatusSchema(
             facility_id=fac.id,
             facility_name=fac.name,
@@ -83,6 +129,8 @@ def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
             is_online=is_online,
             last_heartbeat=latest.created_at if latest else None,
             agent_version=latest.agent_version if latest else None,
+            latest_available_version=LATEST_AGENT_VERSION,
+            has_update_available=has_update,
             sql_server_status=latest.sql_server_status if latest else None,
             last_synced_sale_time=synced_sale_time,
             last_stellar_sale_time=stellar_time,
@@ -90,7 +138,13 @@ def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
             sales_today_amount=float(latest.sales_today_amount or 0.0) if latest else 0.0,
             lag_minutes=lag_minutes,
             config=StoreAgentConfigSchema.from_orm(cfg),
-            pending_commands_count=pending_count
+            pending_commands_count=pending_count,
+            last_product_sync=last_prod,
+            last_barcode_sync=last_bc,
+            last_supplier_product_sync=last_sup_prod,
+            baseline_inventory_done=baseline_done,
+            last_movement_sync=last_mov,
+            is_sync_paused=bool(cfg.is_sync_paused if cfg else False)
         ))
 
     return results
@@ -143,7 +197,8 @@ def update_store_config(
             "categories_enabled": cfg.categories_enabled,
             "suppliers_enabled": cfg.suppliers_enabled,
             "supplier_products_enabled": cfg.supplier_products_enabled,
-            "movements_enabled": cfg.movements_enabled
+            "movements_enabled": cfg.movements_enabled,
+            "is_sync_paused": cfg.is_sync_paused
         },
         status="PENDING"
     )
@@ -151,6 +206,58 @@ def update_store_config(
     db.commit()
     db.refresh(cfg)
     return cfg
+
+@router.post("/all/pause")
+def pause_all_stores(db: Session = Depends(deps.get_db)):
+    """Pausa todos los procesos de extracción para todas las sedes activas."""
+    facilities = db.query(Facility).filter(Facility.is_active == True).all()
+    count = 0
+    now = datetime.now(timezone.utc)
+    for fac in facilities:
+        cfg = db.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == fac.id).first()
+        if not cfg:
+            cfg = StoreAgentConfig(facility_id=fac.id)
+            db.add(cfg)
+        cfg.is_sync_paused = True
+        cfg.config_version += 1
+        cfg.updated_at = now
+        
+        cmd = StoreAgentCommand(
+            facility_id=fac.id,
+            command_type="PAUSE_SYNC",
+            parameters={"message": "Pausa global de sincronización activada por administración."},
+            status="PENDING"
+        )
+        db.add(cmd)
+        count += 1
+    db.commit()
+    return {"status": "SUCCESS", "message": f"Sincronización pausada para {count} sucursales."}
+
+@router.post("/all/resume")
+def resume_all_stores(db: Session = Depends(deps.get_db)):
+    """Reanuda todos los procesos de extracción para todas las sedes activas."""
+    facilities = db.query(Facility).filter(Facility.is_active == True).all()
+    count = 0
+    now = datetime.now(timezone.utc)
+    for fac in facilities:
+        cfg = db.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == fac.id).first()
+        if not cfg:
+            cfg = StoreAgentConfig(facility_id=fac.id)
+            db.add(cfg)
+        cfg.is_sync_paused = False
+        cfg.config_version += 1
+        cfg.updated_at = now
+        
+        cmd = StoreAgentCommand(
+            facility_id=fac.id,
+            command_type="RESUME_SYNC",
+            parameters={"message": "Reanudación global de sincronización activada por administración."},
+            status="PENDING"
+        )
+        db.add(cmd)
+        count += 1
+    db.commit()
+    return {"status": "SUCCESS", "message": f"Sincronización reanudada para {count} sucursales."}
 
 @router.post("/{facility_id}/commands", response_model=StoreAgentCommandSchema)
 def create_store_command(
@@ -160,16 +267,47 @@ def create_store_command(
 ):
     """
     Encola una orden o comando remoto para ser ejecutado por el servicio de Windows de la tienda.
-    Tipos válidos: FORCE_SYNC_SALES, FORCE_SYNC_MASTERS, SYNC_HISTORICAL, RESTART_SERVICE.
+    Tipos válidos: FORCE_SYNC_SALES, FORCE_SYNC_MASTERS, SYNC_HISTORICAL, SYNC_BASELINE, RESTART_SERVICE, UPDATE_SOFTWARE, PAUSE_SYNC, RESUME_SYNC.
     """
     fac = db.query(Facility).filter(Facility.id == facility_id).first()
     if not fac:
         raise HTTPException(status_code=404, detail="Sede no encontrada")
 
+    cmd_type = payload.command_type.strip().upper()
+    params = payload.parameters or {}
+
+    if cmd_type == "UPDATE_SOFTWARE":
+        if "package_url" not in params or not params["package_url"]:
+            params["package_url"] = "https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip"
+        if "target_version" not in params or not params["target_version"]:
+            params["target_version"] = LATEST_AGENT_VERSION
+
+    elif cmd_type in ["PAUSE_SYNC", "STOP_SYNC"]:
+        cmd_type = "PAUSE_SYNC"
+        cfg = db.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == facility_id).first()
+        if not cfg:
+            cfg = StoreAgentConfig(facility_id=facility_id)
+            db.add(cfg)
+        cfg.is_sync_paused = True
+        cfg.config_version += 1
+        cfg.updated_at = datetime.now(timezone.utc)
+        params["message"] = "Pausa de sincronización activada desde Centro de Operaciones."
+
+    elif cmd_type in ["RESUME_SYNC", "START_SYNC"]:
+        cmd_type = "RESUME_SYNC"
+        cfg = db.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == facility_id).first()
+        if not cfg:
+            cfg = StoreAgentConfig(facility_id=facility_id)
+            db.add(cfg)
+        cfg.is_sync_paused = False
+        cfg.config_version += 1
+        cfg.updated_at = datetime.now(timezone.utc)
+        params["message"] = "Reanudación de sincronización activada desde Centro de Operaciones."
+
     cmd = StoreAgentCommand(
         facility_id=facility_id,
-        command_type=payload.command_type.strip().upper(),
-        parameters=payload.parameters or {},
+        command_type=cmd_type,
+        parameters=params,
         status="PENDING"
     )
     db.add(cmd)
@@ -187,6 +325,17 @@ def list_store_commands(
     return db.query(StoreAgentCommand).filter(
         StoreAgentCommand.facility_id == facility_id
     ).order_by(StoreAgentCommand.id.desc()).limit(limit).all()
+
+@router.get("/commands/{command_id}", response_model=StoreAgentCommandSchema)
+def get_store_command(
+    command_id: int,
+    db: Session = Depends(deps.get_db)
+):
+    """Obtiene el estado y detalles de un comando específico."""
+    cmd = db.query(StoreAgentCommand).filter(StoreAgentCommand.id == command_id).first()
+    if not cmd:
+        raise HTTPException(status_code=404, detail="Comando no encontrado")
+    return cmd
 
 @router.post("/commands/{command_id}/ack")
 def acknowledge_command(

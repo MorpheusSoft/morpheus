@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.ServiceProcess;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Data.SqlClient;
@@ -37,6 +38,8 @@ public class MainForm : Form
     private RadioButton rbBaselineToday = null!;
     private RadioButton rbBaselineCustom = null!;
     private TextBox txtBaselineDate = null!;
+    private Label lblBaselineDeposit = null!;
+    private ComboBox cmbBaselineDeposit = null!;
     private Button btnSyncBaseline = null!;
     private Button btnGoToDeposits = null!;
     
@@ -49,6 +52,8 @@ public class MainForm : Form
     // Tab 2: Mapeo de Depósitos (Stellar -> Neo)
     private TabPage tabDeposits = null!;
     private DataGridView dgvDeposits = null!;
+    private ComboBox cmbFilterLocalidad = null!;
+    private CheckBox chkFilterLocalidad = null!;
     private Button btnDetectDeposits = null!;
     private Button btnFetchCloudDeposits = null!;
     private Button btnAddDepositRow = null!;
@@ -123,7 +128,7 @@ public class MainForm : Form
 
     private void InitializeComponent()
     {
-        this.Text = "Neo Sync Agent - Panel de Control Oficial";
+        this.Text = "Neo Sync Agent v2.3.0 - Panel de Control Oficial";
         this.Size = new Size(920, 740);
         this.MinimumSize = new Size(860, 700);
         this.StartPosition = FormStartPosition.CenterScreen;
@@ -237,6 +242,14 @@ public class MainForm : Form
 
         this.Controls.Add(tabControl);
         tabControl.BringToFront();
+
+        tabControl.SelectedIndexChanged += (s, e) =>
+        {
+            if (tabControl.SelectedIndex == 0)
+            {
+                RefreshBaselineDepositCombo();
+            }
+        };
     }
 
     private void BuildTab1(TabPage page)
@@ -296,15 +309,20 @@ public class MainForm : Form
         gbFase3.Controls.Add(btnSyncCosts);
 
         // Baseline Controls
-        var pnlBaseline = new Panel { Location = new Point(16, 140), Size = new Size(770, 72), BackColor = Color.FromArgb(30, 41, 59) };
+        var pnlBaseline = new Panel { Location = new Point(16, 140), Size = new Size(770, 74), BackColor = Color.FromArgb(30, 41, 59) };
         var lblBaselineTitle = new Label { Text = "5. Inventario Inicial (Baseline):", Location = new Point(12, 8), AutoSize = true, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold), ForeColor = Color.White };
         pnlBaseline.Controls.Add(lblBaselineTitle);
+
+        btnGoToDeposits = CreateButton("⚙ Mapeo Depósitos", 610, 4, 145, 26, Color.FromArgb(99, 102, 241));
+        btnGoToDeposits.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+        btnGoToDeposits.Click += (s, e) => { tabControl.SelectedTab = tabDeposits; };
+        pnlBaseline.Controls.Add(btnGoToDeposits);
 
         rbBaselineToday = new RadioButton 
         { 
             Text = "Hoy (Vivo)", 
             Checked = true, 
-            Location = new Point(14, 34), 
+            Location = new Point(14, 38), 
             AutoSize = true, 
             ForeColor = Color.White,
             Cursor = Cursors.Hand
@@ -314,7 +332,7 @@ public class MainForm : Form
         rbBaselineCustom = new RadioButton 
         { 
             Text = "Fecha:", 
-            Location = new Point(125, 34), 
+            Location = new Point(105, 38), 
             AutoSize = true, 
             ForeColor = Color.White,
             Cursor = Cursors.Hand
@@ -324,29 +342,51 @@ public class MainForm : Form
         txtBaselineDate = new TextBox 
         { 
             Text = DateTime.Today.ToString("yyyy-MM-dd"), 
-            Location = new Point(190, 32), 
-            Width = 95, 
+            Location = new Point(168, 35), 
+            Width = 85, 
             BackColor = Color.FromArgb(15, 23, 42), 
             ForeColor = Color.White,
             TextAlign = HorizontalAlignment.Center
         };
         pnlBaseline.Controls.Add(txtBaselineDate);
 
-        btnGoToDeposits = CreateButton("⚙ Mapeo Depósitos", 300, 26, 175, 36, Color.FromArgb(99, 102, 241));
-        btnGoToDeposits.Click += (s, e) => { tabControl.SelectedTab = tabDeposits; };
-        pnlBaseline.Controls.Add(btnGoToDeposits);
+        lblBaselineDeposit = new Label
+        {
+            Text = "Depósito:",
+            Location = new Point(262, 38),
+            AutoSize = true,
+            ForeColor = Color.FromArgb(148, 163, 184),
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold)
+        };
+        pnlBaseline.Controls.Add(lblBaselineDeposit);
 
-        btnSyncBaseline = CreateButton("Sincronizar Inventario (Baseline)", 490, 26, 265, 36, Color.FromArgb(16, 185, 129));
+        cmbBaselineDeposit = new ComboBox
+        {
+            Location = new Point(328, 34),
+            Width = 195,
+            BackColor = Color.FromArgb(15, 23, 42),
+            ForeColor = Color.White,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            Font = new Font("Segoe UI", 8.5f)
+        };
+        cmbBaselineDeposit.Items.Add("Todos los depósitos");
+        cmbBaselineDeposit.SelectedIndex = 0;
+        pnlBaseline.Controls.Add(cmbBaselineDeposit);
+
+        btnSyncBaseline = CreateButton("Sincronizar Baseline", 535, 30, 220, 36, Color.FromArgb(16, 185, 129));
         btnSyncBaseline.Click += BtnSyncBaseline_Click;
         pnlBaseline.Controls.Add(btnSyncBaseline);
 
         void UpdateBaselineLayout()
         {
-            rbBaselineToday.Location = new Point(14, 34);
-            rbBaselineCustom.Location = new Point(rbBaselineToday.Right + 12, 34);
-            txtBaselineDate.Location = new Point(rbBaselineCustom.Right + 6, 31);
-            btnGoToDeposits.Location = new Point(txtBaselineDate.Right + 12, 26);
-            btnSyncBaseline.Location = new Point(pnlBaseline.Width - btnSyncBaseline.Width - 14, 26);
+            btnGoToDeposits.Location = new Point(pnlBaseline.Width - btnGoToDeposits.Width - 14, 4);
+            rbBaselineToday.Location = new Point(14, 38);
+            rbBaselineCustom.Location = new Point(rbBaselineToday.Right + 8, 38);
+            txtBaselineDate.Location = new Point(rbBaselineCustom.Right + 4, 35);
+            lblBaselineDeposit.Location = new Point(txtBaselineDate.Right + 10, 38);
+            cmbBaselineDeposit.Location = new Point(lblBaselineDeposit.Right + 4, 34);
+            btnSyncBaseline.Location = new Point(pnlBaseline.Width - btnSyncBaseline.Width - 14, 30);
         }
 
         pnlBaseline.Layout += (s, e) => UpdateBaselineLayout();
@@ -421,35 +461,57 @@ public class MainForm : Form
         };
         gbDeposits.Controls.Add(lblDesc);
 
-        // Botones de acción
-        btnDetectDeposits = CreateButton("1. Detectar Depósitos (Stellar)", 16, 68, 220, 36, Color.FromArgb(217, 119, 6));
+        // Fila 1 de controles: Filtro de Localidad y Detección en Stellar POS
+        chkFilterLocalidad = new CheckBox
+        {
+            Text = "Filtrar Sucursal:",
+            Checked = true,
+            ForeColor = Color.White,
+            Location = new Point(16, 70),
+            AutoSize = true,
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold)
+        };
+        gbDeposits.Controls.Add(chkFilterLocalidad);
+
+        cmbFilterLocalidad = new ComboBox
+        {
+            Location = new Point(138, 66),
+            Width = 175,
+            BackColor = Color.FromArgb(15, 23, 42),
+            ForeColor = Color.White,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat
+        };
+        gbDeposits.Controls.Add(cmbFilterLocalidad);
+
+        btnDetectDeposits = CreateButton("🔍 1. Detectar Depósitos", 322, 64, 190, 32, Color.FromArgb(217, 119, 6));
         btnDetectDeposits.Click += async (s, e) => await DetectDepositsFromSqlAsync();
         gbDeposits.Controls.Add(btnDetectDeposits);
 
-        btnFetchCloudDeposits = CreateButton("2. Consultar Neo ERP", 244, 68, 180, 36, Color.FromArgb(2, 132, 199));
-        btnFetchCloudDeposits.Click += async (s, e) => await FetchDepositsFromCloudAsync(showMessages: true);
-        gbDeposits.Controls.Add(btnFetchCloudDeposits);
-
-        btnAddDepositRow = CreateButton("➕ Agregar Fila", 432, 68, 115, 36, Color.FromArgb(51, 65, 85));
+        btnAddDepositRow = CreateButton("➕ Fila Manual", 520, 64, 115, 32, Color.FromArgb(51, 65, 85));
         btnAddDepositRow.Click += (s, e) => AddManualDepositRow();
         gbDeposits.Controls.Add(btnAddDepositRow);
 
-        btnRemoveDepositRow = CreateButton("🗑 Eliminar Fila", 555, 68, 115, 36, Color.FromArgb(71, 85, 105));
+        btnRemoveDepositRow = CreateButton("🗑 Eliminar", 643, 64, 95, 32, Color.FromArgb(71, 85, 105));
         btnRemoveDepositRow.Click += (s, e) => RemoveSelectedDepositRow();
         gbDeposits.Controls.Add(btnRemoveDepositRow);
 
-        btnSaveDepositsToCloud = CreateButton("💾 3. Guardar en Neo ERP", 678, 68, 156, 36, Color.FromArgb(16, 185, 129));
-        btnSaveDepositsToCloud.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        // Fila 2 de controles: Enlace y Guardado en Neo ERP (Súper Visible y Prominente)
+        btnFetchCloudDeposits = CreateButton("☁ 2. Consultar Neo ERP", 16, 104, 180, 34, Color.FromArgb(2, 132, 199));
+        btnFetchCloudDeposits.Click += async (s, e) => await FetchDepositsFromCloudAsync(showMessages: true);
+        gbDeposits.Controls.Add(btnFetchCloudDeposits);
+
+        btnSaveDepositsToCloud = CreateButton("💾 3. Guardar en Neo ERP", 204, 104, 215, 34, Color.FromArgb(16, 185, 129));
+        btnSaveDepositsToCloud.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
         btnSaveDepositsToCloud.Click += async (s, e) => await SaveDepositsToCloudAsync();
         gbDeposits.Controls.Add(btnSaveDepositsToCloud);
 
-        // Status Label
         lblDepositStatus = new Label
         {
             Text = "Estado: Presiona '2. Consultar Neo ERP' para cargar almacenes o '1. Detectar Depósitos' desde Stellar.",
-            Location = new Point(18, 112),
-            Size = new Size(818, 22),
-            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            Location = new Point(428, 108),
+            Size = new Size(406, 28),
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
             ForeColor = Color.FromArgb(203, 213, 225),
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
         };
@@ -458,8 +520,8 @@ public class MainForm : Form
         // DataGridView
         dgvDeposits = new DataGridView
         {
-            Location = new Point(16, 140),
-            Size = new Size(818, 390),
+            Location = new Point(16, 146),
+            Size = new Size(818, 384),
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
             BackgroundColor = Color.FromArgb(15, 23, 42),
             ForeColor = Color.White,
@@ -493,17 +555,27 @@ public class MainForm : Form
         {
             Name = "colExternalCode",
             HeaderText = "Cód. Stellar",
-            FillWeight = 12,
-            MinimumWidth = 85,
+            FillWeight = 11,
+            MinimumWidth = 75,
             ReadOnly = false
         };
+
+        var colLocality = new DataGridViewTextBoxColumn
+        {
+            Name = "colExternalLoc",
+            HeaderText = "Localidad",
+            FillWeight = 9,
+            MinimumWidth = 65,
+            ReadOnly = true
+        };
+        colLocality.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
         var colName = new DataGridViewTextBoxColumn
         {
             Name = "colExternalName",
             HeaderText = "Descripción Local (Stellar)",
-            FillWeight = 23,
-            MinimumWidth = 140,
+            FillWeight = 24,
+            MinimumWidth = 135,
             ReadOnly = false
         };
 
@@ -511,9 +583,13 @@ public class MainForm : Form
         {
             Name = "colWarehouse",
             HeaderText = "Almacén en Neo ERP",
-            FillWeight = 25,
-            MinimumWidth = 150,
-            FlatStyle = FlatStyle.Flat
+            FillWeight = 22,
+            MinimumWidth = 145,
+            FlatStyle = FlatStyle.Flat,
+            DisplayStyle = DataGridViewComboBoxDisplayStyle.ComboBox,
+            DisplayMember = "DisplayName",
+            ValueMember = "Id",
+            ValueType = typeof(int)
         };
         colWh.DefaultCellStyle.BackColor = Color.FromArgb(30, 41, 59);
         colWh.DefaultCellStyle.ForeColor = Color.White;
@@ -522,19 +598,35 @@ public class MainForm : Form
         {
             Name = "colLocation",
             HeaderText = "Ubicación en Neo ERP",
-            FillWeight = 25,
-            MinimumWidth = 150,
-            FlatStyle = FlatStyle.Flat
+            FillWeight = 20,
+            MinimumWidth = 140,
+            FlatStyle = FlatStyle.Flat,
+            DisplayStyle = DataGridViewComboBoxDisplayStyle.ComboBox,
+            DisplayMember = "DisplayName",
+            ValueMember = "Id",
+            ValueType = typeof(int)
         };
         colLoc.DefaultCellStyle.BackColor = Color.FromArgb(30, 41, 59);
         colLoc.DefaultCellStyle.ForeColor = Color.White;
+
+        var colSync = new DataGridViewCheckBoxColumn
+        {
+            Name = "colSync",
+            HeaderText = "¿Sincronizar?",
+            FillWeight = 11,
+            MinimumWidth = 85,
+            FlatStyle = FlatStyle.Flat,
+            FalseValue = false,
+            TrueValue = true
+        };
+        colSync.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
         var colAffects = new DataGridViewCheckBoxColumn
         {
             Name = "colAffectsInventory",
             HeaderText = "¿Afecta Kardex?",
-            FillWeight = 12,
-            MinimumWidth = 85,
+            FillWeight = 11,
+            MinimumWidth = 80,
             FlatStyle = FlatStyle.Flat
         };
 
@@ -547,7 +639,7 @@ public class MainForm : Form
             ReadOnly = true
         };
 
-        dgvDeposits.Columns.AddRange(new DataGridViewColumn[] { colCode, colName, colWh, colLoc, colAffects, colStat });
+        dgvDeposits.Columns.AddRange(new DataGridViewColumn[] { colCode, colLocality, colName, colSync, colWh, colLoc, colAffects, colStat });
 
         dgvDeposits.DataError += (s, e) => { e.Cancel = true; };
 
@@ -566,12 +658,17 @@ public class MainForm : Form
             if (e.ColumnIndex == dgvDeposits.Columns["colLocation"]!.Index && e.RowIndex >= 0)
             {
                 var row = dgvDeposits.Rows[e.RowIndex];
-                var wh = row.Cells["colWarehouse"].Value as WarehouseOption;
+                int whId = 0;
+                if (row.Cells["colWarehouse"].Value is int wid) whId = wid;
+                else if (int.TryParse(row.Cells["colWarehouse"].Value?.ToString(), out int pWid)) whId = pWid;
+
+                var wh = _availableWarehouses.FirstOrDefault(w => w.Id == whId);
                 if (wh != null && wh.Locations.Count > 0)
                 {
                     var locCell = (DataGridViewComboBoxCell)row.Cells["colLocation"];
-                    locCell.Items.Clear();
-                    foreach (var l in wh.Locations) locCell.Items.Add(l);
+                    locCell.DataSource = wh.Locations.ToList();
+                    locCell.DisplayMember = "DisplayName";
+                    locCell.ValueMember = "Id";
                 }
             }
         };
@@ -583,31 +680,161 @@ public class MainForm : Form
                 var row = dgvDeposits.Rows[e.RowIndex];
                 var locCell = (DataGridViewComboBoxCell)row.Cells["colLocation"];
                 var currentVal = locCell.Value;
-                locCell.Items.Clear();
-                foreach (var w in _availableWarehouses)
-                {
-                    foreach (var l in w.Locations) locCell.Items.Add(l);
-                }
+                var allLocations = _availableWarehouses.SelectMany(w => w.Locations).ToList();
+                locCell.DataSource = allLocations;
+                locCell.DisplayMember = "DisplayName";
+                locCell.ValueMember = "Id";
                 locCell.Value = currentVal;
             }
         };
 
         gbDeposits.Controls.Add(dgvDeposits);
 
-        // Nota al pie
+        // Nota al pie y Botón Inferior de Guardado
         var lblTip = new Label
         {
-            Text = "💡 Tip: Marca '¿Afecta Kardex?' para depósitos donde las ventas descuentan existencia física real. Si un depósito es de servicios o merma no inventariable, desmárcalo para registrar la venta solo documentalmente.",
+            Text = "💡 Tip: Desmarca '¿Sincronizar?' si tu tienda tiene depósitos que no deseas pasar a Neo ERP (ej: Cambios, Mermas). Esos depósitos serán ignorados en el Inventario y Kardex. '¿Afecta Kardex?' indica si las ventas de ese depósito descuentan stock real.",
             Font = new Font("Segoe UI", 8.5f),
             ForeColor = Color.FromArgb(148, 163, 184),
-            Location = new Point(16, 540),
-            Size = new Size(818, 48),
+            Location = new Point(16, 538),
+            Size = new Size(590, 48),
             Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
         };
         gbDeposits.Controls.Add(lblTip);
 
+        var btnSaveDepositsBottom = CreateButton("💾 3. Guardar en Neo ERP", 614, 538, 220, 44, Color.FromArgb(16, 185, 129));
+        btnSaveDepositsBottom.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+        btnSaveDepositsBottom.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+        btnSaveDepositsBottom.Click += async (s, e) => await SaveDepositsToCloudAsync();
+        gbDeposits.Controls.Add(btnSaveDepositsBottom);
+
         panel.Controls.Add(gbDeposits);
         page.Controls.Add(panel);
+        page.Enter += async (s, e) => await LoadBranchesFromSqlAsync();
+    }
+
+    private async Task LoadBranchesFromSqlAsync()
+    {
+        if (string.IsNullOrWhiteSpace(txtSqlServer.Text) || string.IsNullOrWhiteSpace(txtSqlDb.Text))
+            return;
+
+        try
+        {
+            string connStr = $"Server={txtSqlServer.Text.Trim()};Database={txtSqlDb.Text.Trim()};User Id={txtSqlUser.Text.Trim()};Password={txtSqlPass.Text.Trim()};TrustServerCertificate=True;Connect Timeout=5;";
+            var branches = new List<BranchOption>();
+
+            await Task.Run(() =>
+            {
+                using var conn = new SqlConnection(connStr);
+                conn.Open();
+
+                // 1. Intentar desde MA_SUCURSALES
+                string sqlSuc = @"
+IF OBJECT_ID('MA_SUCURSALES', 'U') IS NOT NULL
+BEGIN
+    SELECT RTRIM(C_codigo) AS codigo, RTRIM(ISNULL(c_descripcion, '')) AS descripcion
+    FROM MA_SUCURSALES WITH (NOLOCK)
+    WHERE C_codigo IS NOT NULL AND RTRIM(C_codigo) <> ''
+    ORDER BY C_codigo;
+END";
+                using (var cmd = new SqlCommand(sqlSuc, conn))
+                using (var rdr = cmd.ExecuteReader())
+                {
+                    while (rdr.Read())
+                    {
+                        branches.Add(new BranchOption
+                        {
+                            Code = rdr["codigo"]?.ToString()?.Trim() ?? "",
+                            Name = rdr["descripcion"]?.ToString()?.Trim() ?? ""
+                        });
+                    }
+                }
+
+                // 2. Si no hubo resultados en MA_SUCURSALES, buscar en MA_DEPOSITO / MA_DEPOSITOS
+                if (branches.Count == 0)
+                {
+                    string sqlDep = @"
+IF OBJECT_ID('MA_DEPOSITO', 'U') IS NOT NULL
+BEGIN
+    SELECT DISTINCT RTRIM(c_codlocalidad) AS codigo, ('Localidad ' + RTRIM(c_codlocalidad)) AS descripcion
+    FROM MA_DEPOSITO WITH (NOLOCK)
+    WHERE c_codlocalidad IS NOT NULL AND RTRIM(c_codlocalidad) <> ''
+    ORDER BY codigo;
+END
+ELSE IF OBJECT_ID('MA_DEPOSITOS', 'U') IS NOT NULL
+BEGIN
+    SELECT DISTINCT RTRIM(c_codlocalidad) AS codigo, ('Localidad ' + RTRIM(c_codlocalidad)) AS descripcion
+    FROM MA_DEPOSITOS WITH (NOLOCK)
+    WHERE c_codlocalidad IS NOT NULL AND RTRIM(c_codlocalidad) <> ''
+    ORDER BY codigo;
+END";
+                    using var cmd2 = new SqlCommand(sqlDep, conn);
+                    using var rdr2 = cmd2.ExecuteReader();
+                    while (rdr2.Read())
+                    {
+                        branches.Add(new BranchOption
+                        {
+                            Code = rdr2["codigo"]?.ToString()?.Trim() ?? "",
+                            Name = rdr2["descripcion"]?.ToString()?.Trim() ?? ""
+                        });
+                    }
+                }
+            });
+
+            if (branches.Count > 0 && this.IsHandleCreated)
+            {
+                this.BeginInvoke(() =>
+                {
+                    cmbFilterLocalidad.DataSource = null;
+                    cmbFilterLocalidad.DisplayMember = "DisplayName";
+                    cmbFilterLocalidad.ValueMember = "Code";
+                    cmbFilterLocalidad.DataSource = branches;
+
+                    SelectMatchingBranch();
+                });
+            }
+        }
+        catch
+        {
+            // Silencioso al inicio
+        }
+    }
+
+    private void SelectMatchingBranch()
+    {
+        if (cmbFilterLocalidad == null || cmbFilterLocalidad.DataSource is not List<BranchOption> branches || branches.Count == 0) return;
+
+        if (cmbStores != null && cmbStores.SelectedItem is FacilityOption opt)
+        {
+            // Extraer número de sucursal del código (ej: "CAT-12" -> "12")
+            string targetCode = "";
+            var parts = opt.Code.Split('-');
+            if (parts.Length > 1 && !string.IsNullOrEmpty(parts[1]))
+            {
+                targetCode = parts[1].Trim();
+            }
+
+            var matched = branches.FirstOrDefault(b => 
+                (!string.IsNullOrEmpty(targetCode) && (b.Code == targetCode || (int.TryParse(b.Code, out int bc) && int.TryParse(targetCode, out int tc) && bc == tc))));
+
+            if (matched == null)
+            {
+                var nameWords = opt.Name.Split(' ', '-', '_').Where(w => w.Length > 3).ToList();
+                matched = branches.FirstOrDefault(b => 
+                    nameWords.Any(w => b.Name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0));
+            }
+
+            if (matched != null)
+            {
+                cmbFilterLocalidad.SelectedItem = matched;
+                return;
+            }
+        }
+
+        if (cmbFilterLocalidad.Items.Count > 0 && cmbFilterLocalidad.SelectedIndex < 0)
+        {
+            cmbFilterLocalidad.SelectedIndex = 0;
+        }
     }
 
     private void DgvDeposits_CellValueChanged(object? sender, DataGridViewCellEventArgs e)
@@ -620,35 +847,31 @@ public class MainForm : Form
 
         if (e.ColumnIndex == colWhIndex)
         {
-            var selectedWh = row.Cells[colWhIndex].Value as WarehouseOption;
-            if (selectedWh == null && row.Cells[colWhIndex].Value is string whStr)
-            {
-                selectedWh = _availableWarehouses.FirstOrDefault(w => w.ToString() == whStr || w.Name == whStr);
-            }
+            int whId = 0;
+            if (row.Cells[colWhIndex].Value is int wid) whId = wid;
+            else if (int.TryParse(row.Cells[colWhIndex].Value?.ToString(), out int pWid)) whId = pWid;
 
-            if (selectedWh != null)
+            var selectedWh = _availableWarehouses.FirstOrDefault(w => w.Id == whId);
+            if (selectedWh != null && selectedWh.Locations.Count > 0)
             {
-                var locCell = (DataGridViewComboBoxCell)row.Cells[colLocIndex];
-                locCell.Items.Clear();
-                foreach (var loc in selectedWh.Locations)
-                {
-                    locCell.Items.Add(loc);
-                }
+                int currentLocId = 0;
+                if (row.Cells[colLocIndex].Value is int lid) currentLocId = lid;
+                else if (int.TryParse(row.Cells[colLocIndex].Value?.ToString(), out int pLid)) currentLocId = pLid;
 
-                var currentLoc = locCell.Value as LocationOption;
-                if (currentLoc == null || currentLoc.WarehouseId != selectedWh.Id)
+                if (!selectedWh.Locations.Any(l => l.Id == currentLocId))
                 {
-                    locCell.Value = selectedWh.Locations.FirstOrDefault();
+                    row.Cells[colLocIndex].Value = selectedWh.Locations[0].Id;
                 }
             }
         }
         else if (e.ColumnIndex == dgvDeposits.Columns["colExternalCode"]!.Index || 
                  e.ColumnIndex == dgvDeposits.Columns["colExternalName"]!.Index ||
+                 e.ColumnIndex == dgvDeposits.Columns["colSync"]!.Index ||
                  e.ColumnIndex == dgvDeposits.Columns["colAffectsInventory"]!.Index)
         {
             int colStatIndex = dgvDeposits.Columns["colStatus"]!.Index;
             string currentStatus = row.Cells[colStatIndex].Value?.ToString() ?? "";
-            if (currentStatus.StartsWith("✔"))
+            if (currentStatus.StartsWith("✔") || currentStatus.StartsWith("⚡") || currentStatus.StartsWith("⏸"))
             {
                 row.Cells[colStatIndex].Value = "Modificado (Sin guardar)";
             }
@@ -661,7 +884,7 @@ public class MainForm : Form
         {
             lblDepositStatus.Text = "Detectando depósitos en SQL Server local...";
             lblDepositStatus.ForeColor = Color.FromArgb(245, 158, 11);
-            lblStatusText.Text = "Consultando MA_DEPOSITOS en SQL Server...";
+            lblStatusText.Text = "Consultando MA_DEPOSITO en SQL Server...";
 
             if (string.IsNullOrWhiteSpace(txtSqlServer.Text) || string.IsNullOrWhiteSpace(txtSqlDb.Text))
             {
@@ -676,48 +899,180 @@ public class MainForm : Form
 
             string connStr = $"Server={txtSqlServer.Text.Trim()};Database={txtSqlDb.Text.Trim()};User Id={txtSqlUser.Text.Trim()};Password={txtSqlPass.Text.Trim()};TrustServerCertificate=True;Connect Timeout=8;";
 
-            var detected = new List<(string Code, string Name)>();
+            if (cmbFilterLocalidad.Items.Count == 0)
+            {
+                await LoadBranchesFromSqlAsync();
+            }
+
+            bool applyFilter = chkFilterLocalidad.Checked;
+            string filterLoc = "";
+            string filterLocName = "";
+            if (cmbFilterLocalidad.SelectedItem is BranchOption bo)
+            {
+                filterLoc = bo.Code;
+                filterLocName = bo.DisplayName;
+            }
+            else if (!string.IsNullOrWhiteSpace(cmbFilterLocalidad.Text))
+            {
+                filterLoc = cmbFilterLocalidad.Text.Trim();
+                filterLocName = filterLoc;
+            }
+
+            var detected = new List<(string Code, string Name, string Loc)>();
 
             await Task.Run(() =>
             {
                 using var conn = new SqlConnection(connStr);
                 conn.Open();
 
-                string sql = @"
-IF OBJECT_ID('MA_DEPOSITOS', 'U') IS NOT NULL
-BEGIN
-    SELECT DISTINCT RTRIM(c_CodArma) AS c_deposito, RTRIM(ISNULL(c_DesArma, 'Depósito ' + c_CodArma)) AS descripcion
-    FROM MA_DEPOSITOS WITH (NOLOCK)
-    WHERE c_CodArma IS NOT NULL AND RTRIM(c_CodArma) <> ''
-    ORDER BY c_deposito;
-END
-ELSE IF OBJECT_ID('tr_inventario', 'U') IS NOT NULL
-BEGIN
-    SELECT DISTINCT RTRIM(c_deposito) AS c_deposito, ('Depósito ' + RTRIM(c_deposito)) AS descripcion
-    FROM tr_inventario WITH (NOLOCK)
-    WHERE c_deposito IS NOT NULL AND RTRIM(c_deposito) <> ''
-    ORDER BY c_deposito;
-END
-";
-                using var cmd = new SqlCommand(sql, conn);
-                using var rdr = cmd.ExecuteReader();
-                while (rdr.Read())
+                // 1. Detectar si existe MA_DEPOSITO (singular) o MA_DEPOSITOS (plural)
+                using var cmdCol = new SqlCommand(@"
+                    SELECT TABLE_NAME, COLUMN_NAME 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_NAME IN ('MA_DEPOSITO', 'MA_DEPOSITOS')", conn);
+
+                string targetTable = "";
+                var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                using (var rdr = cmdCol.ExecuteReader())
                 {
-                    string c = rdr["c_deposito"]?.ToString()?.Trim() ?? "";
-                    string d = rdr["descripcion"]?.ToString()?.Trim() ?? "";
-                    if (!string.IsNullOrEmpty(c))
+                    while (rdr.Read())
                     {
-                        detected.Add((c, string.IsNullOrEmpty(d) ? $"Depósito {c}" : d));
+                        string tbl = rdr.GetString(0);
+                        if (string.IsNullOrEmpty(targetTable) || tbl.Equals("MA_DEPOSITO", StringComparison.OrdinalIgnoreCase))
+                        {
+                            targetTable = tbl;
+                        }
+                        if (tbl.Equals(targetTable, StringComparison.OrdinalIgnoreCase))
+                        {
+                            cols.Add(rdr.GetString(1));
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(targetTable) && cols.Count > 0)
+                {
+                    string codeCol = cols.Contains("c_coddeposito") ? "c_coddeposito" :
+                                     cols.Contains("c_deposito") ? "c_deposito" :
+                                     cols.Contains("c_CodArma") ? "c_CodArma" : "";
+
+                    string descCol = cols.Contains("c_descripcion") ? "c_descripcion" :
+                                     cols.Contains("c_descrip") ? "c_descrip" :
+                                     cols.Contains("c_DesArma") ? "c_DesArma" : "";
+
+                    string locCol = cols.Contains("c_codlocalidad") ? "c_codlocalidad" :
+                                    cols.Contains("c_localidad") ? "c_localidad" :
+                                    cols.Contains("c_sucursal") ? "c_sucursal" : "";
+
+                    if (!string.IsNullOrEmpty(codeCol))
+                    {
+                        string selectDesc = !string.IsNullOrEmpty(descCol) 
+                            ? $"RTRIM(ISNULL({descCol}, 'Depósito ' + RTRIM({codeCol}))) AS descripcion" 
+                            : $"('Depósito ' + RTRIM({codeCol})) AS descripcion";
+
+                        string selectLoc = !string.IsNullOrEmpty(locCol) 
+                            ? $"RTRIM(ISNULL({locCol}, '')) AS localidad" 
+                            : "'' AS localidad";
+
+                        string sql = $@"
+                            SELECT DISTINCT 
+                                RTRIM({codeCol}) AS c_deposito,
+                                {selectDesc},
+                                {selectLoc}
+                            FROM {targetTable} WITH (NOLOCK)
+                            WHERE {codeCol} IS NOT NULL AND RTRIM({codeCol}) <> ''";
+
+                        if (applyFilter && !string.IsNullOrEmpty(locCol) && !string.IsNullOrEmpty(filterLoc))
+                        {
+                            sql += $" AND RTRIM({locCol}) = @LocFilter";
+                        }
+                        sql += $" ORDER BY c_deposito";
+
+                        using var cmd = new SqlCommand(sql, conn);
+                        if (applyFilter && !string.IsNullOrEmpty(locCol) && !string.IsNullOrEmpty(filterLoc))
+                        {
+                            cmd.Parameters.AddWithValue("@LocFilter", filterLoc);
+                        }
+
+                        using var rdr = cmd.ExecuteReader();
+                        while (rdr.Read())
+                        {
+                            string c = rdr["c_deposito"]?.ToString()?.Trim() ?? "";
+                            string d = rdr["descripcion"]?.ToString()?.Trim() ?? "";
+                            string l = rdr["localidad"]?.ToString()?.Trim() ?? "";
+                            if (!string.IsNullOrEmpty(c))
+                            {
+                                detected.Add((c, string.IsNullOrEmpty(d) ? $"Depósito {c}" : d, l));
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // Fallback a tr_inventario / ma_inventario
+                    string sql = @"
+                        IF OBJECT_ID('tr_inventario', 'U') IS NOT NULL
+                        BEGIN
+                            IF OBJECT_ID('ma_inventario', 'U') IS NOT NULL
+                            BEGIN
+                                SELECT DISTINCT 
+                                    RTRIM(t.c_deposito) AS c_deposito, 
+                                    ('Depósito ' + RTRIM(t.c_deposito)) AS descripcion,
+                                    ISNULL(RTRIM(m.c_codlocalidad), '') AS localidad
+                                FROM tr_inventario t WITH (NOLOCK)
+                                LEFT JOIN ma_inventario m WITH (NOLOCK) ON t.c_documento = m.c_documento AND t.c_concepto = m.c_concepto
+                                WHERE t.c_deposito IS NOT NULL AND RTRIM(t.c_deposito) <> ''
+                                ORDER BY c_deposito;
+                            END
+                            ELSE
+                            BEGIN
+                                SELECT DISTINCT 
+                                    RTRIM(c_deposito) AS c_deposito, 
+                                    ('Depósito ' + RTRIM(c_deposito)) AS descripcion,
+                                    '' AS localidad
+                                FROM tr_inventario WITH (NOLOCK)
+                                WHERE c_deposito IS NOT NULL AND RTRIM(c_deposito) <> ''
+                                ORDER BY c_deposito;
+                            END
+                        END";
+
+                    using var cmd = new SqlCommand(sql, conn);
+                    using var rdr = cmd.ExecuteReader();
+                    while (rdr.Read())
+                    {
+                        string c = rdr["c_deposito"]?.ToString()?.Trim() ?? "";
+                        string d = rdr["descripcion"]?.ToString()?.Trim() ?? "";
+                        string l = rdr["localidad"]?.ToString()?.Trim() ?? "";
+                        if (!string.IsNullOrEmpty(c))
+                        {
+                            if (applyFilter && !string.IsNullOrEmpty(filterLoc) && !string.IsNullOrEmpty(l) && l != filterLoc)
+                                continue;
+                            detected.Add((c, string.IsNullOrEmpty(d) ? $"Depósito {c}" : d, l));
+                        }
                     }
                 }
             });
 
             if (detected.Count == 0)
             {
-                lblDepositStatus.Text = "No se encontraron depósitos en la base de datos SQL Server.";
+                lblDepositStatus.Text = $"No se encontraron depósitos locales{(applyFilter ? $" para '{filterLocName}'" : "")}.";
                 lblDepositStatus.ForeColor = Color.FromArgb(245, 158, 11);
-                MessageBox.Show("No se encontraron registros en MA_DEPOSITOS ni en tr_inventario en el servidor SQL.", "Sin Resultados", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show($"No se encontraron registros de depósitos en el servidor SQL{(applyFilter ? $" para '{filterLocName}'" : "")}.\nVerifica si el filtro es el correcto o desmárcalo para ver todas las sucursales.", "Sin Resultados", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
+            }
+
+            if (dgvDeposits.Rows.Count > 0)
+            {
+                var confirm = MessageBox.Show(
+                    $"Se detectaron {detected.Count} depósitos{(applyFilter ? $" para {filterLocName}" : "")}.\n\n¿Deseas reemplazar la lista actual de la grilla por los depósitos detectados?\n\n- 'Sí': Limpia la grilla y carga únicamente los {detected.Count} detectados.\n- 'No': Mantiene los existentes y solo añade los que falten.",
+                    "Actualizar Grilla de Depósitos",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
+
+                if (confirm == DialogResult.Cancel) return;
+                if (confirm == DialogResult.Yes)
+                {
+                    dgvDeposits.Rows.Clear();
+                }
             }
 
             int addedCount = 0;
@@ -741,12 +1096,14 @@ END
                     int rowIndex = dgvDeposits.Rows.Add();
                     var newRow = dgvDeposits.Rows[rowIndex];
                     newRow.Cells["colExternalCode"].Value = item.Code;
+                    newRow.Cells["colExternalLoc"].Value = item.Loc;
                     newRow.Cells["colExternalName"].Value = item.Name;
+                    newRow.Cells["colSync"].Value = true;
 
                     if (defaultWh != null)
                     {
-                        newRow.Cells["colWarehouse"].Value = defaultWh;
-                        newRow.Cells["colLocation"].Value = defaultLoc;
+                        newRow.Cells["colWarehouse"].Value = defaultWh.Id;
+                        newRow.Cells["colLocation"].Value = defaultLoc?.Id ?? 0;
                     }
 
                     newRow.Cells["colAffectsInventory"].Value = true;
@@ -755,9 +1112,13 @@ END
                 }
                 else
                 {
-                    if (string.IsNullOrEmpty(existingRow.Cells["colExternalName"].Value?.ToString()))
+                    existingRow.Cells["colExternalName"].Value = item.Name;
+                    if (!string.IsNullOrEmpty(item.Loc))
+                        existingRow.Cells["colExternalLoc"].Value = item.Loc;
+                    if (defaultWh != null && (existingRow.Cells["colWarehouse"].Value == null || (existingRow.Cells["colWarehouse"].Value is int wid && wid == 0)))
                     {
-                        existingRow.Cells["colExternalName"].Value = item.Name;
+                        existingRow.Cells["colWarehouse"].Value = defaultWh.Id;
+                        existingRow.Cells["colLocation"].Value = defaultLoc?.Id ?? 0;
                     }
                 }
             }
@@ -801,7 +1162,11 @@ END
             }
 
             var json = await resp.Content.ReadAsStringAsync();
-            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var options = new JsonSerializerOptions 
+            { 
+                PropertyNameCaseInsensitive = true,
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+            };
             var data = JsonSerializer.Deserialize<FacilityDepositResponse>(json, options);
 
             if (data == null) return;
@@ -811,59 +1176,84 @@ END
             var colWh = (DataGridViewComboBoxColumn)dgvDeposits.Columns["colWarehouse"]!;
             var colLoc = (DataGridViewComboBoxColumn)dgvDeposits.Columns["colLocation"]!;
 
-            colWh.Items.Clear();
-            colLoc.Items.Clear();
+            colWh.DataSource = null;
+            colWh.DataSource = _availableWarehouses.ToList();
+            colWh.DisplayMember = "DisplayName";
+            colWh.ValueMember = "Id";
 
-            foreach (var w in _availableWarehouses)
+            var allLocations = _availableWarehouses.SelectMany(w => w.Locations).ToList();
+            colLoc.DataSource = null;
+            colLoc.DataSource = allLocations;
+            colLoc.DisplayMember = "DisplayName";
+            colLoc.ValueMember = "Id";
+
+            var defaultWh = _availableWarehouses.FirstOrDefault();
+            var defaultLoc = defaultWh?.Locations.FirstOrDefault();
+
+            string facLabel = !string.IsNullOrWhiteSpace(data.FacilityName) 
+                ? data.FacilityName 
+                : (cmbStores.SelectedItem is FacilityOption opt ? opt.Name : $"ID {facId}");
+
+            if (_availableWarehouses.Count == 0)
             {
-                colWh.Items.Add(w);
-                foreach (var l in w.Locations)
-                {
-                    l.WarehouseId = w.Id;
-                    colLoc.Items.Add(l);
-                }
+                lblDepositStatus.Text = $"⚠️ Neo ERP no devolvió almacenes para la sede '{facLabel}' (ID {facId}). Crea un almacén en Neo ERP (WMS).";
+                lblDepositStatus.ForeColor = Color.FromArgb(239, 68, 68);
             }
-
-            dgvDeposits.Rows.Clear();
 
             if (data.Mappings != null && data.Mappings.Count > 0)
             {
+                dgvDeposits.Rows.Clear();
+
                 foreach (var m in data.Mappings)
                 {
                     int rIdx = dgvDeposits.Rows.Add();
                     var row = dgvDeposits.Rows[rIdx];
 
                     row.Cells["colExternalCode"].Value = m.ExternalDepositCode;
+                    row.Cells["colExternalLoc"].Value = "";
                     row.Cells["colExternalName"].Value = m.ExternalDepositName;
-
-                    var matchedWh = _availableWarehouses.FirstOrDefault(w => w.Id == m.WarehouseId);
-                    if (matchedWh != null)
-                    {
-                        row.Cells["colWarehouse"].Value = matchedWh;
-                        var matchedLoc = matchedWh.Locations.FirstOrDefault(l => l.Id == m.LocationId);
-                        row.Cells["colLocation"].Value = matchedLoc ?? matchedWh.Locations.FirstOrDefault();
-                    }
-
+                    row.Cells["colSync"].Value = m.IsActive;
+                    row.Cells["colWarehouse"].Value = m.WarehouseId;
+                    row.Cells["colLocation"].Value = m.LocationId;
                     row.Cells["colAffectsInventory"].Value = m.AffectsInventory;
-                    row.Cells["colStatus"].Value = m.AutoDiscovered ? "⚡ Auto-detectado" : "✔ Guardado en Nube";
+                    row.Cells["colStatus"].Value = !m.IsActive 
+                        ? "⏸ Omitido (No Sincroniza)" 
+                        : (m.AutoDiscovered ? "⚡ Auto-detectado" : "✔ Guardado en Nube");
                 }
 
                 _depositsConfigured = true;
-                lblDepositStatus.Text = $"[OK] {data.Mappings.Count} depósitos cargados desde Neo ERP para sede {data.FacilityName}.";
+                lblDepositStatus.Text = $"[OK] {data.Mappings.Count} depósitos cargados desde Neo ERP para sede '{facLabel}'.";
                 lblDepositStatus.ForeColor = Color.FromArgb(16, 185, 129);
                 lblStatusText.Text = $"Mapeo de depósitos sincronizado desde Neo ERP ({data.Mappings.Count} depósitos).";
             }
             else
             {
                 _depositsConfigured = false;
-                lblDepositStatus.Text = $"La sede '{data.FacilityName}' no tiene depósitos configurados aún en Neo ERP. Haz clic en '1. Detectar Depósitos (Stellar)'.";
-                lblDepositStatus.ForeColor = Color.FromArgb(245, 158, 11);
+                if (dgvDeposits.Rows.Count > 0 && defaultWh != null)
+                {
+                    foreach (DataGridViewRow row in dgvDeposits.Rows)
+                    {
+                        var curWhVal = row.Cells["colWarehouse"].Value;
+                        if (curWhVal == null || (curWhVal is int cId && cId == 0))
+                        {
+                            row.Cells["colWarehouse"].Value = defaultWh.Id;
+                            row.Cells["colLocation"].Value = defaultLoc?.Id ?? 0;
+                        }
+                    }
+                    lblDepositStatus.Text = $"Almacén '{defaultWh.DisplayName}' vinculado a los depósitos locales. Presiona '3. Guardar en Neo ERP'.";
+                    lblDepositStatus.ForeColor = Color.FromArgb(16, 185, 129);
+                }
+                else
+                {
+                    lblDepositStatus.Text = $"La sede '{facLabel}' no tiene depósitos configurados aún en Neo ERP. Haz clic en '1. Detectar Depósitos (Stellar)'.";
+                    lblDepositStatus.ForeColor = Color.FromArgb(245, 158, 11);
+                }
                 lblStatusText.Text = "Sin depósitos configurados en la nube.";
             }
 
             if (showMessages)
             {
-                MessageBox.Show($"Se consultaron con éxito los almacenes de Neo ERP.\n\nSede: {data.FacilityName}\nAlmacenes disponibles: {_availableWarehouses.Count}\nDepósitos mapeados: {data.Mappings?.Count ?? 0}", "Neo ERP Conectado", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show($"Se consultaron con éxito los almacenes de Neo ERP.\n\nSede: {facLabel} (ID: {facId})\nAlmacenes disponibles: {_availableWarehouses.Count}\nDepósitos mapeados: {data.Mappings?.Count ?? 0}", "Neo ERP Conectado", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
         catch (Exception ex)
@@ -897,12 +1287,23 @@ END
 
         try
         {
+            var defaultWh = _availableWarehouses.FirstOrDefault();
+            var defaultLoc = defaultWh?.Locations.FirstOrDefault();
+
             foreach (DataGridViewRow row in dgvDeposits.Rows)
             {
                 string code = row.Cells["colExternalCode"].Value?.ToString()?.Trim() ?? "";
                 string name = row.Cells["colExternalName"].Value?.ToString()?.Trim() ?? "";
-                var wh = row.Cells["colWarehouse"].Value as WarehouseOption;
-                var loc = row.Cells["colLocation"].Value as LocationOption;
+                bool isSync = (bool)(row.Cells["colSync"].Value ?? true);
+
+                int whId = 0;
+                if (row.Cells["colWarehouse"].Value is int wid) whId = wid;
+                else if (int.TryParse(row.Cells["colWarehouse"].Value?.ToString(), out int pwid)) whId = pwid;
+
+                int locId = 0;
+                if (row.Cells["colLocation"].Value is int lid) locId = lid;
+                else if (int.TryParse(row.Cells["colLocation"].Value?.ToString(), out int plid)) locId = plid;
+
                 bool affects = (bool)(row.Cells["colAffectsInventory"].Value ?? true);
 
                 if (string.IsNullOrEmpty(code))
@@ -911,25 +1312,36 @@ END
                     return;
                 }
 
-                if (wh == null)
+                if (isSync)
                 {
-                    MessageBox.Show($"El depósito '{code}' no tiene un Almacén de Neo ERP seleccionado.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
+                    if (whId <= 0)
+                    {
+                        MessageBox.Show($"El depósito '{code}' está marcado para sincronizar pero no tiene un Almacén de Neo ERP seleccionado.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
 
-                if (loc == null)
+                    if (locId <= 0)
+                    {
+                        MessageBox.Show($"El depósito '{code}' está marcado para sincronizar pero no tiene una Ubicación de Neo ERP seleccionada.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+                else
                 {
-                    MessageBox.Show($"El depósito '{code}' no tiene una Ubicación de Neo ERP seleccionada.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
+                    // Depósito omitido: asignamos almacén base para cumplir con integridad referencial en BD pero NO afecta inventario
+                    if (whId <= 0 && defaultWh != null) whId = defaultWh.Id;
+                    if (locId <= 0 && defaultLoc != null) locId = defaultLoc.Id;
+                    affects = false;
                 }
 
                 var payload = new
                 {
                     external_deposit_code = code,
                     external_deposit_name = name,
-                    warehouse_id = wh.Id,
-                    location_id = loc.Id,
-                    affects_inventory = affects
+                    warehouse_id = whId,
+                    location_id = locId,
+                    affects_inventory = affects,
+                    is_active = isSync
                 };
 
                 string json = JsonSerializer.Serialize(payload);
@@ -940,7 +1352,7 @@ END
 
                 if (resp.IsSuccessStatusCode)
                 {
-                    row.Cells["colStatus"].Value = "✔ Guardado en Nube";
+                    row.Cells["colStatus"].Value = isSync ? "✔ Sincronizado" : "⏸ Omitido (No Sincroniza)";
                     saved++;
                 }
                 else
@@ -981,14 +1393,16 @@ END
         int idx = dgvDeposits.Rows.Add();
         var row = dgvDeposits.Rows[idx];
         row.Cells["colExternalCode"].Value = "";
+        row.Cells["colExternalLoc"].Value = cmbFilterLocalidad?.Text?.Trim() ?? "";
         row.Cells["colExternalName"].Value = "Nuevo Depósito";
 
         if (defaultWh != null)
         {
-            row.Cells["colWarehouse"].Value = defaultWh;
-            row.Cells["colLocation"].Value = defaultLoc;
+            row.Cells["colWarehouse"].Value = defaultWh.Id;
+            row.Cells["colLocation"].Value = defaultLoc?.Id ?? 0;
         }
 
+        row.Cells["colSync"].Value = true;
         row.Cells["colAffectsInventory"].Value = true;
         row.Cells["colStatus"].Value = "Nuevo (Sin Guardar)";
 
@@ -1316,6 +1730,7 @@ END
     {
         txtCustomStoreId.Visible = (cmbStores.SelectedIndex == cmbStores.Items.Count - 1);
         _depositsConfigured = false;
+        SelectMatchingBranch();
         _ = FetchDepositsFromCloudAsync(showMessages: false);
     }
 
@@ -1540,17 +1955,29 @@ END
                 var doc = JsonNode.Parse(json);
                 if (doc != null)
                 {
-                    lblLastSuppliers.Text = $"Proveedores / Productos:\n{doc["LastProductSync"]?.ToString() ?? "Sin iniciar"}";
-                    lblLastBarcodes.Text = $"Codigos de Barra:\n{doc["LastBarcodeSync"]?.ToString() ?? "Sin iniciar"}";
-                    lblLastCosts.Text = $"Costos Proveedor:\n{doc["LastSupplierProductSync"]?.ToString() ?? "Sin iniciar"}";
+                    string FormatDt(string key)
+                    {
+                        var n = doc[key];
+                        if (n == null) return "Sin iniciar";
+                        if (DateTime.TryParse(n.ToString(), out var dt))
+                        {
+                            if (dt <= new DateTime(2000, 1, 1)) return "Sin sincronizar";
+                            return dt.ToString("yyyy-MM-dd HH:mm:ss");
+                        }
+                        return n.ToString();
+                    }
+
+                    lblLastSuppliers.Text = $"Proveedores / Productos:\n{FormatDt("LastProductSync")}";
+                    lblLastBarcodes.Text = $"Codigos de Barra:\n{FormatDt("LastBarcodeSync")}";
+                    lblLastCosts.Text = $"Costos Proveedor:\n{FormatDt("LastSupplierProductSync")}";
                     
                     bool baseline = doc["BaselineInventoryDone"]?.GetValue<bool>() ?? false;
                     lblLastBaseline.Text = $"Inventario Baseline:\n{(baseline ? "COMPLETADO [OK]" : "Pendiente")}";
                     lblLastBaseline.ForeColor = baseline ? Color.FromArgb(16, 185, 129) : Color.FromArgb(245, 158, 11);
 
-                    lblLastSales.Text = $"Ultima Venta:\n{doc["LastSalesSync"]?.ToString() ?? "Sin iniciar"}";
+                    lblLastSales.Text = $"Ultima Venta:\n{FormatDt("LastSalesSync")}";
 
-                    string lastMov = doc["LastMovementSync"]?.ToString() ?? "Sin iniciar";
+                    string lastMov = FormatDt("LastMovementSync");
                     if (lblMovementsInfo != null)
                     {
                         lblMovementsInfo.Text = $"Ultima sincronizacion de movimientos registrada: {lastMov}";
@@ -1582,16 +2009,38 @@ END
         var res = MessageBox.Show("¿Seguro que deseas resetear el estado local de la tienda?\n\nEsto eliminara sync_state.json y morpheus_local.db (creando respaldo en /backup) para comenzar desde cero absoluto.", "Confirmar Reset Local", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (res != DialogResult.Yes) return;
 
+        bool wasRunning = false;
         try
         {
             using var sc = GetActiveServiceController(out string svcName);
             if (sc != null && sc.Status == ServiceControllerStatus.Running)
             {
-                MessageBox.Show($"El servicio de Windows '{svcName}' esta activo. Debes detenerlo antes de resetear.", "Servicio Activo", MessageBoxButtons.OK, MessageBoxIcon.Stop);
-                return;
+                var ask = MessageBox.Show(
+                    $"El servicio de Windows '{svcName}' esta activo y mantiene los archivos de estado bloqueados.\n\n¿Deseas que lo detenga automaticamente para proceder con el reseteo?",
+                    "Servicio Activo",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question
+                );
+
+                if (ask == DialogResult.Yes)
+                {
+                    lblStatusText.Text = $"Deteniendo servicio {svcName}...";
+                    sc.Stop();
+                    sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                    UpdateServiceStatus();
+                    wasRunning = true;
+                }
+                else
+                {
+                    return;
+                }
             }
         }
-        catch {}
+        catch (Exception ex)
+        {
+            MessageBox.Show($"No se pudo detener el servicio automaticamente:\n{ex.Message}\n\nPor favor ve a la pestaña '4. Servicio en Fondo' y presiona 'Detener Servicio'.", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
 
         try
         {
@@ -1614,6 +2063,27 @@ END
             lblResetStatus.Text = "[OK] Estado reseteado a cero (Backup en /backup)";
             lblStatusText.Text = "Fase 2 completada: Estado local limpio.";
             RefreshSyncState();
+
+            if (wasRunning)
+            {
+                var askRestart = MessageBox.Show(
+                    "Estado local reseteado con exito.\n\n¿Deseas volver a iniciar el servicio de Windows ahora?",
+                    "Reiniciar Servicio",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question
+                );
+                if (askRestart == DialogResult.Yes)
+                {
+                    try
+                    {
+                        using var sc = GetActiveServiceController(out _);
+                        sc?.Start();
+                        sc?.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(10));
+                        UpdateServiceStatus();
+                    }
+                    catch {}
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -1659,7 +2129,7 @@ END
                     var json = await resp.Content.ReadAsStringAsync();
                     var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                     var data = JsonSerializer.Deserialize<FacilityDepositResponse>(json, options);
-                    if (data != null && data.Mappings != null && data.Mappings.Count > 0)
+                    if (data != null && data.Mappings != null && data.Mappings.Any(m => m.IsActive))
                     {
                         _depositsConfigured = true;
                     }
@@ -1692,7 +2162,52 @@ END
         }
 
         string date = rbBaselineToday.Checked ? "now" : txtBaselineDate.Text.Trim();
-        RunExtractor("baseline", $"--date {date}");
+        string args = $"--date {date}";
+
+        if (cmbBaselineDeposit != null && cmbBaselineDeposit.SelectedIndex > 0 && cmbBaselineDeposit.SelectedItem != null)
+        {
+            string selectedText = cmbBaselineDeposit.SelectedItem.ToString() ?? "";
+            string depCode = selectedText.Split('-')[0].Trim();
+            if (!string.IsNullOrEmpty(depCode))
+            {
+                args += $" --deposit {depCode}";
+            }
+        }
+
+        RunExtractor("baseline", args);
+    }
+
+    private void RefreshBaselineDepositCombo()
+    {
+        if (cmbBaselineDeposit == null) return;
+        string? currentSelected = cmbBaselineDeposit.SelectedItem?.ToString();
+        cmbBaselineDeposit.Items.Clear();
+        cmbBaselineDeposit.Items.Add("Todos los depósitos");
+
+        var added = new HashSet<string>();
+        if (dgvDeposits != null && dgvDeposits.Rows.Count > 0)
+        {
+            foreach (DataGridViewRow row in dgvDeposits.Rows)
+            {
+                if (row.IsNewRow) continue;
+                string code = row.Cells["colExternalCode"]?.Value?.ToString()?.Trim() ?? "";
+                string name = row.Cells["colExternalName"]?.Value?.ToString()?.Trim() ?? "";
+                if (!string.IsNullOrEmpty(code) && added.Add(code))
+                {
+                    string display = !string.IsNullOrEmpty(name) ? $"{code} - {name}" : code;
+                    cmbBaselineDeposit.Items.Add(display);
+                }
+            }
+        }
+
+        if (currentSelected != null && cmbBaselineDeposit.Items.Contains(currentSelected))
+        {
+            cmbBaselineDeposit.SelectedItem = currentSelected;
+        }
+        else
+        {
+            cmbBaselineDeposit.SelectedIndex = 0;
+        }
     }
 
     private void BtnSyncSales_Click(object? sender, EventArgs e)
@@ -2135,49 +2650,107 @@ public class FacilityOption
     public override string ToString() => $"[{Code}] {Name} (ID: {Id})";
 }
 
+public class BranchOption
+{
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string DisplayName => string.IsNullOrWhiteSpace(Name) ? Code : $"[{Code}] {Name}";
+    public override string ToString() => DisplayName;
+}
+
 public class FacilityDepositResponse
 {
+    [JsonPropertyName("facility_id")]
     public int FacilityId { get; set; }
+
+    [JsonPropertyName("facility_name")]
     public string FacilityName { get; set; } = string.Empty;
+
+    [JsonPropertyName("mappings")]
     public List<CloudDepositItem> Mappings { get; set; } = new();
+
+    [JsonPropertyName("available_warehouses")]
     public List<WarehouseOption> AvailableWarehouses { get; set; } = new();
 }
 
 public class CloudDepositItem
 {
+    [JsonPropertyName("id")]
     public int Id { get; set; }
+
+    [JsonPropertyName("facility_id")]
     public int FacilityId { get; set; }
+
+    [JsonPropertyName("external_deposit_code")]
     public string ExternalDepositCode { get; set; } = string.Empty;
+
+    [JsonPropertyName("external_deposit_name")]
     public string ExternalDepositName { get; set; } = string.Empty;
+
+    [JsonPropertyName("warehouse_id")]
     public int WarehouseId { get; set; }
+
+    [JsonPropertyName("warehouse_name")]
     public string WarehouseName { get; set; } = string.Empty;
+
+    [JsonPropertyName("warehouse_code")]
     public string WarehouseCode { get; set; } = string.Empty;
+
+    [JsonPropertyName("location_id")]
     public int LocationId { get; set; }
+
+    [JsonPropertyName("location_name")]
     public string LocationName { get; set; } = string.Empty;
+
+    [JsonPropertyName("location_code")]
     public string LocationCode { get; set; } = string.Empty;
+
+    [JsonPropertyName("affects_inventory")]
     public bool AffectsInventory { get; set; } = true;
+
+    [JsonPropertyName("is_active")]
     public bool IsActive { get; set; } = true;
+
+    [JsonPropertyName("auto_discovered")]
     public bool AutoDiscovered { get; set; } = false;
 }
 
 public class WarehouseOption
 {
+    [JsonPropertyName("id")]
     public int Id { get; set; }
+
+    [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("code")]
     public string Code { get; set; } = string.Empty;
+
+    [JsonPropertyName("locations")]
     public List<LocationOption> Locations { get; set; } = new();
 
-    public override string ToString() => string.IsNullOrWhiteSpace(Code) ? Name : $"[{Code}] {Name}";
+    public string DisplayName => string.IsNullOrWhiteSpace(Code) ? Name : $"[{Code}] {Name}";
+    public override string ToString() => DisplayName;
 }
 
 public class LocationOption
 {
+    [JsonPropertyName("id")]
     public int Id { get; set; }
+
+    [JsonPropertyName("warehouse_id")]
     public int WarehouseId { get; set; }
+
+    [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("code")]
     public string Code { get; set; } = string.Empty;
+
+    [JsonPropertyName("usage")]
     public string? Usage { get; set; }
 
-    public override string ToString() => string.IsNullOrWhiteSpace(Code) ? Name : $"[{Code}] {Name}";
+    public string DisplayName => string.IsNullOrWhiteSpace(Code) ? (string.IsNullOrWhiteSpace(Usage) ? Name : $"{Name} ({Usage})") : $"[{Code}] {Name}";
+    public override string ToString() => DisplayName;
 }
 

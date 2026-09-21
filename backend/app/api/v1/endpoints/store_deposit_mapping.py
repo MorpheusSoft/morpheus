@@ -135,7 +135,7 @@ def create_or_upsert_deposit_mapping(
             warehouse_id=wh.id,
             location_id=loc.id,
             affects_inventory=payload.affects_inventory,
-            is_active=True,
+            is_active=payload.is_active,
             auto_discovered=False,
             created_at=now,
             updated_at=now
@@ -146,7 +146,7 @@ def create_or_upsert_deposit_mapping(
         mapping.warehouse_id = wh.id
         mapping.location_id = loc.id
         mapping.affects_inventory = payload.affects_inventory
-        mapping.is_active = True
+        mapping.is_active = payload.is_active
         mapping.auto_discovered = False # Validado formalmente por el usuario
         mapping.updated_at = now
 

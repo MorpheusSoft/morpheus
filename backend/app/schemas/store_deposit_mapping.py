@@ -46,6 +46,7 @@ class StoreDepositMappingCreate(BaseModel):
     warehouse_id: int
     location_id: int
     affects_inventory: bool = True
+    is_active: bool = True
 
 class StoreDepositMappingUpdate(BaseModel):
     external_deposit_name: Optional[str] = None

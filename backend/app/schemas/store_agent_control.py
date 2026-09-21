@@ -15,6 +15,7 @@ class StoreAgentConfigSchema(BaseModel):
     suppliers_enabled: bool
     supplier_products_enabled: bool
     movements_enabled: bool
+    is_sync_paused: bool = False
     updated_at: Optional[datetime] = None
 
     class Config:
@@ -31,6 +32,7 @@ class StoreAgentConfigUpdateSchema(BaseModel):
     suppliers_enabled: Optional[bool] = None
     supplier_products_enabled: Optional[bool] = None
     movements_enabled: Optional[bool] = None
+    is_sync_paused: Optional[bool] = None
 
 class StoreAgentCommandCreateSchema(BaseModel):
     command_type: str # FORCE_SYNC_SALES, FORCE_SYNC_MASTERS, SYNC_HISTORICAL, RESTART_SERVICE
@@ -71,3 +73,11 @@ class FacilityAgentStatusSchema(BaseModel):
     lag_minutes: Optional[int] = 0
     config: Optional[StoreAgentConfigSchema] = None
     pending_commands_count: int = 0
+    last_product_sync: Optional[datetime] = None
+    last_barcode_sync: Optional[datetime] = None
+    last_supplier_product_sync: Optional[datetime] = None
+    baseline_inventory_done: Optional[bool] = False
+    last_movement_sync: Optional[datetime] = None
+    latest_available_version: Optional[str] = "2.3.0-neo"
+    has_update_available: Optional[bool] = False
+    is_sync_paused: bool = False

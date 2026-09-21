@@ -26,6 +26,13 @@ public class InventoryMovementsWorker : BackgroundService
         {
             try
             {
+                if (SyncStateManager.IsSyncPaused())
+                {
+                    _logger.LogDebug("[PAUSA] Sincronización de movimientos pausada por administración. En espera...");
+                    await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken);
+                    continue;
+                }
+
                 var syncState = SyncStateManager.LoadState();
                 var config = _configuration.GetSection("DirectExtractors:InventoryMovements").Get<DirectExtractorConfig>();
                 

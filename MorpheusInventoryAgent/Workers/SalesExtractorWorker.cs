@@ -28,6 +28,13 @@ public class SalesExtractorWorker : BackgroundService
         {
             try
             {
+                if (SyncStateManager.IsSyncPaused())
+                {
+                    _logger.LogDebug("[PAUSA] Sincronización continua de ventas pausada por administración. En espera...");
+                    await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken);
+                    continue;
+                }
+
                 var syncState = SyncStateManager.LoadState();
                 var config = _configuration.GetSection("DirectExtractors:Sales").Get<DirectExtractorConfig>() ?? new DirectExtractorConfig
                 {

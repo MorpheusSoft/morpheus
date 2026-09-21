@@ -8,8 +8,22 @@ from app.api import deps
 from app.models.inventory import Product, ProductVariant, Category, ProductFacilityPrice, ProductBarcode, ProductPackaging
 from app.models.core import Currency, Tribute, Supplier, Facility
 from app.models.purchasing import SupplierProduct
+from app.models.store_agent_control import StoreAgentConfig
 
 router = APIRouter()
+
+def is_facility_sync_paused(session: Session, facility_id: Optional[int] = None) -> bool:
+    if facility_id:
+        cfg = session.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == facility_id).first()
+        if cfg and cfg.is_sync_paused:
+            return True
+    else:
+        # Si la configuración de sucursal por defecto o todas están en pausa
+        paused_count = session.query(StoreAgentConfig).filter(StoreAgentConfig.is_sync_paused == True).count()
+        total_count = session.query(StoreAgentConfig).count()
+        if total_count > 0 and paused_count == total_count:
+            return True
+    return False
 
 class LegacyProduct(BaseModel):
     c_Codigo: str
@@ -43,8 +57,13 @@ def get_legacy_facilities(session: Session = Depends(deps.get_db)):
 @router.post("/products-legacy")
 def import_products_legacy(
     products_in: List[LegacyProduct],
+    facility_id: Optional[int] = None,
     session: Session = Depends(deps.get_db)
 ):
+    if is_facility_sync_paused(session, facility_id):
+        print(f"[PAUSA] Ingesta de productos bloqueada (Pausa activa para sede {facility_id or 'global'}).")
+        return {"message": "Sincronización de productos pausada por administración.", "count": 0, "paused": True}
+
     print("Iniciando carga Maestro de Productos con UPSERT (Sin truncar tablas)...")
     
     # 1. Obtener monedas y sucursal por defecto
@@ -214,8 +233,13 @@ class LegacyBarcode(BaseModel):
 @router.post("/products-barcodes-legacy")
 def import_barcodes_legacy(
     barcodes_in: List[LegacyBarcode],
+    facility_id: Optional[int] = None,
     session: Session = Depends(deps.get_db)
 ):
+    if is_facility_sync_paused(session, facility_id):
+        print(f"[PAUSA] Ingesta de códigos de barra bloqueada (Pausa activa para sede {facility_id or 'global'}).")
+        return {"message": "Sincronización de códigos de barra pausada por administración.", "count": 0, "paused": True}
+
     print("Iniciando carga de Códigos Alternos (Barras)...")
     
     count = 0

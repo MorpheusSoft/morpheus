@@ -29,7 +29,9 @@ from app.services.dante_it_service import (
     audit_store_sync_heartbeats,
     detect_sales_consecutive_gaps,
     reconcile_daily_sales_totals,
-    auto_remediate_sales_lag
+    auto_remediate_sales_lag,
+    audit_failed_sync_commands,
+    audit_store_invoice_history
 )
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,8 @@ SKILL_DISPATCHER = {
     'it_sales_gap_detector': detect_sales_consecutive_gaps,
     'it_daily_sales_reconciliation': reconcile_daily_sales_totals,
     'it_auto_remediate_sales_lag': auto_remediate_sales_lag,
+    'it_failed_sync_commands_monitor': audit_failed_sync_commands,
+    'it_invoice_sync_history_audit': audit_store_invoice_history,
 }
 
 def run_worker_cycle(agent_code: str, db: Session) -> Dict[str, Any]:

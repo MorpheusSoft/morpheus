@@ -173,7 +173,8 @@ public class HeartbeatWorker : BackgroundService
                 ["last_supplier_product_sync"] = syncState.LastSupplierProductSync > new DateTime(2000, 1, 1) ? syncState.LastSupplierProductSync.ToString("o") : null!,
                 ["last_sales_sync"] = syncState.LastSalesSync > new DateTime(2000, 1, 1) ? syncState.LastSalesSync.ToString("o") : null!,
                 ["baseline_done"] = syncState.BaselineInventoryDone,
-                ["last_movement_sync"] = syncState.LastMovementSync > new DateTime(2000, 1, 1) ? syncState.LastMovementSync.ToString("o") : null!
+                ["last_movement_sync"] = syncState.LastMovementSync > new DateTime(2000, 1, 1) ? syncState.LastMovementSync.ToString("o") : null!,
+                ["is_sync_paused"] = SyncStateManager.IsSyncPaused()
             }
         };
 
@@ -294,7 +295,28 @@ public class HeartbeatWorker : BackgroundService
                     break;
 
                 case "CONFIG_UPDATE":
+                    if (cmd.Parameters.ValueKind == JsonValueKind.Object)
+                    {
+                        if (cmd.Parameters.TryGetProperty("is_sync_paused", out var isp))
+                        {
+                            SyncStateManager.SetSyncPaused(isp.GetBoolean());
+                        }
+                    }
                     await SendCommandAckAsync(cmd.Id, "COMPLETED", new { message = "Configuración remota aplicada en memoria local." }, null, stoppingToken);
+                    break;
+
+                case "PAUSE_SYNC":
+                case "STOP_SYNC":
+                    SyncStateManager.SetSyncPaused(true);
+                    _logger.LogWarning("[CONTROL REMOTO] Procesos de sincronización periódica PAUSADOS por orden central.");
+                    await SendCommandAckAsync(cmd.Id, "COMPLETED", new { message = "Procesos de sincronización pausados. Telemetría y actualizaciones continúan activas." }, null, stoppingToken);
+                    break;
+
+                case "RESUME_SYNC":
+                case "START_SYNC":
+                    SyncStateManager.SetSyncPaused(false);
+                    _logger.LogInformation("[CONTROL REMOTO] Procesos de sincronización periódica REANUDADOS exitosamente.");
+                    await SendCommandAckAsync(cmd.Id, "COMPLETED", new { message = "Procesos de sincronización reanudados exitosamente." }, null, stoppingToken);
                     break;
 
                 case "RESTART_SERVICE":

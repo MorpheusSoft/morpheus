@@ -3,6 +3,7 @@ using System.Text.Json;
 using Dapper;
 using Microsoft.Data.SqlClient;
 using MorpheusSyncAgent.Models;
+using MorpheusSyncAgent.Utils;
 
 namespace MorpheusSyncAgent.Workers;
 
@@ -25,6 +26,13 @@ public class CategoryExtractorWorker : BackgroundService
         {
             try
             {
+                if (SyncStateManager.IsSyncPaused())
+                {
+                    _logger.LogDebug("[PAUSA] Sincronización de categorías pausada por administración. En espera...");
+                    await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken);
+                    continue;
+                }
+
                 var config = _configuration.GetSection("DirectExtractors:Categories").Get<DirectExtractorConfig>();
                 
                 if (config != null && config.Enabled)

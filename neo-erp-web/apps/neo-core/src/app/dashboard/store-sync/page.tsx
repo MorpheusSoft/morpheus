@@ -6,6 +6,8 @@ import {
   getStoreAgentCommands,
   updateStoreAgentConfig,
   createStoreAgentCommand,
+  pauseAllStores,
+  resumeAllStores,
   FacilityAgentStatus,
   StoreAgentConfig,
   StoreAgentCommand,
@@ -49,10 +51,18 @@ export default function StoreSyncDashboardPage() {
     external_deposit_name: '',
     warehouse_id: 0,
     location_id: 0,
-    affects_inventory: true
+    affects_inventory: true,
+    is_active: true
   });
 
   // Modal states
+  const [showBaselineModal, setShowBaselineModal] = useState(false);
+  const [baselineParams, setBaselineParams] = useState({
+    mode: "now", // "now" | "custom"
+    cutoffDate: new Date().toISOString().split('T')[0],
+    depositCode: "" // "" = todos los activos, o ej "1003"
+  });
+
   const [showHistoricalModal, setShowHistoricalModal] = useState(false);
   const [historicalParams, setHistoricalParams] = useState({
     startDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -62,6 +72,11 @@ export default function StoreSyncDashboardPage() {
 
   const [showRestartModal, setShowRestartModal] = useState(false);
   const [restartConfirmText, setRestartConfirmText] = useState("");
+
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [updateTargetVersion, setUpdateTargetVersion] = useState("2.3.0-neo");
+  const [updatePackageUrl, setUpdatePackageUrl] = useState("https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip");
+  const [selectedErrorModal, setSelectedErrorModal] = useState<{ commandId: number; commandType: string; error: string; time?: string } | null>(null);
 
   const selectedFacility = facilities.find(f => f.facility_id === selectedFacilityId) || null;
 
@@ -311,8 +326,10 @@ export default function StoreSyncDashboardPage() {
     }
   };
 
+  const [togglingAll, setTogglingAll] = useState(false);
+
   const handleRunCommand = async (
-    type: 'FORCE_SYNC_SALES' | 'FORCE_SYNC_MASTERS' | 'SYNC_HISTORICAL' | 'RESTART_SERVICE',
+    type: 'FORCE_SYNC_SALES' | 'FORCE_SYNC_MASTERS' | 'SYNC_HISTORICAL' | 'SYNC_BASELINE' | 'RESTART_SERVICE' | 'UPDATE_SOFTWARE' | 'PAUSE_SYNC' | 'RESUME_SYNC',
     params: Record<string, any> = {}
   ) => {
     if (!selectedFacilityId) return;
@@ -320,12 +337,57 @@ export default function StoreSyncDashboardPage() {
     setExecutingCmd(type);
     try {
       await createStoreAgentCommand(selectedFacilityId, type, params);
+      await fetchFacilitiesData(true);
       await fetchCommandsHistory(selectedFacilityId);
     } catch (err: any) {
       alert("Error al enviar comando: " + err.message);
     } finally {
       setExecutingCmd(null);
     }
+  };
+
+  const handleTogglePause = async (facilityId: number, isCurrentlyPaused: boolean) => {
+    const cmdType = isCurrentlyPaused ? 'RESUME_SYNC' : 'PAUSE_SYNC';
+    setExecutingCmd(cmdType);
+    try {
+      await createStoreAgentCommand(facilityId, cmdType, {});
+      await fetchFacilitiesData(true);
+      await fetchCommandsHistory(facilityId);
+    } catch (err: any) {
+      alert(err.message || "Error al cambiar estado de pausa");
+    } finally {
+      setExecutingCmd(null);
+    }
+  };
+
+  const handleToggleAllStores = async (pause: boolean) => {
+    setTogglingAll(true);
+    try {
+      if (pause) {
+        await pauseAllStores();
+      } else {
+        await resumeAllStores();
+      }
+      await fetchFacilitiesData(true);
+      if (selectedFacilityId) {
+        await fetchCommandsHistory(selectedFacilityId);
+      }
+    } catch (err: any) {
+      alert(err.message || "Error al modificar estado global de tiendas");
+    } finally {
+      setTogglingAll(false);
+    }
+  };
+
+  const handleConfirmBaseline = async () => {
+    setShowBaselineModal(false);
+    const dateVal = baselineParams.mode === 'now' ? 'now' : baselineParams.cutoffDate;
+    await handleRunCommand('SYNC_BASELINE', {
+      date: dateVal,
+      cutoff: dateVal,
+      deposit: baselineParams.depositCode || null,
+      deposit_code: baselineParams.depositCode || null
+    });
   };
 
   const handleConfirmHistorical = async () => {
@@ -352,6 +414,14 @@ export default function StoreSyncDashboardPage() {
     });
   };
 
+  const handleConfirmUpdateSoftware = async () => {
+    setShowUpdateModal(false);
+    await handleRunCommand('UPDATE_SOFTWARE', {
+      target_version: updateTargetVersion.trim() || "2.2.0-neo",
+      package_url: updatePackageUrl.trim() || "https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip"
+    });
+  };
+
   const formatRelativeTime = (dateStr: string | null) => {
     if (!dateStr) return "Sin latido registrado";
     const diffSec = Math.round((Date.now() - new Date(dateStr).getTime()) / 1000);
@@ -369,6 +439,7 @@ export default function StoreSyncDashboardPage() {
     if (!dateStr) return "Sin datos registrados";
     try {
       const d = new Date(dateStr);
+      if (isNaN(d.getTime()) || d.getFullYear() <= 2000) return "Sin sincronizar";
       return d.toLocaleString("es-VE", {
         year: "numeric",
         month: "2-digit",
@@ -478,6 +549,11 @@ export default function StoreSyncDashboardPage() {
                 >
                   {fac.facility_code}
                 </span>
+                {fac.has_update_available && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[9px] font-extrabold bg-amber-400 text-amber-950 uppercase tracking-tighter" title={`Actualización disponible: v${fac.latest_available_version}`}>
+                    v{fac.latest_available_version}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -487,38 +563,67 @@ export default function StoreSyncDashboardPage() {
       {selectedFacility && (
         <div className="space-y-6">
           {/* Navigation Tabs */}
-          <div className="flex items-center gap-3 border-b border-slate-200 pb-px">
-            <button
-              onClick={() => setActiveTab('control')}
-              className={`flex items-center gap-2 px-5 py-3 text-xs font-bold border-b-2 transition-all ${
-                activeTab === 'control'
-                  ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50 rounded-t-xl'
-                  : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-t-xl'
-              }`}
-            >
-              <i className="pi pi-desktop text-sm"></i>
-              <span>Telemetría y Control Remoto</span>
-            </button>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-px">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setActiveTab('control')}
+                className={`flex items-center gap-2 px-5 py-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'control'
+                    ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50 rounded-t-xl'
+                    : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-t-xl'
+                }`}
+              >
+                <i className="pi pi-desktop text-sm"></i>
+                <span>Telemetría y Control Remoto</span>
+              </button>
 
-            <button
-              onClick={() => {
-                setActiveTab('deposits');
-                if (selectedFacilityId) fetchDepositMappings(selectedFacilityId);
-              }}
-              className={`flex items-center gap-2 px-5 py-3 text-xs font-bold border-b-2 transition-all ${
-                activeTab === 'deposits'
-                  ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50 rounded-t-xl'
-                  : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-t-xl'
-              }`}
-            >
-              <i className="pi pi-box text-sm"></i>
-              <span>Mapeo de Depósitos (Stellar ➔ Neo)</span>
-              {depositMappings.filter(m => m.auto_discovered).length > 0 && (
-                <span className="ml-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-500 text-white font-extrabold animate-pulse">
-                  {depositMappings.filter(m => m.auto_discovered).length}
-                </span>
+              <button
+                onClick={() => {
+                  setActiveTab('deposits');
+                  if (selectedFacilityId) fetchDepositMappings(selectedFacilityId);
+                }}
+                className={`flex items-center gap-2 px-5 py-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'deposits'
+                    ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50 rounded-t-xl'
+                    : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-t-xl'
+                }`}
+              >
+                <i className="pi pi-box text-sm"></i>
+                <span>Mapeo de Depósitos (Stellar ➔ Neo)</span>
+                {depositMappings.filter(m => m.auto_discovered).length > 0 && (
+                  <span className="ml-1 px-2 py-0.5 rounded-full text-[10px] bg-amber-500 text-white font-extrabold animate-pulse">
+                    {depositMappings.filter(m => m.auto_discovered).length}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* Global Emergency Pause / Resume Switch */}
+            <div className="flex items-center gap-2 pb-2 sm:pb-0">
+              {facilities.some(f => !f.is_sync_paused) ? (
+                <button
+                  type="button"
+                  onClick={() => handleToggleAllStores(true)}
+                  disabled={togglingAll}
+                  className="px-3.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 disabled:opacity-50"
+                  title="Pausa la subida de datos en todas las tiendas físicas conectadas"
+                >
+                  <i className={`pi ${togglingAll ? "pi-spinner animate-spin" : "pi-pause-circle"}`}></i>
+                  <span>Pausar Todas las Tiendas</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleToggleAllStores(false)}
+                  disabled={togglingAll}
+                  className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 disabled:opacity-50"
+                  title="Reanuda la subida automática en todas las tiendas"
+                >
+                  <i className={`pi ${togglingAll ? "pi-spinner animate-spin" : "pi-play-circle"}`}></i>
+                  <span>Reanudar Todas las Tiendas</span>
+                </button>
               )}
-            </button>
+            </div>
           </div>
 
           {activeTab === 'control' && (
@@ -539,7 +644,7 @@ export default function StoreSyncDashboardPage() {
                     </div>
                     <div>
                       <h2 className="text-lg font-bold text-slate-800">{selectedFacility.facility_name}</h2>
-                      <div className="flex items-center gap-2 mt-0.5">
+                      <div className="flex flex-wrap items-center gap-2 mt-0.5">
                         <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full ${
                           selectedFacility.is_online
                             ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
@@ -548,8 +653,36 @@ export default function StoreSyncDashboardPage() {
                           <span className={`w-1.5 h-1.5 rounded-full ${selectedFacility.is_online ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
                           {selectedFacility.is_online ? "SERVICIO EN LÍNEA" : "DESCONECTADO"}
                         </span>
+                        {selectedFacility.is_sync_paused ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 animate-pulse">
+                            <i className="pi pi-pause text-[8px]"></i>
+                            EXTRACCIÓN EN PAUSA
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                            <i className="pi pi-bolt text-[8px] text-amber-500"></i>
+                            ACTIVA
+                          </span>
+                        )}
                         <span className="text-slate-400 text-xs">•</span>
                         <span className="text-[11px] text-slate-500 font-mono">v{selectedFacility.agent_version || "1.0.0"}</span>
+                        {selectedFacility.has_update_available ? (
+                          <button
+                            onClick={() => {
+                              setUpdateTargetVersion(selectedFacility.latest_available_version || "2.3.0-neo");
+                              setShowUpdateModal(true);
+                            }}
+                            className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 transition-colors animate-pulse cursor-pointer"
+                          >
+                            <i className="pi pi-arrow-circle-up text-[9px]"></i>
+                            Actualizar a v{selectedFacility.latest_available_version || "2.3.0-neo"}
+                          </button>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <i className="pi pi-check text-[9px]"></i>
+                            Al día
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -583,10 +716,10 @@ export default function StoreSyncDashboardPage() {
                     </span>
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-base font-black text-indigo-600">
-                        {selectedFacility.sales_today_count}
+                        {selectedFacility.sales_today_count ?? 0}
                       </span>
-                      <span className="text-[10px] text-slate-500">
-                        (${Number(selectedFacility.sales_today_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                      <span className="text-[10px] text-slate-500 font-medium">
+                        registros
                       </span>
                     </div>
                   </div>
@@ -621,6 +754,53 @@ export default function StoreSyncDashboardPage() {
                     <span className="text-[10px] font-semibold text-indigo-600 bg-white/70 px-2 py-0.5 rounded-md border border-indigo-100">
                       Stellar ➔ Neo ERP
                     </span>
+                  </div>
+                </div>
+
+                {/* Marcas de Catálogos & Maestros (sync_state) */}
+                <div className="mt-3.5 p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                      <i className="pi pi-sync text-xs text-purple-600"></i>
+                      Catálogos & Maestros (Tienda)
+                    </span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      selectedFacility.baseline_inventory_done ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {selectedFacility.baseline_inventory_done ? 'Baseline OK' : 'Baseline Pendiente'}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex items-center justify-between py-1 border-b border-slate-100 text-slate-600">
+                      <span className="text-[11px] font-medium flex items-center gap-1.5">
+                        <i className="pi pi-box text-[10px] text-slate-400"></i>
+                        Productos / Proveedores:
+                      </span>
+                      <span className="font-mono text-[11px] font-semibold text-slate-800">
+                        {formatExactDateTime(selectedFacility.last_product_sync || null)}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between py-1 border-b border-slate-100 text-slate-600">
+                      <span className="text-[11px] font-medium flex items-center gap-1.5">
+                        <i className="pi pi-barcode text-[10px] text-slate-400"></i>
+                        Códigos de Barra:
+                      </span>
+                      <span className="font-mono text-[11px] font-semibold text-slate-800">
+                        {formatExactDateTime(selectedFacility.last_barcode_sync || null)}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between py-1 text-slate-600">
+                      <span className="text-[11px] font-medium flex items-center gap-1.5">
+                        <i className="pi pi-dollar text-[10px] text-slate-400"></i>
+                        Costos por Proveedor:
+                      </span>
+                      <span className="font-mono text-[11px] font-semibold text-slate-800">
+                        {formatExactDateTime(selectedFacility.last_supplier_product_sync || null)}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -661,6 +841,84 @@ export default function StoreSyncDashboardPage() {
 
                 {/* Command Action Buttons */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
+                  {/* Pause / Resume Store Sync Card (Kill-Switch) */}
+                  <div className={`p-4 rounded-2xl border transition-all flex flex-col justify-between sm:col-span-2 ${
+                    selectedFacility.is_sync_paused
+                      ? "border-amber-300 bg-amber-50/60 hover:bg-amber-50/80 shadow-xs"
+                      : "border-rose-200 bg-rose-50/40 hover:bg-rose-50/60"
+                  }`}>
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                      <div className="flex items-start sm:items-center gap-3">
+                        <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-bold text-xl shadow-sm shrink-0 ${
+                          selectedFacility.is_sync_paused
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-rose-100 text-rose-700"
+                        }`}>
+                          <i className={`pi ${selectedFacility.is_sync_paused ? "pi-pause" : "pi-stop-circle"}`}></i>
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-slate-800 text-sm">
+                              {selectedFacility.is_sync_paused ? "Procesos en Tienda en PAUSA" : "Detener Procesos en Tienda (Kill-Switch)"}
+                            </h3>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${
+                              selectedFacility.is_sync_paused
+                                ? "bg-amber-500 text-white animate-pulse"
+                                : "bg-emerald-600 text-white"
+                            }`}>
+                              {selectedFacility.is_sync_paused ? "Pausa Activa" : "Extracción Activa"}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5 max-w-xl">
+                            {selectedFacility.is_sync_paused
+                              ? "Las extracciones periódicas de ventas, productos y movimientos están detenidas en sitio. El servicio Windows sigue vivo reportando telemetría y listo para recibir órdenes o actualizaciones OTA."
+                              : "Pausa de inmediato las extracciones de ventas, catálogo, códigos de barra y movimientos en la tienda. Mantiene activo el canal de telemetría y actualización para no perder el control remoto."}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 w-full sm:w-auto">
+                        {selectedFacility.is_sync_paused ? (
+                          <button
+                            onClick={() => handleTogglePause(selectedFacility.facility_id, true)}
+                            disabled={executingCmd === 'RESUME_SYNC'}
+                            className="w-full sm:w-auto py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-emerald-600/20 inline-flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            {executingCmd === 'RESUME_SYNC' ? (
+                              <>
+                                <i className="pi pi-spinner animate-spin"></i>
+                                <span>Reanudando...</span>
+                              </>
+                            ) : (
+                              <>
+                                <i className="pi pi-play"></i>
+                                <span>Reanudar Sincronización</span>
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleTogglePause(selectedFacility.facility_id, false)}
+                            disabled={executingCmd === 'PAUSE_SYNC'}
+                            className="w-full sm:w-auto py-2.5 px-5 bg-rose-600 hover:bg-rose-700 active:scale-95 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-rose-600/20 inline-flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            {executingCmd === 'PAUSE_SYNC' ? (
+                              <>
+                                <i className="pi pi-spinner animate-spin"></i>
+                                <span>Pausando...</span>
+                              </>
+                            ) : (
+                              <>
+                                <i className="pi pi-pause"></i>
+                                <span>Pausar Procesos de Tienda</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Force Sync Sales */}
                   <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-all flex flex-col justify-between">
                     <div>
@@ -703,7 +961,7 @@ export default function StoreSyncDashboardPage() {
                         <h3 className="font-bold text-slate-800 text-sm">Sincronizar Catálogos & Maestros</h3>
                       </div>
                       <p className="text-xs text-slate-500 leading-relaxed mb-4">
-                        Sincroniza artículos, códigos de barra, proveedores y categorías hacia el catálogo central.
+                        Sincroniza artículos, códigos de barra, costos de proveedores, proveedores y categorías hacia el catálogo central.
                       </p>
                     </div>
                     <button
@@ -722,6 +980,31 @@ export default function StoreSyncDashboardPage() {
                           <span>Actualizar Maestros</span>
                         </>
                       )}
+                    </button>
+                  </div>
+
+                  {/* Baseline Inventory Modal Trigger */}
+                  <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-all flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                          <i className="pi pi-download text-sm"></i>
+                        </div>
+                        <h3 className="font-bold text-slate-800 text-sm">Cargar Inventario Baseline</h3>
+                      </div>
+                      <p className="text-xs text-slate-500 leading-relaxed mb-4">
+                        Sincroniza la foto de inventario físico para todos los depósitos o para uno específico (ej. 1003) sin alterar los demás.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (selectedFacilityId) fetchDepositMappings(selectedFacilityId);
+                        setShowBaselineModal(true);
+                      }}
+                      className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-emerald-600/20 inline-flex items-center justify-center gap-2"
+                    >
+                      <i className="pi pi-box"></i>
+                      <span>Configurar Baseline</span>
                     </button>
                   </div>
 
@@ -767,6 +1050,77 @@ export default function StoreSyncDashboardPage() {
                       <i className="pi pi-refresh"></i>
                       <span>Reiniciar Servicio</span>
                     </button>
+                  </div>
+
+                  {/* Remote OTA Software Update */}
+                  <div className="p-4 rounded-2xl border border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50/60 transition-all flex flex-col justify-between sm:col-span-2">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                      <div className="flex items-start sm:items-center gap-3">
+                        <div className="w-11 h-11 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xl shadow-sm shrink-0">
+                          <i className="pi pi-cloud-download"></i>
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-slate-800 text-sm">Actualizar Software de Tienda (OTA 1 Clic)</h3>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-600 text-white uppercase tracking-wider">
+                              Zero-Touch
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5 max-w-xl">
+                            Descarga y actualiza de forma desatendida el agente y configurador en la tienda, preservando toda la configuración SQL, depósitos y marcas de sincronización.
+                          </p>
+
+                          {/* Comparativa visual de versiones */}
+                          <div className="flex flex-wrap items-center gap-2.5 mt-2.5">
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-xs shadow-2xs">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase">Instalada:</span>
+                              <span className="font-mono font-bold text-slate-800">v{selectedFacility.agent_version || "1.0.0"}</span>
+                            </div>
+                            <i className="pi pi-arrow-right text-xs text-slate-400"></i>
+                            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border shadow-2xs ${
+                              selectedFacility.has_update_available
+                                ? "bg-amber-50 border-amber-300 text-amber-900 font-bold"
+                                : "bg-emerald-50 border-emerald-200 text-emerald-800 font-bold"
+                            }`}>
+                              <span className="text-[10px] uppercase font-bold">{selectedFacility.has_update_available ? "Disponible:" : "Última Versión:"}</span>
+                              <span className="font-mono">v{selectedFacility.latest_available_version || "2.3.0-neo"}</span>
+                            </div>
+                            {selectedFacility.has_update_available && (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-amber-700 bg-amber-100/90 px-2 py-0.5 rounded-full">
+                                <i className="pi pi-bell text-[10px]"></i>
+                                Actualización recomendada
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setUpdateTargetVersion(selectedFacility.latest_available_version || "2.3.0-neo");
+                          setShowUpdateModal(true);
+                        }}
+                        disabled={executingCmd === 'UPDATE_SOFTWARE'}
+                        className="py-3 px-5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 inline-flex items-center justify-center gap-2 shrink-0 self-stretch sm:self-auto"
+                      >
+                        {executingCmd === 'UPDATE_SOFTWARE' ? (
+                          <>
+                            <i className="pi pi-spinner animate-spin"></i>
+                            <span>Despachando actualización...</span>
+                          </>
+                        ) : selectedFacility.has_update_available ? (
+                          <>
+                            <i className="pi pi-arrow-circle-up text-sm"></i>
+                            <span>🚀 Actualizar a v{selectedFacility.latest_available_version || "2.3.0-neo"}</span>
+                          </>
+                        ) : (
+                          <>
+                            <i className="pi pi-check text-sm"></i>
+                            <span>Reinstalar / Forzar v{selectedFacility.latest_available_version || "2.3.0-neo"}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -992,9 +1346,16 @@ export default function StoreSyncDashboardPage() {
                         <tr key={cmd.id} className="hover:bg-slate-50/60 transition-colors">
                           <td className="py-3 px-3 font-mono font-bold text-slate-500">#{cmd.id}</td>
                           <td className="py-3 px-3 font-semibold text-slate-800">
-                            <span className="font-mono text-[11px] bg-slate-100 px-2 py-0.5 rounded-md text-slate-700">
-                              {cmd.command_type}
-                            </span>
+                            {cmd.command_type === 'UPDATE_SOFTWARE' ? (
+                              <span className="inline-flex items-center gap-1 font-mono text-[11px] bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md font-bold">
+                                <i className="pi pi-cloud-download text-[10px]"></i>
+                                UPDATE_SOFTWARE
+                              </span>
+                            ) : (
+                              <span className="font-mono text-[11px] bg-slate-100 px-2 py-0.5 rounded-md text-slate-700">
+                                {cmd.command_type}
+                              </span>
+                            )}
                           </td>
                           <td className="py-3 px-3">
                             <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold ${
@@ -1012,19 +1373,58 @@ export default function StoreSyncDashboardPage() {
                               {cmd.status}
                             </span>
                           </td>
-                          <td className="py-3 px-3 text-slate-500">
-                            {new Date(cmd.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          <td className="py-3 px-3 text-slate-500 font-mono text-[11px] whitespace-nowrap">
+                            {new Date(cmd.created_at).toLocaleString([], {
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit'
+                            })}
                           </td>
-                          <td className="py-3 px-3 text-slate-500">
+                          <td className="py-3 px-3 text-slate-500 font-mono text-[11px] whitespace-nowrap">
                             {cmd.completed_at
-                              ? new Date(cmd.completed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                              ? new Date(cmd.completed_at).toLocaleString([], {
+                                  day: '2-digit',
+                                  month: '2-digit',
+                                  year: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                  second: '2-digit'
+                                })
                               : "—"}
                           </td>
                           <td className="py-3 px-3 max-w-xs truncate font-mono text-[11px]">
                             {cmd.error_message ? (
-                              <span className="text-rose-600 font-semibold">{cmd.error_message}</span>
+                              <div className="flex items-center gap-1.5" title={cmd.error_message}>
+                                <span
+                                  onClick={() => setSelectedErrorModal({
+                                    commandId: cmd.id,
+                                    commandType: cmd.command_type,
+                                    error: cmd.error_message || '',
+                                    time: cmd.completed_at ? new Date(cmd.completed_at).toLocaleString() : undefined
+                                  })}
+                                  className="text-rose-600 font-semibold truncate cursor-pointer hover:underline hover:text-rose-700"
+                                >
+                                  {cmd.error_message}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedErrorModal({
+                                    commandId: cmd.id,
+                                    commandType: cmd.command_type,
+                                    error: cmd.error_message || '',
+                                    time: cmd.completed_at ? new Date(cmd.completed_at).toLocaleString() : undefined
+                                  })}
+                                  className="shrink-0 text-rose-500 hover:text-rose-700 p-1 rounded hover:bg-rose-50 transition-colors"
+                                  title="Ver y copiar error técnico completo"
+                                >
+                                  <i className="pi pi-search-plus text-xs"></i>
+                                </button>
+                              </div>
                             ) : cmd.result_details?.message ? (
-                              <span className="text-emerald-700">{cmd.result_details.message}</span>
+                              <span className="text-emerald-700" title={cmd.result_details.message}>{cmd.result_details.message}</span>
                             ) : cmd.parameters ? (
                               <span className="text-slate-400">{JSON.stringify(cmd.parameters)}</span>
                             ) : (
@@ -1053,11 +1453,30 @@ export default function StoreSyncDashboardPage() {
                       <i className="pi pi-box text-lg"></i>
                     </div>
                     <div>
-                      <h2 className="text-xl font-bold text-slate-800">
-                        Mapeo de Depósitos: {selectedFacility.facility_name}
-                      </h2>
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <h2 className="text-xl font-bold text-slate-800">
+                          Mapeo de Depósitos: {selectedFacility.facility_name}
+                        </h2>
+                        {depositMappings.length > 0 && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-100 text-slate-600 border border-slate-200">
+                              {depositMappings.length} Total
+                            </span>
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                              {depositMappings.filter(m => m.is_active).length} Sincronizando
+                            </span>
+                            {depositMappings.some(m => !m.is_active) && (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-100 text-slate-500 border border-slate-200 flex items-center gap-1">
+                                <i className="pi pi-pause text-[8px]"></i>
+                                {depositMappings.filter(m => !m.is_active).length} Omitidos
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Asocia los códigos de Stellar POS (<code className="font-mono text-indigo-700">c_deposito</code>) con los almacenes y ubicaciones de Neo ERP
+                        Asocia los códigos de Stellar POS (<code className="font-mono text-indigo-700">c_deposito</code>) con los almacenes y ubicaciones de Neo ERP. Los depósitos omitidos no descargan stock ni interfieren en Kardex.
                       </p>
                     </div>
                   </div>
@@ -1072,7 +1491,8 @@ export default function StoreSyncDashboardPage() {
                         external_deposit_name: '',
                         warehouse_id: firstWh?.id || 0,
                         location_id: firstWh?.locations[0]?.id || 0,
-                        affects_inventory: true
+                        affects_inventory: true,
+                        is_active: true
                       });
                       setShowCreateDepositModal(true);
                     }}
@@ -1151,6 +1571,7 @@ export default function StoreSyncDashboardPage() {
                       <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                         <th className="pb-3 px-3">Código Stellar</th>
                         <th className="pb-3 px-3">Descripción Depósito</th>
+                        <th className="pb-3 px-3 text-center">¿Sincronizar?</th>
                         <th className="pb-3 px-3">Almacén Neo ERP</th>
                         <th className="pb-3 px-3">Ubicación de Stock</th>
                         <th className="pb-3 px-3">Impacto en Kardex</th>
@@ -1166,10 +1587,21 @@ export default function StoreSyncDashboardPage() {
                         const locOptions = selectedWh?.locations || [];
 
                         return (
-                          <tr key={m.id} className="hover:bg-slate-50/70 transition-colors">
+                          <tr 
+                            key={m.id} 
+                            className={`transition-colors ${
+                              !m.is_active 
+                                ? 'bg-slate-50/60 opacity-65 hover:opacity-100 hover:bg-slate-100/50' 
+                                : 'hover:bg-slate-50/70'
+                            }`}
+                          >
                             {/* Código Stellar */}
                             <td className="py-3.5 px-3">
-                              <span className="font-mono text-xs font-bold bg-slate-100 text-slate-800 px-2.5 py-1 rounded-lg border border-slate-200">
+                              <span className={`font-mono text-xs font-bold px-2.5 py-1 rounded-lg border ${
+                                !m.is_active
+                                  ? 'bg-slate-100 text-slate-500 border-slate-200'
+                                  : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                              }`}>
                                 {m.external_deposit_code}
                               </span>
                             </td>
@@ -1181,16 +1613,42 @@ export default function StoreSyncDashboardPage() {
                                 value={m.external_deposit_name || ''}
                                 onChange={(e) => handleUpdateDepositRow(m.id, 'external_deposit_name', e.target.value)}
                                 placeholder="Ej. Almacén Principal"
-                                className="text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg w-full max-w-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-700"
+                                className="text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg w-full max-w-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-700 bg-white"
                               />
+                            </td>
+
+                            {/* ¿Sincronizar? Toggle */}
+                            <td className="py-3.5 px-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextVal = !m.is_active;
+                                  handleUpdateDepositRow(m.id, 'is_active', nextVal);
+                                  if (!nextVal) {
+                                    handleUpdateDepositRow(m.id, 'affects_inventory', false);
+                                  }
+                                }}
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all ${
+                                  m.is_active
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
+                                    : "bg-slate-100 text-slate-500 border border-slate-200 hover:bg-slate-200"
+                                }`}
+                                title={m.is_active ? "Depósito activo para sincronización. Clic para omitir." : "Depósito omitido. Clic para reactivar sincronización."}
+                              >
+                                <i className={`pi ${m.is_active ? 'pi-check text-[10px]' : 'pi-pause text-[10px]'}`}></i>
+                                <span>{m.is_active ? "Sí (Activo)" : "Omitido"}</span>
+                              </button>
                             </td>
 
                             {/* Almacén Neo ERP */}
                             <td className="py-3.5 px-3">
                               <select
                                 value={m.warehouse_id}
+                                disabled={!m.is_active}
                                 onChange={(e) => handleUpdateDepositRow(m.id, 'warehouse_id', Number(e.target.value))}
-                                className="text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-700"
+                                className={`text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium ${
+                                  !m.is_active ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-white text-slate-700'
+                                }`}
                               >
                                 {whOptions.map(w => (
                                   <option key={w.id} value={w.id}>
@@ -1204,8 +1662,11 @@ export default function StoreSyncDashboardPage() {
                             <td className="py-3.5 px-3">
                               <select
                                 value={m.location_id}
+                                disabled={!m.is_active}
                                 onChange={(e) => handleUpdateDepositRow(m.id, 'location_id', Number(e.target.value))}
-                                className="text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium text-slate-700"
+                                className={`text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium ${
+                                  !m.is_active ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-white text-slate-700'
+                                }`}
                               >
                                 {locOptions.map(l => (
                                   <option key={l.id} value={l.id}>
@@ -1217,29 +1678,42 @@ export default function StoreSyncDashboardPage() {
 
                             {/* Impacto en Kardex */}
                             <td className="py-3.5 px-3">
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateDepositRow(m.id, 'affects_inventory', !m.affects_inventory)}
-                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all ${
-                                  m.affects_inventory
-                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100"
-                                    : "bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200"
-                                }`}
-                              >
-                                <i className={`pi ${m.affects_inventory ? 'pi-check text-[10px]' : 'pi-ban text-[10px]'}`}></i>
-                                <span>{m.affects_inventory ? "Descarga Stock" : "Solo Documental"}</span>
-                              </button>
+                              {!m.is_active ? (
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-slate-100 text-slate-400 border border-slate-200" title="Depósito omitido: no genera movimientos en Kardex">
+                                  <i className="pi pi-minus text-[10px]"></i>
+                                  <span>Sin Impacto (Omitido)</span>
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateDepositRow(m.id, 'affects_inventory', !m.affects_inventory)}
+                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all ${
+                                    m.affects_inventory
+                                      ? "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                                      : "bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200"
+                                  }`}
+                                  title={m.affects_inventory ? "Las ventas descuentan stock en Kardex" : "Solo registra venta documental sin descargar stock"}
+                                >
+                                  <i className={`pi ${m.affects_inventory ? 'pi-check text-[10px]' : 'pi-ban text-[10px]'}`}></i>
+                                  <span>{m.affects_inventory ? "Descarga Stock" : "Solo Documental"}</span>
+                                </button>
+                              )}
                             </td>
 
                             {/* Estado */}
                             <td className="py-3.5 px-3">
-                              {m.auto_discovered ? (
+                              {!m.is_active ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-300">
+                                  <i className="pi pi-pause text-[9px]"></i>
+                                  Omitido
+                                </span>
+                              ) : m.auto_discovered ? (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
                                   <i className="pi pi-exclamation-triangle text-[9px]"></i>
                                   Auto-detectado
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-slate-50 text-slate-600 border border-slate-200">
+                                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
                                   <i className="pi pi-check-circle text-emerald-600 text-[9px]"></i>
                                   Confirmado
                                 </span>
@@ -1262,7 +1736,7 @@ export default function StoreSyncDashboardPage() {
                                 <button
                                   onClick={() => handleDeleteDeposit(m.id)}
                                   className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                                  title="Eliminar mapeo"
+                                  title="Eliminar mapeo de depósito"
                                 >
                                   <i className="pi pi-trash text-xs"></i>
                                 </button>
@@ -1374,19 +1848,43 @@ export default function StoreSyncDashboardPage() {
               </select>
             </div>
 
-            <div className="pt-2">
+            <div className="pt-2 space-y-3">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={newDepositForm.affects_inventory}
-                  onChange={(e) => setNewDepositForm({ ...newDepositForm, affects_inventory: e.target.checked })}
+                  checked={newDepositForm.is_active}
+                  onChange={(e) => {
+                    const active = e.target.checked;
+                    setNewDepositForm({
+                      ...newDepositForm,
+                      is_active: active,
+                      affects_inventory: active ? newDepositForm.affects_inventory : false
+                    });
+                  }}
                   className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
                 />
-                <span className="font-semibold text-slate-700">Afectar Inventario (Descargar existencia en Kardex)</span>
+                <span className="font-semibold text-slate-700">Sincronizar Depósito (Activo)</span>
               </label>
-              <p className="text-[11px] text-slate-400 ml-6 mt-0.5">
-                Si se desmarca, las ventas de este depósito se registran sin mover stock físico.
+              <p className="text-[11px] text-slate-400 ml-6 -mt-2">
+                Si se desmarca, el depósito queda registrado como omitido y no se procesará en inventario.
               </p>
+
+              {newDepositForm.is_active && (
+                <div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newDepositForm.affects_inventory}
+                      onChange={(e) => setNewDepositForm({ ...newDepositForm, affects_inventory: e.target.checked })}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span className="font-semibold text-slate-700">Afectar Inventario (Descargar existencia en Kardex)</span>
+                  </label>
+                  <p className="text-[11px] text-slate-400 ml-6 mt-0.5">
+                    Si se desmarca, las ventas de este depósito se registran sin mover stock físico.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="pt-4 flex items-center justify-end gap-2 border-t border-slate-100 mt-6">
@@ -1407,6 +1905,122 @@ export default function StoreSyncDashboardPage() {
               </button>
             </div>
           </form>
+        </div>
+      </div>
+    )}
+
+    {/* Baseline Inventory Modal */}
+    {showBaselineModal && (
+      <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-md w-full p-6 animate-in fade-in zoom-in-95">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                <i className="pi pi-download text-xl"></i>
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-800">Cargar Inventario Inicial (Baseline)</h3>
+                <p className="text-xs text-slate-400">{selectedFacility?.facility_name}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowBaselineModal(false)}
+              className="w-8 h-8 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 flex items-center justify-center"
+            >
+              <i className="pi pi-times"></i>
+            </button>
+          </div>
+
+          <div className="space-y-4 my-5 text-xs">
+            {/* Depósito Selection */}
+            <div>
+              <label className="block font-bold text-slate-700 mb-1.5">
+                Depósito a Cargar
+              </label>
+              <select
+                value={baselineParams.depositCode}
+                onChange={(e) => setBaselineParams({ ...baselineParams, depositCode: e.target.value })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="">Todos los depósitos activos configurados</option>
+                {depositMappings.map((dm) => (
+                  <option key={dm.id} value={dm.external_deposit_code}>
+                    {dm.external_deposit_code} - {dm.external_deposit_name || dm.location_name || 'Sin Nombre'} {dm.is_active ? '(Activo)' : '(Inactivo / Omitido)'}
+                  </option>
+                ))}
+              </select>
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                {baselineParams.depositCode
+                  ? `Se procesará exclusivamente el depósito ${baselineParams.depositCode}. El stock y ventas de los demás depósitos permanecerán 100% intactos.`
+                  : "Se procesarán todos los depósitos que tengan el interruptor '¿Sincronizar?' activo."}
+              </span>
+            </div>
+
+            {/* Fecha de Corte */}
+            <div>
+              <label className="block font-bold text-slate-700 mb-1.5">
+                Modalidad de Fecha de Corte
+              </label>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <button
+                  type="button"
+                  onClick={() => setBaselineParams({ ...baselineParams, mode: 'now' })}
+                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all text-center ${
+                    baselineParams.mode === 'now'
+                      ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
+                      : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Inventario Vivo (Ahora)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBaselineParams({ ...baselineParams, mode: 'custom' })}
+                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all text-center ${
+                    baselineParams.mode === 'custom'
+                      ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
+                      : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  Fecha Específica
+                </button>
+              </div>
+
+              {baselineParams.mode === 'custom' && (
+                <div className="mt-2">
+                  <input
+                    type="date"
+                    value={baselineParams.cutoffDate}
+                    onChange={(e) => setBaselineParams({ ...baselineParams, cutoffDate: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">
+                    Se consolidarán los movimientos ocurridos hasta las 23:59:59 del día elegido.
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-2xl text-[11px] text-emerald-800 leading-relaxed mb-6">
+            <i className="pi pi-shield mr-1 text-emerald-600"></i>
+            <strong>Protección de Kardex:</strong> Esta orden se despacha al servicio Windows en tienda. Si seleccionas un depósito individual, solo se extraerá ese almacén de SQL Server sin alterar los datos ya existentes.
+          </div>
+
+          <div className="flex items-center justify-end gap-3">
+            <button
+              onClick={() => setShowBaselineModal(false)}
+              className="px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-all"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleConfirmBaseline}
+              className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all active:scale-95"
+            >
+              Despachar Orden de Baseline
+            </button>
+          </div>
         </div>
       </div>
     )}
@@ -1549,6 +2163,145 @@ export default function StoreSyncDashboardPage() {
                 className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white rounded-xl font-bold text-xs shadow-sm transition-all active:scale-95"
               >
                 Confirmar y Reiniciar Servicio
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update Software OTA Confirmation Modal */}
+      {showUpdateModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-lg w-full p-6 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                  <i className="pi pi-cloud-download text-xl"></i>
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800">Actualizar Software Remoto (OTA)</h3>
+                  <p className="text-xs text-slate-400">{selectedFacility?.facility_name} (ID: {selectedFacility?.facility_id})</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowUpdateModal(false)}
+                className="w-8 h-8 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 flex items-center justify-center"
+              >
+                <i className="pi pi-times"></i>
+              </button>
+            </div>
+
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs text-emerald-900 leading-relaxed my-4 space-y-2">
+              <div className="flex items-center gap-2 font-bold text-emerald-800">
+                <i className="pi pi-shield"></i>
+                <span>Garantía de Preservación de Datos</span>
+              </div>
+              <p>
+                Esta orden descargará silenciosamente el paquete oficial en la tienda, detendrá el servicio unos segundos, actualizará los ejecutables y reiniciará el servicio con la nueva versión.
+              </p>
+              <ul className="list-disc list-inside text-[11px] text-emerald-800/90 pl-1 space-y-0.5">
+                <li><strong>appsettings.json</strong> (conexión SQL y credenciales) <strong>NUNCA se sobreescribe</strong>.</li>
+                <li><strong>sync_state.json</strong> y mapeos de depósitos se conservan 100% intactos.</li>
+                <li>No se requiere conexión por AnyDesk ni abrir PowerShell en la tienda.</li>
+              </ul>
+            </div>
+
+            <div className="space-y-3.5 mb-6 text-xs">
+              <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Versión Instalada en Tienda</span>
+                  <span className="font-mono font-bold text-slate-700 text-xs">v{selectedFacility?.agent_version || "Desconocida"}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] uppercase font-bold text-emerald-600 block">Versión Objetivo a Instalar</span>
+                  <span className="font-mono font-bold text-emerald-700 text-xs">v{updateTargetVersion}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  URL del Paquete de Actualización (ZIP):
+                </label>
+                <input
+                  type="text"
+                  value={updatePackageUrl}
+                  onChange={(e) => setUpdatePackageUrl(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono text-[11px] text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowUpdateModal(false)}
+                className="px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmUpdateSoftware}
+                className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl font-bold text-xs shadow-sm shadow-emerald-600/20 transition-all active:scale-95 inline-flex items-center gap-2"
+              >
+                <i className="pi pi-arrow-circle-up"></i>
+                <span>Confirmar y Despachar Actualización</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Detalle Técnico de Error */}
+      {selectedErrorModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-xl shadow-2xl border border-slate-100 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+                  <i className="pi pi-exclamation-triangle text-xl"></i>
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800">Detalle Técnico del Error</h3>
+                  <p className="text-xs text-slate-400">
+                    Comando #{selectedErrorModal.commandId} ({selectedErrorModal.commandType}) {selectedErrorModal.time && `• ${selectedErrorModal.time}`}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedErrorModal(null)}
+                className="w-8 h-8 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-700 flex items-center justify-center"
+              >
+                <i className="pi pi-times"></i>
+              </button>
+            </div>
+
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-900 leading-relaxed my-3">
+              <p className="font-medium">
+                Diagnóstico devuelto en vivo por el servidor central o el agente local de la tienda:
+              </p>
+            </div>
+
+            <div className="mb-6">
+              <div className="bg-slate-900 text-rose-300 p-4 rounded-2xl font-mono text-xs overflow-x-auto max-h-64 whitespace-pre-wrap select-all border border-slate-800 shadow-inner">
+                {selectedErrorModal.error}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setSelectedErrorModal(null)}
+                className="px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-all"
+              >
+                Cerrar
+              </button>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(selectedErrorModal.error);
+                  alert("Detalle técnico copiado al portapapeles con éxito.");
+                }}
+                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs transition-all active:scale-95 inline-flex items-center gap-2 shadow-sm"
+              >
+                <i className="pi pi-copy"></i>
+                <span>Copiar al Portapapeles</span>
               </button>
             </div>
           </div>

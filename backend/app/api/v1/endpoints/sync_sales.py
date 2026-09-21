@@ -58,7 +58,7 @@ def import_sales_batch(
     target_fac = resolve_facility(session, fac_id_to_check, fac_code_to_check)
     if target_fac:
         cfg = session.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == target_fac.id).first()
-        if cfg and not cfg.sales_enabled and not payload.is_historical:
+        if cfg and (not cfg.sales_enabled or cfg.is_sync_paused) and not payload.is_historical:
             return {
                 "message": f"Sincronización de ventas pausada remotamente desde Neo ERP Web para la sede {target_fac.name}.",
                 "processed": 0,

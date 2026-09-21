@@ -26,6 +26,13 @@ public class SuppliersExtractorWorker : BackgroundService
         {
             try
             {
+                if (SyncStateManager.IsSyncPaused())
+                {
+                    _logger.LogDebug("[PAUSA] Sincronización de proveedores pausada por administración. En espera...");
+                    await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken);
+                    continue;
+                }
+
                 var config = _configuration.GetSection("DirectExtractors:Suppliers").Get<DirectExtractorConfig>();
                 
                 if (config != null && config.Enabled)

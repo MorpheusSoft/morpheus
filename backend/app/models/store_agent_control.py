@@ -21,6 +21,7 @@ class StoreAgentConfig(Base):
     suppliers_enabled = Column(Boolean, nullable=False, default=True)
     supplier_products_enabled = Column(Boolean, nullable=False, default=True)
     movements_enabled = Column(Boolean, nullable=False, default=True)
+    is_sync_paused = Column(Boolean, nullable=False, default=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     facility = relationship("Facility")

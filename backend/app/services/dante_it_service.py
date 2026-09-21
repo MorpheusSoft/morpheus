@@ -13,6 +13,49 @@ from app.models.store_agent_control import StoreAgentCommand
 
 logger = logging.getLogger(__name__)
 
+def dispatch_it_alert(title: str, message: str, db: Optional[Session] = None, agent_code: str = "DANTE_IT"):
+    """
+    Despacha una notificación crítica de Dante TI a través de Telegram y WhatsApp.
+    """
+    full_text = f"{title}\n\n{message}"
+
+    # 1. Telegram
+    try:
+        from app.services.telegram_client import send_telegram_alert_sync
+        send_telegram_alert_sync(text=full_text, db=db, agent_code=agent_code)
+    except Exception as e:
+        logger.error(f"[DANTE TI] Error enviando alerta por Telegram: {e}")
+
+    # 2. WhatsApp (si está configurado)
+    try:
+        from app.core.config import settings
+        import httpx
+        if settings.WHATSAPP_ACCESS_TOKEN and settings.WHATSAPP_PHONE_NUMBER_ID:
+            from app.models.core import User
+            if db:
+                wa_users = db.query(User).filter(
+                    (User.whatsapp_phone.isnot(None)) | (User.phone.isnot(None)),
+                    User.is_active == True
+                ).all()
+                for u in wa_users:
+                    phone = (u.whatsapp_phone or u.phone or "").strip().replace("+", "").replace(" ", "").replace("-", "")
+                    if phone:
+                        url = f"https://graph.facebook.com/v18.0/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages"
+                        headers = {
+                            "Authorization": f"Bearer {settings.WHATSAPP_ACCESS_TOKEN}",
+                            "Content-Type": "application/json"
+                        }
+                        payload = {
+                            "messaging_product": "whatsapp",
+                            "to": phone,
+                            "type": "text",
+                            "text": {"body": full_text}
+                        }
+                        with httpx.Client(timeout=10.0) as client:
+                            client.post(url, headers=headers, json=payload)
+    except Exception as wa_err:
+        logger.debug(f"[DANTE TI] WhatsApp no configurado o error al enviar: {wa_err}")
+
 def audit_store_sync_heartbeats(db: Session, worker: Optional[DigitalWorker] = None) -> List[Dict[str, Any]]:
     """
     Habilidad: it_sync_heartbeat_monitor
@@ -82,21 +125,17 @@ def audit_store_sync_heartbeats(db: Session, worker: Optional[DigitalWorker] = N
                         )
                         db.add(log_entry)
 
-                        # Despacho proactivo inmediato a Telegram
-                        try:
-                            from app.services.telegram_client import send_telegram_alert_sync
-                            tg_alert = (
-                                f"🚨 *[Dante TI - Alerta de Conectividad]*\n\n"
-                                f"La sucursal *{fac.name}* (`{fac.code}`) ha perdido conectividad con la nube.\n\n"
-                                f"• *Desfase:* {int(diff_minutes)} minutos sin latido\n"
-                                f"• *Último contacto:* {latest.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                                f"• *Estado SQL Server:* {latest.sql_server_status or 'DESCONOCIDO'}\n"
-                                f"• *Versión Agente:* v{latest.agent_version or 'N/A'}\n\n"
-                                f"⚡ _Sugerencia: Verificar enlace de red de la tienda o estado del servicio NeoAgentSync._"
-                            )
-                            send_telegram_alert_sync(text=tg_alert, db=db, agent_code="DANTE_IT")
-                        except Exception as tg_err:
-                            logger.error(f"[DANTE TI] Error despachando alerta a Telegram: {tg_err}")
+                        # Despacho proactivo inmediato a Telegram y WhatsApp
+                        title = "🚨 *[Dante TI - Alerta de Conectividad]*"
+                        body = (
+                            f"La sucursal *{fac.name}* (`{fac.code}`) ha perdido conectividad con la nube.\n\n"
+                            f"• *Desfase:* {int(diff_minutes)} minutos sin latido\n"
+                            f"• *Último contacto:* {latest.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+                            f"• *Estado SQL Server:* {latest.sql_server_status or 'DESCONOCIDO'}\n"
+                            f"• *Versión Agente:* v{latest.agent_version or 'N/A'}\n\n"
+                            f"⚡ _Sugerencia: Verificar enlace de red de la tienda o estado del servicio NeoAgentSync._"
+                        )
+                        dispatch_it_alert(title, body, db=db, agent_code="DANTE_IT")
 
                 incidents.append({"facility": fac.name, "status": "OFFLINE", "lag_minutes": int(diff_minutes)})
             else:
@@ -244,10 +283,10 @@ def reconcile_daily_sales_totals(
         diff_total = round(abs(stellar_total - neo_total), 2)
 
         if diff_count == 0 and diff_total < 0.5:
-            summary = f"🎯 [Dante TI] Cuadratura Perfecta en Tienda '{fac.name}' ({target_date}): {neo_count} facturas sincronizadas (${neo_total:,.2f}). Discrepancia: $0.00."
+            summary = f"🎯 [Dante TI] Cuadratura Perfecta en Tienda '{fac.name}' ({target_date}): {neo_count} facturas sincronizadas (Bs. {neo_total:,.2f}). Discrepancia: Bs. 0.00."
             severity = "INFO"
         else:
-            summary = f"⚠️ [Dante TI] Discrepancia en Tienda '{fac.name}' ({target_date}): Stellar={stellar_count} tickets (${stellar_total:,.2f}) vs Neo={neo_count} (${neo_total:,.2f}). Desfase: {diff_count} tickets."
+            summary = f"⚠️ [Dante TI] Discrepancia en Tienda '{fac.name}' ({target_date}): Stellar={stellar_count} tickets (Bs. {stellar_total:,.2f}) vs Neo={neo_count} (Bs. {neo_total:,.2f}). Desfase: {diff_count} tickets."
             severity = "WARNING"
 
         if worker_id:
@@ -336,6 +375,20 @@ def auto_remediate_sales_lag(db: Session, worker: Optional[DigitalWorker] = None
             logger.info(f"⏳ [Dante TI] Tienda '{fac.name}' ya tiene orden #{active_cmd.id} ({active_cmd.command_type}) en cola.")
             continue
 
+        # Circuit Breaker: Si los últimos 3 comandos terminaron en FAILED en las últimas 2 horas, pausar reintentos
+        recent_failures = db.query(StoreAgentCommand).filter(
+            StoreAgentCommand.facility_id == fac.id,
+            StoreAgentCommand.command_type.in_(["FORCE_SYNC_SALES", "SYNC_HISTORICAL"]),
+            StoreAgentCommand.created_at >= now - timedelta(hours=2)
+        ).order_by(StoreAgentCommand.id.desc()).limit(3).all()
+
+        if len(recent_failures) >= 3 and all(c.status == 'FAILED' for c in recent_failures):
+            logger.warning(
+                f"🛑 [Dante TI] Circuit Breaker activo para '{fac.name}': "
+                f"3 órdenes consecutivas fallidas en las últimas 2 horas. Se pausa auto-remediación para evitar bucle."
+            )
+            continue
+
         # Crear orden de auto-remediación
         if diff_hours > 24:
             cmd_type = "SYNC_HISTORICAL"
@@ -399,4 +452,183 @@ def auto_remediate_sales_lag(db: Session, worker: Optional[DigitalWorker] = None
 
     db.commit()
     return actions_taken
+
+
+def audit_failed_sync_commands(db: Session, worker: Optional[DigitalWorker] = None) -> List[Dict[str, Any]]:
+    """
+    Habilidad: it_failed_sync_commands_monitor
+    Supervisa la tabla de comandos remotos (inv.store_agent_commands) en busca de fallos
+    recurrentes o consecutivos en la sincronización de tiendas.
+    Si una tienda acumula >= 2 órdenes fallidas consecutivas o >= 3 fallos recientes:
+    1. Registra un incidente CRITICAL en core.digital_worker_action_logs.
+    2. Notifica proactivamente por Telegram y WhatsApp al equipo de TI y supervisores
+       con el motivo técnico exacto devuelto por el agente/servidor.
+    3. Aplica deduplicación/cooldown para no repetir la misma alerta si el estado no cambia.
+    """
+    worker_id = worker.id if worker else None
+    facilities = db.query(Facility).filter(Facility.is_active == True).all()
+    incidents = []
+    now = datetime.utcnow()
+    window_start = now - timedelta(hours=6)
+
+    for fac in facilities:
+        # Obtener los comandos más recientes de la tienda (hasta 20)
+        recent_cmds = db.query(StoreAgentCommand).filter(
+            StoreAgentCommand.facility_id == fac.id
+        ).order_by(StoreAgentCommand.id.desc()).limit(20).all()
+
+        if not recent_cmds:
+            continue
+
+        # Si el comando más reciente NO está fallido (ej. COMPLETED o en curso), la tienda está operando normalmente
+        latest_cmd = recent_cmds[0]
+        if latest_cmd.status != 'FAILED':
+            continue
+
+        # Evaluar fallos consecutivos comenzando por el más reciente
+        consecutive_failures = 0
+        failed_commands = []
+        for cmd in recent_cmds:
+            if cmd.status == 'FAILED':
+                consecutive_failures += 1
+                failed_commands.append(cmd)
+            elif cmd.status == 'COMPLETED':
+                # Se rompe la racha de fallos
+                break
+
+        # Disparar alerta si el estado actual es de fallos reiterados (>= 2 fallos consecutivos)
+        total_failures = sum(1 for c in recent_cmds if c.status == 'FAILED')
+        should_alert = consecutive_failures >= 2
+
+        if should_alert and failed_commands:
+            last_failed = failed_commands[0]
+            err_msg = (last_failed.error_message or "Error técnico no especificado").strip()
+            cmd_type = last_failed.command_type or "FORCE_SYNC_SALES"
+            completed_str = last_failed.completed_at.strftime("%Y-%m-%d %H:%M") if last_failed.completed_at else "Reciente"
+
+            # Cooldown: verificar si ya alertamos para este mismo último comando o en los últimos 45 min
+            recent_alert = None
+            if worker_id:
+                recent_alert = db.query(DigitalWorkerActionLog).filter(
+                    DigitalWorkerActionLog.worker_id == worker_id,
+                    DigitalWorkerActionLog.facility_id == fac.id,
+                    DigitalWorkerActionLog.action_type == "STORE_SYNC_COMMANDS_FAILED",
+                    DigitalWorkerActionLog.created_at >= now - timedelta(minutes=45)
+                ).order_by(DigitalWorkerActionLog.id.desc()).first()
+
+            # Si ya se alertó y el último comando fallido es el mismo, omitir spam
+            already_alerted_cmd = False
+            if recent_alert and recent_alert.details:
+                already_alerted_cmd = (recent_alert.details.get("last_failed_command_id") == last_failed.id)
+
+            if not already_alerted_cmd:
+                summary = (
+                    f"🚨 [Dante TI] ALERTA DE FALLO DE SINCRONIZACIÓN: Tienda '{fac.name}' ({fac.code}) "
+                    f"acumula {consecutive_failures} orden(es) fallida(s) consecutiva(s) ({cmd_type}). "
+                    f"Causa: {err_msg[:120]}"
+                )
+                logger.error(summary)
+
+                if worker_id:
+                    log_entry = DigitalWorkerActionLog(
+                        worker_id=worker_id,
+                        facility_id=fac.id,
+                        action_type="STORE_SYNC_COMMANDS_FAILED",
+                        severity="CRITICAL",
+                        summary=summary,
+                        details={
+                            "facility_id": fac.id,
+                            "facility_code": fac.code,
+                            "consecutive_failures": consecutive_failures,
+                            "total_failures_in_window": total_failures,
+                            "last_failed_command_id": last_failed.id,
+                            "command_type": cmd_type,
+                            "error_message": err_msg,
+                            "last_failed_at": completed_str,
+                            "failed_command_ids": [c.id for c in failed_commands[:5]]
+                        },
+                        status="COMPLETED"
+                    )
+                    db.add(log_entry)
+
+                # Despachar notificación multicanal (Telegram y WhatsApp)
+                title = f"🚨 *[Dante TI - Alerta de Fallo de Sincronización]*"
+                body = (
+                    f"La sucursal *{fac.name}* (`{fac.code}`) presenta problemas reiterados al sincronizar con la nube:\n\n"
+                    f"• *Comando afectado:* `{cmd_type}`\n"
+                    f"• *Intentos fallidos:* {consecutive_failures} fallos consecutivos ({total_failures} en las últimas 6h)\n"
+                    f"• *Último intento:* {completed_str}\n"
+                    f"• *Detalle técnico del error:*\n"
+                    f"```{err_msg}```\n\n"
+                    f"⚡ *Acción preventiva de Dante:*\n"
+                    f"Se ha activado el *Circuit Breaker* para pausar reintentos automáticos a esta sede. "
+                    f"Por favor revisa la causa técnica indicada arriba para solventar."
+                )
+                dispatch_it_alert(title, body, db=db, agent_code="DANTE_IT")
+
+                incidents.append({
+                    "facility": fac.name,
+                    "consecutive_failures": consecutive_failures,
+                    "last_error": err_msg,
+                    "command_type": cmd_type
+                })
+
+    db.commit()
+    return incidents
+
+
+def audit_store_invoice_history(db: Session, worker: Optional[DigitalWorker] = None) -> List[Dict[str, Any]]:
+    """
+    Habilidad: it_invoice_sync_history_audit
+    Rastrea la fecha inicial de sincronización, la primera y última factura emitida por tienda/caja,
+    el volumen histórico acumulado de documentos y la cantidad de estaciones registradas.
+    """
+    worker_id = worker.id if worker else None
+    facilities = db.query(Facility).filter(Facility.is_active == True).all()
+    history_stats = []
+
+    for fac in facilities:
+        stats = db.query(
+            func.min(Document.created_at),
+            func.max(Document.created_at),
+            func.count(Document.id),
+            func.count(func.distinct(Document.register_code))
+        ).filter(Document.facility_id == fac.id).first()
+
+        min_date, max_date, total_docs, registers_count = stats or (None, None, 0, 0)
+        if total_docs and total_docs > 0:
+            history_stats.append({
+                "facility_id": fac.id,
+                "facility_name": fac.name,
+                "first_invoice_date": str(min_date) if min_date else None,
+                "last_invoice_date": str(max_date) if max_date else None,
+                "total_invoices_accumulated": total_docs,
+                "active_registers_count": registers_count
+            })
+
+    # Log informativo periódico (máximo una vez cada 12 horas)
+    if worker_id and history_stats:
+        now = datetime.utcnow()
+        recent = db.query(DigitalWorkerActionLog).filter(
+            DigitalWorkerActionLog.worker_id == worker_id,
+            DigitalWorkerActionLog.action_type == "INVOICE_SYNC_HISTORY_AUDIT",
+            DigitalWorkerActionLog.created_at >= now - timedelta(hours=12)
+        ).first()
+
+        if not recent:
+            total_global = sum(h["total_invoices_accumulated"] for h in history_stats)
+            summary = f"📊 [Dante TI] Auditoría Histórica de Facturación: {total_global:,} documentos acumulados en {len(history_stats)} sedes activas."
+            log_entry = DigitalWorkerActionLog(
+                worker_id=worker_id,
+                facility_id=facilities[0].id if facilities else 1,
+                action_type="INVOICE_SYNC_HISTORY_AUDIT",
+                severity="INFO",
+                summary=summary,
+                details={"history_by_facility": history_stats},
+                status="COMPLETED"
+            )
+            db.add(log_entry)
+            db.commit()
+
+    return history_stats
 

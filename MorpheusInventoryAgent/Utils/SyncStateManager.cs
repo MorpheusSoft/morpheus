@@ -10,12 +10,55 @@ public class SyncState
     public DateTime LastMovementSync { get; set; } = new DateTime(2000, 1, 1);
     public DateTime LastSalesSync { get; set; } = new DateTime(2000, 1, 1);
     public DateTime LastSupplierProductSync { get; set; } = new DateTime(2000, 1, 1);
+    public bool IsSyncPaused { get; set; } = false;
 }
 
 public static class SyncStateManager
 {
     private static readonly string StateFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sync_state.json");
+    private static readonly string PauseFlagPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sync_paused.flag");
     private static readonly object _lock = new object();
+
+    public static bool IsSyncPaused()
+    {
+        try
+        {
+            if (File.Exists(PauseFlagPath)) return true;
+            return LoadState().IsSyncPaused;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static void SetSyncPaused(bool paused)
+    {
+        try
+        {
+            if (paused)
+            {
+                File.WriteAllText(PauseFlagPath, DateTime.UtcNow.ToString("O"));
+            }
+            else if (File.Exists(PauseFlagPath))
+            {
+                File.Delete(PauseFlagPath);
+            }
+        }
+        catch { }
+
+        try
+        {
+            lock (_lock)
+            {
+                var state = LoadStateInternal();
+                state.IsSyncPaused = paused;
+                var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(StateFilePath, json);
+            }
+        }
+        catch { }
+    }
 
     private static SyncState LoadStateInternal()
     {
@@ -60,6 +103,7 @@ public static class SyncStateManager
                 if (state.LastMovementSync > currentState.LastMovementSync) currentState.LastMovementSync = state.LastMovementSync;
                 if (state.LastSalesSync > currentState.LastSalesSync) currentState.LastSalesSync = state.LastSalesSync;
                 if (state.LastSupplierProductSync > currentState.LastSupplierProductSync) currentState.LastSupplierProductSync = state.LastSupplierProductSync;
+                if (state.IsSyncPaused != currentState.IsSyncPaused) currentState.IsSyncPaused = state.IsSyncPaused;
                 
                 var json = JsonSerializer.Serialize(currentState, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(StateFilePath, json);
