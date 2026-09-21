@@ -74,7 +74,7 @@ export default function StoreSyncDashboardPage() {
   const [restartConfirmText, setRestartConfirmText] = useState("");
 
   const [showUpdateModal, setShowUpdateModal] = useState(false);
-  const [updateTargetVersion, setUpdateTargetVersion] = useState("2.3.0-neo");
+  const [updateTargetVersion, setUpdateTargetVersion] = useState("2.4.0-neo");
   const [updatePackageUrl, setUpdatePackageUrl] = useState("https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip");
   const [selectedErrorModal, setSelectedErrorModal] = useState<{ commandId: number; commandType: string; error: string; time?: string } | null>(null);
 
@@ -669,13 +669,13 @@ export default function StoreSyncDashboardPage() {
                         {selectedFacility.has_update_available ? (
                           <button
                             onClick={() => {
-                              setUpdateTargetVersion(selectedFacility.latest_available_version || "2.3.0-neo");
+                              setUpdateTargetVersion(selectedFacility.latest_available_version || "2.4.0-neo");
                               setShowUpdateModal(true);
                             }}
                             className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 transition-colors animate-pulse cursor-pointer"
                           >
                             <i className="pi pi-arrow-circle-up text-[9px]"></i>
-                            Actualizar a v{selectedFacility.latest_available_version || "2.3.0-neo"}
+                            Actualizar a v{selectedFacility.latest_available_version || "2.4.0-neo"}
                           </button>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -1083,7 +1083,7 @@ export default function StoreSyncDashboardPage() {
                                 : "bg-emerald-50 border-emerald-200 text-emerald-800 font-bold"
                             }`}>
                               <span className="text-[10px] uppercase font-bold">{selectedFacility.has_update_available ? "Disponible:" : "Última Versión:"}</span>
-                              <span className="font-mono">v{selectedFacility.latest_available_version || "2.3.0-neo"}</span>
+                              <span className="font-mono">v{selectedFacility.latest_available_version || "2.4.0-neo"}</span>
                             </div>
                             {selectedFacility.has_update_available && (
                               <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-amber-700 bg-amber-100/90 px-2 py-0.5 rounded-full">
@@ -1097,7 +1097,7 @@ export default function StoreSyncDashboardPage() {
 
                       <button
                         onClick={() => {
-                          setUpdateTargetVersion(selectedFacility.latest_available_version || "2.3.0-neo");
+                          setUpdateTargetVersion(selectedFacility.latest_available_version || "2.4.0-neo");
                           setShowUpdateModal(true);
                         }}
                         disabled={executingCmd === 'UPDATE_SOFTWARE'}
@@ -1111,12 +1111,12 @@ export default function StoreSyncDashboardPage() {
                         ) : selectedFacility.has_update_available ? (
                           <>
                             <i className="pi pi-arrow-circle-up text-sm"></i>
-                            <span>🚀 Actualizar a v{selectedFacility.latest_available_version || "2.3.0-neo"}</span>
+                            <span>🚀 Actualizar a v{selectedFacility.latest_available_version || "2.4.0-neo"}</span>
                           </>
                         ) : (
                           <>
                             <i className="pi pi-check text-sm"></i>
-                            <span>Reinstalar / Forzar v{selectedFacility.latest_available_version || "2.3.0-neo"}</span>
+                            <span>Reinstalar / Forzar v{selectedFacility.latest_available_version || "2.4.0-neo"}</span>
                           </>
                         )}
                       </button>
