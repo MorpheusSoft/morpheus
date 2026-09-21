@@ -214,3 +214,13 @@ public class CommandAckDto
     [JsonPropertyName("error_message")]
     public string? ErrorMessage { get; set; }
 }
+
+public class StellarDepositDto
+{
+    [JsonPropertyName("code")]
+    public string Code { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+}
+

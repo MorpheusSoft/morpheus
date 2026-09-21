@@ -151,11 +151,24 @@ public class HeartbeatWorker : BackgroundService
             overallStatus = "WARNING";
         }
 
+        List<StellarDepositDto> discoveredDeposits = new();
+        if (sqlStatus == "CONNECTED")
+        {
+            try
+            {
+                discoveredDeposits = await QueryStellarDepositsAsync(stoppingToken);
+            }
+            catch (Exception exDep)
+            {
+                _logger.LogDebug("No se pudieron consultar depósitos para telemetría: {Msg}", exDep.Message);
+            }
+        }
+
         var telemetryDto = new StoreSyncTelemetryDto
         {
             FacilityId = facilityId,
             RegisterCode = "SERVER-STORE",
-            AgentVersion = "2.4.2-neo",
+            AgentVersion = "2.4.3-neo",
             MachineName = Environment.MachineName,
             SqlServerStatus = sqlStatus,
             LastStellarSaleTime = lastStellarSale,
@@ -174,7 +187,8 @@ public class HeartbeatWorker : BackgroundService
                 ["last_sales_sync"] = syncState.LastSalesSync > new DateTime(2000, 1, 1) ? syncState.LastSalesSync.ToString("o") : null!,
                 ["baseline_done"] = syncState.BaselineInventoryDone,
                 ["last_movement_sync"] = syncState.LastMovementSync > new DateTime(2000, 1, 1) ? syncState.LastMovementSync.ToString("o") : null!,
-                ["is_sync_paused"] = SyncStateManager.IsSyncPaused()
+                ["is_sync_paused"] = SyncStateManager.IsSyncPaused(),
+                ["deposits"] = discoveredDeposits
             }
         };
 
@@ -335,6 +349,28 @@ public class HeartbeatWorker : BackgroundService
                     Environment.Exit(0);
                     break;
 
+                case "DISCOVER_DEPOSITS":
+                    int facId = _configuration.GetValue<int>("StoreFacilityId", 1);
+                    _logger.LogInformation("[CONTROL REMOTO] Detectando depósitos en SQL Server para sucursal #{FacId}...", facId);
+                    var deps = await QueryStellarDepositsAsync(stoppingToken);
+                    var baseApi = ResolveBaseApiUrl();
+                    var syncDepUrl = $"{baseApi}/store-agent/{facId}/sync-deposits";
+                    var depJson = JsonSerializer.Serialize(deps);
+                    var depContent = new StringContent(depJson, Encoding.UTF8, "application/json");
+                    var depClient = _httpClientFactory.CreateClient();
+                    depClient.Timeout = TimeSpan.FromSeconds(30);
+                    var depResp = await depClient.PostAsync(syncDepUrl, depContent, stoppingToken);
+                    if (depResp.IsSuccessStatusCode)
+                    {
+                        await SendCommandAckAsync(cmd.Id, "COMPLETED", new { count = deps.Count, deposits = deps, message = $"Se detectaron y transmitieron {deps.Count} depósitos de Stellar." }, null, stoppingToken);
+                    }
+                    else
+                    {
+                        var errBody = await depResp.Content.ReadAsStringAsync(stoppingToken);
+                        await SendCommandAckAsync(cmd.Id, "FAILED", null, $"HTTP {depResp.StatusCode}: {errBody}", stoppingToken);
+                    }
+                    break;
+
                 case "UPDATE_SOFTWARE":
                     await ExecuteSoftwareUpdateAsync(cmd, stoppingToken);
                     break;
@@ -419,7 +455,7 @@ public class HeartbeatWorker : BackgroundService
 
     private async Task ExecuteSoftwareUpdateAsync(StoreAgentCommandDto cmd, CancellationToken stoppingToken)
     {
-        string targetVersion = "2.4.2-neo";
+        string targetVersion = "2.4.3-neo";
         string packageUrl = ResolveInstallerUrl();
 
         if (cmd.Parameters.ValueKind == JsonValueKind.Object)
@@ -572,4 +608,115 @@ Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue
             await SendCommandAckAsync(cmd.Id, "FAILED", null, $"Fallo de actualización: {ex.Message}", stoppingToken);
         }
     }
+
+    public async Task<List<StellarDepositDto>> QueryStellarDepositsAsync(CancellationToken stoppingToken)
+    {
+        var list = new List<StellarDepositDto>();
+        string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(connectionString)) return list;
+
+        try
+        {
+            using var conn = new SqlConnection(connectionString);
+            await conn.OpenAsync(stoppingToken);
+
+            // 1. Detectar si existe MA_DEPOSITO o MA_DEPOSITOS y sus columnas
+            string findTableSql = @"
+                SELECT TABLE_NAME, COLUMN_NAME 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME IN ('MA_DEPOSITO', 'MA_DEPOSITOS')
+            ";
+            var colsDict = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            using (var cmdCol = new SqlCommand(findTableSql, conn))
+            using (var rdr = await cmdCol.ExecuteReaderAsync(stoppingToken))
+            {
+                while (await rdr.ReadAsync(stoppingToken))
+                {
+                    string tbl = rdr.GetString(0);
+                    string col = rdr.GetString(1);
+                    if (!colsDict.ContainsKey(tbl))
+                        colsDict[tbl] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    colsDict[tbl].Add(col);
+                }
+            }
+
+            string targetTable = "";
+            if (colsDict.ContainsKey("MA_DEPOSITO")) targetTable = "MA_DEPOSITO";
+            else if (colsDict.ContainsKey("MA_DEPOSITOS")) targetTable = "MA_DEPOSITOS";
+
+            if (!string.IsNullOrEmpty(targetTable))
+            {
+                var cols = colsDict[targetTable];
+                string codeCol = cols.Contains("c_coddeposito") ? "c_coddeposito" :
+                                 cols.Contains("c_deposito") ? "c_deposito" :
+                                 cols.Contains("c_CodArma") ? "c_CodArma" : "";
+
+                string descCol = cols.Contains("c_descripcion") ? "c_descripcion" :
+                                 cols.Contains("c_descrip") ? "c_descrip" :
+                                 cols.Contains("c_DesArma") ? "c_DesArma" : "";
+
+                if (!string.IsNullOrEmpty(codeCol))
+                {
+                    string selectDesc = !string.IsNullOrEmpty(descCol) 
+                        ? $"RTRIM(ISNULL({descCol}, 'Depósito ' + RTRIM({codeCol}))) AS descripcion" 
+                        : $"('Depósito ' + RTRIM({codeCol})) AS descripcion";
+
+                    string sql = $@"
+                        SELECT DISTINCT 
+                            RTRIM({codeCol}) AS c_deposito,
+                            {selectDesc}
+                        FROM {targetTable} WITH (NOLOCK)
+                        WHERE {codeCol} IS NOT NULL AND RTRIM({codeCol}) <> ''
+                        ORDER BY c_deposito
+                    ";
+
+                    using var cmd = new SqlCommand(sql, conn);
+                    using var rdr = await cmd.ExecuteReaderAsync(stoppingToken);
+                    while (await rdr.ReadAsync(stoppingToken))
+                    {
+                        string c = rdr["c_deposito"]?.ToString()?.Trim() ?? "";
+                        string d = rdr["descripcion"]?.ToString()?.Trim() ?? "";
+                        if (!string.IsNullOrEmpty(c))
+                        {
+                            list.Add(new StellarDepositDto { Code = c, Name = string.IsNullOrEmpty(d) ? $"Depósito {c}" : d });
+                        }
+                    }
+                }
+            }
+
+            if (list.Count == 0)
+            {
+                // Fallback a tr_inventario
+                string fallbackSql = @"
+                    IF OBJECT_ID('tr_inventario', 'U') IS NOT NULL
+                    BEGIN
+                        SELECT DISTINCT 
+                            RTRIM(c_deposito) AS c_deposito, 
+                            ('Depósito ' + RTRIM(c_deposito)) AS descripcion
+                        FROM tr_inventario WITH (NOLOCK)
+                        WHERE c_deposito IS NOT NULL AND RTRIM(c_deposito) <> ''
+                        ORDER BY c_deposito;
+                    END
+                ";
+                using var cmd = new SqlCommand(fallbackSql, conn);
+                using var rdr = await cmd.ExecuteReaderAsync(stoppingToken);
+                while (await rdr.ReadAsync(stoppingToken))
+                {
+                    string c = rdr["c_deposito"]?.ToString()?.Trim() ?? "";
+                    string d = rdr["descripcion"]?.ToString()?.Trim() ?? "";
+                    if (!string.IsNullOrEmpty(c))
+                    {
+                        list.Add(new StellarDepositDto { Code = c, Name = string.IsNullOrEmpty(d) ? $"Depósito {c}" : d });
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Error al consultar depósitos en SQL Server: {Msg}", ex.Message);
+        }
+
+        return list;
+    }
 }
+

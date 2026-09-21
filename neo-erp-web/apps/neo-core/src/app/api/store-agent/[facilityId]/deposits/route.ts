@@ -48,8 +48,29 @@ export async function POST(
 ) {
   try {
     const { facilityId } = await params;
-    const body = await request.json();
+    const searchParams = request.nextUrl.searchParams;
+    const action = searchParams.get("action");
     const headers = await getAuthHeaders();
+
+    if (action === "discover") {
+      const res = await fetch(`${API_URL}/store-agent/${facilityId}/discover`, {
+        method: "POST",
+        headers,
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        return NextResponse.json(
+          { error: "Error despachando orden de detección", details: err },
+          { status: res.status }
+        );
+      }
+
+      const data = await res.json();
+      return NextResponse.json(data);
+    }
+
+    const body = await request.json();
 
     const res = await fetch(`${API_URL}/store-agent/${facilityId}/deposits`, {
       method: "POST",

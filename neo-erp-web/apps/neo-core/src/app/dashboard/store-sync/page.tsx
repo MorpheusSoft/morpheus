@@ -39,6 +39,7 @@ export default function StoreSyncDashboardPage() {
   const [depositMappings, setDepositMappings] = useState<StoreDepositMapping[]>([]);
   const [availableWarehouses, setAvailableWarehouses] = useState<WarehouseOption[]>([]);
   const [loadingDeposits, setLoadingDeposits] = useState(false);
+  const [discoveringDeposits, setDiscoveringDeposits] = useState(false);
   const [savingDepositId, setSavingDepositId] = useState<number | null>(null);
   const [depositSuccessMsg, setDepositSuccessMsg] = useState<string | null>(null);
   const [depositErrorMsg, setDepositErrorMsg] = useState<string | null>(null);
@@ -74,7 +75,7 @@ export default function StoreSyncDashboardPage() {
   const [restartConfirmText, setRestartConfirmText] = useState("");
 
   const [showUpdateModal, setShowUpdateModal] = useState(false);
-  const [updateTargetVersion, setUpdateTargetVersion] = useState("2.4.2-neo");
+  const [updateTargetVersion, setUpdateTargetVersion] = useState("2.4.3-neo");
   const [updatePackageUrl, setUpdatePackageUrl] = useState("https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip");
   const [selectedErrorModal, setSelectedErrorModal] = useState<{ commandId: number; commandType: string; error: string; time?: string } | null>(null);
 
@@ -268,6 +269,29 @@ export default function StoreSyncDashboardPage() {
       setDepositErrorMsg(err.message || 'Error al crear mapeo');
     } finally {
       setCreatingDeposit(false);
+    }
+  };
+
+  const handleDiscoverDeposits = async (facilityId: number) => {
+    setDiscoveringDeposits(true);
+    setDepositErrorMsg(null);
+    setDepositSuccessMsg(null);
+    try {
+      const res = await fetch(`/api/store-agent/${facilityId}/deposits?action=discover`, {
+        method: 'POST'
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Error solicitando detección de depósitos' }));
+        throw new Error(err.error || 'Error solicitando detección de depósitos');
+      }
+      setDepositSuccessMsg("Orden de detección despachada a la tienda. Consultando MA_DEPOSITO en SQL Server...");
+      setTimeout(async () => {
+        await fetchDepositMappings(facilityId);
+        setDiscoveringDeposits(false);
+      }, 4000);
+    } catch (e: any) {
+      setDepositErrorMsg(e.message || "Error al solicitar detección de depósitos");
+      setDiscoveringDeposits(false);
     }
   };
 
@@ -669,13 +693,13 @@ export default function StoreSyncDashboardPage() {
                         {selectedFacility.has_update_available ? (
                           <button
                             onClick={() => {
-                              setUpdateTargetVersion(selectedFacility.latest_available_version || "2.4.2-neo");
+                              setUpdateTargetVersion(selectedFacility.latest_available_version || "2.4.3-neo");
                               setShowUpdateModal(true);
                             }}
                             className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 transition-colors animate-pulse cursor-pointer"
                           >
                             <i className="pi pi-arrow-circle-up text-[9px]"></i>
-                            Actualizar a v{selectedFacility.latest_available_version || "2.4.2-neo"}
+                            Actualizar a v{selectedFacility.latest_available_version || "2.4.3-neo"}
                           </button>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -1083,7 +1107,7 @@ export default function StoreSyncDashboardPage() {
                                 : "bg-emerald-50 border-emerald-200 text-emerald-800 font-bold"
                             }`}>
                               <span className="text-[10px] uppercase font-bold">{selectedFacility.has_update_available ? "Disponible:" : "Última Versión:"}</span>
-                              <span className="font-mono">v{selectedFacility.latest_available_version || "2.4.2-neo"}</span>
+                              <span className="font-mono">v{selectedFacility.latest_available_version || "2.4.3-neo"}</span>
                             </div>
                             {selectedFacility.has_update_available && (
                               <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-amber-700 bg-amber-100/90 px-2 py-0.5 rounded-full">
@@ -1097,7 +1121,7 @@ export default function StoreSyncDashboardPage() {
 
                       <button
                         onClick={() => {
-                          setUpdateTargetVersion(selectedFacility.latest_available_version || "2.4.2-neo");
+                          setUpdateTargetVersion(selectedFacility.latest_available_version || "2.4.3-neo");
                           setShowUpdateModal(true);
                         }}
                         disabled={executingCmd === 'UPDATE_SOFTWARE'}
@@ -1111,12 +1135,12 @@ export default function StoreSyncDashboardPage() {
                         ) : selectedFacility.has_update_available ? (
                           <>
                             <i className="pi pi-arrow-circle-up text-sm"></i>
-                            <span>🚀 Actualizar a v{selectedFacility.latest_available_version || "2.4.2-neo"}</span>
+                            <span>🚀 Actualizar a v{selectedFacility.latest_available_version || "2.4.3-neo"}</span>
                           </>
                         ) : (
                           <>
                             <i className="pi pi-check text-sm"></i>
-                            <span>Reinstalar / Forzar v{selectedFacility.latest_available_version || "2.4.2-neo"}</span>
+                            <span>Reinstalar / Forzar v{selectedFacility.latest_available_version || "2.4.3-neo"}</span>
                           </>
                         )}
                       </button>
@@ -1484,6 +1508,16 @@ export default function StoreSyncDashboardPage() {
 
                 <div className="flex items-center gap-3">
                   <button
+                    onClick={() => handleDiscoverDeposits(selectedFacility.facility_id)}
+                    disabled={discoveringDeposits || loadingDeposits}
+                    className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:scale-95 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-emerald-600/20 inline-flex items-center gap-2 cursor-pointer"
+                    title="Consulta MA_DEPOSITO en SQL Server de la tienda para registrar automáticamente los depósitos y almacenes"
+                  >
+                    <i className={`pi ${discoveringDeposits ? 'pi-spinner animate-spin' : 'pi-search'}`}></i>
+                    <span>{discoveringDeposits ? 'Detectando en Tienda...' : 'Detectar Depósitos de Stellar'}</span>
+                  </button>
+
+                  <button
                     onClick={() => {
                       const firstWh = availableWarehouses[0];
                       setNewDepositForm({
@@ -1496,7 +1530,7 @@ export default function StoreSyncDashboardPage() {
                       });
                       setShowCreateDepositModal(true);
                     }}
-                    className="py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-indigo-600/20 inline-flex items-center gap-2"
+                    className="py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-indigo-600/20 inline-flex items-center gap-2 cursor-pointer"
                   >
                     <i className="pi pi-plus"></i>
                     <span>Asociar Nuevo Depósito</span>
@@ -1505,7 +1539,7 @@ export default function StoreSyncDashboardPage() {
                   <button
                     onClick={() => fetchDepositMappings(selectedFacility.facility_id)}
                     disabled={loadingDeposits}
-                    className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all"
+                    className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
                     title="Refrescar depósitos"
                   >
                     <i className={`pi pi-sync ${loadingDeposits ? 'animate-spin' : ''}`}></i>
@@ -1561,9 +1595,42 @@ export default function StoreSyncDashboardPage() {
                     <p className="text-xs">Cargando mapeo de depósitos...</p>
                   </div>
                 ) : depositMappings.length === 0 ? (
-                  <div className="py-12 text-center text-slate-400">
-                    <i className="pi pi-inbox text-3xl mb-2"></i>
-                    <p className="text-xs">No hay depósitos configurados para esta sucursal.</p>
+                  <div className="py-14 text-center">
+                    <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-2xl shadow-inner">
+                      <i className="pi pi-box"></i>
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-700">No hay depósitos configurados para esta sucursal</h3>
+                    <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 mb-5">
+                      Puedes consultar y registrar automáticamente todos los depósitos existentes en Stellar POS (tabla <code className="font-mono text-indigo-600">MA_DEPOSITO</code>) con un solo clic.
+                    </p>
+                    <div className="inline-flex flex-wrap items-center justify-center gap-3">
+                      <button
+                        onClick={() => handleDiscoverDeposits(selectedFacility.facility_id)}
+                        disabled={discoveringDeposits || loadingDeposits}
+                        className="py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 inline-flex items-center gap-2 cursor-pointer"
+                      >
+                        <i className={`pi ${discoveringDeposits ? 'pi-spinner animate-spin' : 'pi-search'}`}></i>
+                        <span>{discoveringDeposits ? 'Detectando depósitos en Stellar...' : '🔍 Detectar Depósitos de Stellar'}</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          const firstWh = availableWarehouses[0];
+                          setNewDepositForm({
+                            external_deposit_code: '',
+                            external_deposit_name: '',
+                            warehouse_id: firstWh?.id || 0,
+                            location_id: firstWh?.locations[0]?.id || 0,
+                            affects_inventory: true,
+                            is_active: true
+                          });
+                          setShowCreateDepositModal(true);
+                        }}
+                        className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-2 cursor-pointer"
+                      >
+                        <i className="pi pi-plus"></i>
+                        <span>Asociar Manualmente</span>
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <table className="w-full text-left text-xs border-collapse">
