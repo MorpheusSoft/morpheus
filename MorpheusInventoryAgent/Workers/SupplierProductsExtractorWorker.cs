@@ -41,7 +41,7 @@ public class SupplierProductsExtractorWorker : BackgroundService
                 
                 if (config != null && config.Enabled)
                 {
-                    await ProcessExtractionAsync(config, stoppingToken);
+                    await ProcessExtractionAsync(config, forceFull: false, stoppingToken: stoppingToken);
                     await Task.Delay(TimeSpan.FromMinutes(config.IntervalMinutes), stoppingToken);
                 }
                 else
@@ -57,7 +57,7 @@ public class SupplierProductsExtractorWorker : BackgroundService
         }
     }
 
-    public async Task RunOnceAsync(CancellationToken stoppingToken = default)
+    public async Task RunOnceAsync(bool forceFull = false, CancellationToken stoppingToken = default)
     {
         var config = _configuration.GetSection("DirectExtractors:SupplierProducts").Get<DirectExtractorConfig>();
         if (config == null)
@@ -65,7 +65,7 @@ public class SupplierProductsExtractorWorker : BackgroundService
             config = new DirectExtractorConfig
             {
                 Enabled = true,
-                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "https://api.qa.morpheussoft.net/api") + "/v1/import/supplier-products-legacy"
+                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "https://api.qa.morpheussoft.net/api/v1") + "/import/supplier-products-legacy"
             };
         }
 
@@ -75,17 +75,18 @@ public class SupplierProductsExtractorWorker : BackgroundService
         Console.WriteLine("=========================================================");
         Console.ResetColor();
 
-        await ProcessExtractionAsync(config, stoppingToken);
+        await ProcessExtractionAsync(config, forceFull, stoppingToken);
         Console.WriteLine("=========================================================\n");
     }
 
-    private async Task ProcessExtractionAsync(DirectExtractorConfig config, CancellationToken stoppingToken = default)
+    private async Task ProcessExtractionAsync(DirectExtractorConfig config, bool forceFull = false, CancellationToken stoppingToken = default)
     {
         string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
         var syncState = SyncStateManager.LoadState();
-        var lastSync = syncState.LastSupplierProductSync;
+        var lastSync = forceFull ? new DateTime(2000, 1, 1) : syncState.LastSupplierProductSync;
         
-        string query = @"
+        string dateClause = forceFull || lastSync.Year == 2000 ? "1=1" : "d_fecha > @LastSync";
+        string query = $@"
             select x.c_codigo as c_Codigo, x.c_codprovee as c_CodProveedor, 
                    case when x.n_costo=0 then (case when ISNULL(p.n_CostoAct, 0) <= 0 then ISNULL(p.n_CostoRep, 0) else p.n_CostoAct end) else x.n_costo end as costo, 
                    1 as compMin, 'EMPAQUE' as empaque, p.n_CantiBul
@@ -93,13 +94,13 @@ public class SupplierProductsExtractorWorker : BackgroundService
                 select ROW_NUMBER() over(Partition by c_codprovee, c_codigo order by d_fecha desc) ln, 
                        c_codigo, c_codprovee, n_costo, d_fecha
                 from MA_PRODXPROV WITH (NOLOCK)
-                where d_fecha > @LastSync
+                where {dateClause}
             ) x
             inner join MA_PRODUCTOS p WITH (NOLOCK) on x.c_codigo=p.c_Codigo
             where ln=1 and ISNULL(p.n_tipopeso, 0) NOT IN (3, 4, 5)
             order by d_fecha desc";
 
-        Console.WriteLine($"  Consultando cruces de costos en SQL Server (posteriores a {lastSync:yyyy-MM-dd})...");
+        Console.WriteLine($"  Consultando cruces de costos en SQL Server (Filtro: > {lastSync:yyyy-MM-dd})...");
         using var connection = new SqlConnection(connectionString);
         var supplierProducts = (await connection.QueryAsync(query, new { LastSync = lastSync })).ToList();
 
@@ -117,10 +118,25 @@ public class SupplierProductsExtractorWorker : BackgroundService
 
         var client = _httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromMinutes(15);
-        var response = await client.PostAsync(config.TargetApiUrl, content, stoppingToken);
+        string targetUrl = config.TargetApiUrl;
+        if (forceFull)
+        {
+            targetUrl += targetUrl.Contains("?") ? "&force=true" : "?force=true";
+        }
+        var response = await client.PostAsync(targetUrl, content, stoppingToken);
 
         if (response.IsSuccessStatusCode)
         {
+            var respStr = await response.Content.ReadAsStringAsync(stoppingToken);
+            if (respStr.Contains("\"paused\":true") || respStr.Contains("\"paused\": true"))
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("  [AVISO] La ingesta fue omitida por el servidor porque la sede está en PAUSA.");
+                Console.ResetColor();
+                _logger.LogWarning("Supplier products import was skipped by server because facility is paused.");
+                return;
+            }
+
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"  [OK] {supplierProducts.Count:N0} relaciones proveedor-producto sincronizadas exitosamente.");
             Console.ResetColor();

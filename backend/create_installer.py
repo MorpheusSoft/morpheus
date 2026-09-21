@@ -86,13 +86,13 @@ def build_installer():
                 "Enabled": False,
                 "IntervalMinutes": 60,
                 "TargetApiUrl": "https://api.qa.morpheussoft.net/api/v1/import/products-legacy",
-                "ExportMode": "OnlyWithStock"
+                "ExportMode": "AllMaster"
             },
             "ProductBarcodes": {
                 "Enabled": False,
                 "IntervalMinutes": 60,
                 "TargetApiUrl": "https://api.qa.morpheussoft.net/api/v1/import/products-barcodes-legacy",
-                "ExportMode": "OnlyWithStock"
+                "ExportMode": "AllMaster"
             },
             "InventoryBaseline": {
                 "Enabled": False,
@@ -272,6 +272,13 @@ Start-Process "$destDir\\MorpheusConfigurador.exe"
 """
     with open(os.path.join(static_dir, "instalar.ps1"), "w", encoding="utf-8") as f:
         f.write(ps1_web)
+
+    # Empaquetar tambien msync_update.zip para compatibilidad total con scripts legacy
+    msync_zip = os.path.join(static_dir, "msync_update.zip")
+    with zipfile.ZipFile(msync_zip, "w", zipfile.ZIP_DEFLATED) as mz:
+        mz.write(os.path.join(build_dir, "MorpheusSyncAgent.exe"), arcname="msync.exe")
+        mz.write(os.path.join(build_dir, "appsettings.json"), arcname="appsettings.json")
+    print(f"[OK] Paquete liviano actualizado: {msync_zip} ({os.path.getsize(msync_zip):,} bytes)")
 
     print(f"\n[OK] Instalador empaquetado: {dest_zip} ({os.path.getsize(dest_zip):,} bytes)")
     print(f"[OK] Script de instalacion web: {os.path.join(static_dir, 'instalar.ps1')}")

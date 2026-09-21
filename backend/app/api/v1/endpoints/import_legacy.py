@@ -59,9 +59,10 @@ def get_legacy_facilities(session: Session = Depends(deps.get_db)):
 def import_products_legacy(
     products_in: List[LegacyProduct],
     facility_id: Optional[int] = None,
+    force: Optional[bool] = False,
     session: Session = Depends(deps.get_db)
 ):
-    if is_facility_sync_paused(session, facility_id):
+    if not force and is_facility_sync_paused(session, facility_id):
         print(f"[PAUSA] Ingesta de productos bloqueada (Pausa activa para sede {facility_id or 'global'}).")
         return {"message": "Sincronización de productos pausada por administración.", "count": 0, "paused": True}
 
@@ -236,9 +237,10 @@ class LegacyBarcode(BaseModel):
 def import_barcodes_legacy(
     barcodes_in: List[LegacyBarcode],
     facility_id: Optional[int] = None,
+    force: Optional[bool] = False,
     session: Session = Depends(deps.get_db)
 ):
-    if is_facility_sync_paused(session, facility_id):
+    if not force and is_facility_sync_paused(session, facility_id):
         print(f"[PAUSA] Ingesta de códigos de barra bloqueada (Pausa activa para sede {facility_id or 'global'}).")
         return {"message": "Sincronización de códigos de barra pausada por administración.", "count": 0, "paused": True}
 
@@ -750,8 +752,14 @@ class LegacySupplierProduct(BaseModel):
 @router.post("/supplier-products-legacy")
 def import_supplier_products_legacy(
     supplier_products_in: List[LegacySupplierProduct],
+    facility_id: Optional[int] = None,
+    force: Optional[bool] = False,
     session: Session = Depends(deps.get_db)
 ):
+    if not force and is_facility_sync_paused(session, facility_id):
+        print(f"[PAUSA] Ingesta de productos por proveedor bloqueada (Pausa activa para sede {facility_id or 'global'}).")
+        return {"message": "Sincronización de productos por proveedor pausada por administración.", "count": 0, "paused": True}
+
     print(f"Iniciando carga de {len(supplier_products_in)} Productos por Proveedor...")
     
     count = 0

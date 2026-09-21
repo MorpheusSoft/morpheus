@@ -37,7 +37,7 @@ public class ProductBarcodesExtractorWorker : BackgroundService
                 
                 if (config != null && config.Enabled)
                 {
-                    await ProcessExtractionAsync(config, stoppingToken);
+                    await ProcessExtractionAsync(config, forceFull: false, stoppingToken: stoppingToken);
                     await Task.Delay(TimeSpan.FromMinutes(config.IntervalMinutes), stoppingToken);
                 }
                 else
@@ -53,7 +53,7 @@ public class ProductBarcodesExtractorWorker : BackgroundService
         }
     }
 
-    public async Task RunOnceAsync(CancellationToken stoppingToken = default)
+    public async Task RunOnceAsync(bool forceFull = false, CancellationToken stoppingToken = default)
     {
         var config = _configuration.GetSection("DirectExtractors:ProductBarcodes").Get<DirectExtractorConfig>();
         if (config == null)
@@ -61,7 +61,7 @@ public class ProductBarcodesExtractorWorker : BackgroundService
             config = new DirectExtractorConfig
             {
                 Enabled = true,
-                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "https://api.qa.morpheussoft.net/api") + "/v1/import/products-barcodes-legacy",
+                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "http://localhost/api") + "/import/products-barcodes-legacy",
                 ExportMode = ExportMode.AllMaster
             };
         }
@@ -78,11 +78,11 @@ public class ProductBarcodesExtractorWorker : BackgroundService
         Console.WriteLine("=========================================================");
         Console.ResetColor();
 
-        await ProcessExtractionAsync(config, stoppingToken);
+        await ProcessExtractionAsync(config, forceFull, stoppingToken);
         Console.WriteLine("=========================================================\n");
     }
 
-    private async Task ProcessExtractionAsync(DirectExtractorConfig config, CancellationToken stoppingToken = default)
+    private async Task ProcessExtractionAsync(DirectExtractorConfig config, bool forceFull = false, CancellationToken stoppingToken = default)
     {
         string connectionString = _configuration.GetConnectionString("LocalSqlServer") ?? string.Empty;
         
@@ -112,10 +112,25 @@ public class ProductBarcodesExtractorWorker : BackgroundService
 
         var client = _httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromMinutes(15);
-        var response = await client.PostAsync(config.TargetApiUrl, content, stoppingToken);
+        string targetUrl = config.TargetApiUrl;
+        if (forceFull)
+        {
+            targetUrl += targetUrl.Contains("?") ? "&force=true" : "?force=true";
+        }
+        var response = await client.PostAsync(targetUrl, content, stoppingToken);
 
         if (response.IsSuccessStatusCode)
         {
+            var respStr = await response.Content.ReadAsStringAsync(stoppingToken);
+            if (respStr.Contains("\"paused\":true") || respStr.Contains("\"paused\": true"))
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("  [AVISO] La ingesta de códigos de barra fue omitida por el servidor porque la sincronización está en PAUSA.");
+                Console.ResetColor();
+                _logger.LogWarning("Barcodes import was skipped by server because facility is paused.");
+                return;
+            }
+
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"  [OK] {barcodes.Count:N0} códigos de barra sincronizados exitosamente.");
             Console.ResetColor();

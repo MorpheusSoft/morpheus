@@ -155,7 +155,7 @@ public class HeartbeatWorker : BackgroundService
         {
             FacilityId = facilityId,
             RegisterCode = "SERVER-STORE",
-            AgentVersion = "2.4.1-neo",
+            AgentVersion = "2.4.2-neo",
             MachineName = Environment.MachineName,
             SqlServerStatus = sqlStatus,
             LastStellarSaleTime = lastStellarSale,
@@ -242,15 +242,15 @@ public class HeartbeatWorker : BackgroundService
 
                 case "FORCE_SYNC_MASTERS":
                     var catWorker = _serviceProvider.GetRequiredService<CategoryExtractorWorker>();
-                    await catWorker.RunOnceAsync();
+                    await catWorker.RunOnceAsync(stoppingToken);
                     var supWorker = _serviceProvider.GetRequiredService<SuppliersExtractorWorker>();
-                    await supWorker.RunOnceAsync();
+                    await supWorker.RunOnceAsync(stoppingToken);
                     var prodWorker = _serviceProvider.GetRequiredService<ProductMasterExtractorWorker>();
-                    await prodWorker.RunOnceAsync();
+                    await prodWorker.RunOnceAsync(forceFull: true, stoppingToken);
                     var bcWorker = _serviceProvider.GetRequiredService<ProductBarcodesExtractorWorker>();
-                    await bcWorker.RunOnceAsync();
+                    await bcWorker.RunOnceAsync(forceFull: true, stoppingToken);
                     var spWorker = _serviceProvider.GetRequiredService<SupplierProductsExtractorWorker>();
-                    await spWorker.RunOnceAsync();
+                    await spWorker.RunOnceAsync(forceFull: true, stoppingToken);
                     await SendCommandAckAsync(cmd.Id, "COMPLETED", new { message = "Catálogos maestros sincronizados exitosamente (Categorías, Proveedores, Productos, Códigos de barra, Costos por Proveedor)." }, null, stoppingToken);
                     break;
 
@@ -419,7 +419,7 @@ public class HeartbeatWorker : BackgroundService
 
     private async Task ExecuteSoftwareUpdateAsync(StoreAgentCommandDto cmd, CancellationToken stoppingToken)
     {
-        string targetVersion = "2.4.1-neo";
+        string targetVersion = "2.4.2-neo";
         string packageUrl = ResolveInstallerUrl();
 
         if (cmd.Parameters.ValueKind == JsonValueKind.Object)
@@ -472,14 +472,14 @@ Start-Sleep -Seconds 3
 
 # 1. Detener servicio y procesos de la tienda
 Stop-Service -Name 'NeoAgentSync' -Force -ErrorAction SilentlyContinue
-Get-Process -Name 'MorpheusConfigurador' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name 'MorpheusConfigurador', 'MorpheusSyncAgent', 'msync' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 $timeout = 15
-while ((Get-Process -Name 'MorpheusSyncAgent' -ErrorAction SilentlyContinue) -and $timeout -gt 0) {
+while ((Get-Process -Name 'MorpheusSyncAgent', 'msync' -ErrorAction SilentlyContinue) -and $timeout -gt 0) {
     Start-Sleep -Seconds 1
     $timeout--
 }
-Get-Process -Name 'MorpheusSyncAgent' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name 'MorpheusSyncAgent', 'msync' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 # 2. Respaldar configuración y estado crítico local
 $backupDir = ""$env:TEMP\neo_update_backup""
@@ -508,6 +508,9 @@ Get-ChildItem -Path $extractDir -Recurse | ForEach-Object {
             Copy-Item $_.FullName -Destination $target -Force
         }
     }
+}
+if (Test-Path ""$destDir\MorpheusSyncAgent.exe"") {
+    Copy-Item ""$destDir\MorpheusSyncAgent.exe"" ""$destDir\msync.exe"" -Force -ErrorAction SilentlyContinue
 }
 
 # 5. Restaurar respaldo de configuración y estado para garantizar 100% integridad
