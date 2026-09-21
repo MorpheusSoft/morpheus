@@ -30,6 +30,7 @@ class LegacyProduct(BaseModel):
     c_Descri: str
     c_Departamento: Optional[str] = None
     n_CostoAct: Optional[float] = 0.0
+    n_CostoRep: Optional[float] = 0.0
     n_precio1: Optional[float] = 0.0
     n_Impuesto1: Optional[float] = 0.0
     moneda: Optional[str] = "USD"
@@ -112,7 +113,8 @@ def import_products_legacy(
         name = p.c_Descri.strip()
         cat_code = str(p.c_Departamento).strip() if p.c_Departamento else ""
         
-        cost = Decimal(str(p.n_CostoAct or 0.0))
+        raw_cost = p.n_CostoAct if (p.n_CostoAct is not None and p.n_CostoAct > 0) else (p.n_CostoRep or 0.0)
+        cost = Decimal(str(raw_cost or 0.0))
         price = Decimal(str(p.n_precio1 or 0.0))
         tax_rate = float(p.n_Impuesto1)
         

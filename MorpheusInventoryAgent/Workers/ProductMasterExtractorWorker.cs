@@ -82,7 +82,7 @@ public class ProductMasterExtractorWorker : BackgroundService
         var syncState = SyncStateManager.LoadState();
         var lastSync = syncState.LastProductSync;
         
-        string baseSelect = "select p.c_Codigo, c_Descri, c_Departamento, n_CostoAct, n_precio1, n_Impuesto1, case when c_CodMoneda='0000000001' then 'VES' else 'USD' end moneda, c_Marca, null imagen, ISNULL(p.n_tipopeso, 0) as n_tipopeso from MA_PRODUCTOS p WITH (NOLOCK)";
+        string baseSelect = "select p.c_Codigo, c_Descri, c_Departamento, case when ISNULL(p.n_CostoAct, 0) <= 0 then ISNULL(p.n_CostoRep, 0) else p.n_CostoAct end as n_CostoAct, ISNULL(p.n_CostoRep, 0) as n_CostoRep, n_precio1, n_Impuesto1, case when c_CodMoneda='0000000001' then 'VES' else 'USD' end moneda, c_Marca, null imagen, ISNULL(p.n_tipopeso, 0) as n_tipopeso from MA_PRODUCTOS p WITH (NOLOCK)";
         string dateFilter = " (p.Update_Date > @LastSync OR p.Add_Date > @LastSync)";
         string typeFilter = " ISNULL(p.n_tipopeso, 0) NOT IN (3, 4, 5)";
         

@@ -87,7 +87,7 @@ public class SupplierProductsExtractorWorker : BackgroundService
         
         string query = @"
             select x.c_codigo as c_Codigo, x.c_codprovee as c_CodProveedor, 
-                   case when x.n_costo=0 then p.n_CostoAct else x.n_costo end as costo, 
+                   case when x.n_costo=0 then (case when ISNULL(p.n_CostoAct, 0) <= 0 then ISNULL(p.n_CostoRep, 0) else p.n_CostoAct end) else x.n_costo end as costo, 
                    1 as compMin, 'EMPAQUE' as empaque, p.n_CantiBul
             from (
                 select ROW_NUMBER() over(Partition by c_codprovee, c_codigo order by d_fecha desc) ln, 
