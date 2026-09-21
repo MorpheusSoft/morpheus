@@ -153,6 +153,8 @@ def import_products_legacy(
             if img:
                 existing_product.image_main = img
                 
+            existing_variant.standard_cost = cost
+            existing_variant.replacement_cost = cost
             existing_variant.average_cost = cost
             existing_variant.last_cost = cost
             existing_variant.sales_price = price
@@ -188,6 +190,8 @@ def import_products_legacy(
                 product_id=parent_product.id,
                 sku=f"PRD-{parent_product.id}",
                 currency_id=curr_id,
+                standard_cost=cost,
+                replacement_cost=cost,
                 average_cost=cost,
                 last_cost=cost,
                 sales_price=price,
