@@ -34,7 +34,7 @@ def is_deposit_for_facility(code_clean: str, name_clean: str, fac: Facility) -> 
     branch_code = digits[0].zfill(2) if digits else str(fac.id).zfill(2)
     
     # 1. Prefijo estándar de la sucursal (ej: 1001, 1002 para sucursal 10; 0801, 0802 para 08)
-    if code_clean.startswith(branch_code) or code_clean.startswith("00" + branch_code):
+    if code_clean.startswith(branch_code) or (len(code_clean) > 4 and code_clean.startswith("00" + branch_code)):
         return True
         
     # 2. Códigos conocidos de depósitos de tránsito asignados a cada sede

@@ -699,6 +699,26 @@ Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue
                         ? $"RTRIM(ISNULL({descCol}, 'Depósito ' + RTRIM({codeCol}))) AS descripcion" 
                         : $"('Depósito ' + RTRIM({codeCol})) AS descripcion";
 
+                    string transitCode = localBranch switch
+                    {
+                        "01" => "0004",   // CUMBOTO
+                        "02" => "0005",   // JUNCAL
+                        "03" => "0006",   // MAYORISTA
+                        "04" => "0007",   // PLAZA
+                        "05" => "0008",   // CENTRO DISTRIBUCION
+                        "06" => "0009",   // LAS LLAVES
+                        "07" => "000010", // SAN FELIPE
+                        "08" => "0011",   // MARACAY
+                        "09" => "0012",   // GUACARA
+                        "10" => "0013",   // TUCACAS
+                        "11" => "0014",   // PATIO TRIGAL
+                        "12" => "0015",   // BELISA
+                        "13" => "0016",   // MORON
+                        "14" => "0017",   // PLAZA DE TOROS
+                        "15" => "0018",   // ISABELICA
+                        _ => ""
+                    };
+
                     // Filtrar EXCLUSIVAMENTE los depósitos que corresponden a esta tienda
                     string sql = $@"
                         SELECT DISTINCT 
@@ -708,13 +728,31 @@ Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue
                         WHERE {codeCol} IS NOT NULL AND RTRIM({codeCol}) <> ''
                     ";
 
+                    string branchFilter = "";
                     if (!string.IsNullOrEmpty(locCol) && !string.IsNullOrEmpty(localBranch))
                     {
-                        sql += $" AND (RTRIM({locCol}) = @LocalBranch OR RTRIM({codeCol}) LIKE @LocalBranch + '%' OR RTRIM({codeCol}) LIKE '00' + @LocalBranch + '%')";
+                        branchFilter = $" AND (RTRIM({locCol}) = @LocalBranch OR RTRIM({codeCol}) LIKE @LocalBranch + '%' OR (LEN(RTRIM({codeCol})) > 4 AND RTRIM({codeCol}) LIKE '00' + @LocalBranch + '%')";
                     }
                     else if (!string.IsNullOrEmpty(localBranch))
                     {
-                        sql += $" AND (RTRIM({codeCol}) LIKE @LocalBranch + '%' OR RTRIM({codeCol}) LIKE '00' + @LocalBranch + '%')";
+                        branchFilter = $" AND (RTRIM({codeCol}) LIKE @LocalBranch + '%' OR (LEN(RTRIM({codeCol})) > 4 AND RTRIM({codeCol}) LIKE '00' + @LocalBranch + '%')";
+                    }
+
+                    if (!string.IsNullOrEmpty(transitCode))
+                    {
+                        branchFilter += " OR RTRIM(" + codeCol + ") = @TransitCode";
+                    }
+
+                    if (!string.IsNullOrEmpty(branchFilter))
+                    {
+                        if (branchFilter.StartsWith(" AND ("))
+                        {
+                            sql += branchFilter + ")";
+                        }
+                        else
+                        {
+                            sql += " AND (" + branchFilter.TrimStart(" AND (".ToCharArray()) + ")";
+                        }
                     }
 
                     sql += " ORDER BY c_deposito";
@@ -723,6 +761,10 @@ Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue
                     if (!string.IsNullOrEmpty(localBranch))
                     {
                         cmd.Parameters.AddWithValue("@LocalBranch", localBranch);
+                    }
+                    if (!string.IsNullOrEmpty(transitCode))
+                    {
+                        cmd.Parameters.AddWithValue("@TransitCode", transitCode);
                     }
 
                     using var rdr = await cmd.ExecuteReaderAsync(stoppingToken);
