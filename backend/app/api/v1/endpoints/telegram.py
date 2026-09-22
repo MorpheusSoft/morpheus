@@ -143,7 +143,8 @@ def call_worker_gemini(
                 pass
 
         try:
-            context_data["quiebres_y_sugeridos"] = diagnose_stockouts(db)[:5]
+            diag = diagnose_stockouts(db)
+            context_data["quiebres_y_sugeridos"] = diag.get("suppliers", [])[:5] if isinstance(diag, dict) else (diag[:5] if isinstance(diag, list) else diag)
         except Exception as e:
             logger.warning(f"Error en stockouts para Clara: {e}")
             try:
