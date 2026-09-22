@@ -101,19 +101,27 @@ def execute_unreconciled_orders_lookup(db: Session) -> List[Dict[str, Any]]:
 
 def execute_returns_lookup(db: Session) -> List[Dict[str, Any]]:
     """Obtiene devoluciones o mermas pendientes."""
-    returns = db.query(SupplierReturn).filter(
-        SupplierReturn.status.in_(['DRAFT', 'PENDING', 'DISPATCHED'])
-    ).limit(10).all()
+    try:
+        returns = db.query(SupplierReturn).filter(
+            SupplierReturn.status.in_(['DRAFT', 'PENDING', 'DISPATCHED'])
+        ).limit(10).all()
 
-    items = []
-    for r in returns:
-        items.append({
-            "return_number": r.return_number,
-            "facility_id": r.facility_id,
-            "status": r.status,
-            "reason": r.notes or "Devolución en muelle"
-        })
-    return items
+        items = []
+        for r in returns:
+            items.append({
+                "return_number": r.return_number,
+                "facility_id": r.facility_id,
+                "status": r.status,
+                "reason": r.notes or "Devolución en muelle"
+            })
+        return items
+    except Exception as e:
+        logger.warning(f"execute_returns_lookup omitido o tabla no disponible: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return []
 
 def call_gemini_format(worker: DigitalWorker, user_name: str, user_message: str, data_context: Dict[str, Any]) -> str:
     """Invoca a Gemini para dar una respuesta con el tono y personalidad del Trabajador Digital."""

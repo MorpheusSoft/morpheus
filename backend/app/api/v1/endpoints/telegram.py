@@ -100,27 +100,56 @@ def call_worker_gemini(
 
     if "CLARA" in clean_code:
         # Contexto de Compras: ODCs pendientes de conciliar, devoluciones, proveedores, quiebres
+        # 1. Búsqueda de producto en vivo si la pregunta menciona uno (prioridad máxima)
         try:
-            unreconciled = execute_unreconciled_orders_lookup(db)
-            returns = execute_returns_lookup(db)
-            suppliers = [
-                {"id": s.id, "name": s.name, "lead_time_days": getattr(s, "lead_time_days", 7)}
-                for s in db.query(Supplier).limit(8).all()
-            ]
-            stockouts = diagnose_stockouts(db)
-            context_data = {
-                "ordenes_pendientes_conciliacion": unreconciled[:5],
-                "devoluciones_en_muelle": returns[:5],
-                "proveedores_activos": suppliers,
-                "quiebres_y_sugeridos": stockouts[:5]
-            }
-
-            # Si el usuario preguntó por un producto específico, incluir su ficha técnica 360° en vivo
             prod_lookup = lookup_purchasing_product_360(user_question, db, limit=3)
             if prod_lookup:
                 context_data["productos_consultados_en_vivo"] = prod_lookup
         except Exception as e:
-            logger.warning(f"Error recopilando contexto para Clara: {e}")
+            logger.warning(f"Error en lookup_purchasing_product_360 para Clara: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+        try:
+            context_data["ordenes_pendientes_conciliacion"] = execute_unreconciled_orders_lookup(db)[:5]
+        except Exception as e:
+            logger.warning(f"Error en unreconciled para Clara: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+        try:
+            context_data["devoluciones_en_muelle"] = execute_returns_lookup(db)[:5]
+        except Exception as e:
+            logger.warning(f"Error en returns para Clara: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+        try:
+            context_data["proveedores_activos"] = [
+                {"id": s.id, "name": s.name, "lead_time_days": getattr(s, "lead_time_days", 7)}
+                for s in db.query(Supplier).limit(8).all()
+            ]
+        except Exception as e:
+            logger.warning(f"Error en suppliers para Clara: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+        try:
+            context_data["quiebres_y_sugeridos"] = diagnose_stockouts(db)[:5]
+        except Exception as e:
+            logger.warning(f"Error en stockouts para Clara: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
         system_prompt = (
             worker.system_prompt if worker else
@@ -136,22 +165,47 @@ def call_worker_gemini(
 
     elif "ARTURO" in clean_code:
         # Contexto de WMS: existencias negativas, devoluciones, almacenes
+        # 1. Búsqueda de producto en vivo si la pregunta menciona uno
         try:
-            negative = execute_negative_stock_lookup(db)
-            returns = execute_returns_lookup(db)
-            facilities = [{"id": f.id, "name": f.name, "code": f.code} for f in db.query(Facility).filter(Facility.is_active == True).all()]
-            context_data = {
-                "existencias_negativas": negative[:8],
-                "devoluciones_pendientes": returns[:5],
-                "almacenes_activos": facilities
-            }
-
-            # Si el usuario preguntó por un producto específico en almacén, incluir su existencia 360° en vivo
             prod_lookup = lookup_purchasing_product_360(user_question, db, limit=3)
             if prod_lookup:
                 context_data["productos_consultados_en_vivo"] = prod_lookup
         except Exception as e:
-            logger.warning(f"Error recopilando contexto para Arturo: {e}")
+            logger.warning(f"Error en lookup producto para Arturo: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+        try:
+            context_data["existencias_negativas"] = execute_negative_stock_lookup(db)[:8]
+        except Exception as e:
+            logger.warning(f"Error en existencias negativas para Arturo: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+        try:
+            context_data["devoluciones_pendientes"] = execute_returns_lookup(db)[:5]
+        except Exception as e:
+            logger.warning(f"Error en devoluciones para Arturo: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+        try:
+            context_data["almacenes_activos"] = [
+                {"id": f.id, "name": f.name, "code": f.code}
+                for f in db.query(Facility).filter(Facility.is_active == True).all()
+            ]
+        except Exception as e:
+            logger.warning(f"Error en almacenes para Arturo: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
         system_prompt = (
             worker.system_prompt if worker else
@@ -166,24 +220,35 @@ def call_worker_gemini(
 
     elif "VALERIA" in clean_code or "PRICING" in clean_code:
         # Contexto de Valeria: márgenes críticos, sesiones pendientes, alzas de costo y PVP
+        # 1. Búsqueda de producto en vivo si la pregunta menciona uno
+        try:
+            prod_lookup = lookup_product_price_and_cost(user_question, db)
+            if prod_lookup:
+                context_data["productos_consultados_en_vivo"] = prod_lookup
+        except Exception as e:
+            logger.warning(f"Error en lookup_product_price_and_cost para Valeria: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
         try:
             crit_margins = audit_critical_margins(db, min_margin_pct=15.0, limit=8)
             cost_spikes = audit_recent_cost_spikes(db, limit=6)
             pending_sess = audit_pending_pricing_sessions(db, limit=5)
             cross_prices = audit_cross_store_price_discrepancies(db, limit=5)
-            context_data = {
+            context_data.update({
                 "productos_margen_critico_o_perdida": crit_margins,
                 "alzas_recientes_costos_proveedores": cost_spikes,
                 "sesiones_fijacion_precios_pendientes": pending_sess,
                 "discrepancias_precios_sucursales": cross_prices
-            }
-
-            # Si el usuario preguntó por un producto específico, incluir su ficha completa
-            prod_lookup = lookup_product_price_and_cost(user_question, db)
-            if prod_lookup:
-                context_data["productos_consultados_en_vivo"] = prod_lookup
+            })
         except Exception as e:
-            logger.warning(f"Error recopilando contexto para Valeria Pricing: {e}")
+            logger.warning(f"Error recopilando contexto analítico para Valeria Pricing: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
         system_prompt = (
             worker.system_prompt if worker else
