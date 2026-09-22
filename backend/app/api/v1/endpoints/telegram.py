@@ -2,6 +2,7 @@ import re
 import json
 import logging
 import os
+import time
 import urllib.request
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -90,6 +91,15 @@ def call_worker_gemini(
     clean_code = (agent_code or "").upper()
 
     if not api_key:
+        try:
+            prod_lookup = lookup_purchasing_product_360(user_question, db, limit=3)
+            if prod_lookup:
+                formatted_list = [format_product_360_telegram(p) for p in prod_lookup]
+                header = f"🤖 *{worker_title}*: Aquí tienes la información de inventario en vivo de Neo ERP:\n\n"
+                return header + "\n\n---\n\n".join(formatted_list)
+        except Exception:
+            pass
+
         return (
             f"🤖 *{worker_title}*: Recibí tu consulta: \"{user_question}\".\n\n"
             f"Para consultas analíticas avanzadas, configura la clave `GEMINI_API_KEY` en el entorno.\n"
@@ -112,45 +122,59 @@ def call_worker_gemini(
             except Exception:
                 pass
 
-        try:
-            context_data["ordenes_pendientes_conciliacion"] = execute_unreconciled_orders_lookup(db)[:5]
-        except Exception as e:
-            logger.warning(f"Error en unreconciled para Clara: {e}")
+        # Si el usuario preguntó por un producto específico, enfocar el contexto en ese producto para no saturar tokens (429)
+        if "productos_consultados_en_vivo" not in context_data:
             try:
-                db.rollback()
-            except Exception:
-                pass
+                context_data["ordenes_pendientes_conciliacion"] = execute_unreconciled_orders_lookup(db)[:5]
+            except Exception as e:
+                logger.warning(f"Error en unreconciled para Clara: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
-        try:
-            context_data["devoluciones_en_muelle"] = execute_returns_lookup(db)[:5]
-        except Exception as e:
-            logger.warning(f"Error en returns para Clara: {e}")
             try:
-                db.rollback()
-            except Exception:
-                pass
+                context_data["devoluciones_en_muelle"] = execute_returns_lookup(db)[:5]
+            except Exception as e:
+                logger.warning(f"Error en returns para Clara: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
-        try:
-            context_data["proveedores_activos"] = [
-                {"id": s.id, "name": s.name, "lead_time_days": getattr(s, "lead_time_days", 7)}
-                for s in db.query(Supplier).limit(8).all()
-            ]
-        except Exception as e:
-            logger.warning(f"Error en suppliers para Clara: {e}")
             try:
-                db.rollback()
-            except Exception:
-                pass
+                context_data["proveedores_activos"] = [
+                    {"id": s.id, "name": s.name, "lead_time_days": getattr(s, "lead_time_days", 7)}
+                    for s in db.query(Supplier).limit(8).all()
+                ]
+            except Exception as e:
+                logger.warning(f"Error en suppliers para Clara: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
-        try:
-            diag = diagnose_stockouts(db)
-            context_data["quiebres_y_sugeridos"] = diag.get("suppliers", [])[:5] if isinstance(diag, dict) else (diag[:5] if isinstance(diag, list) else diag)
-        except Exception as e:
-            logger.warning(f"Error en stockouts para Clara: {e}")
             try:
-                db.rollback()
-            except Exception:
-                pass
+                diag = diagnose_stockouts(db)
+                raw_supps = diag.get("suppliers", []) if isinstance(diag, dict) else (diag if isinstance(diag, list) else [])
+                # Extraer únicamente resumen ejecutivo ligero para evitar agotar cuotas de tokens (429)
+                light_stockouts = [
+                    {
+                        "proveedor": s.get("supplier_name", f"Proveedor {s.get('supplier_id')}"),
+                        "urgencia": s.get("urgency"),
+                        "skus_criticos": s.get("critical_skus_count", 0),
+                        "skus_alerta": s.get("warning_skus_count", 0),
+                        "costo_estimado": s.get("estimated_total_cost", 0.0)
+                    }
+                    for s in raw_supps[:5]
+                ]
+                context_data["quiebres_y_sugeridos_resumen"] = light_stockouts
+            except Exception as e:
+                logger.warning(f"Error en stockouts para Clara: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
         system_prompt = (
             worker.system_prompt if worker else
@@ -178,35 +202,36 @@ def call_worker_gemini(
             except Exception:
                 pass
 
-        try:
-            context_data["existencias_negativas"] = execute_negative_stock_lookup(db)[:8]
-        except Exception as e:
-            logger.warning(f"Error en existencias negativas para Arturo: {e}")
+        if "productos_consultados_en_vivo" not in context_data:
             try:
-                db.rollback()
-            except Exception:
-                pass
+                context_data["existencias_negativas"] = execute_negative_stock_lookup(db)[:8]
+            except Exception as e:
+                logger.warning(f"Error en existencias negativas para Arturo: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
-        try:
-            context_data["devoluciones_pendientes"] = execute_returns_lookup(db)[:5]
-        except Exception as e:
-            logger.warning(f"Error en devoluciones para Arturo: {e}")
             try:
-                db.rollback()
-            except Exception:
-                pass
+                context_data["devoluciones_pendientes"] = execute_returns_lookup(db)[:5]
+            except Exception as e:
+                logger.warning(f"Error en devoluciones para Arturo: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
-        try:
-            context_data["almacenes_activos"] = [
-                {"id": f.id, "name": f.name, "code": f.code}
-                for f in db.query(Facility).filter(Facility.is_active == True).all()
-            ]
-        except Exception as e:
-            logger.warning(f"Error en almacenes para Arturo: {e}")
             try:
-                db.rollback()
-            except Exception:
-                pass
+                context_data["almacenes_activos"] = [
+                    {"id": f.id, "name": f.name, "code": f.code}
+                    for f in db.query(Facility).filter(Facility.is_active == True).all()
+                ]
+            except Exception as e:
+                logger.warning(f"Error en almacenes para Arturo: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
         system_prompt = (
             worker.system_prompt if worker else
@@ -233,23 +258,24 @@ def call_worker_gemini(
             except Exception:
                 pass
 
-        try:
-            crit_margins = audit_critical_margins(db, min_margin_pct=15.0, limit=8)
-            cost_spikes = audit_recent_cost_spikes(db, limit=6)
-            pending_sess = audit_pending_pricing_sessions(db, limit=5)
-            cross_prices = audit_cross_store_price_discrepancies(db, limit=5)
-            context_data.update({
-                "productos_margen_critico_o_perdida": crit_margins,
-                "alzas_recientes_costos_proveedores": cost_spikes,
-                "sesiones_fijacion_precios_pendientes": pending_sess,
-                "discrepancias_precios_sucursales": cross_prices
-            })
-        except Exception as e:
-            logger.warning(f"Error recopilando contexto analítico para Valeria Pricing: {e}")
+        if "productos_consultados_en_vivo" not in context_data:
             try:
-                db.rollback()
-            except Exception:
-                pass
+                crit_margins = audit_critical_margins(db, min_margin_pct=15.0, limit=8)
+                cost_spikes = audit_recent_cost_spikes(db, limit=6)
+                pending_sess = audit_pending_pricing_sessions(db, limit=5)
+                cross_prices = audit_cross_store_price_discrepancies(db, limit=5)
+                context_data.update({
+                    "productos_margen_critico_o_perdida": crit_margins,
+                    "alzas_recientes_costos_proveedores": cost_spikes,
+                    "sesiones_fijacion_precios_pendientes": pending_sess,
+                    "discrepancias_precios_sucursales": cross_prices
+                })
+            except Exception as e:
+                logger.warning(f"Error recopilando contexto analítico para Valeria Pricing: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
         system_prompt = (
             worker.system_prompt if worker else
@@ -370,22 +396,51 @@ def call_worker_gemini(
             f"- Basa tu respuesta en los datos provistos y sé preciso con nombres, códigos, montos o cantidades."
         )
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, default=str).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        models_to_try = ["gemini-2.5-flash", "gemini-flash-latest"]
+        last_error = None
+
+        for idx, model in enumerate(models_to_try):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            payload = {"contents": [{"parts": [{"text": prompt}]}]}
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload, default=str).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except urllib.error.HTTPError as he:
+                last_error = he
+                logger.warning(f"[{clean_code}] Error HTTP {he.code} con modelo {model}: {he.reason}")
+                if he.code == 429 and idx < len(models_to_try) - 1:
+                    time.sleep(1.0)
+                    continue
+                break
+            except Exception as ex:
+                last_error = ex
+                logger.warning(f"[{clean_code}] Excepción con modelo {model}: {ex}")
+                if idx < len(models_to_try) - 1:
+                    continue
+                break
+
+        if last_error:
+            raise last_error
     except Exception as e:
         logger.error(f"[{clean_code} GEMINI ERROR] Error invocando modelo de IA: {e}", exc_info=True)
+
+        # Respaldo de alta disponibilidad: Si teníamos datos de productos consultados en vivo, mostrárselos al usuario directamente
+        if "productos_consultados_en_vivo" in context_data and context_data["productos_consultados_en_vivo"]:
+            prods = context_data["productos_consultados_en_vivo"]
+            formatted_list = [format_product_360_telegram(p) for p in prods]
+            header = f"🤖 *{worker_title}*: Aquí tienes la información de inventario en vivo de Neo ERP:\n\n"
+            return header + "\n\n---\n\n".join(formatted_list)
+
         return (
             f"🤖 *{worker_title}*: No pude conectar con el motor cognitivo ({str(e)}).\n"
-            f"Sin embargo, puedes consultar información directa usando `/ayuda` o comandos rápidos como `/estado`."
+            f"Sin embargo, puedes consultar información directa usando `/ayuda` o comandos rápidos como `/producto <nombre>`."
         )
 
 
