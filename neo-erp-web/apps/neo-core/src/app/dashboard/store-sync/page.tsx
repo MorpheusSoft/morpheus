@@ -734,9 +734,9 @@ export default function StoreSyncDashboardPage() {
                     </span>
                   </div>
 
-                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100" title="Facturas registradas localmente en cajas de Stellar hoy (Stellar -> Neo)">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                      Ventas Hoy
+                      Ventas en Caja (Stellar)
                     </span>
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-base font-black text-indigo-600">
