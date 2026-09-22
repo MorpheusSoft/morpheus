@@ -145,6 +145,11 @@ def call_worker_gemini(
                 "devoluciones_pendientes": returns[:5],
                 "almacenes_activos": facilities
             }
+
+            # Si el usuario preguntó por un producto específico en almacén, incluir su existencia 360° en vivo
+            prod_lookup = lookup_purchasing_product_360(user_question, db, limit=3)
+            if prod_lookup:
+                context_data["productos_consultados_en_vivo"] = prod_lookup
         except Exception as e:
             logger.warning(f"Error recopilando contexto para Arturo: {e}")
 
@@ -152,6 +157,11 @@ def call_worker_gemini(
             worker.system_prompt if worker else
             "Eres Arturo, Supervisor Autónomo de Almacenes de Neo ERP. "
             "Supervisas la exactitud de inventario, stock físico en almacenes, existencias negativas y recepciones."
+        )
+        system_prompt += (
+            "\nTienes acceso a la consulta en vivo de existencias de productos por almacén y sede física. "
+            "Si el usuario te consulta por existencias o ubicación de un producto, reporta el stock por sucursal "
+            "con precisión ejecutiva."
         )
 
     elif "VALERIA" in clean_code or "PRICING" in clean_code:

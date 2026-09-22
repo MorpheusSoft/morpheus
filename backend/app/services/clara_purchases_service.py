@@ -35,6 +35,7 @@ from app.models.core import Supplier, Facility, Buyer
 from app.models.sales import Document, DocumentLine
 from app.models.digital_workers import DigitalWorker, DigitalWorkerActionLog
 from app.services.mrp_bot_service import diagnose_stockouts, generate_supplier_po_draft
+from app.services.nlp_search import search_product_variants
 
 logger = logging.getLogger(__name__)
 
@@ -55,46 +56,8 @@ def lookup_purchasing_product_360(
         return []
 
     try:
-        # 1. Búsqueda por SKU o Nombre (soporta tokens no adyacentes como 'Harina PAN')
-        tokens = [t for t in clean_q.split() if len(t) > 1]
-        token_filters = [
-            or_(
-                ProductVariant.sku.ilike(f"%{t}%"),
-                Product.name.ilike(f"%{t}%")
-            )
-            for t in tokens
-        ] if tokens else [Product.name.ilike(f"%{clean_q}%")]
-
-        variants = db.query(ProductVariant).join(Product).filter(
-            ProductVariant.is_active == True,
-            and_(*token_filters)
-        ).limit(limit).all()
-
-        if not variants:
-            variants = db.query(ProductVariant).join(Product).filter(
-                ProductVariant.is_active == True,
-                or_(
-                    ProductVariant.sku.ilike(f"%{clean_q}%"),
-                    Product.name.ilike(f"%{clean_q}%")
-                )
-            ).limit(limit).all()
-
-        # 2. Si no hay resultados, intentar por Código de Barras
-        if not variants:
-            bc = db.query(ProductBarcode).filter(ProductBarcode.barcode == clean_q).first()
-            if bc and bc.variant:
-                variants = [bc.variant]
-
-        # 3. Si aún no hay resultados, intentar por SKU de proveedor
-        if not variants:
-            sp = db.query(SupplierProduct).filter(
-                SupplierProduct.is_active == True,
-                SupplierProduct.supplier_sku.ilike(f"%{clean_q}%")
-            ).first()
-            if sp and sp.variant_id:
-                var = db.query(ProductVariant).filter(ProductVariant.id == sp.variant_id).first()
-                if var:
-                    variants = [var]
+        # Búsqueda inteligente tolerante a lenguaje natural (código de barras, SKU o tokens sustantivos con NLP)
+        variants = search_product_variants(db, clean_q, limit=limit)
 
         # Mapeo de sedes para nombres amigables
         facilities = db.query(Facility).all()

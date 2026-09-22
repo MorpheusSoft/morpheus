@@ -20,19 +20,14 @@ from app.services.clara_purchases_service import (
     parse_order_intent,
     create_supplier_po_from_chat
 )
+from app.services.nlp_search import search_product_variants
 
 logger = logging.getLogger(__name__)
 
 def execute_stock_lookup(query_text: str, db: Session, limit: int = 5) -> List[Dict[str, Any]]:
-    """Busca existencia de productos por SKU, código de barra o nombre."""
+    """Busca existencia de productos por SKU, código de barra o nombre usando NLP tolerante a lenguaje natural."""
     results = []
-    variants = db.query(ProductVariant).join(Product).filter(
-        or_(
-            ProductVariant.sku.ilike(f"%{query_text}%"),
-            ProductVariant.barcode.ilike(f"%{query_text}%"),
-            Product.name.ilike(f"%{query_text}%")
-        )
-    ).limit(limit).all()
+    variants = search_product_variants(db, query_text, limit=limit)
 
     for v in variants:
         stocks = db.query(InventorySnapshot, Facility).join(Facility, InventorySnapshot.facility_id == Facility.id).filter(

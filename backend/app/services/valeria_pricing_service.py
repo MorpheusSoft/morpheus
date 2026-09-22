@@ -21,6 +21,7 @@ from app.models.inventory import (
 )
 from app.models.core import Facility, SystemSettings
 from app.models.purchasing import PurchaseOrder
+from app.services.nlp_search import search_product_variants
 
 logger = logging.getLogger(__name__)
 
@@ -223,18 +224,8 @@ def lookup_product_price_and_cost(
         return []
 
     try:
-        # 1. Búsqueda por SKU exacto o parcial, o por nombre de producto
-        variants = db.query(ProductVariant).join(Product).filter(
-            ProductVariant.is_active == True,
-            (ProductVariant.sku.ilike(f"%{clean_q}%")) |
-            (Product.name.ilike(f"%{clean_q}%"))
-        ).limit(5).all()
-
-        # Si no hubo resultados, intentar por código de barras
-        if not variants:
-            bc = db.query(ProductBarcode).filter(ProductBarcode.barcode == clean_q).first()
-            if bc and bc.variant:
-                variants = [bc.variant]
+        # Búsqueda inteligente tolerante a lenguaje natural (código de barras, SKU o tokens sustantivos con NLP)
+        variants = search_product_variants(db, clean_q, limit=5)
 
         for v in variants:
             std_cost = float(v.standard_cost or 0)
