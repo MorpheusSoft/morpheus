@@ -120,8 +120,8 @@ export default function UsersPage() {
        full_name: fullName, 
        is_active: isActive,
        is_superuser: isSuperuser,
-       telegram_username: cleanTg || null,
-       phone_number: cleanPhone || null,
+       telegram_username: cleanTg || "",
+       phone_number: cleanPhone || "",
        role_ids: selectedRoles,
        facility_ids: selectedFacilities
     };

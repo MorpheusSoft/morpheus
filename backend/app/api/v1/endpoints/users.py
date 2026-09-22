@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.api import deps
 from app.models.core import User, Role, Facility
+from app.models.digital_workers import DigitalWorker, DigitalWorkerConversation
 from app.schemas.core import User as UserSchema, UserCreate, UserUpdate
 from app.core.security import get_password_hash
 
@@ -93,14 +94,30 @@ def update_user(
     if user_in.password:
         user.hashed_password = get_password_hash(user_in.password)
 
-    if user_in.telegram_username is not None:
-        clean_tg = user_in.telegram_username.strip().lstrip("@") if user_in.telegram_username.strip() else None
-        user.telegram_username = clean_tg
+    fields_set = getattr(user_in, "model_fields_set", getattr(user_in, "__fields_set__", set()))
 
-    if user_in.phone_number is not None:
-        clean_phone = user_in.phone_number.strip().replace(" ", "").replace("-", "") if user_in.phone_number.strip() else None
+    if "telegram_username" in fields_set:
+        val = user_in.telegram_username
+        clean_tg = val.strip().lstrip("@") if val and val.strip() else None
+        user.telegram_username = clean_tg
+        if not clean_tg:
+            # Si el administrador remueve el usuario de Telegram, desvincular también su chat_id y sesiones activas
+            user.telegram_chat_id = None
+            db.query(DigitalWorkerConversation).filter(
+                DigitalWorkerConversation.sender_user_id == user.id,
+                DigitalWorkerConversation.channel == "TELEGRAM"
+            ).delete()
+
+    if "phone_number" in fields_set:
+        val = user_in.phone_number
+        clean_phone = val.strip().replace(" ", "").replace("-", "") if val and val.strip() else None
         user.phone_number = clean_phone
         user.is_phone_verified = bool(clean_phone)
+        if not clean_phone:
+            db.query(DigitalWorkerConversation).filter(
+                DigitalWorkerConversation.sender_user_id == user.id,
+                DigitalWorkerConversation.channel == "WHATSAPP"
+            ).delete()
         
     if user_in.role_ids is not None:
         roles = db.query(Role).filter(Role.id.in_(user_in.role_ids)).all()
