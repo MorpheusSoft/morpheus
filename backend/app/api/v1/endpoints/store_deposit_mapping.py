@@ -77,11 +77,43 @@ def is_deposit_for_facility(code_clean: str, name_clean: str, fac: Facility) -> 
 def sync_discovered_deposits(db: Session, facility_id: int, deposits: List[Any]) -> List[StoreDepositMapping]:
     """
     Registra o actualiza depósitos descubiertos desde Stellar en inv.store_deposit_mappings,
-    creando automáticamente los almacenes y ubicaciones en inv.warehouses e inv.locations si no existen.
+    asociándolos al Almacén Principal de la sucursal en Neo ERP.
+    NUNCA crea almacenes en inv.warehouses para depósitos de Stellar.
     """
     fac = db.query(Facility).filter(Facility.id == facility_id).first()
     if not fac:
         return []
+
+    # 1. Obtener o aprovisionar exclusivamente el Almacén Principal de la sede
+    default_code = fac.code or f"CAT-{facility_id}"
+    main_wh = db.query(Warehouse).filter(
+        Warehouse.facility_id == facility_id,
+        Warehouse.code == default_code
+    ).first()
+    if not main_wh:
+        main_wh = db.query(Warehouse).filter(Warehouse.facility_id == facility_id).order_by(Warehouse.id.asc()).first()
+    if not main_wh:
+        main_wh = Warehouse(
+            name=f"Almacén Principal {fac.name}",
+            code=default_code,
+            facility_id=facility_id
+        )
+        db.add(main_wh)
+        db.flush()
+
+    main_loc = db.query(Location).filter(
+        Location.warehouse_id == main_wh.id,
+        Location.usage == 'INTERNAL'
+    ).first()
+    if not main_loc:
+        main_loc = Location(
+            name=f"ALM-{main_wh.code}/STOCK",
+            code=f"ALM-{main_wh.code}/STOCK",
+            warehouse_id=main_wh.id,
+            usage="INTERNAL"
+        )
+        db.add(main_loc)
+        db.flush()
 
     results = []
     now = datetime.now(timezone.utc)
@@ -105,40 +137,7 @@ def sync_discovered_deposits(db: Session, facility_id: int, deposits: List[Any])
         if not is_deposit_for_facility(code_clean, name_clean, fac):
             continue
 
-        # 1. Buscar o crear Warehouse
-        wh = db.query(Warehouse).filter(
-            Warehouse.facility_id == facility_id,
-            Warehouse.code == code_clean
-        ).first()
-
-        if not wh:
-            wh_display_name = f"Almacén {code_clean} - {name_clean}" if not name_clean.lower().startswith("almacén") else name_clean
-            wh = Warehouse(
-                name=wh_display_name,
-                code=code_clean,
-                facility_id=facility_id
-            )
-            db.add(wh)
-            db.flush()
-
-        # 2. Buscar o crear Location
-        loc = db.query(Location).filter(
-            Location.warehouse_id == wh.id,
-            Location.usage == 'INTERNAL'
-        ).first()
-        if not loc:
-            loc = db.query(Location).filter(Location.warehouse_id == wh.id).first()
-        if not loc:
-            loc = Location(
-                name=f"ALM-{code_clean}/STOCK",
-                code=f"ALM-{code_clean}/STOCK",
-                warehouse_id=wh.id,
-                usage="INTERNAL"
-            )
-            db.add(loc)
-            db.flush()
-
-        # 3. Buscar o crear StoreDepositMapping
+        # Buscar o crear StoreDepositMapping apuntando al Almacén Principal de la sede
         mapping = db.query(StoreDepositMapping).filter(
             StoreDepositMapping.facility_id == facility_id,
             StoreDepositMapping.external_deposit_code == code_clean
@@ -149,8 +148,8 @@ def sync_discovered_deposits(db: Session, facility_id: int, deposits: List[Any])
                 facility_id=facility_id,
                 external_deposit_code=code_clean,
                 external_deposit_name=name_clean,
-                warehouse_id=wh.id,
-                location_id=loc.id,
+                warehouse_id=main_wh.id,
+                location_id=main_loc.id,
                 affects_inventory=True,
                 is_active=True,
                 auto_discovered=True,
@@ -187,20 +186,6 @@ def get_facility_deposit_mappings(
     mappings_db = db.query(StoreDepositMapping).filter(
         StoreDepositMapping.facility_id == facility_id
     ).order_by(StoreDepositMapping.external_deposit_code.asc()).all()
-
-    # Si no hay mapeos, intentar auto-cargar desde la última telemetría reportada por el agente
-    if not mappings_db:
-        last_telem = db.query(StoreSyncTelemetry).filter(
-            StoreSyncTelemetry.facility_id == facility_id
-        ).order_by(StoreSyncTelemetry.id.desc()).first()
-
-        if last_telem and last_telem.telemetry_metadata:
-            cached_deps = last_telem.telemetry_metadata.get("deposits")
-            if cached_deps and isinstance(cached_deps, list):
-                sync_discovered_deposits(db, facility_id, cached_deps)
-                mappings_db = db.query(StoreDepositMapping).filter(
-                    StoreDepositMapping.facility_id == facility_id
-                ).order_by(StoreDepositMapping.external_deposit_code.asc()).all()
 
     mappings = []
     for m in mappings_db:

@@ -436,17 +436,6 @@ def record_heartbeat(
     session.add(entry)
     session.commit()
 
-    # Auto-sincronizar depósitos descubiertos si vienen reportados en la telemetría
-    if entry.telemetry_metadata and "deposits" in entry.telemetry_metadata:
-        deposits_data = entry.telemetry_metadata.get("deposits")
-        if deposits_data and isinstance(deposits_data, list) and len(deposits_data) > 0:
-            try:
-                from app.api.v1.endpoints.store_deposit_mapping import sync_discovered_deposits
-                sync_discovered_deposits(session, facility_id, deposits_data)
-            except Exception as e:
-                logger.warning(f"Error auto-sincronizando depósitos de telemetría para sucursal {facility_id}: {e}")
-
-
     # Consultar configuración deseada para la tienda
     cfg = session.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == facility_id).first()
     if not cfg:
