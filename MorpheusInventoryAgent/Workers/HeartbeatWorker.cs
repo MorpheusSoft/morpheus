@@ -168,7 +168,7 @@ public class HeartbeatWorker : BackgroundService
         {
             FacilityId = facilityId,
             RegisterCode = "SERVER-STORE",
-            AgentVersion = "2.4.4-neo",
+            AgentVersion = "2.4.5-neo",
             MachineName = Environment.MachineName,
             SqlServerStatus = sqlStatus,
             LastStellarSaleTime = lastStellarSale,
@@ -455,7 +455,7 @@ public class HeartbeatWorker : BackgroundService
 
     private async Task ExecuteSoftwareUpdateAsync(StoreAgentCommandDto cmd, CancellationToken stoppingToken)
     {
-        string targetVersion = "2.4.4-neo";
+        string targetVersion = "2.4.5-neo";
         string packageUrl = ResolveInstallerUrl();
 
         if (cmd.Parameters.ValueKind == JsonValueKind.Object)

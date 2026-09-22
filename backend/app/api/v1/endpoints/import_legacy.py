@@ -332,6 +332,7 @@ class LegacyInventoryBaseline(BaseModel):
     c_codArticulo: str
     Cantidad: float
 
+@router.post("/inventory-baseline")
 @router.post("/inventory-baseline-legacy")
 def import_inventory_baseline(
     baseline_in: List[LegacyInventoryBaseline],

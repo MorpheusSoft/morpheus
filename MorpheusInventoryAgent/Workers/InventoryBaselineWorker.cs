@@ -49,12 +49,20 @@ public class InventoryBaselineWorker : BackgroundService
     {
         var syncState = SyncStateManager.LoadState();
         var config = _configuration.GetSection("DirectExtractors:InventoryBaseline").Get<DirectExtractorConfig>();
-        if (config == null)
+        if (config == null || string.IsNullOrWhiteSpace(config.TargetApiUrl))
         {
+            string baseUrl = _configuration.GetValue<string>("ApiBaseUrl")
+                          ?? _configuration.GetValue<string>("DefaultTargetApiUrl")
+                          ?? "https://api.qa.morpheussoft.net";
+            baseUrl = baseUrl.TrimEnd('/');
+            string target = baseUrl.EndsWith("/api/v1/import")
+                ? $"{baseUrl}/inventory-baseline-legacy"
+                : $"{baseUrl}/api/v1/import/inventory-baseline-legacy";
+
             config = new DirectExtractorConfig
             {
                 Enabled = true,
-                TargetApiUrl = _configuration.GetValue<string>("DefaultTargetApiUrl", "http://localhost/api") + "/inventory-baseline"
+                TargetApiUrl = target
             };
         }
 
@@ -116,7 +124,59 @@ public class InventoryBaselineWorker : BackgroundService
         int facilityId = _configuration.GetValue<int>("StoreFacilityId", 1);
         string facilityCode = _configuration.GetValue<string>("StoreFacilityCode", "");
 
-        string depositCondition = !string.IsNullOrWhiteSpace(depositOverride) ? " and t.c_deposito = @DepositCode " : "";
+        // Si no se especificó un depósito específico, filtrar por los depósitos locales de la tienda
+        string depositCondition = "";
+        string localBranch = "";
+        string transitCode = "";
+
+        if (!string.IsNullOrWhiteSpace(depositOverride))
+        {
+            depositCondition = " and t.c_deposito = @DepositCode ";
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(facilityCode))
+            {
+                localBranch = System.Text.RegularExpressions.Regex.Replace(facilityCode, @"[^\d]", "");
+            }
+            if (string.IsNullOrEmpty(localBranch))
+            {
+                localBranch = facilityId.ToString("D2");
+            }
+            if (localBranch.Length == 1) localBranch = "0" + localBranch;
+
+            transitCode = localBranch switch
+            {
+                "01" => "0004",   // CUMBOTO
+                "02" => "0005",   // JUNCAL
+                "03" => "0006",   // MAYORISTA
+                "04" => "0007",   // PLAZA
+                "05" => "0008",   // CENTRO DISTRIBUCION
+                "06" => "0009",   // LAS LLAVES
+                "07" => "000010", // SAN FELIPE
+                "08" => "0011",   // MARACAY
+                "09" => "0012",   // GUACARA
+                "10" => "0013",   // TUCACAS
+                "11" => "0014",   // PATIO TRIGAL
+                "12" => "0015",   // BELISA
+                "13" => "0016",   // MORON
+                "14" => "0017",   // PLAZA DE TOROS
+                "15" => "0018",   // ISABELICA
+                _ => ""
+            };
+
+            if (!string.IsNullOrEmpty(localBranch))
+            {
+                if (!string.IsNullOrEmpty(transitCode))
+                {
+                    depositCondition = " and (t.c_deposito LIKE @LocalBranch + '%' OR t.c_deposito = @TransitCode) ";
+                }
+                else
+                {
+                    depositCondition = " and t.c_deposito LIKE @LocalBranch + '%' ";
+                }
+            }
+        }
 
         string query = $@"
             select @FacilityId as facility_id, @FacilityCode as facility_code, @Cutoff as cutoff_date, t.c_deposito, t.c_codArticulo, sum(case when t.c_tipoMov='Descargo' then t.n_cantidad*-1 else t.n_cantidad end) Cantidad
@@ -133,7 +193,9 @@ public class InventoryBaselineWorker : BackgroundService
             FacilityId = facilityId, 
             FacilityCode = facilityCode, 
             Cutoff = cutoff,
-            DepositCode = depositOverride?.Trim() 
+            DepositCode = depositOverride?.Trim(),
+            LocalBranch = localBranch,
+            TransitCode = transitCode
         }, commandTimeout: 600)).ToList();
 
         if (!baseline.Any())
@@ -181,10 +243,12 @@ public class InventoryBaselineWorker : BackgroundService
         }
         else
         {
+            var errContent = await response.Content.ReadAsStringAsync(stoppingToken);
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  [ERROR] Fallo al enviar inventario baseline. Código HTTP: {response.StatusCode}");
+            Console.WriteLine($"  [ERROR] Fallo al enviar inventario baseline. Código HTTP: {response.StatusCode}. Detalle: {errContent}");
             Console.ResetColor();
-            _logger.LogWarning("Failed to post inventory baseline. Status code: {StatusCode}", response.StatusCode);
+            _logger.LogWarning("Failed to post inventory baseline. Status code: {StatusCode}, Detail: {Detail}", response.StatusCode, errContent);
+            throw new Exception($"Fallo al enviar inventario baseline al servidor central. HTTP {(int)response.StatusCode} ({response.StatusCode}): {errContent}");
         }
     }
 }

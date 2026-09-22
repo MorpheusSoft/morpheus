@@ -191,6 +191,7 @@ public class Program
             builder.Services.AddSingleton<SupplierProductsExtractorWorker>();
             builder.Services.AddSingleton<SuppliersExtractorWorker>();
             builder.Services.AddSingleton<CategoryExtractorWorker>();
+            builder.Services.AddSingleton<InventoryBaselineWorker>();
             builder.Services.AddSingleton<HeartbeatWorker>();
 
             builder.Services.AddHostedService(sp => sp.GetRequiredService<HeartbeatWorker>());
@@ -201,6 +202,7 @@ public class Program
             builder.Services.AddHostedService(sp => sp.GetRequiredService<SupplierProductsExtractorWorker>());
             builder.Services.AddHostedService(sp => sp.GetRequiredService<SuppliersExtractorWorker>());
             builder.Services.AddHostedService(sp => sp.GetRequiredService<CategoryExtractorWorker>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<InventoryBaselineWorker>());
 
             var host = builder.Build();
             host.Run();

@@ -78,6 +78,6 @@ class FacilityAgentStatusSchema(BaseModel):
     last_supplier_product_sync: Optional[datetime] = None
     baseline_inventory_done: Optional[bool] = False
     last_movement_sync: Optional[datetime] = None
-    latest_available_version: Optional[str] = "2.4.4-neo"
+    latest_available_version: Optional[str] = "2.4.5-neo"
     has_update_available: Optional[bool] = False
     is_sync_paused: bool = False
