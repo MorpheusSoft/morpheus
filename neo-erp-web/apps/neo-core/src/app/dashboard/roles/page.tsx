@@ -60,8 +60,8 @@ const initialPermissions: any = {
 const moduleNames: any = {
   neo_core: "Control Maestro (Neo Core)",
   neo_wms: "Almacén y Operaciones (Neo WMS)",
-  neo_inventory: "Catálogo y Existencias (Neo Inventario)",
-  neo_purchases: "Compras y Adquisiciones (Neo Compras)",
+  neo_inventory: "Catálogo y Existencias (Neo Inventory)",
+  neo_purchases: "Compras y Adquisiciones (Neo Purchases)",
   neo_pricing: "Costos, Precios y Habladores (Neo Pricing)",
   neo_b2b: "Portal Mayorista (Neo B2B)",
 };
@@ -86,7 +86,7 @@ const featureNames: any = {
   lots: "Control de Lotes y Vencimientos",
   returns: "Devoluciones a Proveedores",
 
-  // Neo Inventario
+  // Neo Inventory
   products: "Maestro de Productos y Variantes",
   categories: "Categorías de Productos",
   warehouses: "Almacenes y Depósitos",
@@ -96,7 +96,7 @@ const featureNames: any = {
   labels: "Impresión de Códigos de Barra",
   inventory_book: "Libro de Inventarios",
 
-  // Neo Compras
+  // Neo Purchases
   orders: "Gestor de Órdenes de Compra (ODC)",
   requisitions: "Requisiciones de Compra",
   suppliers: "Directorio de Proveedores",

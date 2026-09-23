@@ -16,7 +16,7 @@ import { Providers } from "@/components/Providers";
 import { AppLayout } from "@/components/layout/AppLayout";
 
 export const metadata: Metadata = {
-  title: "Neo Compras",
+  title: "Neo Purchases",
   description: "Next-gen ERP System Module",
 };
 

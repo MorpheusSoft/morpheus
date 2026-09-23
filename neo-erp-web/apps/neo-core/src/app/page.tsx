@@ -21,7 +21,7 @@ export default async function AppSwitcher() {
     },
     {
       id: "purchases",
-      title: "Neo Compras",
+      title: "Neo Purchases",
       description: "Ordenes directas, maestro de proveedores y asistente mágico predictivo.",
       path: "http://localhost:4002",
       icon: "M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z",
@@ -43,7 +43,7 @@ export default async function AppSwitcher() {
     },
     {
       id: "inventory",
-      title: "Neo Inventario",
+      title: "Neo Inventory",
       description: "Catálogo maestro, matriz de variantes, códigos de barra y precios.",
       path: "http://localhost:4001",
       icon: "M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4",

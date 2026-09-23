@@ -273,7 +273,7 @@ export default function DeadStockIntelligencePage() {
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-2xl font-black tracking-tight text-slate-800">
-              Neo Compras: Inteligencia de Inventario & Merma Real
+              Neo Purchases: Inteligencia de Inventario & Merma Real
             </h1>
             <span className="bg-rose-100/80 text-rose-800 text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1.5 border border-rose-200">
               <i className="pi pi-shield text-rose-600"></i> Gatekeeper MRP Clara

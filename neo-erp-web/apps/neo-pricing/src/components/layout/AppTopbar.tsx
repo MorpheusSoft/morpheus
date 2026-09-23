@@ -18,7 +18,7 @@ export function AppTopbar() {
         >
           <i className="pi pi-bars text-lg"></i>
         </button>
-        <h2 className="text-base sm:text-lg font-bold text-slate-800 tracking-tight hidden sm:block">Costos y Precios</h2>
+        <h2 className="text-base sm:text-lg font-bold text-slate-800 tracking-tight hidden sm:block">Neo Pricing</h2>
       </div>
 
       {/* Right side icons */}

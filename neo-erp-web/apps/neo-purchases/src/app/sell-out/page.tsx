@@ -394,7 +394,7 @@ export default function SellOutAgreementsPage() {
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-2xl font-black tracking-tight text-slate-800">
-              Neo Compras: Convenios Sell-Out & N/C
+              Neo Purchases: Convenios Sell-Out & N/C
             </h1>
             <span className="bg-emerald-100/80 text-emerald-800 text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1.5 border border-emerald-200">
               <i className="pi pi-sparkles text-emerald-600"></i> Auditoría Clara

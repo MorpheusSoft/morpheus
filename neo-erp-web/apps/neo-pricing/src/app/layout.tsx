@@ -16,7 +16,7 @@ import { Providers } from "@/components/Providers";
 import { AppLayout } from "@/components/layout/AppLayout";
 
 export const metadata: Metadata = {
-  title: "Neo Costos y Precios",
+  title: "Neo Pricing",
   description: "Next-gen ERP System Module",
   manifest: "/manifest.json",
 };
