@@ -44,8 +44,6 @@ function AppSidebarContent() {
 
   const analyticsItems = [
     { label: 'Análisis y Métricas', icon: 'pi pi-chart-pie', href: '/' },
-    { label: 'Reportes de Precios', icon: 'pi pi-file', href: '/reportes' },
-    { label: 'Ventas por Tienda', icon: 'pi pi-chart-line', href: '/reportes/ventas-tienda' },
     { label: 'Asistente IA', icon: 'pi pi-sparkles', href: '/asistente-ia' },
   ];
 
@@ -53,6 +51,11 @@ function AppSidebarContent() {
     { label: 'Actualizar Costos', icon: 'pi pi-percentage', href: '/costos' },
     { label: 'Actualizar Precios', icon: 'pi pi-tags', href: '/precios' },
     { label: 'Planificar Ofertas', icon: 'pi pi-calendar-plus', href: '/precios/ofertas' },
+  ];
+
+  const reportsItems = [
+    { label: 'Reportes de Precios', icon: 'pi pi-file-pdf', href: '/reportes' },
+    { label: 'Ventas por Tienda', icon: 'pi pi-chart-line', href: '/reportes/ventas-tienda' },
   ];
 
   const storeItems = [
@@ -147,6 +150,7 @@ function AppSidebarContent() {
           <>
             {renderNavGroup("Mando y Análisis", analyticsItems)}
             {renderNavGroup("Gestión de Costos y Precios", pricingItems)}
+            {renderNavGroup("Reportes", reportsItems)}
             {renderNavGroup("Operaciones en Tienda", storeItems)}
           </>
         )}

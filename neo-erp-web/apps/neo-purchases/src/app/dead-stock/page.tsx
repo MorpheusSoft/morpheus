@@ -101,6 +101,86 @@ export default function DeadStockIntelligencePage() {
   const [loadingShrinkage, setLoadingShrinkage] = useState<boolean>(true);
   const [loadingReports, setLoadingReports] = useState<boolean>(false);
   const [generatingReport, setGeneratingReport] = useState<boolean>(false);
+  const [downloadingPdf, setDownloadingPdf] = useState<boolean>(false);
+  const [downloadingExcel, setDownloadingExcel] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get('tab');
+      if (tab === 'shrinkage') setActiveTab(1);
+      else if (tab === 'monthly' || tab === 'reports') setActiveTab(2);
+      else if (tab === 'dead-stock' || tab === 'deadstock') setActiveTab(0);
+    }
+  }, []);
+
+  const handleDownloadPdf = async () => {
+    setDownloadingPdf(true);
+    try {
+      const response = await api.get(`/inventory-intelligence/dead-stock/pdf?days_threshold=${daysThreshold}`, {
+        responseType: 'blob'
+      });
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `NeoERP_Reporte_Dead_Stock_${daysThreshold}dias.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      toast.current?.show({
+        severity: 'success',
+        summary: 'Reporte Descargado',
+        detail: 'El informe ejecutivo en PDF con gráficos se descargó exitosamente.',
+        life: 4000
+      });
+    } catch (err: any) {
+      console.error('Error descargando PDF:', err);
+      toast.current?.show({
+        severity: 'error',
+        summary: 'Error',
+        detail: 'No se pudo generar el reporte en PDF.',
+        life: 5000
+      });
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
+
+  const handleDownloadExcel = async () => {
+    setDownloadingExcel(true);
+    try {
+      const response = await api.get(`/inventory-intelligence/dead-stock/excel?days_threshold=${daysThreshold}`, {
+        responseType: 'blob'
+      });
+      const blob = new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `NeoERP_Reporte_Dead_Stock_${daysThreshold}dias.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      toast.current?.show({
+        severity: 'success',
+        summary: 'Excel Descargado',
+        detail: 'El reporte de auditoría en Excel se descargó exitosamente.',
+        life: 4000
+      });
+    } catch (err: any) {
+      console.error('Error descargando Excel:', err);
+      toast.current?.show({
+        severity: 'error',
+        summary: 'Error',
+        detail: 'No se pudo exportar el archivo Excel.',
+        life: 5000
+      });
+    } finally {
+      setDownloadingExcel(false);
+    }
+  };
 
   // Filters
   const [daysThreshold, setDaysThreshold] = useState<number>(60);
@@ -284,11 +364,29 @@ export default function DeadStockIntelligencePage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
-            label="Descargar Informe Mensual (.xlsx)"
+            label="Descargar PDF"
+            icon="pi pi-file-pdf"
+            className="p-button-sm rounded-xl font-bold bg-rose-600 hover:bg-rose-700 border-none shadow-md shadow-rose-600/20 text-white"
+            onClick={handleDownloadPdf}
+            loading={downloadingPdf}
+            tooltip="Descarga el informe ejecutivo en PDF con gráficos estadísticos y resumen de capital inmovilizado"
+            tooltipOptions={{ position: 'bottom' }}
+          />
+          <Button
+            label="Exportar Excel"
             icon="pi pi-file-excel"
-            className="p-button-sm rounded-xl font-bold bg-emerald-600 hover:bg-emerald-700 border-none shadow-md shadow-emerald-600/20"
+            className="p-button-sm rounded-xl font-bold bg-emerald-600 hover:bg-emerald-700 border-none shadow-md shadow-emerald-600/20 text-white"
+            onClick={handleDownloadExcel}
+            loading={downloadingExcel}
+            tooltip="Exporta la auditoría completa de Dead Stock a Excel corporativo"
+            tooltipOptions={{ position: 'bottom' }}
+          />
+          <Button
+            label="Paquete Mensual (.xlsx)"
+            icon="pi pi-database"
+            className="p-button-sm rounded-xl font-semibold bg-slate-700 hover:bg-slate-800 border-none text-white"
             onClick={handleGenerateMonthlyReport}
             loading={generatingReport}
             tooltip="Genera el libro integral de 5 pestañas de Neo ERP (ODC, Proveedores, Mermas, Dead Stock, Sell-Out)"
@@ -392,7 +490,29 @@ export default function DeadStockIntelligencePage() {
                   </div>
                 </div>
 
-                <div className="text-xs text-slate-500">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    label="Exportar PDF"
+                    icon="pi pi-file-pdf"
+                    size="small"
+                    severity="danger"
+                    outlined
+                    className="text-xs rounded-xl font-semibold"
+                    onClick={handleDownloadPdf}
+                    loading={downloadingPdf}
+                    tooltip="Descargar informe PDF con gráficos"
+                  />
+                  <Button
+                    label="Exportar Excel"
+                    icon="pi pi-file-excel"
+                    size="small"
+                    severity="success"
+                    outlined
+                    className="text-xs rounded-xl font-semibold"
+                    onClick={handleDownloadExcel}
+                    loading={downloadingExcel}
+                    tooltip="Exportar datos completos a Excel"
+                  />
                   <Button
                     label="Re-auditar Almacenes"
                     icon="pi pi-refresh"

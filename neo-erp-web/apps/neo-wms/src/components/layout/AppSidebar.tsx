@@ -47,8 +47,13 @@ function AppSidebarContent() {
 
   const storageItems = [
     { label: 'Mapa de Almacén', icon: 'pi pi-sitemap', href: '/locations' },
-    { label: 'Control de Lotes (FEFO)', icon: 'pi pi-calendar-plus', href: '/lots' },
     { label: 'Ajustes Físicos', icon: 'pi pi-sort-alt', href: '/adjustments' },
+  ];
+
+  const reportsItems = [
+    { label: 'Control de Lotes & FEFO', icon: 'pi pi-calendar-plus', href: '/lots' },
+    { label: 'Histórico de Transferencias', icon: 'pi pi-file', href: '/transfers' },
+    { label: 'Auditoría de Ajustes', icon: 'pi pi-file-pdf', href: '/adjustments' },
   ];
 
   const isActivePath = (href: string) => {
@@ -132,6 +137,7 @@ function AppSidebarContent() {
         {renderNavGroup("Mando y Análisis", analyticsItems)}
         {renderNavGroup("Movimientos y Flujos", operationsItems)}
         {renderNavGroup("Ubicaciones y Control", storageItems)}
+        {renderNavGroup("Reportes", reportsItems)}
       </div>
 
       {/* User Footer */}

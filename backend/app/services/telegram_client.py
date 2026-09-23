@@ -310,3 +310,97 @@ async def get_bot_me(
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(url)
         return resp.json()
+
+
+def send_telegram_document_sync(
+    chat_id: Union[int, str],
+    file_bytes: bytes,
+    filename: str,
+    caption: Optional[str] = None,
+    parse_mode: Optional[str] = "Markdown",
+    bot_token: Optional[str] = None,
+    agent_code: str = "CLARA_COMPRAS"
+) -> bool:
+    """
+    Envía un archivo/documento (PDF, Excel, etc.) síncronamente a un chat de Telegram.
+    """
+    token = bot_token or get_bot_token(agent_code)
+    if not token or token.startswith("PLACEHOLDER") or token == "NONE":
+        logger.warning(f"[TELEGRAM CLIENT SYNC] Token no configurado para {agent_code}. Documento omitido: {filename}")
+        return False
+
+    url = f"{TELEGRAM_API_BASE}/bot{token}/sendDocument"
+    data: Dict[str, Any] = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption
+    if parse_mode:
+        data["parse_mode"] = parse_mode
+
+    files = {
+        "document": (filename, file_bytes, "application/octet-stream")
+    }
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(url, data=data, files=files)
+            if resp.status_code == 200:
+                return True
+
+            err_body = resp.text
+            if "can't parse entities" in err_body or "parse" in err_body.lower():
+                data.pop("parse_mode", None)
+                retry_resp = client.post(url, data=data, files={"document": (filename, file_bytes, "application/octet-stream")})
+                return retry_resp.status_code == 200
+
+            logger.error(f"[TELEGRAM CLIENT SYNC ERROR] sendDocument devolvió {resp.status_code}: {err_body}")
+            return False
+    except Exception as e:
+        logger.error(f"[TELEGRAM CLIENT SYNC EXCEPTION] Error enviando documento {filename} a {chat_id}: {e}")
+        return False
+
+
+async def send_telegram_document(
+    chat_id: Union[int, str],
+    file_bytes: bytes,
+    filename: str,
+    caption: Optional[str] = None,
+    parse_mode: Optional[str] = "Markdown",
+    bot_token: Optional[str] = None,
+    agent_code: str = "CLARA_COMPRAS"
+) -> bool:
+    """
+    Envía un archivo/documento (PDF, Excel, etc.) asíncronamente a un chat de Telegram.
+    """
+    token = bot_token or get_bot_token(agent_code)
+    if not token or token.startswith("PLACEHOLDER") or token == "NONE":
+        logger.warning(f"[TELEGRAM CLIENT] Token no configurado para {agent_code}. Documento omitido: {filename}")
+        return False
+
+    url = f"{TELEGRAM_API_BASE}/bot{token}/sendDocument"
+    data: Dict[str, Any] = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption
+    if parse_mode:
+        data["parse_mode"] = parse_mode
+
+    files = {
+        "document": (filename, file_bytes, "application/octet-stream")
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, data=data, files=files)
+            if resp.status_code == 200:
+                return True
+
+            err_body = resp.text
+            if "can't parse entities" in err_body or "parse" in err_body.lower():
+                data.pop("parse_mode", None)
+                retry_resp = await client.post(url, data=data, files={"document": (filename, file_bytes, "application/octet-stream")})
+                return retry_resp.status_code == 200
+
+            logger.error(f"[TELEGRAM CLIENT ERROR] sendDocument devolvió {resp.status_code}: {err_body}")
+            return False
+    except Exception as e:
+        logger.error(f"[TELEGRAM CLIENT EXCEPTION] Error enviando documento {filename} a {chat_id}: {e}")
+        return False

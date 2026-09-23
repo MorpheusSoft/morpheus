@@ -84,3 +84,81 @@ def generate_monthly_report(
 def list_scheduled_reports(db: Session = Depends(get_db)) -> Any:
     """Lista los reportes automáticos programados en el sistema."""
     return db.query(ScheduledReport).all()
+
+
+@router.get("/dead-stock-export/pdf")
+@router.get("/dead-stock/pdf")
+def download_dead_stock_pdf(
+    days_threshold: int = Query(30, description="Días sin venta para calificar Dead Stock (default: 30)"),
+    db: Session = Depends(get_db)
+) -> Any:
+    """Genera y descarga el reporte ejecutivo de Rotación & Dead Stock en PDF con gráficos embebidos."""
+    from fastapi.responses import Response
+    from app.services.dead_stock_pdf_service import generate_dead_stock_pdf
+
+    result = generate_dead_stock_pdf(db, days_threshold=days_threshold)
+    pdf_bytes = result["pdf_bytes"]
+    filename = f"NeoERP_Reporte_Dead_Stock_{days_threshold}dias.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )
+
+
+@router.get("/dead-stock-export/excel")
+@router.get("/dead-stock/excel")
+def download_dead_stock_excel(
+    days_threshold: int = Query(30, description="Días sin venta para calificar Dead Stock (default: 30)"),
+    db: Session = Depends(get_db)
+) -> Any:
+    """Genera y descarga el reporte de Rotación & Dead Stock en formato Excel corporativo."""
+    from fastapi.responses import FileResponse
+    from app.services.dynamic_export_service import generate_excel_export
+
+    audit_data = audit_all_dead_stock(db, days_threshold=days_threshold, auto_block=False)
+    items = audit_data.get("items", [])
+
+    headers = [
+        "SKU", "Código Barra", "Descripción de Producto", "Categoría", "Marca",
+        "Existencia Actual", "Costo Reposición ($)", "Valoración Total ($)",
+        "Días sin Venta", "Fecha Última Venta", "Estado de Rotación",
+        "Bloqueado para Compra", "Acción Recomendada por Clara"
+    ]
+
+    rows = []
+    for it in items:
+        rows.append([
+            it.get("sku", ""),
+            it.get("barcode", "") or "",
+            it.get("product_name", ""),
+            it.get("category_name", "") or "General",
+            it.get("brand", "") or "",
+            float(it.get("qty_on_hand", 0)),
+            float(it.get("replacement_cost", 0) or 0),
+            float(it.get("stock_valuation_usd", 0) or 0),
+            int(it.get("days_without_sales", 0)),
+            str(it.get("last_sale_date", "") or "Sin ventas"),
+            "Inmóvil (Dead Stock)" if it.get("dead_stock_status") == "DEAD_STOCK" else "Rotación Lenta",
+            "SÍ" if it.get("is_blocked_for_purchasing") else "NO",
+            it.get("clara_recommended_action", "") or ""
+        ])
+
+    export_result = generate_excel_export(
+        title=f"Reporte de Rotación & Dead Stock ({days_threshold} días)",
+        headers=headers,
+        rows=rows,
+        filename_prefix="Reporte_Dead_Stock",
+        sheet_title="Dead Stock & Rotación"
+    )
+
+    return FileResponse(
+        path=export_result["filepath"],
+        filename=export_result["filename"],
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+

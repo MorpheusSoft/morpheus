@@ -36,7 +36,6 @@ function AppSidebarContent() {
   const analyticsItems = [
     { label: 'Visión General', icon: 'pi pi-chart-pie', href: '/' },
     { label: 'Consola Clara (Diagnóstico)', icon: 'pi pi-sparkles', href: '/settings/bot' },
-    { label: 'Dead Stock & Merma Real', icon: 'pi pi-exclamation-triangle', href: '/dead-stock' },
   ];
 
   const operationsItems = [
@@ -45,6 +44,12 @@ function AppSidebarContent() {
     { label: 'Convenios Sell-Out & N/C', icon: 'pi pi-percentage', href: '/sell-out' },
     { label: 'Conciliación 3-Way Match', icon: 'pi pi-check-circle', href: '/reconciliation' },
     { label: 'Directorio de Proveedores', icon: 'pi pi-users', href: '/suppliers' },
+  ];
+
+  const reportsItems = [
+    { label: 'Rotación & Dead Stock', icon: 'pi pi-file-pdf', href: '/dead-stock' },
+    { label: 'Auditoría de Mermas', icon: 'pi pi-chart-line', href: '/dead-stock?tab=shrinkage' },
+    { label: 'Paquete Mensual & KPIs', icon: 'pi pi-file-excel', href: '/dead-stock?tab=monthly' },
   ];
 
   const catalogItems = [
@@ -58,6 +63,14 @@ function AppSidebarContent() {
 
   const isActivePath = (href: string) => {
     if (href === '/') return pathname === '/';
+    const [pathPart] = href.split('?');
+    if (href.includes('?')) {
+      if (typeof window !== 'undefined') {
+        const queryPart = href.split('?')[1];
+        return pathname === pathPart && window.location.search.includes(queryPart);
+      }
+      return pathname === pathPart;
+    }
     return pathname === href || (pathname.startsWith(href) && href !== '/');
   };
 
@@ -136,6 +149,7 @@ function AppSidebarContent() {
       }`}>
         {renderNavGroup("Mando y Análisis", analyticsItems)}
         {renderNavGroup("Ciclo de Compras", operationsItems)}
+        {renderNavGroup("Reportes", reportsItems)}
         {renderNavGroup("Catálogo y Tarifas", catalogItems)}
         {renderNavGroup("Automatización", settingsItems)}
       </div>

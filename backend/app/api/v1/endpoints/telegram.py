@@ -28,6 +28,7 @@ from app.agents.whatsapp_agent import (
 )
 from app.services.telegram_client import (
     send_telegram_message,
+    send_telegram_document_sync,
     set_telegram_webhook,
     get_telegram_webhook_info,
     get_bot_me,
@@ -184,6 +185,9 @@ def call_worker_gemini(
         system_prompt += (
             "\nTienes acceso a la ficha 360° de productos (costos de reposición, promedio, estándar, PVP, margen %, "
             "stock por tienda, rotación diaria en unidades y días de cobertura/runway). "
+            "Si el usuario pregunta por productos sin venta, rotación o dead stock, indícale que en el sistema web está disponible "
+            "en el menú 'Reportes -> Rotación & Dead Stock' de Neo Compras, y que puedes generarle y enviarle el informe ejecutivo en PDF directamente con el comando /dead_stock. "
+            "NUNCA inventes nombres de menús o reportes inexistentes. "
             "Si el usuario te solicita crear una orden de compra o consultar sugeridos, indícale claramente cómo generarla "
             "o confírmale los datos con precisión ejecutiva."
         )
@@ -488,6 +492,7 @@ async def process_telegram_message(
                 f"*Analista Estratégica de Compras y Rentabilidad* de *Neo ERP*.\n\n"
                 f"Superviso órdenes de compra, conciliación 3-way match, abastecimiento y acuerdos comerciales.\n\n"
                 f"📌 *Comandos Disponibles:*\n"
+                f"• `/dead_stock` [días]: Auditoría de productos sin venta, capital atrapado y despacho de reporte PDF\n"
                 f"• `/producto <nombre o sku>`: Ficha 360° de compra (costos, stock por tienda, rotación y proveedor)\n"
                 f"• `/crear_odc <proveedor>`: Generar ODC borrador sugerida (MRP) o con ítems específicos\n"
                 f"• `/odc` o `/ordenes`: Órdenes de compra recientes y su estado\n"
@@ -498,6 +503,8 @@ async def process_telegram_message(
                 f"• `/vincular <PIN>`: Vincular este chat con tu usuario de Neo ERP\n\n"
                 f"💬 *Consultas en lenguaje natural:*\n"
                 f"Puedes preguntarme por ejemplo:\n"
+                f"_• \"Clara cuál es la existencia de los productos con 0 ventas en 30 días\"_\n"
+                f"_• \"Envíame el reporte de rotación y dead stock en PDF\"_\n"
                 f"_• \"Ficha de compra de Harina PAN\"_\n"
                 f"_• \"Clara, genera una orden de compra para Alimentos Polar\"_\n"
                 f"_• \"Crea orden para Alimentos Polar con 50 Harina Pan y 20 Primor\"_\n"
@@ -710,6 +717,76 @@ async def process_telegram_message(
 
     # === COMANDOS DE CLARA (COMPRAS) ===
     if "CLARA" in clean_agent_code:
+        # DETECCIÓN DE DEAD STOCK / ROTACIÓN / PRODUCTOS SIN VENTA (Comando directo o Lenguaje Natural)
+        is_dead_stock_intent = (
+            lower_text.startswith("/dead_stock") or
+            lower_text.startswith("/deadstock") or
+            lower_text.startswith("/reporte_dead_stock") or
+            lower_text.startswith("/rotacion") or
+            lower_text in ["dead stock", "deadstock", "rotacion", "rotación", "reporte dead stock"] or
+            (
+                any(w in lower_text for w in ["sin venta", "cero venta", "0 venta", "0 ventas", "cero ventas", "sin movimiento", "inmovilizado", "inmovilizados", "muerto", "dead stock", "rotacion", "rotación"]) and
+                any(w in lower_text for w in ["producto", "productos", "existencia", "existencias", "stock", "reporte", "informe", "articulo", "articulos", "artículos", "dias", "días", "cual es", "cuál es", "cuáles", "cuales", "ver"])
+            )
+        )
+
+        if is_dead_stock_intent:
+            days_threshold = 30
+            d_match = re.search(r'\b(\d{1,3})\s*(?:dias|días)?\b', lower_text)
+            if d_match:
+                try:
+                    val = int(d_match.group(1))
+                    if 1 <= val <= 365:
+                        days_threshold = val
+                except Exception:
+                    pass
+
+            try:
+                from app.services.dead_stock_pdf_service import generate_dead_stock_pdf
+                pdf_res = generate_dead_stock_pdf(db=db, days_threshold=days_threshold)
+
+                total_cap = pdf_res.get("total_capital_immobilized_usd", 0.0)
+                dead_skus = pdf_res.get("total_dead_stock", 0)
+                slow_skus = pdf_res.get("total_slow_moving", 0)
+                top_items = pdf_res.get("top_items", [])
+
+                summary_lines = [
+                    f"📊 *Auditoría de Rotación & Dead Stock ({days_threshold} días)*",
+                    f"He evaluado el inventario y las ventas registradas en *Neo ERP*:\n",
+                    f"💰 *Capital Inmovilizado:* `${total_cap:,.2f} USD`",
+                    f"🛑 *SKUs Inmóviles (0 ventas):* `{dead_skus}`",
+                    f"⚠️ *SKUs Rotación Lenta:* `{slow_skus}`\n",
+                    f"🏆 *Top SKUs con Mayor Capital Atrapado:*"
+                ]
+                for it in top_items[:5]:
+                    name = it.get("product_name", "SKU")
+                    sku = it.get("sku", "")
+                    stk = it.get("qty_on_hand", 0)
+                    val = it.get("stock_valuation_usd", 0)
+                    summary_lines.append(f"• *{name}* (`{sku}`): Stock: *{stk:,.0f}* | Capital: *${val:,.2f}*")
+
+                summary_lines.append(f"\n📎 *Te he enviado el Reporte Ejecutivo en PDF* con los gráficos estadísticos, análisis de Pareto y detalle completo.")
+                summary_lines.append(f"🌐 En el sistema web de *Neo Compras* puedes consultarlo y descargarlo en: *Reportes -> Rotación & Dead Stock*")
+
+                # Enviar PDF adjunto al chat de Telegram
+                filename = f"NeoERP_Reporte_Dead_Stock_{days_threshold}dias.pdf"
+                send_telegram_document_sync(
+                    chat_id=chat_id,
+                    file_bytes=pdf_res["pdf_bytes"],
+                    filename=filename,
+                    caption=f"📄 Neo ERP • Reporte Dead Stock & Rotación ({days_threshold} días)",
+                    agent_code=clean_agent_code
+                )
+
+                return "\n".join(summary_lines)
+
+            except Exception as e:
+                logger.error(f"Error generando reporte dead stock para Clara: {e}", exc_info=True)
+                return (
+                    f"⚠️ Ocurrió un inconveniente generando el reporte PDF de dead stock: {str(e)}.\n"
+                    f"Sin embargo, puedes consultarlo en la web de *Neo Compras* en *Reportes -> Rotación & Dead Stock*."
+                )
+
         if lower_text in ["/odc", "/ordenes", "odc", "ordenes", "ordenes de compra"]:
             orders = db.query(PurchaseOrder).order_by(PurchaseOrder.id.desc()).limit(8).all()
             if not orders:

@@ -128,7 +128,7 @@ function AppSidebarContent() {
         isCollapsed ? 'lg:px-2 px-[16px]' : 'px-[16px]'
       }`}>
         {renderNavGroup("Mando y Análisis", analyticsItems)}
-        {renderNavGroup("Kardex y Contabilidad", accountingItems)}
+        {renderNavGroup("Reportes", accountingItems)}
         {renderNavGroup("Auditoría y Control", auditItems)}
       </div>
 
