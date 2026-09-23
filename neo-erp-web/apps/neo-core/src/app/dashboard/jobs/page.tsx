@@ -99,66 +99,68 @@ export default function JobsPage() {
         ) : jobs.length === 0 ? (
           <div className="p-10 text-center text-slate-500">No hay tareas programadas en la base de datos.</div>
         ) : (
-          <table className="w-full text-left text-sm text-slate-600">
-            <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-4 rounded-tl-2xl">Código Hash</th>
-                <th className="px-6 py-4">Tarea Programada</th>
-                <th className="px-6 py-4 text-center">Hora de Ejecución</th>
-                <th className="px-6 py-4">Última Corrida</th>
-                <th className="px-6 py-4 text-center">Estado Onde-Click</th>
-                <th className="px-6 py-4 text-right rounded-tr-2xl">Ajustar</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {jobs.map((job) => (
-                <tr key={job.job_code} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-6 py-4 font-mono font-medium text-slate-400">{job.job_code}</td>
-                  <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
-                     <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
-                       <i className="pi pi-server text-sm"></i>
-                     </div>
-                     {job.name}
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                     <span className="bg-slate-100 text-slate-600 border border-slate-200 px-2.5 py-1 rounded-md text-xs font-mono font-bold tracking-widest inline-block">
-                        <i className="pi pi-clock mr-1"></i> {job.execution_time}
-                     </span>
-                  </td>
-                  <td className="px-6 py-4 font-mono text-slate-400 text-xs">
-                     {job.last_executed_at ? new Date(job.last_executed_at).toLocaleString() : "Nunca"}
-                  </td>
-                  <td className="px-6 py-4">
-                     <div className="flex justify-center">
-                        <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" className="sr-only peer" checked={job.is_enabled} onChange={() => handleToggle(job)} />
-                          <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-500 shadow-inner"></div>
-                        </label>
-                     </div>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex justify-end gap-1.5">
-                      <button 
-                        onClick={() => handleRunNow(job)}
-                        disabled={runningCode === job.job_code}
-                        className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors disabled:opacity-50"
-                        title="Ejecutar Ahora"
-                      >
-                        <i className={`pi ${runningCode === job.job_code ? "pi-spin pi-spinner" : "pi-play"} text-xs`}></i>
-                      </button>
-                      <button 
-                        onClick={() => openEditModal(job)}
-                        className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                        title="Editar Horario"
-                      >
-                        <i className="pi pi-cog"></i>
-                      </button>
-                    </div>
-                  </td>
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full min-w-[800px] text-left text-sm text-slate-600">
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-4 rounded-tl-2xl">Código Hash</th>
+                  <th className="px-6 py-4">Tarea Programada</th>
+                  <th className="px-6 py-4 text-center">Hora de Ejecución</th>
+                  <th className="px-6 py-4">Última Corrida</th>
+                  <th className="px-6 py-4 text-center">Estado Onde-Click</th>
+                  <th className="px-6 py-4 text-right rounded-tr-2xl">Ajustar</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {jobs.map((job) => (
+                  <tr key={job.job_code} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4 font-mono font-medium text-slate-400">{job.job_code}</td>
+                    <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
+                       <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
+                         <i className="pi pi-server text-sm"></i>
+                       </div>
+                       {job.name}
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                       <span className="bg-slate-100 text-slate-600 border border-slate-200 px-2.5 py-1 rounded-md text-xs font-mono font-bold tracking-widest inline-block">
+                          <i className="pi pi-clock mr-1"></i> {job.execution_time}
+                       </span>
+                    </td>
+                    <td className="px-6 py-4 font-mono text-slate-400 text-xs">
+                       {job.last_executed_at ? new Date(job.last_executed_at).toLocaleString() : "Nunca"}
+                    </td>
+                    <td className="px-6 py-4">
+                       <div className="flex justify-center">
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" className="sr-only peer" checked={job.is_enabled} onChange={() => handleToggle(job)} />
+                            <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-500 shadow-inner"></div>
+                          </label>
+                       </div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex justify-end gap-1.5">
+                        <button 
+                          onClick={() => handleRunNow(job)}
+                          disabled={runningCode === job.job_code}
+                          className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors disabled:opacity-50"
+                          title="Ejecutar Ahora"
+                        >
+                          <i className={`pi ${runningCode === job.job_code ? "pi-spin pi-spinner" : "pi-play"} text-xs`}></i>
+                        </button>
+                        <button 
+                          onClick={() => openEditModal(job)}
+                          className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                          title="Editar Horario"
+                        >
+                          <i className="pi pi-cog"></i>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

@@ -169,99 +169,101 @@ export default function UsersPage() {
         ) : users.length === 0 ? (
           <div className="p-10 text-center text-slate-500">No hay usuarios en la base de datos.</div>
         ) : (
-          <table className="w-full text-left text-sm text-slate-600">
-            <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-4 rounded-tl-2xl">Usuario</th>
-                <th className="px-6 py-4">Correo (Login)</th>
-                <th className="px-6 py-4">Roles Principales</th>
-                <th className="px-6 py-4">Canales Asistentes</th>
-                <th className="px-6 py-4">Estatus</th>
-                <th className="px-6 py-4 text-right rounded-tr-2xl">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {users.map((u) => (
-                <tr key={u.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
-                     <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${u.user_type === 'DIGITAL_WORKER' ? 'bg-gradient-to-tr from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-500/20' : u.is_superuser ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'bg-slate-100 text-slate-500'}`}>
-                        {u.user_type === 'DIGITAL_WORKER' ? <i className="pi pi-android text-xs"></i> : (u.full_name?.substring(0,2)?.toUpperCase() || 'US')}
-                     </div>
-                     <div>
-                        <div className="flex items-center gap-2">
-                           <span>{u.full_name}</span>
-                           {u.user_type === 'DIGITAL_WORKER' && (
-                              <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full text-[10px] font-bold border border-purple-200 inline-flex items-center gap-1">
-                                 <i className="pi pi-android text-[10px]"></i> Empleado Digital
-                              </span>
-                           )}
-                        </div>
-                        {u.is_superuser && <span className="text-[10px] text-indigo-500 uppercase tracking-widest block">Root Admin</span>}
-                     </div>
-                  </td>
-                  <td className="px-6 py-4 font-medium">{u.email}</td>
-                  <td className="px-6 py-4">
-                     <div className="flex gap-1 flex-wrap">
-                        {u.roles?.map((r:any) => (
-                           <span key={r.id} className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded text-[10px] uppercase font-bold border border-slate-200">
-                              {r.name}
-                           </span>
-                        ))}
-                        {(!u.roles || u.roles.length === 0) && <span className="text-slate-400 italic text-xs">Sin roles</span>}
-                     </div>
-                  </td>
-                  <td className="px-6 py-4">
-                     <div className="flex flex-col gap-1">
-                        {u.telegram_username ? (
-                           <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-lg w-fit">
-                              <i className="pi pi-send text-[10px]"></i> @{u.telegram_username}
-                           </span>
-                        ) : u.telegram_chat_id ? (
-                           <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-sky-600 bg-sky-50/70 border border-sky-100 px-2 py-0.5 rounded-lg w-fit">
-                              <i className="pi pi-check text-[10px]"></i> Telegram ID
-                           </span>
-                        ) : (
-                           <span className="text-[11px] text-slate-400 italic">Sin Telegram</span>
-                        )}
-                        {u.phone_number ? (
-                           <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg w-fit">
-                              <i className="pi pi-whatsapp text-[10px]"></i> {u.phone_number}
-                           </span>
-                        ) : null}
-                     </div>
-                  </td>
-                  <td className="px-6 py-4">
-                     {u.is_active ? (
-                        <span className="text-emerald-500 font-bold flex items-center gap-1 text-xs"><i className="pi pi-check-circle"></i> Activo</span>
-                     ) : (
-                        <span className="text-rose-500 font-bold flex items-center gap-1 text-xs bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200 w-fit"><i className="pi pi-lock"></i> Bloqueado</span>
-                     )}
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex items-center justify-end gap-1.5">
-                      {u.user_type !== "DIGITAL_WORKER" && (
-                        <button 
-                          onClick={() => openInviteModal(u)}
-                          className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1.5"
-                          title="Generar enlace o invitar a Telegram"
-                        >
-                          <i className="pi pi-send text-xs"></i>
-                          <span>Invitar</span>
-                        </button>
-                      )}
-                      <button 
-                        onClick={() => openEditModal(u)}
-                        className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                        title="Administrar"
-                      >
-                        <i className="pi pi-pencil"></i>
-                      </button>
-                    </div>
-                  </td>
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full min-w-[880px] text-left text-sm text-slate-600">
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-4 rounded-tl-2xl">Usuario</th>
+                  <th className="px-6 py-4">Correo (Login)</th>
+                  <th className="px-6 py-4">Roles Principales</th>
+                  <th className="px-6 py-4">Canales Asistentes</th>
+                  <th className="px-6 py-4">Estatus</th>
+                  <th className="px-6 py-4 text-right rounded-tr-2xl">Acciones</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {users.map((u) => (
+                  <tr key={u.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
+                       <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${u.user_type === 'DIGITAL_WORKER' ? 'bg-gradient-to-tr from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-500/20' : u.is_superuser ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'bg-slate-100 text-slate-500'}`}>
+                          {u.user_type === 'DIGITAL_WORKER' ? <i className="pi pi-android text-xs"></i> : (u.full_name?.substring(0,2)?.toUpperCase() || 'US')}
+                       </div>
+                       <div>
+                          <div className="flex items-center gap-2">
+                             <span>{u.full_name}</span>
+                             {u.user_type === 'DIGITAL_WORKER' && (
+                                <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full text-[10px] font-bold border border-purple-200 inline-flex items-center gap-1">
+                                   <i className="pi pi-android text-[10px]"></i> Empleado Digital
+                                </span>
+                             )}
+                          </div>
+                          {u.is_superuser && <span className="text-[10px] text-indigo-500 uppercase tracking-widest block">Root Admin</span>}
+                       </div>
+                    </td>
+                    <td className="px-6 py-4 font-medium">{u.email}</td>
+                    <td className="px-6 py-4">
+                       <div className="flex gap-1 flex-wrap">
+                          {u.roles?.map((r:any) => (
+                             <span key={r.id} className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded text-[10px] uppercase font-bold border border-slate-200">
+                                {r.name}
+                             </span>
+                          ))}
+                          {(!u.roles || u.roles.length === 0) && <span className="text-slate-400 italic text-xs">Sin roles</span>}
+                       </div>
+                    </td>
+                    <td className="px-6 py-4">
+                       <div className="flex flex-col gap-1">
+                          {u.telegram_username ? (
+                             <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-lg w-fit">
+                                <i className="pi pi-send text-[10px]"></i> @{u.telegram_username}
+                             </span>
+                          ) : u.telegram_chat_id ? (
+                             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-sky-600 bg-sky-50/70 border border-sky-100 px-2 py-0.5 rounded-lg w-fit">
+                                <i className="pi pi-check text-[10px]"></i> Telegram ID
+                             </span>
+                          ) : (
+                             <span className="text-[11px] text-slate-400 italic">Sin Telegram</span>
+                          )}
+                          {u.phone_number ? (
+                             <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg w-fit">
+                                <i className="pi pi-whatsapp text-[10px]"></i> {u.phone_number}
+                             </span>
+                          ) : null}
+                       </div>
+                    </td>
+                    <td className="px-6 py-4">
+                       {u.is_active ? (
+                          <span className="text-emerald-500 font-bold flex items-center gap-1 text-xs"><i className="pi pi-check-circle"></i> Activo</span>
+                       ) : (
+                          <span className="text-rose-500 font-bold flex items-center gap-1 text-xs bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200 w-fit"><i className="pi pi-lock"></i> Bloqueado</span>
+                       )}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {u.user_type !== "DIGITAL_WORKER" && (
+                          <button 
+                            onClick={() => openInviteModal(u)}
+                            className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1.5"
+                            title="Generar enlace o invitar a Telegram"
+                          >
+                            <i className="pi pi-send text-xs"></i>
+                            <span className="hidden sm:inline">Invitar</span>
+                          </button>
+                        )}
+                        <button 
+                          onClick={() => openEditModal(u)}
+                          className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 border border-transparent hover:border-indigo-100 transition-colors"
+                          title="Administrar / Editar"
+                        >
+                          <i className="pi pi-pencil text-xs"></i>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

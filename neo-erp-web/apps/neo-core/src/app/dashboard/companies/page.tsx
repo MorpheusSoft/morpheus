@@ -89,45 +89,47 @@ export default function CompaniesPage() {
         ) : companies.length === 0 ? (
           <div className="p-10 text-center text-slate-500">No hay empresas registradas en el sistema.</div>
         ) : (
-          <table className="w-full text-left text-sm text-slate-600">
-            <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-4 rounded-tl-2xl">ID</th>
-                <th className="px-6 py-4">Razón Social</th>
-                <th className="px-6 py-4">RIF / Tax ID</th>
-                <th className="px-6 py-4">Moneda Base</th>
-                <th className="px-6 py-4 text-right rounded-tr-2xl">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {companies.map((c) => (
-                <tr key={c.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-6 py-4 font-mono font-medium text-slate-400">#{c.id}</td>
-                  <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
-                     <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
-                       <i className="pi pi-building text-sm"></i>
-                     </div>
-                     {c.name}
-                  </td>
-                  <td className="px-6 py-4 font-mono">{c.tax_id || "N/A"}</td>
-                  <td className="px-6 py-4">
-                     <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-md text-xs font-bold tracking-wide">
-                        {c.currency_code}
-                     </span>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <button 
-                      onClick={() => openEditModal(c)}
-                      className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                      title="Editar Empresa"
-                    >
-                      <i className="pi pi-pencil"></i>
-                    </button>
-                  </td>
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full min-w-[700px] text-left text-sm text-slate-600">
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-4 rounded-tl-2xl">ID</th>
+                  <th className="px-6 py-4">Razón Social</th>
+                  <th className="px-6 py-4">RIF / Tax ID</th>
+                  <th className="px-6 py-4">Moneda Base</th>
+                  <th className="px-6 py-4 text-right rounded-tr-2xl">Acciones</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {companies.map((c) => (
+                  <tr key={c.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4 font-mono font-medium text-slate-400">#{c.id}</td>
+                    <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
+                       <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
+                         <i className="pi pi-building text-sm"></i>
+                       </div>
+                       {c.name}
+                    </td>
+                    <td className="px-6 py-4 font-mono">{c.tax_id || "N/A"}</td>
+                    <td className="px-6 py-4">
+                       <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-md text-xs font-bold tracking-wide">
+                          {c.currency_code}
+                       </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <button 
+                        onClick={() => openEditModal(c)}
+                        className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                        title="Editar Empresa"
+                      >
+                        <i className="pi pi-pencil"></i>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

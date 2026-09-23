@@ -271,57 +271,59 @@ export default function RolesPage() {
         ) : roles.length === 0 ? (
           <div className="p-10 text-center text-slate-500">No hay roles registrados en el sistema.</div>
         ) : (
-          <table className="w-full text-left text-sm text-slate-600">
-            <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-4 rounded-tl-2xl">Perfiles</th>
-                <th className="px-6 py-4">Descripción</th>
-                <th className="px-6 py-4 text-center">Usuario Digital</th>
-                <th className="px-6 py-4 text-center">Estatus</th>
-                <th className="px-6 py-4 text-right rounded-tr-2xl">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {roles.map((r) => (
-                <tr key={r.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
-                     <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
-                        <i className="pi pi-id-card text-sm"></i>
-                     </div>
-                     {r.name}
-                  </td>
-                  <td className="px-6 py-4">{r.description || <span className="text-slate-400 italic">Sin descripción</span>}</td>
-                  <td className="px-6 py-4 text-center">
-                     {r.can_use_oracle ? (
-                        <span className="bg-purple-50 text-purple-700 border border-purple-200 px-2.5 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1.5 shadow-sm">
-                           <i className="pi pi-android text-purple-600"></i> Digital
-                        </span>
-                     ) : (
-                        <span className="bg-slate-50 text-slate-500 border border-slate-200 px-2.5 py-1 rounded-lg text-[11px] font-medium inline-flex items-center gap-1.5">
-                           <i className="pi pi-user text-slate-400"></i> Humano
-                        </span>
-                     )}
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                     {r.is_active ? (
-                        <span className="bg-emerald-50 text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-md text-[10px] uppercase font-black tracking-widest inline-block">Activo</span>
-                     ) : (
-                        <span className="bg-slate-100 text-slate-400 border border-slate-200 px-2.5 py-1 rounded-md text-[10px] uppercase font-black tracking-widest inline-block">Inactivo</span>
-                     )}
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <button 
-                      onClick={() => openEditModal(r)}
-                      className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                      title="Editar Rol"
-                    >
-                      <i className="pi pi-pencil"></i>
-                    </button>
-                  </td>
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full min-w-[700px] text-left text-sm text-slate-600">
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-4 rounded-tl-2xl">Perfiles</th>
+                  <th className="px-6 py-4">Descripción</th>
+                  <th className="px-6 py-4 text-center">Usuario Digital</th>
+                  <th className="px-6 py-4 text-center">Estatus</th>
+                  <th className="px-6 py-4 text-right rounded-tr-2xl">Acciones</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {roles.map((r) => (
+                  <tr key={r.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
+                       <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
+                          <i className="pi pi-id-card text-sm"></i>
+                       </div>
+                       {r.name}
+                    </td>
+                    <td className="px-6 py-4">{r.description || <span className="text-slate-400 italic">Sin descripción</span>}</td>
+                    <td className="px-6 py-4 text-center">
+                       {r.can_use_oracle ? (
+                          <span className="bg-purple-50 text-purple-700 border border-purple-200 px-2.5 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1.5 shadow-sm">
+                             <i className="pi pi-android text-purple-600"></i> Digital
+                          </span>
+                       ) : (
+                          <span className="bg-slate-50 text-slate-500 border border-slate-200 px-2.5 py-1 rounded-lg text-[11px] font-medium inline-flex items-center gap-1.5">
+                             <i className="pi pi-user text-slate-400"></i> Humano
+                          </span>
+                       )}
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                       {r.is_active ? (
+                          <span className="bg-emerald-50 text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-md text-[10px] uppercase font-black tracking-widest inline-block">Activo</span>
+                       ) : (
+                          <span className="bg-slate-100 text-slate-400 border border-slate-200 px-2.5 py-1 rounded-md text-[10px] uppercase font-black tracking-widest inline-block">Inactivo</span>
+                       )}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <button 
+                        onClick={() => openEditModal(r)}
+                        className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                        title="Editar Rol"
+                      >
+                        <i className="pi pi-pencil"></i>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

@@ -113,62 +113,64 @@ export default function CurrenciesPage() {
         ) : currencies.length === 0 ? (
           <div className="p-10 text-center text-slate-500">No hay tarifas parametrizadas en el sistema.</div>
         ) : (
-          <table className="w-full text-left text-sm text-slate-600">
-            <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-4 rounded-tl-2xl">Código ISO</th>
-                <th className="px-6 py-4">Moneda</th>
-                <th className="px-6 py-4">Tasa de Cambio</th>
-                <th className="px-6 py-4">Decimales</th>
-                <th className="px-6 py-4 text-center">Estatus</th>
-                <th className="px-6 py-4 text-right rounded-tr-2xl">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {currencies.map((c) => (
-                <tr key={c.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-6 py-4 font-mono font-medium text-indigo-500">{c.code}</td>
-                  <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
-                     <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 font-bold">
-                       {c.symbol}
-                     </div>
-                     {c.name}
-                  </td>
-                  <td className="px-6 py-4 font-mono font-semibold text-slate-700">
-                     {c.exchange_rate}
-                  </td>
-                  <td className="px-6 py-4 font-mono text-slate-400">
-                     {c.decimal_places}
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                     {c.is_active ? (
-                        <span className="bg-emerald-50 text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-md text-[10px] uppercase font-black tracking-widest inline-block">Activa</span>
-                     ) : (
-                        <span className="bg-slate-100 text-slate-400 border border-slate-200 px-2.5 py-1 rounded-md text-[10px] uppercase font-black tracking-widest inline-block">Inactiva</span>
-                     )}
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex justify-end gap-2">
-                       <button 
-                         onClick={() => openEditModal(c)}
-                         className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                         title="Editar Divisa"
-                       >
-                         <i className="pi pi-pencil"></i>
-                       </button>
-                       <button 
-                         onClick={() => handleDelete(c)}
-                         className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                         title="Eliminar Divisa"
-                       >
-                         <i className="pi pi-trash"></i>
-                       </button>
-                    </div>
-                  </td>
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full min-w-[750px] text-left text-sm text-slate-600">
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b border-slate-200">
+                <tr>
+                  <th className="px-6 py-4 rounded-tl-2xl">Código ISO</th>
+                  <th className="px-6 py-4">Moneda</th>
+                  <th className="px-6 py-4">Tasa de Cambio</th>
+                  <th className="px-6 py-4">Decimales</th>
+                  <th className="px-6 py-4 text-center">Estatus</th>
+                  <th className="px-6 py-4 text-right rounded-tr-2xl">Acciones</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {currencies.map((c) => (
+                  <tr key={c.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4 font-mono font-medium text-indigo-500">{c.code}</td>
+                    <td className="px-6 py-4 font-bold text-slate-800 flex items-center gap-3">
+                       <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 font-bold shrink-0">
+                         {c.symbol}
+                       </div>
+                       {c.name}
+                    </td>
+                    <td className="px-6 py-4 font-mono font-semibold text-slate-700">
+                       {c.exchange_rate}
+                    </td>
+                    <td className="px-6 py-4 font-mono text-slate-400">
+                       {c.decimal_places}
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                       {c.is_active ? (
+                          <span className="bg-emerald-50 text-emerald-600 border border-emerald-200 px-2.5 py-1 rounded-md text-[10px] uppercase font-black tracking-widest inline-block">Activa</span>
+                       ) : (
+                          <span className="bg-slate-100 text-slate-400 border border-slate-200 px-2.5 py-1 rounded-md text-[10px] uppercase font-black tracking-widest inline-block">Inactiva</span>
+                       )}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex justify-end gap-2">
+                         <button 
+                           onClick={() => openEditModal(c)}
+                           className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                           title="Editar Divisa"
+                         >
+                           <i className="pi pi-pencil"></i>
+                         </button>
+                         <button 
+                           onClick={() => handleDelete(c)}
+                           className="w-8 h-8 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                           title="Eliminar Divisa"
+                         >
+                           <i className="pi pi-trash"></i>
+                         </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
