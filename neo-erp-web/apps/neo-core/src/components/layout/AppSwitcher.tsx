@@ -57,7 +57,7 @@ export function AppSwitcher() {
 
       {/* Popover Menu */}
       {isOpen && (
-        <div className="absolute left-0 lg:left-auto lg:right-0 mt-3 w-80 bg-white/95 backdrop-blur-2xl rounded-3xl shadow-2xl border border-gray-200 z-50 origin-top-left lg:origin-top-right overflow-hidden p-4">
+        <div className="absolute right-0 mt-3 w-80 max-w-[calc(100vw-2rem)] bg-white/95 backdrop-blur-2xl rounded-3xl shadow-2xl border border-gray-200 z-50 origin-top-right overflow-hidden p-4">
           <div className="flex items-center justify-between px-2 mb-4">
              <h3 className="font-bold text-slate-800 text-lg">Módulos Neo</h3>
           </div>
