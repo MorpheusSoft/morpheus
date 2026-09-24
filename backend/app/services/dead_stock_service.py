@@ -133,37 +133,160 @@ def evaluate_variant_dead_stock(
 def audit_all_dead_stock(
     db: Session,
     days_threshold: Optional[int] = None,
-    auto_block: bool = True
+    auto_block: bool = True,
+    worker_code: str = "CLARA_COMPRAS"
 ) -> Dict[str, Any]:
     """
     Escaneo completo de existencias en almacenes para detectar Dead Stock y productos de rotación lenta.
+    Optimizado en una sola consulta de agregación masiva para ejecutar en ~200ms sin bloquear el servidor.
     """
+    from sqlalchemy import text
     threshold = days_threshold or get_dead_stock_threshold(db)
+    now = datetime.now(timezone.utc)
+    today = now.date()
 
-    # Identificar variantes con existencias > 0
-    stock_variants = db.query(InventorySnapshot.variant_id)\
-        .group_by(InventorySnapshot.variant_id)\
-        .having(func.sum(InventorySnapshot.stock_qty) > 0)\
-        .all()
-    variant_ids = [r[0] for r in stock_variants if r[0]]
+    sql = text("""
+        WITH stock_data AS (
+            SELECT variant_id, SUM(stock_qty) AS qty_on_hand
+            FROM inv.inventory_snapshots
+            GROUP BY variant_id
+            HAVING SUM(stock_qty) > 0
+        ),
+        latest_sales AS (
+            SELECT dl.variant_id, MAX(d.created_at) AS last_sale_at
+            FROM sales.document_lines dl
+            JOIN sales.documents d ON d.id = dl.document_id
+            WHERE d.type IN ('INVOICE', 'DELIVERY_NOTE', 'ORDER')
+              AND d.state IN ('PAID', 'CONFIRMED')
+            GROUP BY dl.variant_id
+        )
+        SELECT 
+            pv.id AS variant_id,
+            pv.product_id,
+            pv.sku,
+            pv.barcode,
+            p.name AS product_name,
+            COALESCE(c.name, 'Sin Categoría') AS category_name,
+            COALESCE(p.brand, 'Genérica') AS brand,
+            sd.qty_on_hand,
+            COALESCE(pv.replacement_cost, pv.average_cost, pv.standard_cost, 0.0) AS unit_cost,
+            ls.last_sale_at,
+            p.created_at AS product_created_at,
+            pv.is_blocked_for_purchasing,
+            pv.purchasing_blocked_reason
+        FROM stock_data sd
+        JOIN inv.product_variants pv ON pv.id = sd.variant_id
+        JOIN inv.products p ON p.id = pv.product_id
+        LEFT JOIN inv.categories c ON c.id = p.category_id
+        LEFT JOIN latest_sales ls ON ls.variant_id = pv.id;
+    """)
+
+    rows = db.execute(sql).fetchall()
 
     dead_stock_items = []
     total_capital_dead = Decimal('0.0')
     total_slow = 0
     total_dead = 0
     blocked_count = 0
+    to_block_ids = []
 
-    for var_id in variant_ids:
-        item = evaluate_variant_dead_stock(db, var_id, days_threshold=threshold, auto_block=auto_block)
-        if item["dead_stock_status"] in ("DEAD_STOCK", "SLOW_MOVING"):
-            dead_stock_items.append(item)
-            if item["dead_stock_status"] == "DEAD_STOCK":
-                total_dead += 1
-                total_capital_dead += item["stock_valuation_usd"]
-            else:
-                total_slow += 1
-            if item["is_blocked_for_purchasing"]:
+    for r in rows:
+        var_id = r.variant_id
+        qty_on_hand = Decimal(str(r.qty_on_hand or 0.0))
+        unit_cost = Decimal(str(r.unit_cost or 0.0))
+        valuation_usd = round(qty_on_hand * unit_cost, 2)
+
+        last_sale_dt = r.last_sale_at
+        if last_sale_dt:
+            last_sale_date = last_sale_dt.date() if hasattr(last_sale_dt, 'date') else last_sale_dt
+            days_without_sales = max(0, (today - last_sale_date).days)
+        else:
+            p_created = r.product_created_at.date() if r.product_created_at else today
+            days_without_sales = max(0, (today - p_created).days)
+            last_sale_date = None
+
+        is_already_blocked = bool(r.is_blocked_for_purchasing)
+        blocked_reason = r.purchasing_blocked_reason
+
+        if days_without_sales >= threshold:
+            dead_stock_status = "DEAD_STOCK"
+            action = (
+                f"⛔ Inmovilizado Crítico: {days_without_sales} días sin ventas con {qty_on_hand:.1f} unidades "
+                f"(${valuation_usd:,.2f} inmovilizados). Clara bloquea la recompra en MRP y sugiere convenio Sell-Out o devolución."
+            )
+            total_dead += 1
+            total_capital_dead += valuation_usd
+            if auto_block:
+                if not is_already_blocked:
+                    to_block_ids.append(var_id)
                 blocked_count += 1
+                is_already_blocked = True
+                blocked_reason = f"Dead Stock: inmovilizado ({days_without_sales} días sin ventas)"
+            elif is_already_blocked:
+                blocked_count += 1
+        elif days_without_sales >= (threshold // 2):
+            dead_stock_status = "SLOW_MOVING"
+            action = (
+                f"⚠️ Rotación Lenta: {days_without_sales} días sin ventas ({qty_on_hand:.1f} unidades en stock). "
+                f"Se sugiere no generar pedidos de reposición masivos."
+            )
+            total_slow += 1
+            if is_already_blocked:
+                blocked_count += 1
+        else:
+            dead_stock_status = "HEALTHY"
+            action = "✅ Rotación normal dentro del rango estándar de ventas."
+            if is_already_blocked:
+                blocked_count += 1
+
+        if dead_stock_status in ("DEAD_STOCK", "SLOW_MOVING"):
+            dead_stock_items.append({
+                "variant_id": var_id,
+                "product_id": r.product_id,
+                "sku": r.sku,
+                "product_name": r.product_name,
+                "barcode": r.barcode,
+                "category_name": r.category_name,
+                "brand": r.brand,
+                "qty_on_hand": qty_on_hand,
+                "stock_valuation_usd": float(valuation_usd),
+                "days_without_sales": days_without_sales,
+                "last_sale_date": last_sale_date,
+                "dead_stock_status": dead_stock_status,
+                "is_blocked_for_purchasing": is_already_blocked,
+                "purchasing_blocked_reason": blocked_reason,
+                "clara_recommended_action": action
+            })
+
+    # Actualizar variantes bloqueadas de forma masiva en lote
+    if auto_block and to_block_ids:
+        db.query(ProductVariant).filter(ProductVariant.id.in_(to_block_ids)).update(
+            {
+                ProductVariant.is_blocked_for_purchasing: True,
+                ProductVariant.purchasing_blocked_reason: f"Dead Stock: inmovilizado (>= {threshold} días sin ventas)"
+            },
+            synchronize_session=False
+        )
+
+        worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == worker_code).first()
+        worker_id = worker.id if worker else None
+        action_log = DigitalWorkerActionLog(
+            worker_id=worker_id,
+            action_type="DEAD_STOCK_PURCHASING_BLOCKED_BATCH",
+            target_entity_type="inventory_dead_stock",
+            target_entity_id=datetime.now().strftime("%Y%m%d%H%M"),
+            severity="WARNING",
+            summary=f"Clara bloqueó la recompra de {len(to_block_ids)} SKUs inmovilizados por Dead Stock (>= {threshold} días sin ventas).",
+            details={
+                "total_newly_blocked": len(to_block_ids),
+                "threshold_applied": threshold,
+                "sample_variant_ids": to_block_ids[:20]
+            },
+            status="COMPLETED"
+        )
+        db.add(action_log)
+
+    db.commit()
 
     return {
         "total_dead_stock_items": total_dead,

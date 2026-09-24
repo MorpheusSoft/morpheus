@@ -11,7 +11,7 @@ async def run_background_poller():
     from app.services.jobs_service import poll_and_execute_jobs
     while True:
         try:
-            poll_and_execute_jobs()
+            await asyncio.to_thread(poll_and_execute_jobs)
         except Exception as e:
             print(f"[CRON FATAL ERROR] {e}")
         await asyncio.sleep(60)

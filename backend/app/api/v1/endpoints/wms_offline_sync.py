@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from app.api import deps
 from app.models.inventory import (
     Warehouse, Location, Product, ProductVariant, ProductBarcode,
-    ProductPackaging, StockPicking, StockMove, StockPickingType, InventorySnapshot
+    ProductPackaging, StockPicking, StockMove, StockPickingType, InventorySnapshot,
+    InventorySession, InventoryLine
 )
 from app.models.core import Facility, User
 
@@ -39,6 +40,30 @@ class RelocationBatchPayload(BaseModel):
     operator_code: Optional[str] = None
     facility_id: Optional[int] = None
     items: List[RelocationSyncItem]
+
+class InventoryCountItem(BaseModel):
+    client_uuid: str
+    session_id: Optional[int] = None
+    barcode: Optional[str] = None
+    variant_id: Optional[int] = None
+    facility_id: Optional[int] = None
+    warehouse_id: Optional[int] = None
+    location_id: Optional[int] = None
+    counted_qty: float
+    uom: Optional[str] = "UND"
+    packaging_id: Optional[int] = None
+    factor: Optional[float] = 1.0
+    device_id: Optional[str] = None
+    operator_code: Optional[str] = None
+    offline_scanned_at: Optional[datetime] = None
+    notes: Optional[str] = None
+
+class InventoryCountBatchPayload(BaseModel):
+    device_id: Optional[str] = "PDA-UNKNOWN"
+    operator_code: Optional[str] = None
+    facility_id: Optional[int] = None
+    warehouse_id: Optional[int] = None
+    items: List[InventoryCountItem]
 
 # ==============================================================================
 # HELPER: Obtener o crear ubicación por defecto de almacén
@@ -419,5 +444,277 @@ def sync_offline_relocations(
         "synced": synced_count,
         "duplicates": duplicate_count,
         "discrepancies": discrepancy_count,
+        "results": results
+    }
+
+# ==============================================================================
+# 4. VERIFICADOR DE PRECIOS Y EXISTENCIAS EN TIEMPO REAL (Para PDA Online)
+# ==============================================================================
+@router.get("/product-inquiry")
+def get_product_inquiry(
+    code: str = Query(..., description="Código de barras o SKU del producto"),
+    facility_id: Optional[int] = Query(None, description="ID de la sucursal"),
+    db: Session = Depends(deps.get_db)
+):
+    """
+    Consulta rápida de producto por código de barras o SKU.
+    Retorna precios, empaques y existencias reales en la sucursal indicada.
+    """
+    clean = code.strip()
+    variant = None
+    # 1. Buscar en códigos de barra registrados
+    bar = db.query(ProductBarcode).filter(ProductBarcode.barcode == clean).first()
+    if bar:
+        variant = db.query(ProductVariant).filter(ProductVariant.id == bar.product_variant_id).first()
+    if not variant:
+        # 2. Buscar por código directo o SKU en variante
+        variant = db.query(ProductVariant).filter(
+            (ProductVariant.barcode == clean) | (ProductVariant.sku == clean)
+        ).first()
+
+    if not variant:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Producto con código '{code}' no encontrado en el sistema."
+        )
+
+    prod = variant.product
+
+    # Empaques
+    packagings = []
+    if prod and prod.packagings:
+        for p in prod.packagings:
+            packagings.append({
+                "id": p.id,
+                "name": p.name,
+                "qty_per_unit": float(p.qty_per_unit),
+                "calculated_price": round(float(variant.sales_price or 0.0) * float(p.qty_per_unit), 2)
+            })
+
+    # Códigos de barra adicionales
+    barcodes = [b.barcode for b in variant.barcodes if b.barcode]
+    if variant.barcode and variant.barcode not in barcodes:
+        barcodes.append(variant.barcode)
+
+    # Existencias de la sucursal (Snapshot)
+    stock_facility = 0.0
+    warehouses_stock = []
+    if facility_id:
+        snap = db.query(InventorySnapshot).filter(
+            InventorySnapshot.variant_id == variant.id,
+            InventorySnapshot.facility_id == facility_id
+        ).first()
+        if snap:
+            stock_facility = float(snap.stock_qty or 0.0)
+
+        # Listar almacenes de esta sucursal
+        whs = db.query(Warehouse).filter(
+            Warehouse.facility_id == facility_id,
+            Warehouse.is_scrap == False
+        ).all()
+        for w in whs:
+            warehouses_stock.append({
+                "warehouse_id": w.id,
+                "warehouse_name": w.name,
+                "warehouse_code": w.code,
+                "is_transit": w.is_transit
+            })
+
+    return {
+        "variant_id": variant.id,
+        "product_id": variant.product_id,
+        "sku": variant.sku,
+        "name": prod.name if prod else variant.sku,
+        "uom_base": (prod.uom_base if prod else "UND") or "UND",
+        "sales_price": float(variant.sales_price or 0.0),
+        "stock_facility": stock_facility,
+        "facility_id": facility_id,
+        "barcodes": barcodes,
+        "packagings": packagings,
+        "warehouses": warehouses_stock
+    }
+
+# ==============================================================================
+# 5. SESIONES DE INVENTARIO ACTIVAS (Para selección en la PDA)
+# ==============================================================================
+@router.get("/inventory-sessions")
+def get_sync_inventory_sessions(
+    facility_id: Optional[int] = Query(None, description="Filtrar por sucursal"),
+    db: Session = Depends(deps.get_db)
+):
+    """
+    Obtiene las sesiones de inventario abiertas (IN_PROGRESS o DRAFT) para la sucursal.
+    """
+    query = db.query(InventorySession).filter(InventorySession.state.in_(["IN_PROGRESS", "DRAFT"]))
+    if facility_id:
+        query = query.filter(InventorySession.facility_id == facility_id)
+    sessions = query.order_by(InventorySession.id.desc()).all()
+
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "facility_id": s.facility_id,
+            "warehouse_id": s.warehouse_id,
+            "scope_type": s.scope_type,
+            "state": s.state,
+            "date_start": s.date_start.isoformat() if s.date_start else None
+        }
+        for s in sessions
+    ]
+
+# ==============================================================================
+# 6. SINCRONIZACIÓN DE CONTEOS FÍSICOS (Toma de Inventario PDA)
+# ==============================================================================
+@router.post("/inventory-counts", status_code=status.HTTP_200_OK)
+def sync_inventory_counts(
+    payload: InventoryCountBatchPayload,
+    db: Session = Depends(deps.get_db)
+):
+    """
+    Procesa un lote de conteos físicos registrados offline por la PDA.
+    Actualiza o crea las líneas de inventario (InventoryLine) de forma acumulativa e idempotente.
+    """
+    if not payload.items:
+        return {"message": "Lote vacío", "synced": 0, "results": []}
+
+    results = []
+    synced_count = 0
+    duplicate_count = 0
+
+    target_facility_id = payload.facility_id
+    target_warehouse_id = payload.warehouse_id
+    default_session = None
+
+    for item in payload.items:
+        # A. Idempotencia: Verificar si client_uuid ya fue procesado en InventoryLine
+        existing_recorded = db.query(InventoryLine).filter(
+            InventoryLine.notes.like(f"%UUID:{item.client_uuid}%")
+        ).first()
+        if existing_recorded:
+            duplicate_count += 1
+            results.append({
+                "client_uuid": item.client_uuid,
+                "status": "ALREADY_SYNCED",
+                "message": "Conteo ya registrado anteriormente."
+            })
+            continue
+
+        # B. Resolver variante de producto
+        variant = None
+        if item.variant_id:
+            variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
+        if not variant and item.barcode:
+            clean_code = item.barcode.strip()
+            bar = db.query(ProductBarcode).filter(ProductBarcode.barcode == clean_code).first()
+            if bar:
+                variant = db.query(ProductVariant).filter(ProductVariant.id == bar.product_variant_id).first()
+            if not variant:
+                variant = db.query(ProductVariant).filter(
+                    (ProductVariant.barcode == clean_code) | (ProductVariant.sku == clean_code)
+                ).first()
+
+        if not variant:
+            results.append({
+                "client_uuid": item.client_uuid,
+                "status": "ERROR",
+                "message": f"Producto con código '{item.barcode}' no encontrado en el sistema."
+            })
+            continue
+
+        # C. Multiplicador por empaque o factor
+        multiplier = float(item.factor or 1.0)
+        if item.packaging_id and item.packaging_id > 0:
+            pkg = db.query(ProductPackaging).filter(ProductPackaging.id == item.packaging_id).first()
+            if pkg:
+                multiplier = float(pkg.qty_per_unit)
+
+        base_counted_qty = round(float(item.counted_qty) * multiplier, 4)
+
+        # D. Resolver Sesión de Inventario
+        session = None
+        if item.session_id:
+            session = db.query(InventorySession).filter(InventorySession.id == item.session_id).first()
+
+        if not session:
+            # Buscar sesión IN_PROGRESS para la sucursal o crear una automática
+            if not default_session:
+                sess_query = db.query(InventorySession).filter(InventorySession.state == "IN_PROGRESS")
+                fac_id = item.facility_id or target_facility_id
+                if fac_id:
+                    sess_query = sess_query.filter(InventorySession.facility_id == fac_id)
+                default_session = sess_query.order_by(InventorySession.id.desc()).first()
+
+                if not default_session:
+                    wh_id = item.warehouse_id or target_warehouse_id
+                    wh = db.query(Warehouse).filter(Warehouse.id == wh_id).first() if wh_id else None
+                    resolved_fac_id = wh.facility_id if wh else (item.facility_id or target_facility_id)
+                    fac = db.query(Facility).filter(Facility.id == resolved_fac_id).first() if resolved_fac_id else None
+                    fac_name = fac.name if fac else f"SUCURSAL-{resolved_fac_id}"
+
+                    default_session = InventorySession(
+                        name=f"Toma PDA [{fac_name}] {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                        facility_id=resolved_fac_id,
+                        warehouse_id=wh_id,
+                        scope_type="GENERAL",
+                        state="IN_PROGRESS"
+                    )
+                    db.add(default_session)
+                    db.flush()
+            session = default_session
+
+        # E. Actualizar o agregar línea de inventario
+        line = db.query(InventoryLine).filter(
+            InventoryLine.session_id == session.id,
+            InventoryLine.product_variant_id == variant.id
+        ).first()
+
+        device_str = item.device_id or payload.device_id or "PDA"
+        op_str = item.operator_code or payload.operator_code or "OP"
+        audit_tag = f"UUID:{item.client_uuid} [+{base_counted_qty} {op_str}@{device_str}]"
+
+        if line:
+            line.counted_qty = float(line.counted_qty or 0.0) + base_counted_qty
+            line.notes = f"{line.notes or ''} | {audit_tag}".strip(" |")
+            line.updated_at = datetime.now()
+        else:
+            theo_qty = 0.0
+            snap = db.query(InventorySnapshot).filter(
+                InventorySnapshot.variant_id == variant.id,
+                InventorySnapshot.facility_id == session.facility_id
+            ).first()
+            if snap:
+                theo_qty = float(snap.stock_qty or 0.0)
+
+            line = InventoryLine(
+                session_id=session.id,
+                product_variant_id=variant.id,
+                location_id=item.location_id,
+                theoretical_qty=theo_qty,
+                counted_qty=base_counted_qty,
+                notes=audit_tag,
+                updated_at=datetime.now()
+            )
+            db.add(line)
+
+        db.flush()
+        synced_count += 1
+        results.append({
+            "client_uuid": item.client_uuid,
+            "status": "SYNCED",
+            "session_id": session.id,
+            "line_id": line.id,
+            "counted_qty": base_counted_qty,
+            "total_counted_line": float(line.counted_qty or 0.0),
+            "message": "Conteo registrado exitosamente."
+        })
+
+    db.commit()
+
+    return {
+        "message": f"Conteos sincronizados: {synced_count}, Duplicados: {duplicate_count}.",
+        "total_processed": len(payload.items),
+        "synced": synced_count,
+        "duplicates": duplicate_count,
         "results": results
     }

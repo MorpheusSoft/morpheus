@@ -743,7 +743,7 @@ async def process_telegram_message(
 
             try:
                 from app.services.dead_stock_pdf_service import generate_dead_stock_pdf
-                pdf_res = generate_dead_stock_pdf(db=db, days_threshold=days_threshold)
+                pdf_res = await asyncio.to_thread(generate_dead_stock_pdf, db=db, days_threshold=days_threshold)
 
                 total_cap = pdf_res.get("total_capital_immobilized_usd", 0.0)
                 dead_skus = pdf_res.get("total_dead_stock", 0)
@@ -770,7 +770,8 @@ async def process_telegram_message(
 
                 # Enviar PDF adjunto al chat de Telegram
                 filename = f"NeoERP_Reporte_Dead_Stock_{days_threshold}dias.pdf"
-                send_telegram_document_sync(
+                await asyncio.to_thread(
+                    send_telegram_document_sync,
                     chat_id=chat_id,
                     file_bytes=pdf_res["pdf_bytes"],
                     filename=filename,

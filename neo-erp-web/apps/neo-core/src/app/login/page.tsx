@@ -1,5 +1,8 @@
 import LoginForm from "./LoginForm"
 
+export const dynamic = "force-dynamic"
+export const revalidate = 0
+
 export const metadata = {
   title: "Login | Neo ERP"
 }
