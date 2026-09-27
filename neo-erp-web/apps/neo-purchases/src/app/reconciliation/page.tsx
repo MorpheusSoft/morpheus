@@ -217,6 +217,8 @@ export default function ReconciliationPage() {
         name: l.product_name,
         uom: l.uom_base,
         pack_name: l.pack_name,
+        qty_per_pack: Number(l.qty_per_pack || 1),
+        qty_ordered_packs: Number(l.qty_ordered || 0),
         ordered_qty: Number(l.expected_base_qty),
         received_qty: Number(l.received_base_qty),
         billed_qty: Number(l.billed_qty !== null ? l.billed_qty : l.received_base_qty),
@@ -1088,8 +1090,14 @@ export default function ReconciliationPage() {
                   body={(r) => {
                     const isWeight = isWeightUom(r.uom);
                     const dec = isWeight ? 3 : 0;
+                    const isPack = (r.qty_per_pack || 1) > 1;
                     return (
                       <div className="flex flex-col items-end gap-0.5 text-right font-medium">
+                        {isPack && (
+                          <span className="text-[10px] font-black text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">
+                            {r.qty_ordered_packs} {r.pack_name || 'Bultos'} (x{r.qty_per_pack})
+                          </span>
+                        )}
                         <span className="text-slate-600 font-bold">
                           {r.ordered_qty.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })} {r.uom}
                         </span>
@@ -1101,7 +1109,7 @@ export default function ReconciliationPage() {
                     );
                   }}
                   align="right"
-                  style={{ width: '130px' }}
+                  style={{ width: '150px' }}
                 />
 
                 {/* Col 2: WMS Recepción Muelle */}
@@ -1111,8 +1119,15 @@ export default function ReconciliationPage() {
                     const isShort = r.received_qty < r.ordered_qty;
                     const isWeight = isWeightUom(r.uom);
                     const dec = isWeight ? 3 : 0;
+                    const isPack = (r.qty_per_pack || 1) > 1;
+                    const recPacks = isPack ? parseFloat((r.received_qty / r.qty_per_pack).toFixed(1)) : null;
                     return (
                       <div className="flex flex-col items-end gap-0.5 text-right font-medium">
+                        {isPack && (
+                          <span className="text-[10px] font-bold text-slate-500">
+                            ≈ {recPacks} {r.pack_name || 'Bultos'}
+                          </span>
+                        )}
                         <span className={`font-black px-1.5 py-0.5 rounded ${isShort ? 'bg-amber-100 text-amber-800' : 'bg-emerald-50 text-emerald-700'}`}>
                           {r.received_qty.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })} {r.uom}
                         </span>
@@ -1124,7 +1139,7 @@ export default function ReconciliationPage() {
                     );
                   }}
                   align="right"
-                  style={{ width: '140px' }}
+                  style={{ width: '150px' }}
                 />
 
                 {/* Col 3: Factura Proveedor */}
@@ -1135,8 +1150,15 @@ export default function ReconciliationPage() {
                     const isQtyOver = r.billed_qty > r.received_qty;
                     const isWeight = isWeightUom(r.uom);
                     const dec = isWeight ? 3 : 0;
+                    const isPack = (r.qty_per_pack || 1) > 1;
+                    const billedPacks = isPack ? parseFloat((r.billed_qty / r.qty_per_pack).toFixed(1)) : null;
                     return (
                       <div className="flex flex-col items-end gap-1.5 bg-indigo-50/40 p-2 rounded-lg border border-indigo-100">
+                        {isPack && (
+                          <span className="text-[10px] font-bold text-indigo-800 self-start">
+                            ≈ {billedPacks} {r.pack_name || 'Bultos'}
+                          </span>
+                        )}
                         <div className="flex items-center gap-2">
                           <span className="text-[10px] font-bold text-slate-500">Cant:</span>
                           <InputNumber

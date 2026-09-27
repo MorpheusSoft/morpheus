@@ -112,6 +112,19 @@ export default function NewOrderPage() {
     api.get('/facilities/?limit=1000')
       .then(res => setFacilities(res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : [])))
       .catch(err => console.error(err));
+
+    api.get('/users/me')
+      .then(res => {
+        const user = res.data;
+        const savedFacility = typeof window !== 'undefined' ? (localStorage.getItem('morpheus_wms_facility') || localStorage.getItem('morpheus_facility')) : null;
+        if (savedFacility) {
+          const parsed = parseInt(savedFacility, 10);
+          if (parsed > 0) setSelectedFacilityId(parsed);
+        } else if (user?.facilities && user.facilities.length > 0) {
+          setSelectedFacilityId(user.facilities[0].id);
+        }
+      })
+      .catch(err => console.error(err));
       
     api.get('/categories/?limit=1000')
       .then(res => setCategories(res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : [])))
@@ -146,12 +159,12 @@ export default function NewOrderPage() {
              setCatalog([]);
         });
         
-      const supplier = suppliers.find(s => s.id === selectedSupplierId);
-      if (supplier && supplier.default_facility_id) {
-          setSelectedFacilityId(supplier.default_facility_id);
-      } else {
-          setSelectedFacilityId(null);
-      }
+      // No sobreescribir la sucursal del usuario logueado; solo asignar si no tiene ninguna seleccionada
+      setSelectedFacilityId(prev => {
+        if (prev) return prev;
+        const supplier = suppliers.find(s => s.id === selectedSupplierId);
+        return supplier?.default_facility_id || null;
+      });
       
       // Reseteamos las líneas porque son de otro proveedor
       setLines([]);
@@ -268,7 +281,10 @@ export default function NewOrderPage() {
   const addLine = () => {
     if (!selectedProduct) return;
     
+    // Si no ha seleccionado empaque específico, priorizar el empaque asociado al producto o el primer empaque disponible
     const chosenPack = (selectedProduct.available_packagings || []).find((p: any) => p.id === selectedPackId) 
+        || (selectedProduct.available_packagings || []).find((p: any) => p.id === selectedProduct.pack_id)
+        || (selectedProduct.available_packagings || []).find((p: any) => p.id !== null)
         || { id: null, name: 'Und. Base', qty_per_unit: 1, label: 'Unidad Base (x1)' };
         
     if (lines.some(l => l.variant_id === selectedProduct.variant_id && l.pack_id === chosenPack.id)) {
@@ -339,6 +355,23 @@ export default function NewOrderPage() {
               qty_ordered: cleanQty,
               expected_base_qty: expected_base,
               subtotal: expected_base * (row.unit_cost || 0)
+          };
+      }));
+  };
+
+  // Sincronización bidireccional desde Unidades Base hacia Bultos
+  const handleBaseQtyChange = (internalId: string, newBaseQty: number) => {
+      setLines(prev => prev.map(row => {
+          if (row.internal_id !== internalId) return row;
+          const factor = (row.qty_per_pack && row.qty_per_pack > 0) ? row.qty_per_pack : 1;
+          const isWeight = isWeightUom(row.uom_base);
+          const cleanBase = isWeight ? parseFloat(newBaseQty.toFixed(3)) : Math.round(newBaseQty);
+          const computedPacks = factor > 1 ? parseFloat((cleanBase / factor).toFixed(2)) : cleanBase;
+          return {
+              ...row,
+              qty_ordered: computedPacks,
+              expected_base_qty: cleanBase,
+              subtotal: cleanBase * (row.unit_cost || 0)
           };
       }));
   };
@@ -1642,42 +1675,94 @@ PRD-4297	5`}
              </div>
           )} align="center" />
           
-          <Column header="Cant. a Comprar" style={{ minWidth: '120px' }} body={(r) => {
+          <Column header="Cant. a Comprar" style={{ minWidth: '220px' }} body={(r) => {
              const isPack = (r.qty_per_pack || 1) > 1;
              const isWeight = !isPack && isWeightUom(r.uom_base);
              const uomLabel = r.uom_base || 'UND';
+
+             if (!isPack) {
+                 return (
+                     <div className="flex items-center justify-center gap-1.5">
+                         <input 
+                            type="number" 
+                            value={r.qty_ordered} 
+                            min="0"
+                            step={isWeight ? "0.001" : "1"}
+                            onKeyDown={(e) => preventDecimalKey(e, isWeight)}
+                            onChange={(e) => {
+                               const raw = e.target.value;
+                               if (raw === '') {
+                                  handleQtyChange(r.internal_id, 0);
+                                  return;
+                               }
+                               const parsed = isWeight ? parseFloat(raw.replace(',', '.')) : parseInt(raw, 10);
+                               handleQtyChange(r.internal_id, isNaN(parsed) ? 0 : parsed);
+                            }}
+                            className={`w-24 text-center text-sm font-black p-1.5 rounded-lg border-2 outline-none shadow-inner ${
+                               r.qty_ordered === 0 
+                                  ? 'border-amber-200 bg-amber-50 text-amber-700' 
+                                  : 'border-indigo-200 bg-indigo-50/70 text-indigo-700 focus:border-indigo-500'
+                            }`} 
+                         />
+                         <span className="text-xs font-bold text-slate-500">{uomLabel}</span>
+                     </div>
+                 );
+             }
+
              return (
-                 <div className="flex flex-col items-center gap-1">
-                     <input 
-                        type="number" 
-                        value={r.qty_ordered} 
-                        min="0"
-                        step={isWeight ? "0.001" : "1"}
-                        onKeyDown={(e) => preventDecimalKey(e, isWeight)}
-                        onChange={(e) => {
-                           const raw = e.target.value;
-                           if (raw === '') {
-                              handleQtyChange(r.internal_id, 0);
-                              return;
-                           }
-                           const parsed = isWeight ? parseFloat(raw.replace(',', '.')) : parseInt(raw, 10);
-                           handleQtyChange(r.internal_id, isNaN(parsed) ? 0 : parsed);
-                        }}
-                        className={`w-20 text-center text-base font-black p-1.5 rounded-lg border-2 outline-none shadow-inner ${
-                           r.qty_ordered === 0 
-                              ? 'border-amber-200 bg-amber-50 text-amber-700' 
-                              : 'border-indigo-200 bg-indigo-50/70 text-indigo-700 focus:border-indigo-500'
-                        }`} 
-                     />
-                     {isPack ? (
-                         <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
-                            = {r.expected_base_qty} {uomLabel}
-                         </span>
-                     ) : (
-                         <span className="text-[10px] font-semibold text-slate-400">
-                            {r.qty_ordered} {uomLabel}
-                         </span>
-                     )}
+                 <div className="flex items-center justify-center gap-2 bg-slate-50/80 p-1.5 rounded-xl border border-slate-200">
+                     {/* Cantidad Bultos */}
+                     <div className="flex flex-col items-center">
+                         <span className="text-[9px] font-black uppercase text-indigo-600 tracking-wider">Bultos</span>
+                         <input 
+                            type="number" 
+                            value={r.qty_ordered} 
+                            min="0"
+                            step="1"
+                            onChange={(e) => {
+                               const raw = e.target.value;
+                               if (raw === '') {
+                                  handleQtyChange(r.internal_id, 0);
+                                  return;
+                               }
+                               handleQtyChange(r.internal_id, parseFloat(raw) || 0);
+                            }}
+                            className={`w-16 text-center text-sm font-black p-1 rounded-lg border-2 outline-none shadow-inner ${
+                               r.qty_ordered === 0 
+                                  ? 'border-amber-200 bg-amber-50 text-amber-700' 
+                                  : 'border-indigo-400 bg-white text-indigo-900 focus:border-indigo-600'
+                            }`} 
+                            title="Cantidad en bultos/empaques"
+                         />
+                     </div>
+
+                     {/* Factor multiplicador */}
+                     <span className="text-[10px] font-black text-slate-400 mt-3">x{r.qty_per_pack} =</span>
+
+                     {/* Total Unidades sincronizado */}
+                     <div className="flex flex-col items-center">
+                         <span className="text-[9px] font-black uppercase text-emerald-600 tracking-wider">Unidades ({uomLabel})</span>
+                         <input 
+                            type="number" 
+                            value={r.expected_base_qty} 
+                            min="0"
+                            step="1"
+                            onChange={(e) => {
+                               const raw = e.target.value;
+                               if (raw === '') {
+                                  handleBaseQtyChange(r.internal_id, 0);
+                                  return;
+                               }
+                               handleBaseQtyChange(r.internal_id, parseFloat(raw) || 0);
+                            }}
+                            className={`w-20 text-center text-sm font-black p-1 rounded-lg border-2 outline-none shadow-inner ${
+                               r.expected_base_qty === 0 
+                                  ? 'border-amber-200 bg-amber-50 text-amber-700' 
+                                  : 'border-emerald-400 bg-emerald-50/50 text-emerald-900 focus:border-emerald-600'
+                            }`} 
+                            title="Total de unidades sueltas netas"
+                         />
+                     </div>
                  </div>
              );
           }} align="center" />
