@@ -134,3 +134,40 @@ def test_supplier_calendar_schedule_display(db: Session):
     assert "Lunes" in cal_text
     assert "Martes" in cal_text
     assert "Miércoles" in cal_text
+
+
+def test_parse_order_intent_facility_extraction():
+    """
+    Verifica que parse_order_intent extraiga correctamente la sucursal
+    incluso si incluye prefijo de empresa ('CATANIA BELISA') o apodo fonético ('Belice').
+    """
+    from app.services.clara_purchases_service import parse_order_intent
+
+    sup, fac, cat, items = parse_order_intent("/crear_odc PLUMROSE LATINOAMERICANA, C.A. en CATANIA BELISA")
+    assert sup == "PLUMROSE LATINOAMERICANA, C.A."
+    assert fac == "CATANIA BELISA"
+    assert cat is None
+    assert items is None
+
+    sup2, fac2, _, _ = parse_order_intent("/crear_odc PLUMROSE LATINOAMERICANA, C.A. en Belice")
+    assert sup2 == "PLUMROSE LATINOAMERICANA, C.A."
+    assert fac2 == "Belice"
+
+    sup3, fac3, _, _ = parse_order_intent("/crear_odc PLUMROSE LATINOAMERICANA, C.A. en Belisa")
+    assert sup3 == "PLUMROSE LATINOAMERICANA, C.A."
+    assert fac3 == "Belisa"
+
+
+def test_order_creation_response_includes_neo_erp_closing_guidance():
+    """
+    Verifica que la guía de cierre en Neo ERP esté presente con pasos e instrucciones claras.
+    """
+    from app.services.clara_purchases_service import format_neo_erp_order_guidance
+
+    guidance = format_neo_erp_order_guidance(order_id=123, order_ref="ODC-2026-00123")
+    assert "ODC-2026-00123" in guidance
+    assert "Neo ERP" in guidance
+    assert "Neo Compras" in guidance
+    assert "Confirmar Orden" in guidance
+    assert "https://compras.qa.morpheussoft.net/orders/123" in guidance
+

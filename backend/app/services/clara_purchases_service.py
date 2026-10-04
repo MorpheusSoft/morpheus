@@ -241,7 +241,53 @@ def format_product_360_telegram(item: Dict[str, Any]) -> str:
     )
 
 
-KNOWN_FACILITIES = ["tucacas", "belisa", "cumboto", "maracay", "cendi", "trigal", "palma", "moron"]
+def format_neo_erp_order_guidance(order_id: Optional[int] = None, order_ref: Optional[str] = None) -> str:
+    """
+    Construye las instrucciones ejecutivas paso a paso para que el comprador
+    valide, ajuste y cierre/apruebe la orden en Neo ERP (Neo Compras).
+    """
+    ref_txt = f"`{order_ref}`" if order_ref else "la orden"
+    base_url = "https://compras.qa.morpheussoft.net"
+    link_url = f"{base_url}/orders/{order_id}" if order_id else f"{base_url}/orders"
+
+    lines = [
+        "───────────────────",
+        "📋 *¿Cómo validar y cerrar esta orden en Neo ERP?*",
+        f"1️⃣ *Acceder a la Orden:* [Abrir {ref_txt} en Neo Compras]({link_url})",
+        "   _(O ingresa vía menú: **Neo ERP ➔ Neo Compras ➔ Órdenes de Compra**) ._",
+        f"2️⃣ *Revisar Líneas:* Abre {ref_txt} para cotejar costos unitarios, empaques y cantidades sugeridas.",
+        "3️⃣ *Ajustar (Opcional):* Puedes modificar cantidades o excluir renglones según el acuerdo comercial con el proveedor.",
+        "4️⃣ *Cerrar y Emitir:* Haz clic en el botón superior **\"Confirmar Orden\"** (o **\"Aprobar\"**) para cerrarla. Su estado cambiará de `DRAFT` (Borrador) a `CONFIRMED`.",
+        "5️⃣ *Recepción en Muelle:* Al confirmarla, la orden queda formalmente emitida y se enruta de inmediato a **Neo Logística / Neo WMS** para su recepción física contra factura."
+    ]
+    return "\n".join(lines)
+
+
+def format_neo_erp_multi_order_guidance() -> str:
+    """
+    Instrucciones para validar y cerrar múltiples órdenes generadas por sucursal.
+    """
+    base_url = "https://compras.qa.morpheussoft.net"
+    lines = [
+        "───────────────────",
+        "📋 *¿Cómo validar y cerrar estas órdenes en Neo ERP?*",
+        f"1️⃣ *Acceder al Listado:* [Abrir Órdenes en Neo Compras]({base_url}/orders)",
+        "   _(Menú: **Neo ERP ➔ Neo Compras ➔ Órdenes de Compra**) ._",
+        "2️⃣ En la tabla verás los borradores independientes creados para cada sucursal con déficit.",
+        "3️⃣ Abre cada orden para verificar precios, renglones y condiciones comerciales.",
+        "4️⃣ Haz clic en **\"Confirmar Orden\"** en cada una para cerrarlas y emitirlas formalmente hacia los despachos y muelles de cada sede."
+    ]
+    return "\n".join(lines)
+
+
+FACILITY_ALIASES = [
+    "catania belisa", "catania belice", "catania tucacas", "catania cumboto", "catania maracay",
+    "catania cendi", "catania moron", "catania palma", "catania trigal",
+    "centro de distribucion", "cendi", "distribucion",
+    "belisa", "belice", "tucacas", "cumboto", "maracay", "moron", "palma", "trigal"
+]
+KNOWN_FACILITIES = sorted(FACILITY_ALIASES, key=len, reverse=True)
+
 
 def parse_order_intent(text: str) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[List[Dict[str, Any]]]]:
     """
@@ -333,18 +379,48 @@ def parse_order_intent(text: str) -> Tuple[Optional[str], Optional[str], Optiona
             fac_query = "todas"
             clean = clean[:m_todas.start()] + " " + clean[m_todas.end():]
         else:
-            # Chequear 'sucursal X' / 'sede X' / 'tienda X'
-            m_fac = re.search(r"\b(?:sucursal|sede|tienda)\s+([a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]+)", clean, re.IGNORECASE)
-            if m_fac:
-                fac_query = m_fac.group(1).strip()
-                clean = clean[:m_fac.start()] + " " + clean[m_fac.end():]
-            else:
+            # 1. Chequear sedes conocidas con conector explícito: "en Catania Belisa", "para Belisa", "en la sucursal Catania Belisa"
+            for kf in KNOWN_FACILITIES:
+                m_kf = re.search(rf"\b(?:en|para)\s+(?:(?:la|el)\s+)?(?:(?:sucursal|sede|tienda|almac[eé]n)\s+)?(?:de\s+)?\b({re.escape(kf)})\b", clean, re.IGNORECASE)
+                if m_kf:
+                    fac_query = m_kf.group(1).strip()
+                    clean = clean[:m_kf.start()] + " " + clean[m_kf.end():]
+                    break
+
+            # 2. Chequear con prefijo "sucursal/sede/tienda": "sucursal Catania Belisa"
+            if not fac_query:
                 for kf in KNOWN_FACILITIES:
-                    m_kf = re.search(rf"\b(?:en|para)\s+({kf})\b", clean, re.IGNORECASE)
+                    m_kf = re.search(rf"\b(?:sucursal|sede|tienda|almac[eé]n)\s+(?:de\s+)?\b({re.escape(kf)})\b", clean, re.IGNORECASE)
                     if m_kf:
                         fac_query = m_kf.group(1).strip()
                         clean = clean[:m_kf.start()] + " " + clean[m_kf.end():]
                         break
+
+            # 3. Chequear si la sede conocida está al final del texto ("... Catania Belisa")
+            if not fac_query:
+                for kf in KNOWN_FACILITIES:
+                    m_kf = re.search(rf"\b({re.escape(kf)})\s*$", clean, re.IGNORECASE)
+                    if m_kf:
+                        fac_query = m_kf.group(1).strip()
+                        clean = clean[:m_kf.start()] + " " + clean[m_kf.end():]
+                        break
+
+            # 4. Fallback al final del texto: "... en [Nombre de Sede]"
+            if not fac_query:
+                m_end = re.search(r"\s+\b(?:en|para)\s+(?:(?:la|el)\s+)?(?:(?:sucursal|sede|tienda|almac[eé]n)\s+)?([a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s]+)$", clean, re.IGNORECASE)
+                if m_end and len(m_end.group(1).strip()) <= 35:
+                    candidate = m_end.group(1).strip()
+                    # Evitar colisión con palabras comunes de ítems
+                    if not any(w in candidate.lower() for w in ["bulto", "caja", "unidad", "categoria", "rubro"]):
+                        fac_query = candidate
+                        clean = clean[:m_end.start()].strip()
+
+            # 5. Chequear 'sucursal X' / 'sede X' / 'tienda X' genérica
+            if not fac_query:
+                m_fac = re.search(r"\b(?:sucursal|sede|tienda|almac[eé]n)\s+([a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s]+?)(?=\s+(?:categoria|rubro|dpto|departamento|con)\b|$)", clean, re.IGNORECASE)
+                if m_fac:
+                    fac_query = m_fac.group(1).strip()
+                    clean = clean[:m_fac.start()] + " " + clean[m_fac.end():]
 
     # D. Limpiar comandos y verbos iniciales para aislar proveedor
     clean = re.sub(
@@ -429,27 +505,70 @@ def create_supplier_po_from_chat(
 
     if facility_query:
         clean_fq = strip_accents(facility_query.strip().lower())
+        clean_fq = clean_fq.replace("belice", "belisa")
         if any(w in clean_fq for w in ["todas", "todas las tiendas", "todas las sucursales", "todas las sedes", "todos los almacenes"]):
             is_multi_facility = True
         else:
             all_active_facs = db.query(Facility).filter(Facility.is_active == True).all()
-            matched_fac = next((f for f in all_active_facs if clean_fq in strip_accents(f.name.lower()) or clean_fq in strip_accents((f.code or '').lower())), None)
+            matched_fac = next((
+                f for f in all_active_facs
+                if clean_fq in strip_accents(f.name.lower())
+                or strip_accents(f.name.lower()) in clean_fq
+                or clean_fq in strip_accents((f.code or '').lower())
+            ), None)
+
+            if not matched_fac and any(w in clean_fq for w in ["cendi", "distribucion"]):
+                matched_fac = db.query(Facility).filter(Facility.is_active == True, Facility.is_distribution_center == True).first()
+
+            if not matched_fac:
+                fq_tokens = set(re.findall(r"\w+", clean_fq))
+                noise = {"catania", "sede", "sucursal", "tienda", "almacen", "el", "la", "en", "para"}
+                meaningful_q = fq_tokens - noise
+                if meaningful_q:
+                    for f in all_active_facs:
+                        f_tokens = set(re.findall(r"\w+", strip_accents(f.name.lower()))) - noise
+                        if meaningful_q & f_tokens:
+                            matched_fac = f
+                            break
+
             if matched_fac:
                 target_facility_id = matched_fac.id
                 target_facility_name = matched_fac.name
-            elif any(w in clean_fq for w in ["cendi", "distribucion"]):
-                cendi = db.query(Facility).filter(Facility.is_active == True, Facility.is_distribution_center == True).first()
-                if cendi:
-                    target_facility_id = cendi.id
-                    target_facility_name = cendi.name
+            else:
+                avail_names = [f.name for f in all_active_facs]
+                return {
+                    "success": False,
+                    "error": f"No se encontró la sucursal '{facility_query.strip()}'. Sucursales disponibles: {', '.join(avail_names)}."
+                }
 
     if not is_multi_facility and not target_facility_id:
-        if facility_id:
+        active_facs = db.query(Facility).filter(Facility.is_active == True).all()
+        # Detectar qué sede tiene déficit real para este proveedor
+        fac_with_deficit = []
+        for fac in active_facs:
+            try:
+                diag = diagnose_stockouts(db, facility_id=fac.id, supplier_id=supplier.id)
+                s_diag = next((s for s in diag.get("suppliers", []) if s["supplier_id"] == supplier.id), None)
+                if s_diag and s_diag.get("items"):
+                    fac_with_deficit.append((fac, len(s_diag["items"]), s_diag.get("estimated_total_cost", 0.0)))
+            except Exception:
+                continue
+
+        if len(fac_with_deficit) == 1:
+            target_facility_id = fac_with_deficit[0][0].id
+            target_facility_name = fac_with_deficit[0][0].name
+        elif len(fac_with_deficit) > 1:
+            fac_with_deficit.sort(key=lambda x: x[2], reverse=True)
+            target_facility_id = fac_with_deficit[0][0].id
+            target_facility_name = fac_with_deficit[0][0].name
+        elif facility_id:
             fac_obj = db.query(Facility).filter(Facility.id == facility_id).first()
+            target_facility_id = fac_obj.id if fac_obj else None
+            target_facility_name = fac_obj.name if fac_obj else "Sede Central"
         else:
-            fac_obj = db.query(Facility).filter(Facility.is_active == True).first()
-        target_facility_id = fac_obj.id if fac_obj else None
-        target_facility_name = fac_obj.name if fac_obj else "Sede Central"
+            fac_obj = active_facs[0] if active_facs else None
+            target_facility_id = fac_obj.id if fac_obj else None
+            target_facility_name = fac_obj.name if fac_obj else "Sede Central"
 
     facility_name = target_facility_name or "Sede Central"
 
@@ -531,6 +650,7 @@ def create_supplier_po_from_chat(
 
                 healthy_note = f"\n_💡 Sedes con cobertura suficiente (sin déficit): {', '.join(healthy_stores)}._" if healthy_stores else ""
 
+                guidance = format_neo_erp_multi_order_guidance()
                 return {
                     "success": True,
                     "mode": "MRP_MULTI_FACILITY",
@@ -543,9 +663,9 @@ def create_supplier_po_from_chat(
                         f"He evaluado el déficit de *{supplier.name}*{cat_txt} y generado los borradores correspondientes:\n\n"
                         + "\n".join(orders_lines) +
                         f"\n\n💰 *Total Global Estimado:* *${float(total_global_amount):,.2f} USD* ({total_global_lines} renglones en total)\n"
-                        f"🏷️ *Estado:* `DRAFT` (Borradores independientes listos para revisión y firma)"
+                        f"🏷️ *Estado:* `DRAFT` (Borradores independientes listos para revisión y cierre)"
                         f"{healthy_note}\n\n"
-                        f"_Disponibles en Neo ERP > Neo Compras para su gestión._"
+                        f"{guidance}"
                     )
                 }
 
@@ -582,6 +702,7 @@ def create_supplier_po_from_chat(
                 notes=f"Orden sugerida MRP generada vía {channel} por instrucción de {user_name}."
             )
 
+            guidance = format_neo_erp_order_guidance(po_res.get("order_id"), po_res.get("order_reference"))
             return {
                 "success": True,
                 "mode": "MRP_SUGGESTED",
@@ -594,11 +715,13 @@ def create_supplier_po_from_chat(
                 "lines_count": po_res["lines_count"],
                 "message": (
                     f"✅ *Orden de Compra Borrador Creada (Sugerido MRP)*\n\n"
-                    f"He preparado la orden *{po_res['order_reference']}* para *{supplier.name}* con destino a *{target_facility_name}*{cat_txt}.\n\n"
+                    f"He preparado exitosamente la orden *{po_res['order_reference']}* para *{supplier.name}* con destino a *{target_facility_name}*{cat_txt}.\n\n"
+                    f"📊 *Resumen de la Orden:*\n"
+                    f"• Sede Destino: *{target_facility_name}*\n"
                     f"• Total Estimado: *${po_res['total_amount']:,.2f} USD*\n"
                     f"• Renglones en Quiebre: *{po_res['lines_count']} ítems calculados*\n"
-                    f"• Estado: `DRAFT` (Borrador para confirmación y firma)\n\n"
-                    f"_Disponible en Neo ERP > Neo Compras para revisión._"
+                    f"• Estado: `DRAFT` (Borrador pendiente de validación y cierre)\n\n"
+                    f"{guidance}"
                 )
             }
         except Exception as e:
@@ -763,6 +886,7 @@ def create_supplier_po_from_chat(
         if unresolved_queries:
             unresolved_note = f"\n\n⚠️ _No se encontraron los siguientes ítems: {', '.join(unresolved_queries)}._"
 
+        guidance = format_neo_erp_order_guidance(po.id, po.reference)
         return {
             "success": True,
             "mode": "CUSTOM_ITEMS",
@@ -778,9 +902,9 @@ def create_supplier_po_from_chat(
                 + "\n".join(lines_summary) +
                 f"\n\n💰 *Total Estimado:* ${float(total_order_amount):,.2f} USD\n"
                 f"📋 *Renglones:* {len(resolved_lines)} productos\n"
-                f"🏷️ *Estado:* `DRAFT` (Borrador)"
+                f"🏷️ *Estado:* `DRAFT` (Borrador pendiente de validación y cierre)"
                 f"{unresolved_note}\n\n"
-                f"_Ya está disponible en Neo ERP para revisión y firma._"
+                f"{guidance}"
             )
         }
 
