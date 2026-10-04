@@ -202,7 +202,7 @@ def run_clara_proactive_purchasing_scan(
         try:
             action_log = DigitalWorkerActionLog(
                 worker_id=worker.id,
-                facility_id=1,
+                facility_id=None,
                 action_type="PROACTIVE_PURCHASING_SCAN",
                 severity="INFO",
                 summary=(

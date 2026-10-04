@@ -444,9 +444,12 @@ def create_supplier_po_from_chat(
                     target_facility_name = cendi.name
 
     if not is_multi_facility and not target_facility_id:
-        target_facility_id = facility_id or 1
-        fac_obj = db.query(Facility).filter(Facility.id == target_facility_id).first()
-        target_facility_name = fac_obj.name if fac_obj else f"Sede #{target_facility_id}"
+        if facility_id:
+            fac_obj = db.query(Facility).filter(Facility.id == facility_id).first()
+        else:
+            fac_obj = db.query(Facility).filter(Facility.is_active == True).first()
+        target_facility_id = fac_obj.id if fac_obj else None
+        target_facility_name = fac_obj.name if fac_obj else "Sede Central"
 
     facility_name = target_facility_name or "Sede Central"
 

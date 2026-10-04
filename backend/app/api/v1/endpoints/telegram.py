@@ -877,7 +877,7 @@ async def process_telegram_message(
                     "• `/crear_odc Alimentos Polar | 50 Harina Pan, 20 Primor` (Renglones específicos)\n"
                     "• *\"Clara, genera ODC de Alimentos Polar para Tucacas en la categoría Víveres\"*"
                 )
-            target_fac_id = user.facilities[0].id if (user and user.facilities) else 1
+            target_fac_id = user.facilities[0].id if (user and user.facilities) else None
             po_result = create_supplier_po_from_chat(
                 db=db,
                 supplier_query=sup_query,
