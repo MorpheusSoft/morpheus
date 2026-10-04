@@ -113,29 +113,63 @@ def diagnose_stockouts(
     fac_ids = list(facility_map.keys())
 
     # 3. Batch Prefetch para velocidad sub-segundo (elimina N+1 queries)
-    variants_map = {v.id: v for v in db.query(ProductVariant).filter(ProductVariant.is_active == True).all()}
-    products_map = {p.id: p for p in db.query(Product).all()}
-    suppliers_map = {s.id: s for s in db.query(Supplier).all()}
-    pack_map = {p.id: p for p in db.query(ProductPackaging).all()}
     categories_map = {c.id: c.name for c in db.query(Category).all()}
-    snapshots_map = {
-        (s.variant_id, s.facility_id): s 
-        for s in db.query(InventorySnapshot).filter(InventorySnapshot.facility_id.in_(fac_ids)).all()
-    }
-    facility_prices_map = {
-        (fp.variant_id, fp.facility_id): fp 
-        for fp in db.query(ProductFacilityPrice).filter(ProductFacilityPrice.facility_id.in_(fac_ids)).all()
-    }
-    
-    transit_rows = db.query(
-        PurchaseOrderLine.variant_id,
-        PurchaseOrder.dest_facility_id,
-        func.sum(PurchaseOrderLine.expected_base_qty)
-    ).join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.order_id)\
-    .filter(
-        PurchaseOrder.status.in_(['draft', 'approved', 'sent', 'viewed', 'confirmed', 'pending_approval']),
-        PurchaseOrder.dest_facility_id.in_(fac_ids)
-    ).group_by(PurchaseOrderLine.variant_id, PurchaseOrder.dest_facility_id).all()
+    target_var_ids = [sp.variant_id for sp in supplier_products]
+
+    if supplier_id and target_var_ids:
+        variants_map = {v.id: v for v in db.query(ProductVariant).filter(ProductVariant.id.in_(target_var_ids)).all()}
+        target_prod_ids = [v.product_id for v in variants_map.values()]
+        products_map = {p.id: p for p in db.query(Product).filter(Product.id.in_(target_prod_ids)).all()} if target_prod_ids else {}
+        suppliers_map = {s.id: s for s in db.query(Supplier).filter(Supplier.id == supplier_id).all()}
+        pack_ids = [sp.pack_id for sp in supplier_products if sp.pack_id]
+        pack_map = {p.id: p for p in db.query(ProductPackaging).filter(ProductPackaging.id.in_(pack_ids)).all()} if pack_ids else {}
+        snapshots_map = {
+            (s.variant_id, s.facility_id): s 
+            for s in db.query(InventorySnapshot).filter(
+                InventorySnapshot.facility_id.in_(fac_ids),
+                InventorySnapshot.variant_id.in_(target_var_ids)
+            ).all()
+        }
+        facility_prices_map = {
+            (fp.variant_id, fp.facility_id): fp 
+            for fp in db.query(ProductFacilityPrice).filter(
+                ProductFacilityPrice.facility_id.in_(fac_ids),
+                ProductFacilityPrice.variant_id.in_(target_var_ids)
+            ).all()
+        }
+        transit_rows = db.query(
+            PurchaseOrderLine.variant_id,
+            PurchaseOrder.dest_facility_id,
+            func.sum(PurchaseOrderLine.expected_base_qty)
+        ).join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.order_id)\
+        .filter(
+            PurchaseOrder.status.in_(['draft', 'approved', 'sent', 'viewed', 'confirmed', 'pending_approval']),
+            PurchaseOrder.dest_facility_id.in_(fac_ids),
+            PurchaseOrderLine.variant_id.in_(target_var_ids)
+        ).group_by(PurchaseOrderLine.variant_id, PurchaseOrder.dest_facility_id).all()
+    else:
+        variants_map = {v.id: v for v in db.query(ProductVariant).filter(ProductVariant.is_active == True).all()}
+        products_map = {p.id: p for p in db.query(Product).all()}
+        suppliers_map = {s.id: s for s in db.query(Supplier).all()}
+        pack_map = {p.id: p for p in db.query(ProductPackaging).all()}
+        snapshots_map = {
+            (s.variant_id, s.facility_id): s 
+            for s in db.query(InventorySnapshot).filter(InventorySnapshot.facility_id.in_(fac_ids)).all()
+        }
+        facility_prices_map = {
+            (fp.variant_id, fp.facility_id): fp 
+            for fp in db.query(ProductFacilityPrice).filter(ProductFacilityPrice.facility_id.in_(fac_ids)).all()
+        }
+        transit_rows = db.query(
+            PurchaseOrderLine.variant_id,
+            PurchaseOrder.dest_facility_id,
+            func.sum(PurchaseOrderLine.expected_base_qty)
+        ).join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.order_id)\
+        .filter(
+            PurchaseOrder.status.in_(['draft', 'approved', 'sent', 'viewed', 'confirmed', 'pending_approval']),
+            PurchaseOrder.dest_facility_id.in_(fac_ids)
+        ).group_by(PurchaseOrderLine.variant_id, PurchaseOrder.dest_facility_id).all()
+
     transit_map = {(row[0], row[1]): (row[2] or Decimal('0')) for row in transit_rows}
 
     # 4. Mapeo de proveedores y cálculo de líneas
