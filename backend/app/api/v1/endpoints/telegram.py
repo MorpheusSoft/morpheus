@@ -7,7 +7,7 @@ import urllib.request
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from fastapi import APIRouter, Request, Response, Depends, HTTPException, Header, Query
+from fastapi import APIRouter, Request, Response, Depends, HTTPException, Header, Query, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
@@ -453,7 +453,7 @@ def call_worker_gemini(
         )
 
 
-async def process_telegram_message(
+async def _process_telegram_message_core(
     chat_id: int,
     chat_type: str,
     text: str,
@@ -1166,26 +1166,109 @@ async def process_telegram_message(
         agent_code=clean_agent_code
     )
 
-    # Registrar mensaje saliente
-    if worker and conv:
-        db.add(DigitalWorkerMessage(
-            conversation_id=conv.id,
-            sender_type="WORKER",
-            content=ai_reply
-        ))
-        db.commit()
-
     return ai_reply
+
+
+async def process_telegram_message(
+    chat_id: int,
+    chat_type: str,
+    text: str,
+    username: Optional[str],
+    first_name: str,
+    agent_code: str,
+    db: Session
+) -> str:
+    """
+    Wrapper central que ejecuta el motor de comandos / razonamiento cognitivo y audita
+    todas las respuestas del trabajador digital en core.digital_worker_messages.
+    """
+    reply = await _process_telegram_message_core(
+        chat_id=chat_id,
+        chat_type=chat_type,
+        text=text,
+        username=username,
+        first_name=first_name,
+        agent_code=agent_code,
+        db=db
+    )
+
+    clean_code = (agent_code or "").upper()
+    try:
+        worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == clean_code).first()
+        if worker:
+            conv = db.query(DigitalWorkerConversation).filter(
+                DigitalWorkerConversation.worker_id == worker.id,
+                DigitalWorkerConversation.channel == "TELEGRAM",
+                DigitalWorkerConversation.external_sender_id == str(chat_id)
+            ).first()
+            if conv:
+                db.add(DigitalWorkerMessage(
+                    conversation_id=conv.id,
+                    sender_type="WORKER",
+                    content=reply
+                ))
+                db.commit()
+    except Exception as e:
+        logger.error(f"[TELEGRAM AUDIT] Error guardando respuesta del trabajador digital en BD: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    return reply
+
+
+async def handle_incoming_telegram_message_background(
+    chat_id: int,
+    chat_type: str,
+    text: str,
+    username: Optional[str],
+    first_name: str,
+    agent_code: str
+):
+    """
+    Procesador asíncrono en segundo plano para webhooks de Telegram.
+    Permite responder 200 OK inmediatamente a Telegram (< 50ms) evitando
+    cancelaciones por timeout HTTP mientras se procesan algoritmos pesados de MRP o PDFs.
+    """
+    from app.api.deps import SessionLocal
+    with SessionLocal() as db:
+        try:
+            reply = await process_telegram_message(
+                chat_id=chat_id,
+                chat_type=chat_type,
+                text=text,
+                username=username,
+                first_name=first_name,
+                agent_code=agent_code,
+                db=db
+            )
+            await send_telegram_message(
+                chat_id=chat_id,
+                text=reply,
+                agent_code=agent_code
+            )
+        except Exception as err:
+            logger.error(f"[TELEGRAM ERROR {agent_code}] {err}", exc_info=True)
+            try:
+                await send_telegram_message(
+                    chat_id=chat_id,
+                    text="⚠️ Disculpa, ocurrió un inconveniente interno procesando tu consulta. Por favor intenta de nuevo en unos momentos o usa `/ayuda`.",
+                    agent_code=agent_code
+                )
+            except Exception:
+                pass
 
 
 @router.post("/dante/webhook")
 async def dante_telegram_webhook(
     request: Request,
-    x_telegram_bot_api_secret_token: Optional[str] = Header(None),
-    db: Session = Depends(get_db)
+    background_tasks: BackgroundTasks,
+    x_telegram_bot_api_secret_token: Optional[str] = Header(None)
 ):
     """
     Webhook oficial para Dante TI (recibe actualizaciones de Telegram).
+    Responde 200 OK inmediatamente y delega el procesamiento en segundo plano.
     """
     # Verificar secreto de webhook si fue configurado
     expected_secret = settings.TELEGRAM_DANTE_WEBHOOK_SECRET
@@ -1214,27 +1297,17 @@ async def dante_telegram_webhook(
     if not chat_id or not text:
         return {"status": "ignored"}
 
-    try:
-        reply = await process_telegram_message(
-            chat_id=chat_id,
-            chat_type=chat_type,
-            text=text,
-            username=username,
-            first_name=first_name,
-            agent_code="DANTE_IT",
-            db=db
-        )
+    background_tasks.add_task(
+        handle_incoming_telegram_message_background,
+        chat_id=chat_id,
+        chat_type=chat_type,
+        text=text,
+        username=username,
+        first_name=first_name,
+        agent_code="DANTE_IT"
+    )
 
-        # Despachar respuesta de vuelta al usuario / grupo
-        await send_telegram_message(
-            chat_id=chat_id,
-            text=reply,
-            agent_code="DANTE_IT"
-        )
-    except Exception as err:
-        logger.error(f"[TELEGRAM DANTE ERROR] Error procesando mensaje de {chat_id}: {err}", exc_info=True)
-
-    # Retornar siempre 200 OK a Telegram para no bloquear la cola de updates
+    # Retornar siempre 200 OK a Telegram de inmediato para no bloquear la cola de updates
     return {"status": "ok"}
 
 
@@ -1242,11 +1315,12 @@ async def dante_telegram_webhook(
 async def generic_telegram_webhook(
     agent_code: str,
     request: Request,
-    x_telegram_bot_api_secret_token: Optional[str] = Header(None),
-    db: Session = Depends(get_db)
+    background_tasks: BackgroundTasks,
+    x_telegram_bot_api_secret_token: Optional[str] = Header(None)
 ):
     """
     Webhook multicanal extensible para cualquier Trabajador Digital de Neo ERP.
+    Responde 200 OK inmediatamente a Telegram y procesa de forma asíncrona.
     """
     clean_code = agent_code.upper()
     try:
@@ -1269,32 +1343,15 @@ async def generic_telegram_webhook(
     if not chat_id or not text:
         return {"status": "ignored"}
 
-    try:
-        reply = await process_telegram_message(
-            chat_id=chat_id,
-            chat_type=chat_type,
-            text=text,
-            username=username,
-            first_name=first_name,
-            agent_code=clean_code,
-            db=db
-        )
-
-        await send_telegram_message(
-            chat_id=chat_id,
-            text=reply,
-            agent_code=clean_code
-        )
-    except Exception as err:
-        logger.error(f"[TELEGRAM ERROR {clean_code}] {err}", exc_info=True)
-        try:
-            await send_telegram_message(
-                chat_id=chat_id,
-                text="⚠️ Disculpa, ocurrió un inconveniente interno procesando tu consulta. Por favor intenta de nuevo en unos momentos o usa `/ayuda`.",
-                agent_code=clean_code
-            )
-        except Exception:
-            pass
+    background_tasks.add_task(
+        handle_incoming_telegram_message_background,
+        chat_id=chat_id,
+        chat_type=chat_type,
+        text=text,
+        username=username,
+        first_name=first_name,
+        agent_code=clean_code
+    )
 
     return {"status": "ok"}
 

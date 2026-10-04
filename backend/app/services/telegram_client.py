@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from typing import Optional, Union, Dict, Any, List
@@ -90,7 +91,7 @@ async def send_telegram_message(
     disable_web_page_preview: bool = True
 ) -> bool:
     """
-    Despacha un mensaje asíncrono a Telegram mediante httpx.
+    Despacha un mensaje asíncrono a Telegram mediante httpx con reintentos para caídas transitorias.
     Si el parse_mode falla (por caracteres Markdown no escapados), reintenta automáticamente en texto plano.
     """
     token = bot_token or get_bot_token(agent_code)
@@ -107,25 +108,31 @@ async def send_telegram_message(
     if parse_mode:
         payload["parse_mode"] = parse_mode
 
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code == 200:
-                return True
+    for attempt in range(1, 3):
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(url, json=payload)
+                if resp.status_code == 200:
+                    return True
 
-            # Si falló por formato Markdown, reintentar sin parse_mode
-            err_body = resp.text
-            if "can't parse entities" in err_body or "parse" in err_body.lower():
-                logger.warning(f"[TELEGRAM CLIENT] Error de parseo Markdown, reintentando sin parse_mode: {err_body}")
-                payload.pop("parse_mode", None)
-                retry_resp = await client.post(url, json=payload)
-                return retry_resp.status_code == 200
+                # Si falló por formato Markdown, reintentar sin parse_mode
+                err_body = resp.text
+                if "can't parse entities" in err_body or "parse" in err_body.lower():
+                    logger.warning(f"[TELEGRAM CLIENT] Error de parseo Markdown, reintentando sin parse_mode: {err_body}")
+                    payload.pop("parse_mode", None)
+                    retry_resp = await client.post(url, json=payload)
+                    return retry_resp.status_code == 200
 
-            logger.error(f"[TELEGRAM CLIENT ERROR] Telegram API devolvió status {resp.status_code}: {err_body}")
+                logger.error(f"[TELEGRAM CLIENT ERROR] Telegram API devolvió status {resp.status_code}: {err_body}")
+                return False
+        except (httpx.RequestError, httpx.RemoteProtocolError) as net_err:
+            logger.warning(f"[TELEGRAM CLIENT RETRY] Intento {attempt} a chat {chat_id} falló por red ({net_err}). Reintentando...")
+            await asyncio.sleep(0.6)
+        except Exception as e:
+            logger.error(f"[TELEGRAM CLIENT EXCEPTION] Excepción enviando a Telegram chat {chat_id}: {e}")
             return False
-    except Exception as e:
-        logger.error(f"[TELEGRAM CLIENT EXCEPTION] Excepción enviando a Telegram chat {chat_id}: {e}")
-        return False
+
+    return False
 
 
 def send_telegram_message_sync(

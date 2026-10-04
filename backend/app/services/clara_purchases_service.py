@@ -249,11 +249,12 @@ def format_neo_erp_order_guidance(order_id: Optional[int] = None, order_ref: Opt
     ref_txt = f"`{order_ref}`" if order_ref else "la orden"
     base_url = "https://compras.qa.morpheussoft.net"
     link_url = f"{base_url}/orders/{order_id}" if order_id else f"{base_url}/orders"
+    link_label = f"Abrir {order_ref} en Neo Compras" if order_ref else "Abrir Orden en Neo Compras"
 
     lines = [
         "───────────────────",
         "📋 *¿Cómo validar y cerrar esta orden en Neo ERP?*",
-        f"1️⃣ *Acceder a la Orden:* [Abrir {ref_txt} en Neo Compras]({link_url})",
+        f"1️⃣ *Acceder a la Orden:* [{link_label}]({link_url})",
         "   _(O ingresa vía menú: **Neo ERP ➔ Neo Compras ➔ Órdenes de Compra**) ._",
         f"2️⃣ *Revisar Líneas:* Abre {ref_txt} para cotejar costos unitarios, empaques y cantidades sugeridas.",
         "3️⃣ *Ajustar (Opcional):* Puedes modificar cantidades o excluir renglones según el acuerdo comercial con el proveedor.",
@@ -510,36 +511,42 @@ def create_supplier_po_from_chat(
             is_multi_facility = True
         else:
             all_active_facs = db.query(Facility).filter(Facility.is_active == True).all()
-            matched_fac = next((
-                f for f in all_active_facs
-                if clean_fq in strip_accents(f.name.lower())
-                or strip_accents(f.name.lower()) in clean_fq
-                or clean_fq in strip_accents((f.code or '').lower())
-            ), None)
 
-            if not matched_fac and any(w in clean_fq for w in ["cendi", "distribucion"]):
-                matched_fac = db.query(Facility).filter(Facility.is_active == True, Facility.is_distribution_center == True).first()
+            # Extraer tokens significativos (descartando la marca "catania" y palabras comunes de enlace)
+            noise = {"catania", "sede", "sucursal", "tienda", "almacen", "el", "la", "en", "para"}
+            fq_tokens = set(re.findall(r"\w+", clean_fq))
+            meaningful_q = fq_tokens - noise
 
-            if not matched_fac:
-                fq_tokens = set(re.findall(r"\w+", clean_fq))
-                noise = {"catania", "sede", "sucursal", "tienda", "almacen", "el", "la", "en", "para"}
-                meaningful_q = fq_tokens - noise
-                if meaningful_q:
-                    for f in all_active_facs:
-                        f_tokens = set(re.findall(r"\w+", strip_accents(f.name.lower()))) - noise
-                        if meaningful_q & f_tokens:
-                            matched_fac = f
-                            break
+            matched_fac = None
+            if meaningful_q:
+                # 1. Coincidencia por tokens significativos (ej: "belisa", "maracay", "tucacas", "cumboto")
+                for f in all_active_facs:
+                    f_tokens = set(re.findall(r"\w+", strip_accents(f.name.lower()))) - noise
+                    if meaningful_q & f_tokens:
+                        matched_fac = f
+                        break
 
-            if matched_fac:
-                target_facility_id = matched_fac.id
-                target_facility_name = matched_fac.name
+                # 2. Coincidencia por código o CENDI
+                if not matched_fac:
+                    matched_fac = next((f for f in all_active_facs if clean_fq == strip_accents((f.code or '').lower())), None)
+
+                if not matched_fac and any(w in clean_fq for w in ["cendi", "distribucion"]):
+                    matched_fac = db.query(Facility).filter(Facility.is_active == True, Facility.is_distribution_center == True).first()
+
+                if matched_fac:
+                    target_facility_id = matched_fac.id
+                    target_facility_name = matched_fac.name
+                else:
+                    avail_names = [f.name for f in all_active_facs]
+                    return {
+                        "success": False,
+                        "error": f"No se encontró la sucursal '{facility_query.strip()}'. Sucursales disponibles: {', '.join(avail_names)}."
+                    }
             else:
-                avail_names = [f.name for f in all_active_facs]
-                return {
-                    "success": False,
-                    "error": f"No se encontró la sucursal '{facility_query.strip()}'. Sucursales disponibles: {', '.join(avail_names)}."
-                }
+                # El usuario colocó solo 'Catania' o 'la tienda' (la marca general).
+                # No asignar arbitrariamente a una sola tienda; dejar que el detector inteligente
+                # asigne automáticamente la sede con déficit activo para este proveedor (ej. Belisa para Plumrose).
+                pass
 
     if not is_multi_facility and not target_facility_id:
         active_facs = db.query(Facility).filter(Facility.is_active == True).all()

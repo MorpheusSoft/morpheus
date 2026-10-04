@@ -171,3 +171,56 @@ def test_order_creation_response_includes_neo_erp_closing_guidance():
     assert "Confirmar Orden" in guidance
     assert "https://compras.qa.morpheussoft.net/orders/123" in guidance
 
+
+def test_telegram_process_message_audits_worker_replies(db: Session):
+    """
+    Verifica que cada respuesta emitida por el bot (tanto comandos como respuestas)
+    quede auditada en core.digital_worker_messages.
+    """
+    import asyncio
+    from app.api.v1.endpoints.telegram import process_telegram_message
+    from app.models.digital_workers import DigitalWorker, DigitalWorkerConversation, DigitalWorkerMessage
+
+    # Verificar que el worker exista
+    worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == "CLARA_COMPRAS").first()
+    if not worker:
+        return
+
+    from app.models.core import User
+
+    # Asegurar un usuario vinculado para la prueba
+    test_user = db.query(User).filter(User.telegram_chat_id == 983665576).first()
+    if not test_user:
+        test_user = db.query(User).first()
+        if test_user:
+            test_user.telegram_chat_id = 983665576
+            db.commit()
+
+    # Ejecutar simulación de comando /cronograma
+    reply = asyncio.run(process_telegram_message(
+        chat_id=983665576,
+        chat_type="private",
+        text="/cronograma",
+        username="TestUser",
+        first_name="Tester",
+        agent_code="CLARA_COMPRAS",
+        db=db
+    ))
+
+    assert "Cronograma Semanal" in reply or "Lunes" in reply
+
+    # Verificar que el mensaje saliente de tipo WORKER se haya guardado
+    conv = db.query(DigitalWorkerConversation).filter(
+        DigitalWorkerConversation.worker_id == worker.id,
+        DigitalWorkerConversation.external_sender_id == "983665576"
+    ).first()
+    assert conv is not None
+
+    last_worker_msg = db.query(DigitalWorkerMessage).filter(
+        DigitalWorkerMessage.conversation_id == conv.id,
+        DigitalWorkerMessage.sender_type == "WORKER"
+    ).order_by(DigitalWorkerMessage.id.desc()).first()
+
+    assert last_worker_msg is not None
+    assert reply == last_worker_msg.content
+
