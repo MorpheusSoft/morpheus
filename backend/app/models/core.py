@@ -153,6 +153,7 @@ class Supplier(Base):
     restock_coverage_days = Column(Integer, default=0) # Días para Reposición
     sales_analysis_days = Column(Integer, default=0) # Días de Análisis
     minimum_order_qty = Column(Numeric(19, 4), default=0) # MOQ
+    order_day_of_week = Column(Integer, nullable=True) # 0=Lunes, 1=Martes, 2=Miércoles, 3=Jueves, 4=Viernes, 5=Sábado, 6=Domingo
     
     # Phase 3: Clara Logistics & Cadence Calibration
     auto_tune_logistics = Column(Boolean, default=False)

@@ -497,6 +497,8 @@ async def process_telegram_message(
                 f"*Analista Estratégica de Compras y Rentabilidad* de *Neo ERP*.\n\n"
                 f"Superviso órdenes de compra, conciliación 3-way match, abastecimiento y acuerdos comerciales.\n\n"
                 f"📌 *Comandos Disponibles:*\n"
+                f"• `/proactivo`: Diagnóstico matutino ejecutivo y sugeridos del día de hoy\n"
+                f"• `/cronograma` o `/calendario`: Agenda semanal de atención de proveedores por sucursal\n"
                 f"• `/dead_stock` [días]: Auditoría de productos sin venta, capital atrapado y despacho de reporte PDF\n"
                 f"• `/producto <nombre o sku>`: Ficha 360° de compra (costos, stock por tienda, rotación y proveedor)\n"
                 f"• `/crear_odc <proveedor>`: Generar ODC borrador sugerida (MRP) o con ítems específicos\n"
@@ -722,6 +724,11 @@ async def process_telegram_message(
 
     # === COMANDOS DE CLARA (COMPRAS) ===
     if "CLARA" in clean_agent_code:
+        # CRONOGRAMA / CALENDARIO SEMANAL DE COMPRAS
+        if lower_text in ["/cronograma", "cronograma", "/calendario", "calendario", "/calendario_compras", "calendario de compras", "cronograma de compras"]:
+            from app.services.clara_proactive_service import get_weekly_procurement_calendar
+            return get_weekly_procurement_calendar(db)
+
         # DETECCIÓN DE DEAD STOCK / ROTACIÓN / PRODUCTOS SIN VENTA (Comando directo o Lenguaje Natural)
         is_dead_stock_intent = (
             lower_text.startswith("/dead_stock") or

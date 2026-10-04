@@ -169,6 +169,25 @@ class SellOutAgreementLine(Base):
     agreement = relationship("SellOutAgreement", back_populates="lines")
     variant = relationship("ProductVariant")
 
+class SupplierFacilitySchedule(Base):
+    __tablename__ = "supplier_facility_schedules"
+    __table_args__ = {"schema": "pur"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    supplier_id = Column(Integer, ForeignKey("core.suppliers.id"), nullable=False, index=True)
+    facility_id = Column(Integer, ForeignKey("core.facilities.id"), nullable=False, index=True)
+    order_day_of_week = Column(Integer, nullable=False) # 0=Lunes, 1=Martes, 2=Miércoles, 3=Jueves, 4=Viernes, 5=Sábado, 6=Domingo
+    review_cadence_days = Column(Integer, default=7) # 7=semanal, 14/15=quincenal, 30=mensual
+    lead_time_days = Column(Integer, default=3) # Días de despacho para esta sede
+    restock_coverage_days = Column(Integer, default=7) # Días de cobertura deseados
+    replenishment_mode = Column(String(30), default='STORE_DIRECT') # STORE_DIRECT o CONSOLIDATED_CD
+    is_active = Column(Boolean, default=True)
+    last_evaluated_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    supplier = relationship("Supplier")
+    facility = relationship("Facility")
+
 # Ensure cross-schema relations resolve properly
 from app.models import inventory  # noqa: F401
 

@@ -8,10 +8,10 @@ from typing import List, Dict, Any, Tuple, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
-from app.models.purchasing import PurchaseOrder, PurchaseOrderLine, SupplierProduct, MRPBotLog
+from app.models.purchasing import PurchaseOrder, PurchaseOrderLine, SupplierProduct, MRPBotLog, SupplierFacilitySchedule
 from app.models.inventory import InventorySnapshot, ProductVariant, Product, ProductPackaging, ProductFacilityPrice, Category
 from app.models.core import Supplier, Facility, Buyer
-from app.models.sales import Document, DocumentLine
+from app.models.sales import Document, DocumentLine, DocumentState
 from app.models.digital_workers import DigitalWorker, DigitalWorkerActionLog
 
 logger = logging.getLogger(__name__)
@@ -21,38 +21,42 @@ def predict_demand_and_safety_stock(
     lead_time_days: int,
     run_rate: float,
     safety_stock_configured: float,
-    seasonal_index: float = 1.0
+    seasonal_index: float = 1.0,
+    coverage_days: Optional[int] = None
 ) -> Tuple[Decimal, Decimal]:
     """
-    Mocked predictive AI estimator.
-    Calculates:
-      1. Predicted Demand = daily_sales (run_rate) * Lead Time * Seasonal Index
-      2. Statistical Safety Stock = Z * sqrt(LT * Demand_StdDev^2 + Daily_Sales^2 * LT_Variance)
-    Uses a service level target of 95% (Z-score = 1.65).
+    Estimador predictivo MRP calibrado:
+    1. Si run_rate <= 0 y safety_stock_configured <= 0:
+       Demanda = 0, Stock Seguridad = 0 (Regla 'Venta Cero = Sugerido Cero').
+    2. Días de Horizonte Total = (coverage_days or 0) + lead_time_days (si coverage_days > 0 sino lead_time_days).
+    3. Predicted Demand = daily_sales * Horizonte * Seasonal Index.
+    4. Statistical Safety Stock = Z * sqrt(LT * Demand_StdDev^2 + Daily_Sales^2 * LT_Variance)
+       si daily_sales > 0, comparado con safety_stock_configured.
     """
-    # Daily sales average (fallback to 3.5 if no run rate)
-    daily_sales = float(run_rate) if run_rate and run_rate > 0 else 3.5
-    
-    # Lead time in days (fallback to 5 if not configured)
-    lt_days = lead_time_days if lead_time_days and lead_time_days > 0 else 5
-    
-    # Predict demand with dynamic seasonal factor
-    predicted_demand = daily_sales * lt_days * seasonal_index
-    
-    # Statistical Safety Stock:
-    # Z-score for 95% service level
-    z_score = 1.65
-    # Volatility of daily demand: assumed standard deviation is 25% of daily sales
-    demand_std_dev = daily_sales * 0.25
-    # Volatility of lead time (supplier punctuality): variance is 10% of lead time days
-    lt_variance = lt_days * 0.10
-    
-    # Z * sqrt(LT * var_demand + Demand^2 * var_LT)
-    stat_safety = z_score * math.sqrt(lt_days * (demand_std_dev ** 2) + (daily_sales ** 2) * lt_variance)
-    
-    # Compare with the manually configured safety stock and use the maximum
-    final_safety = max(stat_safety, float(safety_stock_configured or 0.0))
-    
+    daily_sales = float(run_rate) if run_rate and run_rate > 0 else 0.0
+    safe_conf = float(safety_stock_configured or 0.0)
+
+    # Regla de Oro: Si el producto no rota y no tiene stock de seguridad manual, sugerido = 0
+    if daily_sales <= 0.0 and safe_conf <= 0.0:
+        return Decimal('0.00'), Decimal('0.00')
+
+    lt_days = lead_time_days if lead_time_days and lead_time_days > 0 else 3
+    cov_days = coverage_days if coverage_days and coverage_days > 0 else 0
+    total_horizon_days = (cov_days + lt_days) if cov_days > 0 else lt_days
+
+    # Demanda prevista sobre el horizonte total de exposición
+    predicted_demand = daily_sales * total_horizon_days * seasonal_index
+
+    # Stock de Seguridad Estadístico (Z-score 1.65 para 95% de nivel de servicio)
+    if daily_sales > 0.0:
+        z_score = 1.65
+        demand_std_dev = daily_sales * 0.25
+        lt_variance = lt_days * 0.10
+        stat_safety = z_score * math.sqrt(lt_days * (demand_std_dev ** 2) + (daily_sales ** 2) * lt_variance)
+        final_safety = max(stat_safety, safe_conf)
+    else:
+        final_safety = safe_conf
+
     return Decimal(str(round(predicted_demand, 2))), Decimal(str(round(final_safety, 2)))
 
 def diagnose_stockouts(
@@ -60,16 +64,20 @@ def diagnose_stockouts(
     facility_id: Optional[int] = None,
     supplier_id: Optional[int] = None,
     category_id: Optional[int] = None,
-    category_ids: Optional[List[int]] = None
+    category_ids: Optional[List[int]] = None,
+    target_weekday: Optional[int] = None,
+    only_scheduled_today: bool = False
 ) -> Dict[str, Any]:
     """
-    Motor de Diagnóstico Predictivo MRP en Memoria.
-    Evalúa stock físico, tránsito abierto, velocidad de rotación real e índices estacionales.
-    Clasifica por proveedor en semáforos de urgencia:
-      - CRITICAL (Quiebre Inmediato): Stock disponible <= 0 o días de stock < Lead Time.
-      - WARNING (Quiebre Proyectado): Inventario disponible <= Umbral Crítico.
-      - HEALTHY (Saludable): Cobertura suficiente.
-    Soporta filtrado multidimensional por Proveedor, Sede y Categoría/Departamento.
+    Motor de Diagnóstico Predictivo MRP en Memoria Calibrado.
+    Evalúa stock físico, órdenes en tránsito confirmadas, velocidad de rotación real de 30 días,
+    días de cobertura por reposición/visita y cronograma semanal de atención.
+    
+    Regla Comercial de Oro:
+      - Venta Cero = Sugerido Cero: Si un SKU no rota en esa sede y no tiene stock de seguridad manual,
+        se descarta de la compra y no genera pedidos ciegos.
+    
+    Soporta filtrado multidimensional por Proveedor, Sede, Categoría y Cronograma Semanal.
     NO crea registros en pur.purchase_orders.
     """
     # 0. Resolución de Categorías y Subcategorías
@@ -116,6 +124,45 @@ def diagnose_stockouts(
     categories_map = {c.id: c.name for c in db.query(Category).all()}
     target_var_ids = [sp.variant_id for sp in supplier_products]
 
+    # Pre-cálculo de ventas reales de los últimos 30 días para determinar run_rate sin ficticios
+    since_30d = datetime.now() - timedelta(days=30)
+    sales_30d_map: Dict[Tuple[int, int], float] = {}
+    try:
+        sales_q = db.query(
+            DocumentLine.variant_id,
+            Document.facility_id,
+            func.sum(DocumentLine.quantity)
+        ).join(Document, Document.id == DocumentLine.document_id)\
+        .filter(
+            Document.state.in_([DocumentState.CONFIRMED, DocumentState.PAID, 'CONFIRMED', 'PAID']),
+            Document.created_at >= since_30d,
+            Document.facility_id.in_(fac_ids)
+        )
+        if target_var_ids:
+            sales_q = sales_q.filter(DocumentLine.variant_id.in_(target_var_ids))
+        sales_rows = sales_q.group_by(DocumentLine.variant_id, Document.facility_id).all()
+        for r in sales_rows:
+            if r[0] and r[1]:
+                sales_30d_map[(r[0], r[1])] = float(r[2] or 0.0)
+    except Exception as e:
+        logger.warning(f"[MRP] Error precalculando ventas reales 30d: {e}")
+
+    # Cargar cronograma semanal de atención de proveedores
+    schedules_map: Dict[Tuple[int, int], SupplierFacilitySchedule] = {}
+    try:
+        sched_q = db.query(SupplierFacilitySchedule).filter(
+            SupplierFacilitySchedule.is_active == True,
+            SupplierFacilitySchedule.facility_id.in_(fac_ids)
+        )
+        if supplier_id:
+            sched_q = sched_q.filter(SupplierFacilitySchedule.supplier_id == supplier_id)
+        for s in sched_q.all():
+            schedules_map[(s.supplier_id, s.facility_id)] = s
+    except Exception as e:
+        logger.warning(f"[MRP] Error cargando cronogramas de proveedores: {e}")
+
+    weekday_today = target_weekday if target_weekday is not None else datetime.now().weekday()
+
     if supplier_id and target_var_ids:
         variants_map = {v.id: v for v in db.query(ProductVariant).filter(ProductVariant.id.in_(target_var_ids)).all()}
         target_prod_ids = [v.product_id for v in variants_map.values()]
@@ -137,13 +184,14 @@ def diagnose_stockouts(
                 ProductFacilityPrice.variant_id.in_(target_var_ids)
             ).all()
         }
+        # Solo órdenes en firme confirmadas cuentan como tránsito (excluye borradores de prueba)
         transit_rows = db.query(
             PurchaseOrderLine.variant_id,
             PurchaseOrder.dest_facility_id,
             func.sum(PurchaseOrderLine.expected_base_qty)
         ).join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.order_id)\
         .filter(
-            PurchaseOrder.status.in_(['draft', 'approved', 'sent', 'viewed', 'confirmed', 'pending_approval']),
+            PurchaseOrder.status.in_(['approved', 'sent', 'viewed', 'confirmed']),
             PurchaseOrder.dest_facility_id.in_(fac_ids),
             PurchaseOrderLine.variant_id.in_(target_var_ids)
         ).group_by(PurchaseOrderLine.variant_id, PurchaseOrder.dest_facility_id).all()
@@ -166,7 +214,7 @@ def diagnose_stockouts(
             func.sum(PurchaseOrderLine.expected_base_qty)
         ).join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.order_id)\
         .filter(
-            PurchaseOrder.status.in_(['draft', 'approved', 'sent', 'viewed', 'confirmed', 'pending_approval']),
+            PurchaseOrder.status.in_(['approved', 'sent', 'viewed', 'confirmed']),
             PurchaseOrder.dest_facility_id.in_(fac_ids)
         ).group_by(PurchaseOrderLine.variant_id, PurchaseOrder.dest_facility_id).all()
 
@@ -194,11 +242,18 @@ def diagnose_stockouts(
             continue
 
         if supplier.id not in suppliers_data:
-            lead_time = supplier.lead_time_days or 5
+            lead_time = supplier.lead_time_days or 3
+            coverage_days = supplier.restock_coverage_days or 7
+            supp_sched_today = (supplier.order_day_of_week == weekday_today)
             suppliers_data[supplier.id] = {
                 "supplier_id": supplier.id,
                 "supplier_name": supplier.name,
+                "tax_id": supplier.tax_id,
                 "lead_time_days": lead_time,
+                "restock_coverage_days": coverage_days,
+                "order_day_of_week": supplier.order_day_of_week,
+                "is_scheduled_today": supp_sched_today,
+                "scheduled_facilities": [],
                 "urgency": "HEALTHY",
                 "total_skus": 0,
                 "skus_in_breach": 0,
@@ -215,26 +270,54 @@ def diagnose_stockouts(
                 "items": []
             }
 
-        lead_time = suppliers_data[supplier.id]["lead_time_days"]
-
         for fac_id, fac in facility_map.items():
             total_items_evaluated += 1
             suppliers_data[supplier.id]["total_skus"] += 1
 
+            # Obtener cronograma específico para esta sucursal si existe
+            sched = schedules_map.get((supplier.id, fac_id))
+            fac_lead_time = sched.lead_time_days if sched and sched.lead_time_days > 0 else (supplier.lead_time_days or 3)
+            fac_coverage_days = sched.restock_coverage_days if sched and sched.restock_coverage_days > 0 else (supplier.restock_coverage_days or 7)
+
+            if sched and sched.order_day_of_week == weekday_today:
+                suppliers_data[supplier.id]["is_scheduled_today"] = True
+                if fac.name not in suppliers_data[supplier.id]["scheduled_facilities"]:
+                    suppliers_data[supplier.id]["scheduled_facilities"].append(fac.name)
+
             snapshot = snapshots_map.get((variant.id, fac_id))
             stock_qty = Decimal(str(snapshot.stock_qty)) if snapshot and snapshot.stock_qty is not None else Decimal('0')
             safety_stock_conf = Decimal(str(snapshot.safety_stock)) if snapshot and snapshot.safety_stock is not None else Decimal('0')
-            run_rate = Decimal(str(snapshot.run_rate)) if snapshot and snapshot.run_rate and snapshot.run_rate > 0 else Decimal('3.5')
+
+            # Consumo Diario Real:
+            # 1. Si el snapshot tiene run_rate manual > 0, respetarlo
+            # 2. De lo contrario, calcular de ventas 30d reales (ventas / 30)
+            # 3. Si no hay ventas, run_rate = 0 (Sin comodines ficticios)
+            sales_30d_qty = sales_30d_map.get((variant.id, fac_id), 0.0)
+            if snapshot and snapshot.run_rate and snapshot.run_rate > Decimal('0'):
+                run_rate = Decimal(str(snapshot.run_rate))
+            elif sales_30d_qty > 0.0:
+                run_rate = Decimal(str(round(sales_30d_qty / 30.0, 4)))
+            else:
+                run_rate = Decimal('0')
 
             transit_qty = transit_map.get((variant.id, fac_id), Decimal('0'))
             inventario_disponible = stock_qty + transit_qty
 
+            # =========================================================================
+            # REGLA DE ORO COMERCIAL: VENTA CERO = SUGERIDO CERO
+            # Si el producto no rota en esta tienda (run_rate == 0) y no tiene stock de seguridad manual:
+            # NO APLICA REPOSICIÓN (Se descarta de compras para no inflar pedidos ciegos)
+            # =========================================================================
+            if run_rate <= Decimal('0') and safety_stock_conf <= Decimal('0'):
+                continue
+
             predicted_demand, statistical_safety = predict_demand_and_safety_stock(
                 variant_id=variant.id,
-                lead_time_days=lead_time,
+                lead_time_days=fac_lead_time,
                 run_rate=float(run_rate),
                 safety_stock_configured=float(safety_stock_conf),
-                seasonal_index=1.0
+                seasonal_index=1.0,
+                coverage_days=fac_coverage_days
             )
 
             umbral_critico = predicted_demand + statistical_safety
@@ -244,7 +327,7 @@ def diagnose_stockouts(
 
             # Determinación de Urgencia
             item_urgency = "HEALTHY"
-            if inventario_disponible <= 0 or days_of_stock < lead_time:
+            if inventario_disponible <= 0 or (run_rate > 0 and days_of_stock < fac_lead_time):
                 item_urgency = "CRITICAL"
             elif inventario_disponible <= umbral_critico:
                 item_urgency = "WARNING"
@@ -315,7 +398,9 @@ def diagnose_stockouts(
                     # Excluir automáticamente del sugerido
                     continue
 
-                qty_needed = max(umbral_critico - inventario_disponible, Decimal('1'))
+                qty_needed = max(Decimal('0'), umbral_critico - inventario_disponible)
+                if qty_needed <= Decimal('0'):
+                    continue
 
                 if sp.pack_id:
                     pack = pack_map.get(sp.pack_id)
@@ -369,6 +454,8 @@ def diagnose_stockouts(
                     "run_rate": float(run_rate),
                     "days_of_stock": round(days_of_stock, 1),
                     "critical_threshold": float(umbral_critico),
+                    "lead_time_days": fac_lead_time,
+                    "coverage_days": fac_coverage_days,
                     "urgency": item_urgency,
                     "boxes_needed": boxes_needed,
                     "suggested_base_qty": float(suggested_base_qty),
@@ -412,9 +499,16 @@ def diagnose_stockouts(
 
         suppliers_list.append(s_data)
 
-    # Ordenar proveedores: CRITICAL primero, luego WARNING, luego HEALTHY. Dentro de cada nivel, por mayor costo estimado
+    if only_scheduled_today:
+        suppliers_list = [s for s in suppliers_list if s.get("is_scheduled_today")]
+
+    # Ordenar proveedores: Proveedores del cronograma de hoy primero, luego por urgencia y costo
     urgency_order = {"CRITICAL": 0, "WARNING": 1, "HEALTHY": 2}
-    suppliers_list.sort(key=lambda s: (urgency_order[s["urgency"]], -s["estimated_total_cost"]))
+    suppliers_list.sort(key=lambda s: (
+        0 if s.get("is_scheduled_today") else 1,
+        urgency_order[s["urgency"]],
+        -s["estimated_total_cost"]
+    ))
 
     # Resumen general
     critical_count = sum(1 for s in suppliers_list if s["urgency"] == "CRITICAL")
