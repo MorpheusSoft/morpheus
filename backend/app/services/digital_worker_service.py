@@ -33,6 +33,7 @@ from app.services.dante_it_service import (
     audit_failed_sync_commands,
     audit_store_invoice_history
 )
+from app.services.clara_proactive_service import run_clara_proactive_purchasing_scan
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ SKILL_DISPATCHER = {
     'clara_sell_out_settlement': run_sell_out_settlement_audit,
     'clara_monthly_executive_reports': run_monthly_executive_reports,
     'purchase_whatsapp_assistant': run_purchase_whatsapp_listener,
+    'clara_proactive_purchases_dispatch': run_clara_proactive_purchasing_scan,
 
     # Dante TI & Sincronización
     'it_sync_heartbeat_monitor': audit_store_sync_heartbeats,

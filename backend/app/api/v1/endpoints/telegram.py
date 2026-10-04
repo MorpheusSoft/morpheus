@@ -58,6 +58,7 @@ from app.services.clara_purchases_service import (
     parse_order_intent,
     create_supplier_po_from_chat
 )
+from app.services.clara_proactive_service import run_clara_proactive_purchasing_scan
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,10 @@ def call_worker_gemini(
             "Si el usuario pregunta por productos sin venta, rotación o dead stock, indícale que en el sistema web está disponible "
             "en el menú 'Reportes -> Rotación & Dead Stock' de Neo Compras, y que puedes generarle y enviarle el informe ejecutivo en PDF directamente con el comando /dead_stock. "
             "NUNCA inventes nombres de menús o reportes inexistentes. "
+            "\nAdemás, eres un trabajador digital PROACTIVO: eres capaz de diagnosticar quiebres y generar órdenes de compra (ODCs) "
+            "segmentadas multidimensionalmente por Proveedor, Sucursal/Tienda (o 'en todas las tiendas' generando un borrador por cada tienda con déficit) "
+            "y Categoría/Rubro. El usuario puede consultar el diagnóstico matutino con /proactivo o /sugeridos, o crear órdenes con: "
+            "'/crear_odc [proveedor] en [sucursal] categoria [rubro]' o '/crear_odc [proveedor] en todas'. "
             "Si el usuario te solicita crear una orden de compra o consultar sugeridos, indícale claramente cómo generarla "
             "o confírmale los datos con precisión ejecutiva."
         )
@@ -809,14 +814,17 @@ async def process_telegram_message(
                 lines.append(f"• *{u['order_number']}* ({u['supplier']}) | Monto: ${u['total_usd']:,.2f} | Estado: `{u['status']}`")
             return "\n".join(lines)
 
-        if lower_text in ["/sugeridos", "/quiebres", "sugeridos", "quiebres"]:
-            so = diagnose_stockouts(db)
-            if not so:
-                return "✅ *Abastecimiento*: No se detectaron productos en quiebre crítico de stock en este momento."
-            lines = ["🚨 *Quiebres y Sugeridos de Compra:* \n"]
-            for item in so[:8]:
-                lines.append(f"• *{item['product_name']}* (`{item['sku']}`): Stock={item['stock_qty']} | Sugerido: *+{item['suggested_reorder_qty']}* unid.")
-            return "\n".join(lines)
+        # COMANDO O CONSULTA PROACTIVA DE ABASTECIMIENTO: /proactivo, /sugeridos, /quiebres, /calendario
+        is_proactive_briefing = (
+            lower_text in ["/proactivo", "proactivo", "/sugeridos", "/quiebres", "sugeridos", "quiebres", "/calendario", "calendario"] or
+            (
+                any(w in lower_text for w in ["compras", "sugeridos", "quiebres", "pedidos", "reposicion", "reposición"]) and
+                any(w in lower_text for w in ["pendientes", "hoy", "sucursal", "sucursales", "tiendas", "tenemos", "reabastecer", "alertas"])
+            )
+        )
+        if is_proactive_briefing:
+            res = run_clara_proactive_purchasing_scan(db, force_notify=True)
+            return res.get("message_preview") or res.get("message")
 
         if lower_text in ["/proveedores", "proveedores"]:
             sups = db.query(Supplier).filter(Supplier.is_active == True).limit(10).all()
@@ -859,20 +867,23 @@ async def process_telegram_message(
             )
         )
         if is_create_po:
-            sup_query, custom_items = parse_order_intent(raw_text)
+            sup_query, fac_query, cat_query, custom_items = parse_order_intent(raw_text)
             if not sup_query:
                 return (
                     "❓ Por favor indica el proveedor para generar la orden de compra.\n\n"
                     "Ejemplos:\n"
-                    "• `/crear_odc Alimentos Polar` (Modo sugerido MRP por quiebres)\n"
-                    "• `/crear_odc Alimentos Polar | 50 Harina Pan, 20 Primor` (Modo con renglones específicos)\n"
-                    "• *\"Clara, genera una orden de compra para Alimentos Polar\"*"
+                    "• `/crear_odc Alimentos Polar en todas` (Borradores para todas las sucursales con déficit)\n"
+                    "• `/crear_odc Alimentos Polar en Tucacas categoria Viveres` (Por sede y categoría)\n"
+                    "• `/crear_odc Alimentos Polar | 50 Harina Pan, 20 Primor` (Renglones específicos)\n"
+                    "• *\"Clara, genera ODC de Alimentos Polar para Tucacas en la categoría Víveres\"*"
                 )
             target_fac_id = user.facilities[0].id if (user and user.facilities) else 1
             po_result = create_supplier_po_from_chat(
                 db=db,
                 supplier_query=sup_query,
                 user_name=user_name,
+                facility_query=fac_query,
+                category_query=cat_query,
                 facility_id=target_fac_id,
                 custom_items=custom_items,
                 channel="Telegram"

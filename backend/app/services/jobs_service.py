@@ -21,6 +21,9 @@ def execute_job_by_code(job_code: str, db: Session):
     elif job_code == 'monthly_purchases_audit_report':
         from app.services.monthly_reports_service import execute_scheduled_monthly_job
         execute_scheduled_monthly_job(db)
+    elif job_code in ('clara_proactive_purchases_dispatch', 'clara_morning_purchasing_scan'):
+        from app.services.clara_proactive_service import run_clara_proactive_purchasing_scan
+        run_clara_proactive_purchasing_scan(db)
     else:
         logger.warning(f"[CRON DAEMON] Código de job desconocido: {job_code}")
 

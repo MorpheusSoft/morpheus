@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine, SupplierProduct, MRPBotLog
-from app.models.inventory import InventorySnapshot, ProductVariant, Product, ProductPackaging, ProductFacilityPrice
+from app.models.inventory import InventorySnapshot, ProductVariant, Product, ProductPackaging, ProductFacilityPrice, Category
 from app.models.core import Supplier, Facility, Buyer
 from app.models.sales import Document, DocumentLine
 from app.models.digital_workers import DigitalWorker, DigitalWorkerActionLog
@@ -58,7 +58,9 @@ def predict_demand_and_safety_stock(
 def diagnose_stockouts(
     db: Session,
     facility_id: Optional[int] = None,
-    supplier_id: Optional[int] = None
+    supplier_id: Optional[int] = None,
+    category_id: Optional[int] = None,
+    category_ids: Optional[List[int]] = None
 ) -> Dict[str, Any]:
     """
     Motor de Diagnóstico Predictivo MRP en Memoria.
@@ -67,8 +69,23 @@ def diagnose_stockouts(
       - CRITICAL (Quiebre Inmediato): Stock disponible <= 0 o días de stock < Lead Time.
       - WARNING (Quiebre Proyectado): Inventario disponible <= Umbral Crítico.
       - HEALTHY (Saludable): Cobertura suficiente.
+    Soporta filtrado multidimensional por Proveedor, Sede y Categoría/Departamento.
     NO crea registros en pur.purchase_orders.
     """
+    # 0. Resolución de Categorías y Subcategorías
+    target_cat_ids = set()
+    if category_ids:
+        target_cat_ids.update(category_ids)
+    if category_id:
+        target_cat_ids.add(category_id)
+        cat_obj = db.query(Category).filter(Category.id == category_id).first()
+        if cat_obj and cat_obj.path:
+            child_ids = [c[0] for c in db.query(Category.id).filter(Category.path.like(f"{cat_obj.path}/%")).all()]
+            target_cat_ids.update(child_ids)
+        elif cat_obj:
+            child_ids = [c[0] for c in db.query(Category.id).filter(Category.parent_id == category_id).all()]
+            target_cat_ids.update(child_ids)
+
     # 1. Obtener productos de proveedores activos
     sp_query = db.query(SupplierProduct).filter(SupplierProduct.is_active == True)
     if supplier_id:
@@ -100,6 +117,7 @@ def diagnose_stockouts(
     products_map = {p.id: p for p in db.query(Product).all()}
     suppliers_map = {s.id: s for s in db.query(Supplier).all()}
     pack_map = {p.id: p for p in db.query(ProductPackaging).all()}
+    categories_map = {c.id: c.name for c in db.query(Category).all()}
     snapshots_map = {
         (s.variant_id, s.facility_id): s 
         for s in db.query(InventorySnapshot).filter(InventorySnapshot.facility_id.in_(fac_ids)).all()
@@ -133,6 +151,10 @@ def diagnose_stockouts(
         if not product:
             continue
 
+        # Filtro de Categoría si aplica
+        if target_cat_ids and product.category_id not in target_cat_ids:
+            continue
+
         supplier = suppliers_map.get(sp.supplier_id)
         if not supplier:
             continue
@@ -155,6 +177,7 @@ def diagnose_stockouts(
                 "estimated_total_cost": 0.0,
                 "existing_draft_po_id": None,
                 "existing_draft_po_reference": None,
+                "categories_found": {},
                 "items": []
             }
 
@@ -294,10 +317,16 @@ def diagnose_stockouts(
                 else:
                     suppliers_data[supplier.id]["warning_skus_count"] += 1
 
+                cat_id = product.category_id
+                cat_name = categories_map.get(cat_id, "General") if cat_id else "General"
+                suppliers_data[supplier.id]["categories_found"][cat_name] = suppliers_data[supplier.id]["categories_found"].get(cat_name, 0) + 1
+
                 suppliers_data[supplier.id]["items"].append({
                     "variant_id": variant.id,
                     "sku": variant.sku,
                     "product_name": product.name,
+                    "category_id": cat_id,
+                    "category_name": cat_name,
                     "facility_id": fac.id,
                     "facility_name": fac.name,
                     "stock_qty": float(stock_qty),
@@ -329,6 +358,13 @@ def diagnose_stockouts(
             s_data["urgency"] = "HEALTHY"
 
         s_data["estimated_total_cost"] = round(s_data["estimated_total_cost"], 2)
+
+        # Resumen ordenado de categorías
+        cat_counts = s_data.pop("categories_found", {})
+        s_data["categories_summary"] = [
+            {"name": cname, "count": cnt}
+            for cname, cnt in sorted(cat_counts.items(), key=lambda x: -x[1])
+        ]
 
         # Buscar borrador activo existente
         existing_draft = db.query(PurchaseOrder).filter(
@@ -371,12 +407,14 @@ def generate_supplier_po_draft(
     db: Session,
     supplier_id: int,
     facility_id: int,
+    category_id: Optional[int] = None,
+    category_ids: Optional[List[int]] = None,
     buyer_id: Optional[int] = None,
     notes: Optional[str] = None,
     worker_code: str = "CLARA_COMPRAS"
 ) -> Dict[str, Any]:
     """
-    Generación Quirúrgica de una sola Orden de Compra en borrador para un proveedor y sede específicos.
+    Generación Quirúrgica de una sola Orden de Compra en borrador para un proveedor, sede y categoría específicos.
     Respeta empaques maestros y pedidos mínimos calculados por el motor de diagnóstico.
     Registra la acción en core.digital_worker_actions_log.
     """
@@ -388,12 +426,25 @@ def generate_supplier_po_draft(
     if not facility:
         raise ValueError(f"Sede/Almacén con ID {facility_id} no existe.")
 
-    # Diagnosticar en memoria exclusivamente para este proveedor y sede
-    diagnosis = diagnose_stockouts(db, facility_id=facility_id, supplier_id=supplier_id)
+    category_name = None
+    if category_id:
+        cat_obj = db.query(Category).filter(Category.id == category_id).first()
+        if cat_obj:
+            category_name = cat_obj.name
+
+    # Diagnosticar en memoria exclusivamente para este proveedor, sede y categoría
+    diagnosis = diagnose_stockouts(
+        db,
+        facility_id=facility_id,
+        supplier_id=supplier_id,
+        category_id=category_id,
+        category_ids=category_ids
+    )
     supplier_diag = next((s for s in diagnosis["suppliers"] if s["supplier_id"] == supplier_id), None)
 
+    cat_label = f" en la categoría '{category_name}'" if category_name else ""
     if not supplier_diag or not supplier_diag["items"]:
-        raise ValueError(f"El proveedor '{supplier.name}' no tiene productos en quiebre o déficit en '{facility.name}'.")
+        raise ValueError(f"El proveedor '{supplier.name}' no tiene productos en quiebre o déficit en '{facility.name}'{cat_label}.")
 
     # Obtener comprador
     if not buyer_id:
@@ -406,7 +457,7 @@ def generate_supplier_po_draft(
 
     year = datetime.now().year
     po_notes = notes or (
-        f"Borrador generado quirúrgicamente por {worker_title}. "
+        f"Borrador generado quirúrgicamente por {worker_title}{cat_label}. "
         f"Contiene {len(supplier_diag['items'])} renglones con quiebre o riesgo de stockout. "
         f"Requiere revisión y confirmación del analista de compras."
     )
@@ -457,11 +508,13 @@ def generate_supplier_po_draft(
             target_entity_type='purchase_order',
             target_entity_id=str(po.id),
             severity='INFO',
-            summary=f"ODC Borrador creada para {supplier.name}: {po.reference} (${total_order_amount:,.2f} USD, {len(supplier_diag['items'])} renglones).",
+            summary=f"ODC Borrador creada para {supplier.name}: {po.reference} (${total_order_amount:,.2f} USD, {len(supplier_diag['items'])} renglones){cat_label}.",
             details={
                 "order_reference": po.reference,
                 "supplier_name": supplier.name,
                 "facility_name": facility.name,
+                "category_id": category_id,
+                "category_name": category_name,
                 "total_amount": float(total_order_amount),
                 "items_count": len(supplier_diag["items"]),
                 "skus": [i["sku"] for i in supplier_diag["items"][:10]]
@@ -481,6 +534,7 @@ def generate_supplier_po_draft(
         "order_reference": po.reference,
         "supplier_name": supplier.name,
         "facility_name": facility.name,
+        "category_name": category_name,
         "total_amount": float(total_order_amount),
         "lines_count": len(supplier_diag["items"])
     }

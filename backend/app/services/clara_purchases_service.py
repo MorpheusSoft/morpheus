@@ -29,7 +29,8 @@ from app.models.inventory import (
     ProductBarcode,
     ProductPackaging,
     InventorySnapshot,
-    ProductFacilityPrice
+    ProductFacilityPrice,
+    Category
 )
 from app.models.core import Supplier, Facility, Buyer
 from app.models.sales import Document, DocumentLine
@@ -37,7 +38,16 @@ from app.models.digital_workers import DigitalWorker, DigitalWorkerActionLog
 from app.services.mrp_bot_service import diagnose_stockouts, generate_supplier_po_draft
 from app.services.nlp_search import search_product_variants
 
+import unicodedata
+
 logger = logging.getLogger(__name__)
+
+
+def strip_accents(text: str) -> str:
+    """Elimina diacríticos/acentos para comparaciones tolerantes a ortografía."""
+    if not text:
+        return ""
+    return "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
 
 
 def lookup_purchasing_product_360(
@@ -231,74 +241,145 @@ def format_product_360_telegram(item: Dict[str, Any]) -> str:
     )
 
 
-def parse_order_intent(text: str) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
+KNOWN_FACILITIES = ["tucacas", "belisa", "cumboto", "maracay", "cendi", "trigal", "palma", "moron"]
+
+def parse_order_intent(text: str) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[List[Dict[str, Any]]]]:
     """
-    Analiza una instrucción conversacional o comando para extraer:
-    1. Proveedor objetivo (nombre o ID).
-    2. Ítems personalizados (si se especificaron productos y cantidades) para Modo B.
-       Si no se especificaron ítems, retorna None en items para Modo A (Sugerido MRP).
+    Analiza una instrucción conversacional o comando para extraer multidimensionalmente:
+    1. Proveedor objetivo (nombre, código o ID).
+    2. Sede objetivo (nombre de sucursal, CENDI o 'todas').
+    3. Categoría objetivo (ej: Víveres, Farmacia, Charcutería).
+    4. Ítems personalizados (si se especificaron productos y cantidades) para Modo B.
+       Si no se especificaron ítems, retorna None en custom_items para Modo A (Sugerido MRP).
     """
     clean = text.strip()
 
-    # Formato con barra vertical: /crear_odc Proveedor | 50 Harina Pan, 20 Detergente
+    # 1. Modo estructurado con barra vertical:
+    # Ej: /crear_odc Alimentos Polar | Tucacas | Víveres | 50 Harina Pan, 20 Primor
     if "|" in clean:
-        parts = clean.split("|", 1)
-        sup_part = re.sub(r"^/(?:crear_odc|crear_orden|orden_crear|odc_crear|odc)\s*", "", parts[0], flags=re.IGNORECASE).strip()
-        items_part = parts[1].strip()
-        items = []
-        for it in items_part.split(","):
-            m = re.search(r"(\d+(?:\.\d+)?)\s*(?:bultos?|cajas?|uds?|unidades?|fardos?|paquetes?|kgs?|kg)?\s*(?:de)?\s*(.+)", it.strip(), re.IGNORECASE)
-            if m:
-                items.append({"qty": float(m.group(1)), "query": m.group(2).strip()})
-            elif it.strip():
-                items.append({"qty": 1.0, "query": it.strip()})
-        return sup_part, items
+        parts = [p.strip() for p in clean.split("|")]
+        sup = re.sub(r"^/(?:crear_odc|crear_orden|orden_crear|odc_crear|odc)\s*", "", parts[0], flags=re.IGNORECASE)
+        sup = re.sub(r"^(?:clara,?\s*)?(?:por favor\s*)?(?:genera|crea|haz|prepara|emitir)\s*(?:una\s*)?(?:orden de compra|odc|pedido de compra|orden|sugerido)?\s*(?:para|a|al proveedor|de|del proveedor)?\s*", "", sup, flags=re.IGNORECASE).strip()
 
-    # Formato en lenguaje natural con cláusula 'con' o 'incluyendo':
-    # Ej: "Clara, genera orden para Alimentos Polar con 50 bultos de Harina Pan y 20 cajas de Crema de Arroz Primor"
-    con_match = re.split(r"\b(?:con|incluyendo|con los productos|con los siguientes renglones)\b", clean, flags=re.IGNORECASE)
+        fac = None
+        cat = None
+        items = None
+
+        for p in parts[1:]:
+            p_lower = p.lower()
+            # A. Ítems con cantidades
+            has_quantities = bool(re.search(r"\d+\s*(?:bultos?|cajas?|uds?|unidades?|fardos?|paquetes?|kgs?|kg)?\s*(?:de)?\s*[a-zA-Z]", p, re.IGNORECASE))
+            if has_quantities or ("," in p and any(c.isdigit() for c in p)):
+                items = []
+                for it in p.split(","):
+                    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:bultos?|cajas?|uds?|unidades?|fardos?|paquetes?|kgs?|kg)?\s*(?:de)?\s*(.+)", it.strip(), re.IGNORECASE)
+                    if m:
+                        items.append({"qty": float(m.group(1)), "query": m.group(2).strip()})
+                    elif it.strip():
+                        items.append({"qty": 1.0, "query": it.strip()})
+            # B. Categoría explícita
+            elif re.search(r"\b(?:categor[ií]a|rubro|dpto|departamento)\b", p, re.IGNORECASE):
+                cat = re.sub(r"\b(?:categor[ií]a|rubro|dpto|departamento)\b\s*", "", p, flags=re.IGNORECASE).strip()
+            # C. Sede explícita o 'todas'
+            elif any(w in p_lower for w in ["todas", "cendi", "sucursal", "sede", "tienda"]) or any(kf in p_lower for kf in KNOWN_FACILITIES):
+                fac = re.sub(r"\b(?:sede|sucursal|tienda|en|para)\b\s*", "", p, flags=re.IGNORECASE).strip()
+            # D. Asignaciones posicionales
+            elif not fac and not cat:
+                fac = p.strip()
+            elif fac and not cat:
+                cat = p.strip()
+
+        return (sup if sup else None), fac, cat, items
+
+    # 2. Modo Lenguaje Natural
+    # A. Extraer ítems personalizados si tiene cláusula 'con ...'
+    custom_items = None
+    con_match = re.split(r"\b(?:con\s+(?:\d+|los productos|los siguientes renglones)|incluyendo\s+(?:\d+|los productos))\b", clean, flags=re.IGNORECASE)
     if len(con_match) > 1:
-        sup_part = con_match[0]
-        items_part = con_match[1]
-        sup_cleaned = re.sub(
-            r"^(?:clara,?\s*)?(?:por favor\s*)?(?:genera|crea|haz|prepara|emitir)\s*(?:una\s*)?(?:orden de compra|odc|pedido de compra|orden)\s*(?:para|a|al proveedor)?\s*",
-            "",
-            sup_part,
-            flags=re.IGNORECASE
-        ).strip()
-        items = []
-        raw_items = re.split(r"[,;]|\s+y\s+", items_part)
-        for it in raw_items:
+        items_part = clean[len(con_match[0]):].strip()
+        clean = con_match[0].strip()
+        items_part = re.sub(r"^(?:con|incluyendo)\s*", "", items_part, flags=re.IGNORECASE)
+        # Extraer posible sede al final del bloque de ítems
+        m_end_fac = re.search(r"\s+\b(?:en|para)\s+([a-zA-Z0-9áéíóúÁÉÍÓÚñÑ\s]+)$", items_part, re.IGNORECASE)
+        if m_end_fac and any(kf in m_end_fac.group(1).lower() for kf in KNOWN_FACILITIES + ["todas", "cendi"]):
+            fac_from_items = m_end_fac.group(1).strip()
+            items_part = items_part[:m_end_fac.start()].strip()
+        else:
+            fac_from_items = None
+
+        custom_items = []
+        for it in re.split(r"[,;]|\s+y\s+", items_part):
             m = re.search(r"(\d+(?:\.\d+)?)\s*(?:bultos?|cajas?|uds?|unidades?|fardos?|paquetes?|kgs?|kg)?\s*(?:de)?\s*(.+)", it.strip(), re.IGNORECASE)
             if m:
-                items.append({"qty": float(m.group(1)), "query": m.group(2).strip()})
+                custom_items.append({"qty": float(m.group(1)), "query": m.group(2).strip()})
             elif it.strip():
-                items.append({"qty": 1.0, "query": it.strip()})
-        return sup_cleaned, items
+                custom_items.append({"qty": 1.0, "query": it.strip()})
+    else:
+        fac_from_items = None
 
-    # Solo proveedor (Modo A - Sugerido MRP)
-    sup_cleaned = re.sub(
-        r"^(?:/(?:crear_odc|crear_orden|odc)\s*|(?:clara,?\s*)?(?:por favor\s*)?(?:genera|crea|haz|prepara|emitir)\s*(?:una\s*)?(?:orden de compra|odc|pedido de compra|orden)\s*(?:para|a|al proveedor)?\s*)",
+    # B. Extraer Categoría
+    cat_query = None
+    m_cat = re.search(r"\b(?:en la categor[ií]a|en categor[ií]a|de la categor[ií]a|categor[ií]a|rubro|departamento)\s+(.+?)(?=\s+(?:para|en|sede|sucursal|tienda|con)\b|$)", clean, re.IGNORECASE)
+    if m_cat:
+        cat_query = m_cat.group(1).strip()
+        clean = clean[:m_cat.start()] + " " + clean[m_cat.end():]
+
+    # C. Extraer Sede / Sucursales
+    fac_query = fac_from_items
+    if not fac_query:
+        # Chequear 'en todas las sucursales / tiendas'
+        m_todas = re.search(r"\b(?:en todas las sucursales|en todas las tiendas|en todas las sedes|en todas|para todas las tiendas|para todas las sucursales|todas las tiendas|todas las sucursales|todas)\b", clean, re.IGNORECASE)
+        if m_todas:
+            fac_query = "todas"
+            clean = clean[:m_todas.start()] + " " + clean[m_todas.end():]
+        else:
+            # Chequear 'sucursal X' / 'sede X' / 'tienda X'
+            m_fac = re.search(r"\b(?:sucursal|sede|tienda)\s+([a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]+)", clean, re.IGNORECASE)
+            if m_fac:
+                fac_query = m_fac.group(1).strip()
+                clean = clean[:m_fac.start()] + " " + clean[m_fac.end():]
+            else:
+                for kf in KNOWN_FACILITIES:
+                    m_kf = re.search(rf"\b(?:en|para)\s+({kf})\b", clean, re.IGNORECASE)
+                    if m_kf:
+                        fac_query = m_kf.group(1).strip()
+                        clean = clean[:m_kf.start()] + " " + clean[m_kf.end():]
+                        break
+
+    # D. Limpiar comandos y verbos iniciales para aislar proveedor
+    clean = re.sub(
+        r"^(?:/(?:crear_odc|crear_orden|orden_crear|odc_crear|odc)\s*|(?:clara,?\s*)?(?:por favor\s*)?(?:genera|crea|haz|prepara|emitir)\s*(?:una\s*)?(?:orden de compra|odc|pedido de compra|orden|sugerido)?\s*(?:para|a|al proveedor|de|del proveedor)?\s*)",
         "",
         clean,
         flags=re.IGNORECASE
     ).strip()
-    return (sup_cleaned if sup_cleaned else None), None
+
+    # Limpiar conectores residuales al inicio o final
+    clean = re.sub(r"^(?:de|para|al?)\s+", "", clean, flags=re.IGNORECASE).strip()
+    clean = re.sub(r"\s+(?:en\s+la|en\s+el|en|para\s+la|para\s+el|para|de\s+la|de\s+el|de|al?)\s*$", "", clean, flags=re.IGNORECASE).strip()
+
+    sup_query = clean if clean else None
+    return sup_query, fac_query, cat_query, custom_items
 
 
 def create_supplier_po_from_chat(
     db: Session,
     supplier_query: str,
     user_name: str,
-    facility_id: Optional[int] = 1,
+    facility_query: Optional[str] = None,
+    category_query: Optional[str] = None,
+    facility_id: Optional[int] = None,
     custom_items: Optional[List[Dict[str, Any]]] = None,
     channel: str = "Telegram"
 ) -> Dict[str, Any]:
     """
-    Crea una Orden de Compra en borrador (DRAFT) a través de la interfaz conversacional.
+    Crea una Orden de Compra en borrador (DRAFT) a través de la interfaz conversacional de Clara (Neo Compras).
     Soporta:
-      - Modo A: Sin custom_items -> Sugerido predictivo MRP para quiebres y déficits.
-      - Modo B: Con custom_items -> Creación a la medida con los productos especificados.
+      - Modo A (Sugerido MRP):
+        * Multitienda: genera borradores independientes para cada sede con déficit.
+        * Por Sede: genera para una tienda específica.
+        * Por Categoría: filtra ítems exclusivamente de la categoría / departamento indicado.
+      - Modo B (Personalizado): Creación a la medida con los productos dictados por el usuario.
     """
     clean_sup_q = (supplier_query or "").strip()
     if not clean_sup_q:
@@ -311,7 +392,7 @@ def create_supplier_po_from_chat(
     supplier = None
     if clean_sup_q.isdigit():
         supplier = db.query(Supplier).filter(Supplier.id == int(clean_sup_q)).first()
-    
+
     if not supplier:
         supplier = db.query(Supplier).filter(
             Supplier.is_active == True,
@@ -319,14 +400,12 @@ def create_supplier_po_from_chat(
         ).first()
 
     if not supplier:
-        # Búsqueda por RIF / Tax ID
         supplier = db.query(Supplier).filter(
             Supplier.is_active == True,
             Supplier.tax_id.ilike(f"%{clean_sup_q}%")
         ).first()
 
     if not supplier:
-        # Búsqueda por tokens significativos (ej: 'Polar', 'Isola', 'Colgate')
         words = [w for w in re.findall(r"\b[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}\b", clean_sup_q)]
         for w in words:
             cand = db.query(Supplier).filter(
@@ -343,22 +422,137 @@ def create_supplier_po_from_chat(
             "error": f"No se encontró ningún proveedor activo que coincida con '{clean_sup_q}'."
         }
 
-    # 2. Sede de destino
-    target_facility_id = facility_id or 1
-    facility = db.query(Facility).filter(Facility.id == target_facility_id).first()
-    if not facility:
-        facility = db.query(Facility).filter(Facility.is_active == True).first()
-        target_facility_id = facility.id if facility else 1
+    # 2. Resolución de Sede / Sucursal
+    is_multi_facility = False
+    target_facility_id = None
+    target_facility_name = None
 
-    facility_name = facility.name if facility else f"Sede #{target_facility_id}"
+    if facility_query:
+        clean_fq = strip_accents(facility_query.strip().lower())
+        if any(w in clean_fq for w in ["todas", "todas las tiendas", "todas las sucursales", "todas las sedes", "todos los almacenes"]):
+            is_multi_facility = True
+        else:
+            all_active_facs = db.query(Facility).filter(Facility.is_active == True).all()
+            matched_fac = next((f for f in all_active_facs if clean_fq in strip_accents(f.name.lower()) or clean_fq in strip_accents((f.code or '').lower())), None)
+            if matched_fac:
+                target_facility_id = matched_fac.id
+                target_facility_name = matched_fac.name
+            elif any(w in clean_fq for w in ["cendi", "distribucion"]):
+                cendi = db.query(Facility).filter(Facility.is_active == True, Facility.is_distribution_center == True).first()
+                if cendi:
+                    target_facility_id = cendi.id
+                    target_facility_name = cendi.name
+
+    if not is_multi_facility and not target_facility_id:
+        target_facility_id = facility_id or 1
+        fac_obj = db.query(Facility).filter(Facility.id == target_facility_id).first()
+        target_facility_name = fac_obj.name if fac_obj else f"Sede #{target_facility_id}"
+
+    facility_name = target_facility_name or "Sede Central"
+
+    # 3. Resolución de Categoría (Tolerante a acentos y mayúsculas/minúsculas)
+    target_category_id = None
+    target_category_name = None
+    if category_query:
+        clean_cq = strip_accents(category_query.strip().lower())
+        all_active_cats = db.query(Category).filter(Category.is_active == True).all()
+        # Coincidencia exacta primero
+        matched_cat = next((c for c in all_active_cats if strip_accents(c.name.lower()) == clean_cq or strip_accents((c.slug or '').lower()) == clean_cq), None)
+        # Coincidencia parcial si no hubo exacta
+        if not matched_cat:
+            matched_cat = next((c for c in all_active_cats if clean_cq in strip_accents(c.name.lower())), None)
+
+        if matched_cat:
+            target_category_id = matched_cat.id
+            target_category_name = matched_cat.name
+        else:
+            top_cats = [c.name for c in db.query(Category).filter(Category.parent_id == None, Category.is_active == True).limit(8).all()]
+            return {
+                "success": False,
+                "error": f"No se encontró la categoría '{category_query.strip()}'. Categorías principales disponibles: {', '.join(top_cats)}."
+            }
+
+    cat_txt = f" en la categoría *{target_category_name}*" if target_category_name else ""
 
     # =========================================================================
     # MODO A: SUGERIDO MRP (Sin renglones personalizados)
     # =========================================================================
     if not custom_items:
         try:
-            # Validar si tiene productos en quiebre o déficit
-            diag = diagnose_stockouts(db, facility_id=target_facility_id, supplier_id=supplier.id)
+            # Caso 1: Multitienda ("en todas las tiendas")
+            if is_multi_facility:
+                active_facilities = db.query(Facility).filter(Facility.is_active == True).order_by(Facility.id.asc()).all()
+                created_orders = []
+                healthy_stores = []
+                total_global_amount = Decimal("0.00")
+                total_global_lines = 0
+
+                for fac in active_facilities:
+                    diag = diagnose_stockouts(
+                        db,
+                        facility_id=fac.id,
+                        supplier_id=supplier.id,
+                        category_id=target_category_id
+                    )
+                    s_diag = next((s for s in diag.get("suppliers", []) if s["supplier_id"] == supplier.id), None)
+                    if s_diag and s_diag.get("items"):
+                        po_res = generate_supplier_po_draft(
+                            db=db,
+                            supplier_id=supplier.id,
+                            facility_id=fac.id,
+                            category_id=target_category_id,
+                            notes=f"Orden sugerida multitienda ({fac.name}) generada vía {channel} por instrucción de {user_name}."
+                        )
+                        created_orders.append(po_res)
+                        total_global_amount += Decimal(str(po_res["total_amount"]))
+                        total_global_lines += po_res["lines_count"]
+                    else:
+                        healthy_stores.append(fac.name)
+
+                if not created_orders:
+                    return {
+                        "success": False,
+                        "no_deficit": True,
+                        "supplier_name": supplier.name,
+                        "message": (
+                            f"El proveedor *{supplier.name}* presenta niveles de stock saludables en **todas las sucursales**{cat_txt}. "
+                            f"No se detectaron quiebres ni déficit urgente en este momento.\n\n"
+                            f"_💡 Si deseas generar una orden de compra manual con productos específicos, indícame:_\n"
+                            f"• `/crear_odc {supplier.name} | [sucursal] | 50 [producto], 20 [otro]`"
+                        )
+                    }
+
+                orders_lines = []
+                for o in created_orders:
+                    orders_lines.append(f"🏢 *{o['facility_name']}*: `{o['order_reference']}` ➡️ *${o['total_amount']:,.2f} USD* ({o['lines_count']} renglones)")
+
+                healthy_note = f"\n_💡 Sedes con cobertura suficiente (sin déficit): {', '.join(healthy_stores)}._" if healthy_stores else ""
+
+                return {
+                    "success": True,
+                    "mode": "MRP_MULTI_FACILITY",
+                    "orders": created_orders,
+                    "supplier_name": supplier.name,
+                    "total_amount": float(total_global_amount),
+                    "lines_count": total_global_lines,
+                    "message": (
+                        f"✅ *Órdenes de Compra Creadas por Sucursal (Multitienda)*\n\n"
+                        f"He evaluado el déficit de *{supplier.name}*{cat_txt} y generado los borradores correspondientes:\n\n"
+                        + "\n".join(orders_lines) +
+                        f"\n\n💰 *Total Global Estimado:* *${float(total_global_amount):,.2f} USD* ({total_global_lines} renglones en total)\n"
+                        f"🏷️ *Estado:* `DRAFT` (Borradores independientes listos para revisión y firma)"
+                        f"{healthy_note}\n\n"
+                        f"_Disponibles en Neo ERP > Neo Compras para su gestión._"
+                    )
+                }
+
+            # Caso 2: Sede Única
+            diag = diagnose_stockouts(
+                db,
+                facility_id=target_facility_id,
+                supplier_id=supplier.id,
+                category_id=target_category_id
+            )
             suppliers_list = diag.get("suppliers", [])
             supplier_diag = next((s for s in suppliers_list if s["supplier_id"] == supplier.id), None)
 
@@ -367,9 +561,9 @@ def create_supplier_po_from_chat(
                     "success": False,
                     "no_deficit": True,
                     "supplier_name": supplier.name,
-                    "facility_name": facility_name,
+                    "facility_name": target_facility_name,
                     "message": (
-                        f"El proveedor *{supplier.name}* presenta niveles de stock saludables en *{facility_name}*. "
+                        f"El proveedor *{supplier.name}* presenta niveles de stock saludables en *{target_facility_name}*{cat_txt}. "
                         f"No se detectaron quiebres ni déficit urgente en este momento.\n\n"
                         f"_💡 Si deseas generar una orden de compra manual con productos específicos, indícame:_\n"
                         f"• `/crear_odc {supplier.name} | 50 [producto], 20 [otro]`"
@@ -381,6 +575,7 @@ def create_supplier_po_from_chat(
                 db=db,
                 supplier_id=supplier.id,
                 facility_id=target_facility_id,
+                category_id=target_category_id,
                 notes=f"Orden sugerida MRP generada vía {channel} por instrucción de {user_name}."
             )
 
@@ -390,12 +585,13 @@ def create_supplier_po_from_chat(
                 "order_id": po_res["order_id"],
                 "order_reference": po_res["order_reference"],
                 "supplier_name": supplier.name,
-                "facility_name": facility_name,
+                "facility_name": target_facility_name,
+                "category_name": target_category_name,
                 "total_amount": po_res["total_amount"],
                 "lines_count": po_res["lines_count"],
                 "message": (
                     f"✅ *Orden de Compra Borrador Creada (Sugerido MRP)*\n\n"
-                    f"He preparado la orden *{po_res['order_reference']}* para *{supplier.name}* con destino a *{facility_name}*.\n\n"
+                    f"He preparado la orden *{po_res['order_reference']}* para *{supplier.name}* con destino a *{target_facility_name}*{cat_txt}.\n\n"
                     f"• Total Estimado: *${po_res['total_amount']:,.2f} USD*\n"
                     f"• Renglones en Quiebre: *{po_res['lines_count']} ítems calculados*\n"
                     f"• Estado: `DRAFT` (Borrador para confirmación y firma)\n\n"
