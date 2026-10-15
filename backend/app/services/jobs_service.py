@@ -23,7 +23,13 @@ def execute_job_by_code(job_code: str, db: Session):
         execute_scheduled_monthly_job(db)
     elif job_code in ('clara_proactive_purchases_dispatch', 'clara_morning_purchasing_scan'):
         from app.services.clara_proactive_service import run_clara_proactive_purchasing_scan
-        run_clara_proactive_purchasing_scan(db)
+        return run_clara_proactive_purchasing_scan(db)
+    elif job_code in ('arturo_proactive_wms_dispatch', 'arturo_morning_wms_scan'):
+        from app.services.arturo_proactive_service import run_arturo_proactive_wms_scan
+        return run_arturo_proactive_wms_scan(db)
+    elif job_code in ('valeria_proactive_pricing_dispatch', 'valeria_morning_pricing_scan'):
+        from app.services.valeria_pricing_service import run_valeria_proactive_pricing_scan
+        return run_valeria_proactive_pricing_scan(db)
     else:
         logger.warning(f"[CRON DAEMON] Código de job desconocido: {job_code}")
 

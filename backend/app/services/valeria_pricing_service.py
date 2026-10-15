@@ -6,9 +6,17 @@ de precios, consistencia de precios multitienda y fichas técnicas de costo y PV
 
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func, text
+
+try:
+    from zoneinfo import ZoneInfo
+    CARACAS_TZ = ZoneInfo("America/Caracas")
+except Exception:
+    CARACAS_TZ = timezone(timedelta(hours=-4))
+
+WEEKDAYS_ES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 
 from app.models.inventory import (
     ProductVariant,
@@ -19,9 +27,11 @@ from app.models.inventory import (
     PricingSessionLine,
     Category
 )
-from app.models.core import Facility, SystemSettings
+from app.models.core import Facility, SystemSettings, User
+from app.models.digital_workers import DigitalWorker, DigitalWorkerActionLog, DigitalWorkerConversation
 from app.models.purchasing import PurchaseOrder
 from app.services.nlp_search import search_product_variants
+from app.services.telegram_client import send_telegram_message_sync
 
 logger = logging.getLogger(__name__)
 
@@ -264,3 +274,250 @@ def lookup_product_price_and_cost(
     except Exception as e:
         logger.error(f"[VALERIA SERVICE] Error en lookup_product_price_and_cost: {e}")
         return []
+
+
+def run_valeria_proactive_pricing_scan(
+    db: Session,
+    worker: Optional[DigitalWorker] = None,
+    force_notify: bool = False,
+    specific_chat_id: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Ejecuta el escaneo proactivo de precios, costos y rentabilidad de Valeria (Neo Pricing).
+    Audita márgenes críticos, alzas de costo de proveedores, sesiones en borrador
+    y discrepancias de precio multitienda, despachando el briefing ejecutivo a gerencia.
+    """
+    logger.info("[VALERIA PROACTIVO] Iniciando escaneo matutino de precios y rentabilidad...")
+
+    if not worker:
+        worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == "VALERIA_PRICING").first()
+
+    now_caracas = datetime.now(CARACAS_TZ)
+    date_str = now_caracas.strftime("%d/%m/%Y %I:%M %p")
+    weekday_idx = now_caracas.weekday()
+    weekday_name = WEEKDAYS_ES[weekday_idx]
+
+    # 1. Ejecutar auditorías nativas
+    critical_margins = audit_critical_margins(db, min_margin_pct=15.0, limit=8)
+    cost_spikes = audit_recent_cost_spikes(db, limit=6)
+    pending_sessions = audit_pending_pricing_sessions(db, limit=5)
+    discrepancies = audit_cross_store_price_discrepancies(db, limit=5)
+
+    has_alerts = bool(critical_margins or cost_spikes or pending_sessions or discrepancies)
+
+    # 2. Si no hay alertas
+    if not has_alerts:
+        logger.info("[VALERIA PROACTIVO] Sin alertas críticas de precios ni márgenes.")
+        msg_ok = (
+            f"🎯 *Briefing Proactivo de Precios y Rentabilidad | Neo ERP*\n"
+            f"🤖 *Valeria (Neo Pricing / Costos)*\n"
+            f"📅 _{date_str}_ (*{weekday_name} de Operaciones*)\n\n"
+            f"✅ *Excelente noticia:* Todos los precios y márgenes comerciales se encuentran en estado óptimo.\n"
+            f"• Sin productos vendiéndose a pérdida ni con margen crítico (< 15%).\n"
+            f"• Sin incrementos imprevistos de costos en compras recientes.\n"
+            f"• Sin sesiones de precios pendientes por aplicar.\n"
+            f"• Consistencia total de precios entre tiendas físicas.\n\n"
+            f"💡 _Puedes consultar cualquier producto con `/precio [nombre o SKU]`._"
+        )
+
+        notifications_sent = 0
+        if force_notify:
+            target_chats = set()
+            if specific_chat_id:
+                target_chats.add(str(specific_chat_id))
+            else:
+                users_linked = db.query(User.telegram_chat_id).filter(
+                    User.telegram_chat_id.isnot(None),
+                    User.is_active == True
+                ).all()
+                for (cid,) in users_linked:
+                    if cid:
+                        target_chats.add(str(cid))
+
+            for cid in target_chats:
+                ok = send_telegram_message_sync(chat_id=cid, text=msg_ok, agent_code="VALERIA_PRICING")
+                if ok:
+                    notifications_sent += 1
+
+        return {
+            "success": True,
+            "critical_margins_count": 0,
+            "cost_spikes_count": 0,
+            "pending_sessions_count": 0,
+            "discrepancies_count": 0,
+            "notifications_sent": notifications_sent,
+            "message": "Márgenes comerciales y costos en perfecto orden.",
+            "message_preview": msg_ok
+        }
+
+    # 3. Construir Resumen Ejecutivo para Telegram
+    blocks = [
+        f"🎯 *Briefing Proactivo de Precios y Rentabilidad | Neo ERP*",
+        f"🤖 *Valeria (Neo Pricing / Costos)* - Diagnóstico Matutino",
+        f"📅 _{date_str}_ (*{weekday_name} de Operaciones*)\n",
+        f"📊 *Diagnóstico Global de Rentabilidad:*",
+        f"• SKUs en Margen Crítico / Pérdida: *{len(critical_margins)}*",
+        f"• Alzas Recientes de Costo: *{len(cost_spikes)} casos*",
+        f"• Sesiones de Precios en Borrador: *{len(pending_sessions)} pendientes*",
+        f"• Discrepancias Multitienda: *{len(discrepancies)} productos*",
+    ]
+
+    # Sección A: Margen Crítico y Pérdida
+    if critical_margins:
+        blocks.append(f"\n───────────────────")
+        blocks.append(f"🛡️ *Productos en Margen Crítico o Venta a Pérdida:*")
+        for c in critical_margins[:5]:
+            icon = "🔴 PÉRDIDA" if c.get("is_negative") else "🟡 MARGEN BAJO"
+            p_name = c.get("product_name") or "Producto"
+            sku = c.get("sku") or "N/A"
+            margin = c.get("margin_pct", 0.0)
+            cost = c.get("cost", 0.0)
+            pvp = c.get("sales_price", 0.0)
+            blocks.append(
+                f"• *{p_name}* (`{sku}`):\n"
+                f"   - Estado: *{icon}* | Margen: *{margin}%*\n"
+                f"   - Costo: ${cost:,.4f} | PVP: ${pvp:,.4f}"
+            )
+        if len(critical_margins) > 5:
+            blocks.append(f"  _... y {len(critical_margins) - 5} productos adicionales en riesgo._")
+
+    # Sección B: Alzas de Costo
+    if cost_spikes:
+        blocks.append(f"\n───────────────────")
+        blocks.append(f"📈 *Alzas Recientes de Costo de Proveedores:*")
+        for sp in cost_spikes[:4]:
+            p_name = sp.get("product_name") or "Producto"
+            sku = sp.get("sku") or "N/A"
+            old_c = sp.get("old_cost", 0.0)
+            new_c = sp.get("new_cost", 0.0)
+            inc_pct = sp.get("cost_increase_pct", 0.0)
+            pvp = sp.get("current_pvp", 0.0)
+            drop = sp.get("margin_drop_pct", 0.0)
+            blocks.append(
+                f"• *{p_name}* (`{sku}`): Costo +*{inc_pct}%* (${old_c:,.4f} ➔ ${new_c:,.4f})\n"
+                f"   - PVP Actual: ${pvp:,.4f} (Erosión margen: -{drop}%)"
+            )
+        if len(cost_spikes) > 4:
+            blocks.append(f"  _... y {len(cost_spikes) - 4} aumentos adicionales de costo._")
+
+    # Sección C: Sesiones de Precios Pendientes
+    if pending_sessions:
+        blocks.append(f"\n───────────────────")
+        blocks.append(f"📑 *Sesiones de Fijación de Precios Pendientes (DRAFT):*")
+        for s in pending_sessions[:3]:
+            sid = s.get("id")
+            sname = s.get("name")
+            sup = s.get("supplier") or "Varios"
+            cnt = s.get("lines_count", 0)
+            blocks.append(f"• *Sesión #{sid} - {sname}* ({sup}): *{cnt}* productos listos para publicar")
+        if len(pending_sessions) > 3:
+            blocks.append(f"  _... y {len(pending_sessions) - 3} sesiones adicionales en borrador._")
+
+    # Sección D: Discrepancias Multitienda
+    if discrepancies:
+        blocks.append(f"\n───────────────────")
+        blocks.append(f"🏬 *Discrepancias de Precio entre Sucursales:*")
+        for d in discrepancies[:3]:
+            p_name = d.get("product_name") or "Producto"
+            sku = d.get("sku") or "N/A"
+            min_p = d.get("min_price", 0.0)
+            max_p = d.get("max_price", 0.0)
+            diff = d.get("discrepancy_amount", 0.0)
+            blocks.append(f"• *{p_name}* (`{sku}`): Rango ${min_p:,.2f} - ${max_p:,.2f} (Diferencia: ${diff:,.2f})")
+        if len(discrepancies) > 3:
+            blocks.append(f"  _... y {len(discrepancies) - 3} productos desalineados adicionales._")
+
+    blocks.append("\n───────────────────")
+    blocks.append(
+        "💡 *Comandos Rápidos:*\n"
+        "• `/margen_critico`: Ver productos con margen bajo o pérdida\n"
+        "• `/aumentos`: Auditar alzas de costo de proveedores\n"
+        "• `/sesiones`: Revisar sesiones de precios pendientes\n"
+        "• `/precio [producto]`: Consultar ficha técnica de costo y PVP"
+    )
+
+    telegram_text = "\n".join(blocks)
+
+    # 4. Despachar a destinatarios oficiales
+    notifications_sent = 0
+    target_chats = set()
+
+    if specific_chat_id:
+        target_chats.add(str(specific_chat_id))
+    else:
+        # A. Usuarios activos vinculados
+        try:
+            users_linked = db.query(User.telegram_chat_id).filter(
+                User.telegram_chat_id.isnot(None),
+                User.is_active == True
+            ).all()
+            for (cid,) in users_linked:
+                if cid:
+                    target_chats.add(str(cid))
+        except Exception as e:
+            logger.warning(f"[VALERIA PROACTIVO] Error consultando usuarios vinculados: {e}")
+
+        # B. Conversaciones previas autenticadas con Valeria
+        if worker:
+            try:
+                convs = db.query(DigitalWorkerConversation.external_sender_id).filter(
+                    DigitalWorkerConversation.worker_id == worker.id,
+                    DigitalWorkerConversation.channel == "TELEGRAM",
+                    DigitalWorkerConversation.is_authenticated == True
+                ).all()
+                for (cid,) in convs:
+                    if cid:
+                        target_chats.add(str(cid))
+            except Exception as e:
+                logger.warning(f"[VALERIA PROACTIVO] Error consultando conversaciones de Valeria: {e}")
+
+    for cid in target_chats:
+        ok = send_telegram_message_sync(
+            chat_id=cid,
+            text=telegram_text,
+            agent_code="VALERIA_PRICING"
+        )
+        if ok:
+            notifications_sent += 1
+
+    # 5. Registrar en Bitácora de Acciones de Valeria
+    if worker:
+        try:
+            action_log = DigitalWorkerActionLog(
+                worker_id=worker.id,
+                facility_id=None,
+                action_type="PROACTIVE_PRICING_SCAN",
+                severity="WARNING" if critical_margins else "INFO",
+                summary=(
+                    f"Briefing matutino de Precios: {len(critical_margins)} SKUs en margen crítico, "
+                    f"{len(cost_spikes)} alzas de costo, {len(pending_sessions)} sesiones DRAFT. "
+                    f"{notifications_sent} alertas enviadas vía Telegram."
+                ),
+                details={
+                    "critical_margins_count": len(critical_margins),
+                    "cost_spikes_count": len(cost_spikes),
+                    "pending_sessions_count": len(pending_sessions),
+                    "discrepancies_count": len(discrepancies),
+                    "notifications_sent": notifications_sent,
+                    "target_chats": list(target_chats)
+                },
+                recipient_target="Analistas y Supervisores de Precios",
+                status="COMPLETED"
+            )
+            db.add(action_log)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"[VALERIA PROACTIVO] Error guardando log de acción: {e}")
+
+    logger.info(f"[VALERIA PROACTIVO] Escaneo finalizado. {notifications_sent} alertas enviadas.")
+    return {
+        "success": True,
+        "critical_margins_count": len(critical_margins),
+        "cost_spikes_count": len(cost_spikes),
+        "pending_sessions_count": len(pending_sessions),
+        "discrepancies_count": len(discrepancies),
+        "notifications_sent": notifications_sent,
+        "message_preview": telegram_text
+    }
+

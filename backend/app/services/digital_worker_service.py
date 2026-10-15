@@ -34,14 +34,27 @@ from app.services.dante_it_service import (
     audit_store_invoice_history
 )
 from app.services.clara_proactive_service import run_clara_proactive_purchasing_scan
+from app.services.arturo_proactive_service import run_arturo_proactive_wms_scan
+from app.services.valeria_pricing_service import (
+    audit_critical_margins,
+    audit_recent_cost_spikes,
+    audit_pending_pricing_sessions,
+    audit_cross_store_price_discrepancies,
+    run_valeria_proactive_pricing_scan
+)
 
 logger = logging.getLogger(__name__)
 
 SKILL_DISPATCHER = {
     # Arturo WMS
     'negative_stock_watchdog': audit_negative_stock,
+    'negative_stock_auditor': audit_negative_stock,
     'dock_returns_and_scrap_guard': audit_dock_returns_and_scrap,
+    'dock_returns_and_scrap_monitor': audit_dock_returns_and_scrap,
     '3way_unreconciled_watchdog': audit_unreconciled_orders,
+    '3way_unreconciled_auditor': audit_unreconciled_orders,
+    'arturo_proactive_wms_dispatch': run_arturo_proactive_wms_scan,
+    'arturo_morning_wms_scan': run_arturo_proactive_wms_scan,
 
     # Clara Compras
     'mrp_purchase_suggester': run_mrp_draft_generation,
@@ -54,6 +67,16 @@ SKILL_DISPATCHER = {
     'clara_monthly_executive_reports': run_monthly_executive_reports,
     'purchase_whatsapp_assistant': run_purchase_whatsapp_listener,
     'clara_proactive_purchases_dispatch': run_clara_proactive_purchasing_scan,
+    'clara_morning_purchasing_scan': run_clara_proactive_purchasing_scan,
+
+    # Valeria Pricing
+    'pricing_margin_shield': audit_critical_margins,
+    'pricing_cost_spike_watchdog': audit_recent_cost_spikes,
+    'pricing_cost_spike_monitor': audit_recent_cost_spikes,
+    'pricing_pending_sessions_guard': audit_pending_pricing_sessions,
+    'pricing_cross_store_consistency': audit_cross_store_price_discrepancies,
+    'valeria_proactive_pricing_dispatch': run_valeria_proactive_pricing_scan,
+    'valeria_morning_pricing_scan': run_valeria_proactive_pricing_scan,
 
     # Dante TI & Sincronización
     'it_sync_heartbeat_monitor': audit_store_sync_heartbeats,
@@ -101,7 +124,10 @@ def run_worker_cycle(agent_code: str, db: Session) -> Dict[str, Any]:
 
         try:
             logger.info(f"[{w_agent_code}] Ejecutando habilidad: {skill_name} ({skill_code})...")
-            result = handler(db, worker)
+            try:
+                result = handler(db, worker)
+            except TypeError:
+                result = handler(db)
             cycle_summary["executed_skills"].append({
                 "skill_code": skill_code,
                 "name": skill_name,

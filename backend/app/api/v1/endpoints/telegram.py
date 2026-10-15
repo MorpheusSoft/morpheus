@@ -59,6 +59,8 @@ from app.services.clara_purchases_service import (
     create_supplier_po_from_chat
 )
 from app.services.clara_proactive_service import run_clara_proactive_purchasing_scan
+from app.services.arturo_proactive_service import run_arturo_proactive_wms_scan
+from app.services.valeria_pricing_service import run_valeria_proactive_pricing_scan
 
 logger = logging.getLogger(__name__)
 
@@ -523,6 +525,7 @@ async def _process_telegram_message_core(
                 f"*Supervisor Autónomo de Almacenes* de *Neo ERP*.\n\n"
                 f"Superviso el inventario físico, recepciones en muelle, existencias negativas y transferencias.\n\n"
                 f"📌 *Comandos Disponibles:*\n"
+                f"• `/proactivo`: Diagnóstico matutino y briefing operativo de existencias\n"
                 f"• `/negativos`: Detección de inventario negativo por almacén\n"
                 f"• `/devoluciones`: Devoluciones a proveedores pendientes de despacho\n"
                 f"• `/stock <producto>`: Consulta de existencia en tiempo real\n"
@@ -539,6 +542,7 @@ async def _process_telegram_message_core(
                 f"*Estratega Autónoma de Precios, Costos y Rentabilidad* de *Neo ERP*.\n\n"
                 f"Superviso en tiempo real la protección de márgenes comerciales, alzas de costos de proveedores, sesiones de fijación de precios y consistencia en anaquel.\n\n"
                 f"📌 *Comandos Disponibles:*\n"
+                f"• `/proactivo`: Diagnóstico matutino de rentabilidad y alertas de precios\n"
                 f"• `/margen_critico`: Alerta de productos vendiéndose a pérdida o con margen < 15%\n"
                 f"• `/sesiones`: Sesiones de fijación de precios en borrador pendientes por aplicar\n"
                 f"• `/aumentos`: Productos con alzas recientes de costo y cálculo de caída de margen\n"
@@ -904,6 +908,18 @@ async def _process_telegram_message_core(
 
     # === COMANDOS DE ARTURO (ALMACÉN) ===
     if "ARTURO" in clean_agent_code:
+        # COMANDO O CONSULTA PROACTIVA WMS: /proactivo, /briefing, /diagnostico
+        is_arturo_proactive = (
+            lower_text in ["/proactivo", "proactivo", "/diagnostico", "diagnostico", "/briefing", "briefing"] or
+            (
+                any(w in lower_text for w in ["almacen", "almacén", "existencias", "muelle", "recepciones"]) and
+                any(w in lower_text for w in ["resumen", "diagnostico", "diagnóstico", "informe", "reporte", "proactivo", "hoy", "novedades"])
+            )
+        )
+        if is_arturo_proactive:
+            res = run_arturo_proactive_wms_scan(db, force_notify=True, specific_chat_id=chat_id)
+            return res.get("message_preview") or res.get("message")
+
         if lower_text in ["/negativos", "negativos", "existencia negativa"]:
             negs = execute_negative_stock_lookup(db)
             if not negs:
@@ -938,6 +954,18 @@ async def _process_telegram_message_core(
 
     # === COMANDOS DE VALERIA (PRECIOS Y COSTOS) ===
     if "VALERIA" in clean_agent_code or "PRICING" in clean_agent_code:
+        # COMANDO O CONSULTA PROACTIVA PRICING: /proactivo, /rentabilidad, /briefing
+        is_valeria_proactive = (
+            lower_text in ["/proactivo", "proactivo", "/rentabilidad", "rentabilidad", "/briefing", "briefing", "/diagnostico", "diagnostico"] or
+            (
+                any(w in lower_text for w in ["precios", "precio", "costos", "costo", "margen", "márgenes", "rentabilidad"]) and
+                any(w in lower_text for w in ["resumen", "diagnostico", "diagnóstico", "informe", "reporte", "proactivo", "hoy", "novedades"])
+            )
+        )
+        if is_valeria_proactive:
+            res = run_valeria_proactive_pricing_scan(db, force_notify=True, specific_chat_id=chat_id)
+            return res.get("message_preview") or res.get("message")
+
         if lower_text in ["/margen_critico", "margen critico", "margen_critico", "perdida", "venta a perdida", "/perdida"]:
             crits = audit_critical_margins(db, min_margin_pct=15.0, limit=10)
             if not crits:
