@@ -16,11 +16,27 @@ if backend_dir not in sys.path:
 
 from sqlalchemy.orm import Session
 from app.api.deps import SessionLocal
+from sqlalchemy import text
 from app.models.core import SystemJob
 from app.models.digital_workers import DigitalWorker, DigitalSkill, DigitalWorkerSkill
 
 
-SYSTEM_JOBS_DEF = [
+def sync_table_sequence(db: Session, schema: str, table: str, id_col: str = "id"):
+    """Alinea la secuencia serial de PostgreSQL al valor máximo existente para prevenir UniqueViolation."""
+    try:
+        db.execute(text(f"SELECT setval(pg_get_serial_sequence('{schema}.{table}', '{id_col}'), coalesce(max({id_col}), 0) + 1, false) FROM {schema}.{table};"))
+        db.commit()
+    except Exception as e:
+        db.rollback()
+
+
+def seed_proactive_system_jobs(db: Session):
+    print("==================================================================")
+    print("🌱 [SEED] Configurando Trabajos en Segundo Plano (core.system_jobs)")
+    print("==================================================================")
+    sync_table_sequence(db, "core", "system_jobs")
+
+    for job_def in SYSTEM_JOBS_DEF:
     {
         "job_code": "arturo_proactive_wms_dispatch",
         "name": "Control Matutino de Almacén y Existencias (Arturo)",
@@ -152,6 +168,8 @@ def seed_digital_skills_and_links(db: Session):
     print("\n==================================================================")
     print("🧠 [SEED] Registrando Habilidades y Asignaciones a Usuarios Digitales")
     print("==================================================================")
+    sync_table_sequence(db, "core", "digital_skills")
+    sync_table_sequence(db, "core", "digital_worker_skills")
 
     for s_def in DIGITAL_SKILLS_DEF:
         code = s_def["skill_code"]
