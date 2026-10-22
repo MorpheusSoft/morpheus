@@ -1,29 +1,18 @@
 "use server"
 
-import { cookies } from "next/headers"
 import { revalidatePath } from "next/cache"
-
-const API_URL = "http://127.0.0.1:8000/api/v1"
-
-async function getAuthHeaders() {
-  const cookieStore = await cookies()
-  const token = cookieStore.get("access_token")?.value
-  return {
-    "Authorization": `Bearer ${token}`,
-    "Content-Type": "application/json",
-  }
-}
+import { getServerApiUrl, getAuthHeaders } from "@/lib/server-api"
 
 export async function getJobs() {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/jobs/`, { headers, cache: 'no-store' })
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/jobs/`, { headers, cache: 'no-store' })
   if (!res.ok) throw new Error("Failed to fetch jobs")
   return res.json()
 }
 
 export async function updateJob(jobCode: string, data: any) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/jobs/${jobCode}`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/jobs/${jobCode}`, {
     method: "PUT",
     headers,
     body: JSON.stringify(data),
@@ -34,8 +23,8 @@ export async function updateJob(jobCode: string, data: any) {
 }
 
 export async function runJobNow(jobCode: string) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/jobs/${jobCode}/run`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/jobs/${jobCode}/run`, {
     method: "POST",
     headers,
   })
@@ -43,4 +32,3 @@ export async function runJobNow(jobCode: string) {
   revalidatePath("/dashboard/jobs")
   return res.json()
 }
-

@@ -382,7 +382,7 @@ export default function MetricsDashboardPage() {
             ></Column>
             <Column 
               field="sales_price" 
-              header="PVP BASE" 
+              header="PVP BASE (SIN IVA)" 
               body={(r) => `$${Number(r.sales_price).toFixed(2)}`}
               className="w-[12%] text-right font-bold text-slate-700"
               alignHeader="right"

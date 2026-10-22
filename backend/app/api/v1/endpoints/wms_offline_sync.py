@@ -336,16 +336,8 @@ def sync_offline_relocations(
             variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
         
         if not variant and item.barcode:
-            clean_code = item.barcode.strip()
-            # Buscar en ProductBarcode
-            bar = db.query(ProductBarcode).filter(ProductBarcode.barcode == clean_code).first()
-            if bar:
-                variant = db.query(ProductVariant).filter(ProductVariant.id == bar.product_variant_id).first()
-            if not variant:
-                # Buscar por barcode directo o SKU en ProductVariant
-                variant = db.query(ProductVariant).filter(
-                    (ProductVariant.barcode == clean_code) | (ProductVariant.sku == clean_code)
-                ).first()
+            from app.core.barcode import find_variant_by_code
+            variant, _, _ = find_variant_by_code(db, item.barcode)
 
         if not variant:
             results.append({
@@ -460,17 +452,8 @@ def get_product_inquiry(
     Consulta rápida de producto por código de barras o SKU.
     Retorna precios, empaques y existencias reales en la sucursal indicada.
     """
-    clean = code.strip()
-    variant = None
-    # 1. Buscar en códigos de barra registrados
-    bar = db.query(ProductBarcode).filter(ProductBarcode.barcode == clean).first()
-    if bar:
-        variant = db.query(ProductVariant).filter(ProductVariant.id == bar.product_variant_id).first()
-    if not variant:
-        # 2. Buscar por código directo o SKU en variante
-        variant = db.query(ProductVariant).filter(
-            (ProductVariant.barcode == clean) | (ProductVariant.sku == clean)
-        ).first()
+    from app.core.barcode import find_variant_by_code
+    variant, _, _ = find_variant_by_code(db, code)
 
     if not variant:
         raise HTTPException(
@@ -605,14 +588,8 @@ def sync_inventory_counts(
         if item.variant_id:
             variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
         if not variant and item.barcode:
-            clean_code = item.barcode.strip()
-            bar = db.query(ProductBarcode).filter(ProductBarcode.barcode == clean_code).first()
-            if bar:
-                variant = db.query(ProductVariant).filter(ProductVariant.id == bar.product_variant_id).first()
-            if not variant:
-                variant = db.query(ProductVariant).filter(
-                    (ProductVariant.barcode == clean_code) | (ProductVariant.sku == clean_code)
-                ).first()
+            from app.core.barcode import find_variant_by_code
+            variant, _, _ = find_variant_by_code(db, item.barcode)
 
         if not variant:
             results.append({

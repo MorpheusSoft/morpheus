@@ -13,7 +13,13 @@ export const ProductService = {
   },
   getCategories: async () => {
     const { data } = await api.get('/categories?limit=1000');
-    return data;
+    const items = Array.isArray(data) ? data : (data?.data || []);
+    return items.map((c: any) => ({
+      ...c,
+      displayName: c.full_path 
+        ? (c.level_name ? `[${c.level_name}] ${c.full_path}` : c.full_path)
+        : c.name
+    })).sort((a: any, b: any) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''));
   },
   getTributes: async () => {
     const { data } = await api.get('/tributes/');

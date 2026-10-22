@@ -135,6 +135,47 @@ function ProductFormContent() {
   const [tributes, setTributes] = useState<any[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
+  const categoryOptionTemplate = (option: any) => {
+    if (!option) return null;
+    return (
+      <div className="flex items-center gap-2 py-1 text-xs">
+        {option.level_name && (
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider shrink-0 ${
+            option.level === 0 ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
+            option.level === 1 ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+            'bg-slate-100 text-slate-700 border border-slate-200'
+          }`}>
+            {option.level_name}
+          </span>
+        )}
+        <span className="font-medium text-slate-800">{option.full_path || option.name}</span>
+      </div>
+    );
+  };
+
+  const selectedCategoryTemplate = (option: any, props: any) => {
+    const selected = (option && typeof option === 'object' && (option.name || option.displayName))
+      ? option
+      : (categories || []).find((c: any) => c.id === (option || props?.value));
+    if (selected) {
+      return (
+        <div className="flex items-center gap-2 text-xs truncate">
+          {selected.level_name && (
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider shrink-0 ${
+              selected.level === 0 ? 'bg-indigo-100 text-indigo-800' :
+              selected.level === 1 ? 'bg-amber-100 text-amber-800' :
+              'bg-slate-200 text-slate-700'
+            }`}>
+              {selected.level_name}
+            </span>
+          )}
+          <span className="font-semibold text-slate-800 truncate">{selected.full_path || selected.displayName || selected.name}</span>
+        </div>
+      );
+    }
+    return <span>{props?.placeholder || "Selecciona Categoría"}</span>;
+  };
+
   const { control, handleSubmit, watch, setValue, formState: { errors } } = useForm({
     resolver: yupResolver(schema),
     defaultValues: {
@@ -563,10 +604,15 @@ function ProductFormContent() {
                       value={field.value} 
                       onChange={(e) => field.onChange(e.value)} 
                       options={categories} 
-                      optionLabel="name" 
+                      optionLabel="displayName" 
                       optionValue="id" 
-                      placeholder="Selecciona Categoría" 
-                      className="w-full !rounded-xl !border-slate-200 !bg-slate-50 hover:!bg-white focus:!bg-white shadow-none"
+                      itemTemplate={categoryOptionTemplate}
+                      valueTemplate={selectedCategoryTemplate}
+                      filter
+                      filterBy="displayName,name,full_path"
+                      showClear
+                      placeholder="Selecciona Categoría Jerárquica..." 
+                      className="w-full !rounded-xl !border-slate-200 !bg-slate-50 hover:!bg-white focus:!bg-white shadow-none text-xs"
                       pt={{ input: { className: '!py-3 !px-4 text-slate-800 font-medium' }, trigger: { className: 'text-slate-400' } }}
                     />
                   )} />
@@ -909,7 +955,7 @@ function ProductFormContent() {
                          
                          {field.value ? (
                              <div className="relative group rounded-xl overflow-hidden shadow-md">
-                                 <img src={`http://localhost:8000${field.value}`} alt="Product" className="w-48 h-48 object-cover" />
+                                 <img src={(field.value.startsWith("http") ? field.value : `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace(/\/api\/v1\/?$/, "")}${field.value}`)} alt="Product" className="w-48 h-48 object-cover" />
                                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
                                     <label className="cursor-pointer bg-white text-slate-800 py-2 px-4 rounded-full font-bold text-xs shadow-xl">
                                        <i className="pi pi-upload mr-2"></i> Cambiar
@@ -942,7 +988,7 @@ function ProductFormContent() {
                                     <div className="truncate text-xs font-bold text-slate-700">Documento Adjunto</div>
                                  </div>
                                  <div className="flex items-center gap-2">
-                                     <a href={`http://localhost:8000${field.value}`} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700 text-sm font-bold"><i className="pi pi-external-link"></i></a>
+                                     <a href={(field.value.startsWith("http") ? field.value : `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace(/\/api\/v1\/?$/, "")}${field.value}`)} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700 text-sm font-bold"><i className="pi pi-external-link"></i></a>
                                      <label className="cursor-pointer text-slate-500 hover:text-slate-700 font-bold ml-2">
                                          <i className="pi pi-sync"></i>
                                          <input type="file" className="hidden" accept="application/pdf" onChange={(e) => handleUpload(e, 'datasheet')} />
@@ -969,7 +1015,7 @@ function ProductFormContent() {
                   <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
                      {((watch('images') || []) as string[]).map((imgUrl: string, idx: number) => (
                         <div key={idx} className="relative group rounded-xl overflow-hidden shadow-md bg-white border border-slate-100 aspect-square flex items-center justify-center">
-                            <img src={`http://localhost:8000${imgUrl}`} alt={`Gallery ${idx + 1}`} className="w-full h-full object-cover" />
+                            <img src={(imgUrl.startsWith("http") ? imgUrl : `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace(/\/api\/v1\/?$/, "")}${imgUrl}`)} alt={`Gallery ${idx + 1}`} className="w-full h-full object-cover" />
                             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all gap-2">
                                 <Button type="button" icon="pi pi-trash" onClick={() => deleteSecondaryImage(idx)} className="p-button-rounded p-button-danger p-button-sm !w-8 !h-8" title="Eliminar Imagen" />
                             </div>

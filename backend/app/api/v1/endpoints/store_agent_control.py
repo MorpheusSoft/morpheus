@@ -1,3 +1,4 @@
+import os
 from typing import List, Optional, Any, Dict
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -8,7 +9,7 @@ from app.api import deps
 from app.models.core import Facility
 from app.models.sync_telemetry import StoreSyncTelemetry
 from app.models.store_agent_control import StoreAgentConfig, StoreAgentCommand
-from app.models.inventory import Product, ProductBarcode, StoreDepositMapping
+from app.models.inventory import Product, ProductBarcode, StoreDepositMapping, InventorySession
 from app.models.purchasing import SupplierProduct
 from app.schemas.store_agent_control import (
     StoreAgentConfigSchema,
@@ -111,13 +112,14 @@ def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
             has_bc = db.query(ProductBarcode.id).filter(ProductBarcode.code_type == 'BARCODE').first()
             if has_bc:
                 last_bc = last_prod
-        if not baseline_done:
-            has_dep = db.query(StoreDepositMapping.id).filter(
-                StoreDepositMapping.facility_id == fac.id,
-                StoreDepositMapping.is_active == True
-            ).first()
-            if has_dep:
-                baseline_done = True
+        # Validación estricta en base de datos: Verificar si la sede tiene al menos una sesión de Baseline ejecutada
+        has_baseline = db.query(InventorySession.id).filter(
+            InventorySession.facility_id == fac.id,
+            InventorySession.name.ilike('%Baseline%'),
+            InventorySession.state.in_(["DONE", "CLOSED"])
+        ).first() is not None
+
+        baseline_done = has_baseline
 
         current_ver = (latest.agent_version or "").strip() if latest else ""
         has_update = bool(is_online and current_ver and current_ver != LATEST_AGENT_VERSION)
@@ -278,7 +280,10 @@ def create_store_command(
 
     if cmd_type == "UPDATE_SOFTWARE":
         if "package_url" not in params or not params["package_url"]:
-            params["package_url"] = "https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip"
+            params["package_url"] = os.getenv(
+                "STORE_AGENT_PACKAGE_URL",
+                "https://api.qa.morpheussoft.net/static/MorpheusSyncAgent_Installer.zip"
+            )
         if "target_version" not in params or not params["target_version"]:
             params["target_version"] = LATEST_AGENT_VERSION
 

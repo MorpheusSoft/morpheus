@@ -1,43 +1,32 @@
 "use server"
 
-import { cookies } from "next/headers"
 import { revalidatePath } from "next/cache"
-
-const API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1"
-
-async function getAuthHeaders() {
-  const cookieStore = await cookies()
-  const token = cookieStore.get("access_token")?.value
-  return {
-    "Authorization": `Bearer ${token}`,
-    "Content-Type": "application/json",
-  }
-}
+import { getServerApiUrl, getAuthHeaders } from "@/lib/server-api"
 
 export async function getDigitalWorkers() {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/`, { headers, cache: 'no-store' })
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/`, { headers, cache: 'no-store' })
   if (!res.ok) throw new Error("Failed to fetch digital workers")
   return res.json()
 }
 
 export async function getDigitalSkills() {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/skills`, { headers, cache: 'no-store' })
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/skills`, { headers, cache: 'no-store' })
   if (!res.ok) throw new Error("Failed to fetch skills catalog")
   return res.json()
 }
 
 export async function getDigitalWorker(id: number) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/${id}`, { headers, cache: 'no-store' })
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/${id}`, { headers, cache: 'no-store' })
   if (!res.ok) throw new Error("Failed to fetch digital worker")
   return res.json()
 }
 
 export async function updateDigitalWorker(id: number, data: any) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/${id}`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/${id}`, {
     method: "PUT",
     headers,
     body: JSON.stringify(data),
@@ -48,8 +37,8 @@ export async function updateDigitalWorker(id: number, data: any) {
 }
 
 export async function toggleDigitalSkill(workerId: number, skillId: number, isEnabled: boolean, parameters?: any) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/${workerId}/skills/${skillId}/toggle`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/${workerId}/skills/${skillId}/toggle`, {
     method: "POST",
     headers,
     body: JSON.stringify({ is_enabled: isEnabled, parameters }),
@@ -60,8 +49,8 @@ export async function toggleDigitalSkill(workerId: number, skillId: number, isEn
 }
 
 export async function runDigitalWorkerNow(workerId: number) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/${workerId}/run`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/${workerId}/run`, {
     method: "POST",
     headers,
   })
@@ -71,8 +60,8 @@ export async function runDigitalWorkerNow(workerId: number) {
 }
 
 export async function getDigitalWorkerActions(workerId: number, limit: number = 30) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/${workerId}/actions?limit=${limit}`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/${workerId}/actions?limit=${limit}`, {
     headers,
     cache: 'no-store'
   })
@@ -81,8 +70,8 @@ export async function getDigitalWorkerActions(workerId: number, limit: number = 
 }
 
 export async function generatePairingPin(workerId: number) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/${workerId}/generate-pin`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/${workerId}/generate-pin`, {
     method: "POST",
     headers,
   })
@@ -92,7 +81,8 @@ export async function generatePairingPin(workerId: number) {
 }
 
 export async function simulateWhatsApp(phoneNumber: string, message: string) {
-  const res = await fetch(`${API_URL}/whatsapp/simulate`, {
+  const apiUrl = await getServerApiUrl()
+  const res = await fetch(`${apiUrl}/whatsapp/simulate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ phone_number: phoneNumber, message }),
@@ -103,7 +93,8 @@ export async function simulateWhatsApp(phoneNumber: string, message: string) {
 }
 
 export async function simulateTelegram(chatId: number, text: string, agentCode: string = "DANTE_IT") {
-  const res = await fetch(`${API_URL}/telegram/simulate`, {
+  const apiUrl = await getServerApiUrl()
+  const res = await fetch(`${apiUrl}/telegram/simulate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, agent_code: agentCode }),
@@ -114,8 +105,8 @@ export async function simulateTelegram(chatId: number, text: string, agentCode: 
 }
 
 export async function getWorkerTelegramConfig(workerId: number) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/${workerId}/channel-config/telegram`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/${workerId}/channel-config/telegram`, {
     headers,
     cache: 'no-store'
   })
@@ -136,8 +127,8 @@ export async function saveWorkerTelegramConfig(
     custom_webhook_url?: string
   }
 ) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/${workerId}/channel-config/telegram`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/${workerId}/channel-config/telegram`, {
     method: "POST",
     headers,
     body: JSON.stringify(payload)
@@ -151,8 +142,8 @@ export async function saveWorkerTelegramConfig(
 }
 
 export async function testWorkerTelegramToken(workerId: number, token: string) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/${workerId}/channel-config/telegram/test`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/${workerId}/channel-config/telegram/test`, {
     method: "POST",
     headers,
     body: JSON.stringify({ token })
@@ -165,8 +156,8 @@ export async function testWorkerTelegramToken(workerId: number, token: string) {
 }
 
 export async function deleteWorkerTelegramWebhook(workerId: number) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/digital-workers/${workerId}/channel-config/telegram/delete-webhook`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/digital-workers/${workerId}/channel-config/telegram/delete-webhook`, {
     method: "POST",
     headers
   })
@@ -177,4 +168,3 @@ export async function deleteWorkerTelegramWebhook(workerId: number) {
   revalidatePath("/dashboard/digital-workers")
   return res.json()
 }
-

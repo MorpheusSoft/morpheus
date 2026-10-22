@@ -4,6 +4,7 @@ import { InputText } from 'primereact/inputtext';
 import { Button } from 'primereact/button';
 import { Message } from 'primereact/message';
 import api from '@/lib/api';
+import { getLoginUrl } from '@/lib/domain';
 
 export default function RegisterPage() {
   const [formData, setFormData] = useState({
@@ -98,8 +99,7 @@ export default function RegisterPage() {
             icon="pi pi-arrow-left"
             onClick={() => {
               if (typeof window !== 'undefined') {
-                const isProd = window.location.hostname.includes('.morpheussoft.net');
-                window.location.href = isProd ? 'http://hub.qa.morpheussoft.net/login' : 'http://localhost:4000/login';
+                window.location.href = getLoginUrl();
               }
             }}
             className="w-full !rounded-xl !bg-slate-900 border-none text-white hover:!bg-slate-800 !py-2.5 shadow-sm text-xs font-bold"
@@ -249,8 +249,7 @@ export default function RegisterPage() {
                 onClick={(e) => {
                   e.preventDefault();
                   if (typeof window !== 'undefined') {
-                    const isProd = window.location.hostname.includes('.morpheussoft.net');
-                    window.location.href = isProd ? 'http://hub.qa.morpheussoft.net/login' : 'http://localhost:4000/login';
+                    window.location.href = getLoginUrl();
                   }
                 }}
                 className="text-blue-500 hover:text-blue-600 font-bold"

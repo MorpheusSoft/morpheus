@@ -143,8 +143,13 @@ def get_advanced_kardex(
                 sm.date::timestamptz as date,
                 COALESCE(sm.reference, 'MOVE-' || sm.id) as reference,
                 CASE 
+                    WHEN sm.reference LIKE 'POS Sale%' THEN 'VENTA / DESPACHO POS'
+                    WHEN sm.reference LIKE 'TOMA-FISICA%' THEN 'AJUSTE TOMA FÍSICA'
                     WHEN pt.name IS NOT NULL THEN UPPER(pt.name)
                     WHEN l_src.usage = 'SUPPLIER' AND l_dest.usage = 'INTERNAL' THEN 'RECEPCIÓN'
+                    WHEN l_dest.usage = 'CUSTOMER' OR l_dest.code = 'CUSTOMER' THEN 'VENTA'
+                    WHEN l_dest.usage = 'LOSS' OR l_dest.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN 'AJUSTE'
+                    WHEN l_src.usage = 'LOSS' OR l_src.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN 'AJUSTE'
                     ELSE 'TRANSFERENCIA'
                 END as source_type,
                 sm.quantity_done as qty_done,
@@ -170,15 +175,15 @@ def get_advanced_kardex(
             LEFT JOIN inv.locations l_dest ON l_dest.id = sm.location_dest_id
             LEFT JOIN inv.warehouses w_dest ON w_dest.id = l_dest.warehouse_id
             LEFT JOIN core.facilities f_dest ON f_dest.id = w_dest.facility_id
-            WHERE sm.state = 'DONE'
+            WHERE sm.state = 'DONE' AND sm.product_id IN ({p_ids_str})
             
             UNION ALL
             
             SELECT
                 il.product_variant_id as product_id,
-                COALESCE(iss.date_end, iss.date_start)::timestamptz as date,
+                COALESCE(iss.date_start, iss.date_end, iss.created_at)::timestamptz as date,
                 iss.name as reference,
-                'AJUSTE' as source_type,
+                CASE WHEN iss.name ILIKE '%Baseline%' THEN 'INVENTARIO INICIAL' ELSE 'AJUSTE' END as source_type,
                 ABS(il.difference_qty) as qty_done,
                 0 as unit_cost, 
                 CASE WHEN il.difference_qty < 0 THEN iss.facility_id ELSE NULL END as src_facility_id,
@@ -197,8 +202,11 @@ def get_advanced_kardex(
             JOIN inv.inventory_sessions iss ON iss.id = il.session_id
             JOIN core.facilities f ON f.id = iss.facility_id
             LEFT JOIN inv.locations l ON l.id = il.location_id
-            LEFT JOIN inv.warehouses w ON w.id = l.warehouse_id
-            WHERE iss.state IN ('APPLIED', 'DONE') AND il.difference_qty != 0
+            LEFT JOIN inv.warehouses w ON w.id = COALESCE(l.warehouse_id, iss.warehouse_id)
+            WHERE iss.state IN ('APPLIED', 'DONE') AND il.difference_qty != 0 AND il.product_variant_id IN ({p_ids_str})
+              AND NOT EXISTS (
+                  SELECT 1 FROM inv.stock_moves sm WHERE sm.reference = 'TOMA-FISICA-' || iss.id
+              )
             
             UNION ALL
             
@@ -228,6 +236,16 @@ def get_advanced_kardex(
                 SELECT id, name FROM inv.warehouses WHERE facility_id = d.facility_id ORDER BY id ASC LIMIT 1
             ) w_def ON true
             WHERE d.type = 'INVOICE' AND d.state = 'CONFIRMED' AND (d.is_historical IS FALSE OR d.is_historical IS NULL)
+              AND dl.variant_id IN ({p_ids_str})
+              AND NOT EXISTS (
+                  SELECT 1 FROM inv.stock_moves sm 
+                  WHERE sm.product_id = dl.variant_id 
+                    AND (
+                        sm.reference = 'POS Sale C' || COALESCE(d.register_code, '') || '-' || d.document_number
+                        OR sm.reference = d.document_number
+                        OR sm.reference LIKE '%' || d.document_number
+                    )
+              )
         )
     """
 
@@ -327,14 +345,15 @@ def get_advanced_kardex(
         name_upper = (product_name or "").upper()
         import re
 
-        # 1. Check for explicit discrete unit markers (UND, UNIDAD, PACK, CAJA, BTO, etc.)
-        is_explicit_unit = bool(re.search(r'\b\d*\s*(UND|UNID|UNIDAD|UNIDADES|PZA|PIEZA|PIEZAS|PACK|PQTE|PAQUETE|CAJA|BTO|BULTO)\b', name_upper))
         has_bulk = bool(re.search(r'\b(A GRANEL|AL PESO|POR PESO|PESADO|POR KILO|POR KG)\b', name_upper))
+        has_fractional = any(abs(q - round(q)) > 1e-4 for q in sample_quantities if q is not None)
 
-        if is_explicit_unit and not has_bulk:
+        # 1. Si la UOM base del catálogo maestro es una unidad discreta conocida (UND, PZA, etc.)
+        discrete_uoms = {"UND", "UNID", "UNIDAD", "UNIDADES", "PZA", "PIEZA", "PIEZAS", "PACK", "PQTE", "PAQUETE", "CAJA", "BTO", "BULTO"}
+        if uom_clean in discrete_uoms and not (has_bulk or has_fractional):
             return "UND", False
 
-        # 2. Check UOM base from DB if explicitly weight/volume
+        # 2. Si la UOM base del catálogo maestro es explícitamente peso/volumen/longitud
         if uom_clean in ["KG", "KGS", "KILOGRAMO", "KILOGRAMOS"]:
             return "KG", True
         if uom_clean in ["LT", "LTS", "LITRO", "LITROS"]:
@@ -342,18 +361,21 @@ def get_advanced_kardex(
         if uom_clean in ["MT", "METRO", "METROS"]:
             return "MT", True
 
-        # 3. Check name for KG / LT indicators
-        has_kg = bool(re.search(r'\b\d*\.?\d*\s*(KG|KGS|KILO|KILOS)\b', name_upper))
+        # 3. Marcadores de unidad discreta en el nombre (siempre que no sea a granel o fraccional)
+        is_explicit_unit = bool(re.search(r'\b\d*\s*(UND|UNID|UNIDAD|UNIDADES|PZA|PIEZA|PIEZAS|PACK|PQTE|PAQUETE|CAJA|BTO|BULTO)\b', name_upper))
+        if is_explicit_unit and not (has_bulk or has_fractional):
+            return "UND", False
+
+        # 4. Si tiene movimientos con decimales (fraccional) o indicador de granel/peso, es por peso
+        if has_bulk or has_fractional:
+            return "KG", True
+
+        # 5. Si no tiene uom_base discreta y el nombre indica LT explícito
         has_lt = bool(re.search(r'\b\d*\.?\d*\s*(LT|LTS|LITRO|LITROS)\b', name_upper))
-        has_fractional = any(abs(q - round(q)) > 1e-4 for q in sample_quantities if q is not None)
-
-        if has_lt:
+        if has_lt and not uom_clean:
             return "LT", True
-        if has_kg or has_bulk:
-            return "KG", True
-        if has_fractional:
-            return "KG", True
 
+        # Por defecto, en retail la inmensa mayoría de productos son piezas/unidades
         return "UND", False
 
     results = []
@@ -415,9 +437,15 @@ def get_advanced_kardex(
             elif src_wh_id and (not dest_wh_id or src_wh_id != dest_wh_id):
                 if src_wh_id in wh_moves_map:
                     flow_disp = f"Salida ({m.source_type})"
-                    if m.source_type == 'VENTA':
-                        flow_disp = "Venta a Cliente"
-                    elif m.dest_name and m.dest_name != 'N/A':
+                    if m.source_type in ('AJUSTE', 'AJUSTE TOMA FÍSICA') or (m.reference and 'TOMA-FISICA' in m.reference):
+                        flow_disp = "Ajuste por Toma Física (Faltante)"
+                    elif 'PRODUCCIÓN' in (m.source_type or '').upper() or (m.reference and 'MFG_CONSUME' in m.reference):
+                        flow_disp = "Consumo de Producción (Piso de Planta)"
+                    elif m.source_type in ('VENTA', 'VENTA / DESPACHO POS') or (m.reference and 'POS Sale' in m.reference):
+                        flow_disp = "Salida a Cliente"
+                    elif 'CLIENTE' in (m.dest_location_name or '').upper() or 'CONSUMO' in (m.dest_location_name or '').upper():
+                        flow_disp = "Salida a Cliente"
+                    elif m.dest_name and m.dest_name != 'N/A' and not m.dest_name.startswith('N/A - '):
                         flow_disp = f"Salida hacia {m.dest_name}"
                     wh_moves_map[src_wh_id].append({
                         "date": m.date,
@@ -438,9 +466,17 @@ def get_advanced_kardex(
             elif dest_wh_id and (not src_wh_id or src_wh_id != dest_wh_id):
                 if dest_wh_id in wh_moves_map:
                     flow_disp = f"Entrada ({m.source_type})"
-                    if m.source_type == 'RECEPCIÓN':
+                    if m.source_type == 'INVENTARIO INICIAL':
+                        flow_disp = "Inventario Inicial (Apertura)"
+                    elif m.source_type in ('AJUSTE', 'AJUSTE TOMA FÍSICA') or (m.reference and 'TOMA-FISICA' in m.reference):
+                        flow_disp = "Ajuste por Toma Física (Sobrante)"
+                    elif 'PRODUCCIÓN' in (m.source_type or '').upper() or (m.reference and 'MFG_PRODUCE' in m.reference):
+                        flow_disp = "Entrada de Producción (Producto Terminado)"
+                    elif m.source_type in ('VENTA', 'VENTA / DESPACHO POS') or (m.reference and 'POS Sale' in m.reference):
+                        flow_disp = "Devolución / Reingreso de Cliente"
+                    elif m.source_type == 'RECEPCIÓN':
                         flow_disp = "Recepción de Proveedor"
-                    elif m.src_name and m.src_name != 'N/A':
+                    elif m.src_name and m.src_name != 'N/A' and not m.src_name.startswith('N/A - '):
                         flow_disp = f"Entrada desde {m.src_name}"
                     wh_moves_map[dest_wh_id].append({
                         "date": m.date,

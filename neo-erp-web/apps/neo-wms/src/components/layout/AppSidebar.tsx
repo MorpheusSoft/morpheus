@@ -52,8 +52,6 @@ function AppSidebarContent() {
 
   const reportsItems = [
     { label: 'Control de Lotes & FEFO', icon: 'pi pi-calendar-plus', href: '/lots' },
-    { label: 'Histórico de Transferencias', icon: 'pi pi-file', href: '/transfers' },
-    { label: 'Auditoría de Ajustes', icon: 'pi pi-file-pdf', href: '/adjustments' },
   ];
 
   const isActivePath = (href: string) => {

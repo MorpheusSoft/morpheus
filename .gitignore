@@ -40,8 +40,17 @@ MorpheusInventoryAgent/publish_win64/
 MorpheusInventoryAgent/publish_windows/
 MorpheusInventoryAgent/publish_windows_final/
 
+# Flutter / Android / PDA binaries
+*.apk
+*.aab
+pda_app/build/
+pda_app/.dart_tool/
+.gradle/
+
 # Local workspace custom overrides
 scratch/
 .venv_local/
 backend/static/uploads/exports/
 
+
+*.tsbuildinfo

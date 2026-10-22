@@ -1058,6 +1058,17 @@ def get_warehouse_stock(
                 -quantity_done AS qty 
             FROM inv.stock_moves 
             WHERE state = 'DONE'
+
+            UNION ALL
+
+            SELECT 
+                l.product_variant_id AS product_id,
+                l.location_id,
+                NULL::integer AS batch_id,
+                l.difference_qty AS qty
+            FROM inv.inventory_lines l
+            JOIN inv.inventory_sessions s ON l.session_id = s.id
+            WHERE s.state IN ('DONE', 'APPLIED') AND l.location_id IS NOT NULL
         )
         SELECT 
             m.product_id AS variant_id,

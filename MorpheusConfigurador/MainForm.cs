@@ -2259,7 +2259,7 @@ END";
                     {
                         ["LastProductSync"] = "2000-01-01T00:00:00",
                         ["LastBarcodeSync"] = "2000-01-01T00:00:00",
-                        ["BaselineInventoryDone"] = true,
+                        ["BaselineInventoryDone"] = false,
                         ["LastMovementSync"] = "2000-01-01T00:00:00",
                         ["LastSalesSync"] = "2000-01-01T00:00:00",
                         ["LastSupplierProductSync"] = "2000-01-01T00:00:00"
@@ -2267,7 +2267,6 @@ END";
                 }
 
                 stateObj["LastMovementSync"] = start.ToString("yyyy-MM-ddT00:00:00");
-                stateObj["BaselineInventoryDone"] = true;
                 File.WriteAllText(_syncStatePath, stateObj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
 
                 RefreshSyncState();

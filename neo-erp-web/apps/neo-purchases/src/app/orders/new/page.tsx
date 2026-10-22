@@ -127,7 +127,11 @@ export default function NewOrderPage() {
       .catch(err => console.error(err));
       
     api.get('/categories/?limit=1000')
-      .then(res => setCategories(res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : [])))
+      .then(res => {
+        const raw = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
+        const sorted = [...raw].sort((a: any, b: any) => (a.full_path || a.name || '').localeCompare(b.full_path || b.name || ''));
+        setCategories(sorted);
+      })
       .catch(err => console.error(err));
       
     api.get('/currencies/')
@@ -1077,7 +1081,7 @@ export default function NewOrderPage() {
             
             <div className="flex flex-col gap-1">
                 <label className="text-sm font-bold text-slate-700">Categoría *</label>
-                <Dropdown value={newProductForm.category_id} onChange={(e) => setNewProductForm({...newProductForm, category_id: e.value})} options={categories} optionLabel="name" optionValue="id" placeholder="Seleccione Categoría Maestra" filter className="w-full border-2 rounded-xl" />
+                <Dropdown value={newProductForm.category_id} onChange={(e) => setNewProductForm({...newProductForm, category_id: e.value})} options={(categories || []).map((c: any) => ({ ...c, displayLabel: c.full_path ? `[${c.level_name || 'Cat'}] ${c.full_path}` : c.name }))} optionLabel="displayLabel" optionValue="id" placeholder="Seleccione Categoría Jerárquica" filter className="w-full border-2 rounded-xl text-xs" />
             </div>
             
             <div className="grid grid-cols-2 gap-4">

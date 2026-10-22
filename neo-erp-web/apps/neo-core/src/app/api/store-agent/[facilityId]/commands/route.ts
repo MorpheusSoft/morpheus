@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
+import { getInternalApiUrl } from "@/lib/domain";
 
 export async function GET(
   request: NextRequest,
@@ -11,7 +10,10 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const limit = searchParams.get("limit") || "25";
 
-    const res = await fetch(`${API_URL}/store-agent/${facilityId}/commands?limit=${limit}`, {
+    const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "";
+    const apiUrl = getInternalApiUrl(host);
+
+    const res = await fetch(`${apiUrl}/store-agent/${facilityId}/commands?limit=${limit}`, {
       cache: "no-store",
       headers: {
         "Content-Type": "application/json",

@@ -17,11 +17,15 @@ SHRINKAGE_REASON_CODES = ["MERMA", "MERMA_01", "DANNO", "SCRAP", "VENCIMIENTO", 
 
 def get_shrinkage_reasons(db: Session) -> List[int]:
     reasons = db.query(AdjustmentReason).filter(
-        (AdjustmentReason.code.in_(SHRINKAGE_REASON_CODES)) |
-        (AdjustmentReason.name.ilike("%merma%")) |
-        (AdjustmentReason.name.ilike("%avería%")) |
-        (AdjustmentReason.name.ilike("%daño%")) |
-        (AdjustmentReason.name.ilike("%scrap%"))
+        (
+            (AdjustmentReason.code.in_(SHRINKAGE_REASON_CODES)) |
+            (AdjustmentReason.name.ilike("%merma%")) |
+            (AdjustmentReason.name.ilike("%avería%")) |
+            (AdjustmentReason.name.ilike("%daño%")) |
+            (AdjustmentReason.name.ilike("%scrap%"))
+        ),
+        ~AdjustmentReason.code.in_(["MERMA_PROD_ANORMAL", "MERMA_PROD_NATURAL"]),
+        ~AdjustmentReason.code.ilike("MERMA_PROD%"),
     ).all()
     return [r.id for r in reasons]
 

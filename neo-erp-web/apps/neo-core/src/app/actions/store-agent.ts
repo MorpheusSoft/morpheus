@@ -1,18 +1,7 @@
 "use server"
 
-import { cookies } from "next/headers"
 import { revalidatePath } from "next/cache"
-
-const API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1"
-
-async function getAuthHeaders() {
-  const cookieStore = await cookies()
-  const token = cookieStore.get("access_token")?.value
-  return {
-    "Authorization": `Bearer ${token}`,
-    "Content-Type": "application/json",
-  }
-}
+import { getServerApiUrl, getAuthHeaders } from "@/lib/server-api"
 
 export interface StoreAgentConfig {
   id: number
@@ -73,7 +62,7 @@ export interface StoreAgentCommand {
 
 export async function getStoreFacilities(): Promise<FacilityAgentStatus[]> {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/facilities`, {
       headers,
       cache: 'no-store'
@@ -91,7 +80,7 @@ export async function getStoreFacilities(): Promise<FacilityAgentStatus[]> {
 
 export async function getStoreAgentConfig(facilityId: number): Promise<StoreAgentConfig | null> {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/${facilityId}/config`, {
       headers,
       cache: 'no-store'
@@ -106,7 +95,7 @@ export async function getStoreAgentConfig(facilityId: number): Promise<StoreAgen
 
 export async function updateStoreAgentConfig(facilityId: number, data: Partial<StoreAgentConfig>) {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/${facilityId}/config`, {
       method: "PUT",
       headers,
@@ -130,7 +119,7 @@ export async function createStoreAgentCommand(
   parameters: Record<string, any> = {}
 ): Promise<StoreAgentCommand> {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/${facilityId}/commands`, {
       method: "POST",
       headers,
@@ -153,7 +142,7 @@ export async function createStoreAgentCommand(
 
 export async function pauseAllStores(): Promise<{ status: string; message: string }> {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/all/pause`, {
       method: "POST",
       headers,
@@ -172,7 +161,7 @@ export async function pauseAllStores(): Promise<{ status: string; message: strin
 
 export async function resumeAllStores(): Promise<{ status: string; message: string }> {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/all/resume`, {
       method: "POST",
       headers,
@@ -191,7 +180,7 @@ export async function resumeAllStores(): Promise<{ status: string; message: stri
 
 export async function getStoreAgentCommands(facilityId: number, limit: number = 20): Promise<StoreAgentCommand[]> {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/${facilityId}/commands?limit=${limit}`, {
       headers,
       cache: 'no-store'
@@ -245,7 +234,7 @@ export interface FacilityDepositMappingResponse {
 
 export async function getStoreDepositMappings(facilityId: number): Promise<FacilityDepositMappingResponse | null> {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/${facilityId}/deposits`, {
       headers,
       cache: 'no-store'
@@ -270,7 +259,7 @@ export async function saveStoreDepositMapping(
   }
 ) {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/${facilityId}/deposits`, {
       method: 'POST',
       headers,
@@ -300,7 +289,7 @@ export async function updateStoreDepositMapping(
   }
 ) {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/${facilityId}/deposits/${mappingId}`, {
       method: 'PUT',
       headers,
@@ -320,7 +309,7 @@ export async function updateStoreDepositMapping(
 
 export async function deleteStoreDepositMapping(facilityId: number, mappingId: number) {
   try {
-    const headers = await getAuthHeaders()
+    const [headers, API_URL] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
     const res = await fetch(`${API_URL}/store-agent/${facilityId}/deposits/${mappingId}`, {
       method: 'DELETE',
       headers
@@ -336,4 +325,3 @@ export async function deleteStoreDepositMapping(facilityId: number, mappingId: n
     throw new Error(error.message || 'Error al eliminar el mapeo')
   }
 }
-

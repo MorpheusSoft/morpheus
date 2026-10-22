@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname } from 'next/navigation';
+import { clearAuthCookies, getLoginUrl } from '@/lib/domain';
 
 interface SessionGuardProps {
   children: React.ReactNode;
@@ -32,6 +33,7 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
   const redirectingRef = useRef(false);
 
   const isPublic = 
+    pathname === '/' ||
     pathname.startsWith('/login') || 
     pathname.includes('/public/') || 
     pathname.includes('/register');
@@ -44,18 +46,9 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem('token');
-        const isProd = window.location.hostname.includes('.morpheussoft.net');
-        
-        if (isProd) {
-          document.cookie = 'access_token=; Max-Age=0; path=/; domain=.morpheussoft.net;';
-        }
-        document.cookie = 'access_token=; Max-Age=0; path=/;';
-        
+        clearAuthCookies();
         const currentUrl = window.location.href;
-        const loginUrl = isProd 
-          ? `https://hub.qa.morpheussoft.net/login?callbackUrl=${encodeURIComponent(currentUrl)}` 
-          : `http://localhost:4000/login?callbackUrl=${encodeURIComponent(currentUrl)}`;
-        
+        const loginUrl = getLoginUrl(currentUrl);
         window.location.href = loginUrl;
       } catch (err) {
         console.error('Error durante redirección por desconexión:', err);

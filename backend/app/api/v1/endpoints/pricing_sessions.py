@@ -98,20 +98,26 @@ def attach_calculated_fields(session: PricingSession, db: Session):
     facility_prices = {}
     variants_map = {}
     if variant_ids:
+        from sqlalchemy.orm import selectinload
         fps = db.query(ProductFacilityPrice).filter(ProductFacilityPrice.variant_id.in_(variant_ids)).all()
         for fp in fps:
             if fp.variant_id not in facility_prices or (fp.is_active and fp.target_utility_pct is not None):
                 facility_prices[fp.variant_id] = fp
-        vars_list = db.query(ProductVariant).filter(ProductVariant.id.in_(variant_ids)).all()
+        vars_list = db.query(ProductVariant).options(
+            selectinload(ProductVariant.product).selectinload(Product.tribute)
+        ).filter(ProductVariant.id.in_(variant_ids)).all()
         variants_map = {v.id: v for v in vars_list}
 
     for line in session.lines:
         line.suggested_price = 0.0
         line.suggested_margin = 0.0
         line.current_margin = 0.0
+        line.tax_rate = 16.0
 
         if line.variant_id and line.variant_id in variants_map:
             variant = variants_map[line.variant_id]
+            if variant.product and hasattr(variant.product, 'tax_rate'):
+                line.tax_rate = float(variant.product.tax_rate)
             fp = facility_prices.get(line.variant_id)
 
             is_replacement = (session.target_cost_type == 'REPLACEMENT')
@@ -661,18 +667,13 @@ def upload_csv_to_session(
 
         # 1. Match by barcode
         if barcode_val:
-            variant = db.query(ProductVariant).filter(
-                (ProductVariant.barcode == barcode_val) |
-                (ProductVariant.barcodes.any(ProductBarcode.barcode == barcode_val))
-            ).first()
+            from app.core.barcode import find_variant_by_code
+            variant, _, _ = find_variant_by_code(db, barcode_val)
 
         # Try sku_val as barcode if no barcode_val or no match found
         if not variant and sku_val:
-            clean_sku_b = sku_val.replace(' ', '')
-            variant = db.query(ProductVariant).filter(
-                (ProductVariant.barcode == clean_sku_b) |
-                (ProductVariant.barcodes.any(ProductBarcode.barcode == clean_sku_b))
-            ).first()
+            from app.core.barcode import find_variant_by_code
+            variant, _, _ = find_variant_by_code(db, sku_val)
 
         # 2. Match by supplier SKU or master SKU
         if not variant and sku_val:
@@ -1124,11 +1125,8 @@ def upload_pdf_to_session(
 
             # 1. Match por código de barra
             if item_barcode:
-                clean_bar = item_barcode.replace(' ', '')
-                variant = db.query(ProductVariant).filter(
-                    (ProductVariant.barcode == clean_bar) |
-                    (ProductVariant.barcodes.any(ProductBarcode.barcode == clean_bar))
-                ).first()
+                from app.core.barcode import find_variant_by_code
+                variant, _, _ = find_variant_by_code(db, item_barcode)
 
             # 2. Match por SKU de proveedor
             if not variant and item_sku:
@@ -1140,12 +1138,8 @@ def upload_pdf_to_session(
                     if supplier_product:
                         variant = db.query(ProductVariant).filter(ProductVariant.id == supplier_product.variant_id).first()
                 if not variant:
-                    clean_sku_b = item_sku.replace(' ', '')
-                    variant = db.query(ProductVariant).filter(
-                        (ProductVariant.barcode == clean_sku_b) |
-                        (ProductVariant.barcodes.any(ProductBarcode.barcode == clean_sku_b)) |
-                        (ProductVariant.sku == item_sku)
-                    ).first()
+                    from app.core.barcode import find_variant_by_code
+                    variant, _, _ = find_variant_by_code(db, item_sku)
 
             # 3. Match semántico / fuzzy por nombre
             if not variant:
@@ -1476,16 +1470,12 @@ def bulk_filter_lines(
         query = query.filter(SupplierProduct.supplier_id.in_(payload.filters.supplier_ids))
 
     if payload.filters.category_ids:
-        from sqlalchemy import or_
-        cats = db.query(Category).filter(Category.id.in_(payload.filters.category_ids)).all()
-        if cats:
-            query = query.join(Category, Product.category_id == Category.id)
-            cat_conditions = []
-            for c in cats:
-                cat_conditions.append(Category.id == c.id)
-                if c.path:
-                    cat_conditions.append(Category.path.like(f"{c.path}/%"))
-            query = query.filter(or_(*cat_conditions))
+        from app.api.v1.endpoints.inventory_session import get_all_related_category_ids
+        all_cat_ids = set()
+        for cid in payload.filters.category_ids:
+            all_cat_ids.update(get_all_related_category_ids(db, cid))
+        if all_cat_ids:
+            query = query.filter(Product.category_id.in_(list(all_cat_ids)))
 
     if payload.filters.search_term:
         query = query.filter(Product.name.ilike(f"%{payload.filters.search_term}%"))

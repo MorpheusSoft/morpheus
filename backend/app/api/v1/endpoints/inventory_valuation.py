@@ -196,7 +196,9 @@ def get_inventory_valuation(
     # Cargar detalles de variantes y productos
     variants_query = db.query(ProductVariant).join(Product, ProductVariant.product_id == Product.id)
     if category_id:
-        variants_query = variants_query.filter(Product.category_id == category_id)
+        from app.api.v1.endpoints.inventory_session import get_all_related_category_ids
+        rel_cat_ids = get_all_related_category_ids(db, category_id)
+        variants_query = variants_query.filter(Product.category_id.in_(rel_cat_ids))
         
     variants = variants_query.all()
     
@@ -293,7 +295,9 @@ def get_inventory_book(
     # Filtrar variantes por categoría si aplica
     variants_query = db.query(ProductVariant).join(Product, ProductVariant.product_id == Product.id)
     if category_id:
-        variants_query = variants_query.filter(Product.category_id == category_id)
+        from app.api.v1.endpoints.inventory_session import get_all_related_category_ids
+        rel_cat_ids = get_all_related_category_ids(db, category_id)
+        variants_query = variants_query.filter(Product.category_id.in_(rel_cat_ids))
     variants = variants_query.all()
     
     # 1. Obtener todos los movimientos terminados (DONE) para este conjunto de variantes y ubicaciones

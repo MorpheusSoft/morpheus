@@ -19,6 +19,9 @@ class CategoryCreate(CategoryBase):
 class Category(CategoryBase):
     id: int
     path: Optional[str] = None
+    full_path: Optional[str] = None
+    level_name: Optional[str] = None
+    level: Optional[int] = None
     
     class Config:
         from_attributes = True

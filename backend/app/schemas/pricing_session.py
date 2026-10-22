@@ -45,6 +45,7 @@ class PricingSessionLineOut(PricingSessionLineBase):
     suggested_price: Optional[Decimal] = None
     suggested_margin: Optional[Decimal] = None
     current_margin: Optional[Decimal] = None
+    tax_rate: Optional[float] = 16.0
     variant: Optional[VariantBarcodesOut] = None
     
     model_config = ConfigDict(from_attributes=True)

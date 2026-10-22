@@ -3,6 +3,7 @@ import React from 'react';
 import { usePathname } from 'next/navigation';
 import api from '@/lib/api';
 import { SessionGuard } from '../auth/SessionGuard';
+import { clearAuthCookies, getLoginUrl } from '@/lib/domain';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || '';
@@ -27,15 +28,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const handleLogout = () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('token');
-      const isProd = window.location.hostname.includes('.morpheussoft.net');
-      const domain = isProd ? 'domain=.morpheussoft.net;' : '';
-      document.cookie = `access_token=; Max-Age=0; path=/; ${domain}`;
-      
-      const loginUrl = isProd 
-        ? 'http://hub.qa.morpheussoft.net/login' 
-        : 'http://localhost:4000/login';
-        
-      window.location.href = loginUrl;
+      clearAuthCookies();
+      window.location.href = getLoginUrl();
     }
   };
 

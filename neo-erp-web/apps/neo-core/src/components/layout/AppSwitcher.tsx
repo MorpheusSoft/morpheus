@@ -1,14 +1,15 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
+import { resolveDomain, type DomainConfig } from '@/lib/domain';
 
 export function AppSwitcher() {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const [isProd, setIsProd] = useState(false);
+  const [domainConfig, setDomainConfig] = useState<DomainConfig>(() => resolveDomain());
 
   useEffect(() => {
-    setIsProd(window.location.hostname.includes('.morpheussoft.net'));
+    setDomainConfig(resolveDomain());
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setIsOpen(false);
@@ -19,19 +20,20 @@ export function AppSwitcher() {
   }, []);
 
   const apps = [
-    { name: "Neo Core", icon: "pi pi-desktop", color: "text-indigo-600", bg: "bg-indigo-50", href: isProd ? "https://hub.qa.morpheussoft.net/dashboard" : "http://localhost:4000/dashboard" },
-    { name: "Neo Inventory", icon: "pi pi-box", color: "text-blue-600", bg: "bg-blue-50", href: isProd ? "https://inventario.qa.morpheussoft.net/inventario" : "http://localhost:4001/products" },
-    { name: "Neo Purchases", icon: "pi pi-shopping-cart", color: "text-emerald-600", bg: "bg-emerald-50", href: isProd ? "https://compras.qa.morpheussoft.net/compras" : "http://localhost:4002/compras" },
-    { name: "Neo WMS", icon: "pi pi-truck", color: "text-purple-600", bg: "bg-purple-50", href: isProd ? "https://logistica.qa.morpheussoft.net/wms" : "http://localhost:4003/" },
-    { name: "Neo Pricing", icon: "pi pi-percentage", color: "text-rose-600", bg: "bg-rose-50", href: isProd ? "https://costos.qa.morpheussoft.net/costos" : "http://localhost:4004/costos" },
-    { name: "Catálogo B2B", icon: "pi pi-globe", color: "text-teal-600", bg: "bg-teal-50", href: isProd ? "https://b2b.qa.morpheussoft.net" : "http://localhost:4005/", disabled: false },
+    { name: "Neo Core", icon: "pi pi-desktop", color: "text-indigo-600", bg: "bg-indigo-50", href: domainConfig.apps.core },
+    { name: "Neo Inventory", icon: "pi pi-box", color: "text-blue-600", bg: "bg-blue-50", href: domainConfig.apps.inventory },
+    { name: "Neo Purchases", icon: "pi pi-shopping-cart", color: "text-emerald-600", bg: "bg-emerald-50", href: domainConfig.apps.purchases },
+    { name: "Neo WMS", icon: "pi pi-truck", color: "text-purple-600", bg: "bg-purple-50", href: domainConfig.apps.wms },
+    { name: "Neo Pricing", icon: "pi pi-percentage", color: "text-rose-600", bg: "bg-rose-50", href: domainConfig.apps.pricing },
+    { name: "Neo Producción", icon: "pi pi-cog", color: "text-orange-600", bg: "bg-orange-50", href: domainConfig.apps.production, disabled: false },
+    { name: "Catálogo B2B", icon: "pi pi-globe", color: "text-teal-600", bg: "bg-teal-50", href: domainConfig.apps.b2b, disabled: false },
     { name: "Ventas", icon: "pi pi-dollar", color: "text-amber-600", bg: "bg-amber-50", href: "#", disabled: true },
     { name: "Reportes", icon: "pi pi-chart-bar", color: "text-slate-600", bg: "bg-slate-50", href: "#", disabled: true },
   ];
 
   const extraApps = [
-    { name: "Kiosco (Habladores)", icon: "pi pi-tablet", color: "text-violet-600", bg: "bg-violet-50", href: isProd ? "https://costos.qa.morpheussoft.net/costos/habladores/tienda" : "http://localhost:4004/costos/habladores/tienda", disabled: false },
-    { name: "Consultor Móvil", icon: "pi pi-mobile", color: "text-indigo-600", bg: "bg-indigo-50", href: isProd ? "https://costos.qa.morpheussoft.net/costos/kiosco/consultor" : "http://localhost:4004/costos/kiosco/consultor", disabled: false },
+    { name: "Kiosco (Habladores)", icon: "pi pi-tablet", color: "text-violet-600", bg: "bg-violet-50", href: domainConfig.apps.kiosco, disabled: false },
+    { name: "Consultor Móvil", icon: "pi pi-mobile", color: "text-indigo-600", bg: "bg-indigo-50", href: domainConfig.apps.consultor, disabled: false },
   ];
 
   return (

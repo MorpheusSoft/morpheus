@@ -1,24 +1,31 @@
 "use server"
 
-import { cookies } from "next/headers"
+import { cookies, headers } from "next/headers"
 import { redirect } from "next/navigation"
+import { resolveDomain, sanitizeCallbackUrl, extractHostname, isQaHost } from "@/lib/domain"
 
-async function requestBackendToken(username: string, password: string) {
-  // URLs de conexión en orden de prioridad:
-  // 1. INTERNAL_API_URL si está definida explícitamente en el entorno
-  // 2. Conexión directa interna en localhost si corre en el mismo servidor (0ms latencia, sin loopback SSL)
-  // 3. NEXT_PUBLIC_API_URL como fallback público
+async function requestBackendToken(username: string, password: string, reqHost?: string) {
+  const hostname = extractHostname(reqHost || "")
   const candidates: string[] = []
 
-  if (process.env.INTERNAL_API_URL) {
-    candidates.push(process.env.INTERNAL_API_URL.replace(/\/+$/, ""))
-  }
-  candidates.push("http://127.0.0.1:8000/api/v1")
-
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    const pub = process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, "")
-    if (!candidates.includes(pub)) {
-      candidates.push(pub)
+  // Si estamos en entorno QA (*.qa.morpheussoft.net), SIEMPRE conectar exclusivamente al backend de QA (8100)
+  if (isQaHost(hostname)) {
+    if (process.env.INTERNAL_API_URL) {
+      candidates.push(process.env.INTERNAL_API_URL.replace(/\/+$/, ""))
+    }
+    candidates.push("http://127.0.0.1:8100/api/v1")
+    candidates.push("https://api.qa.morpheussoft.net/api/v1")
+  } else {
+    // Producción Catania / Morpheus / Desarrollo
+    if (process.env.INTERNAL_API_URL) {
+      candidates.push(process.env.INTERNAL_API_URL.replace(/\/+$/, ""))
+    }
+    candidates.push("http://127.0.0.1:8000/api/v1")
+    if (process.env.NEXT_PUBLIC_API_URL) {
+      const pub = process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, "")
+      if (!candidates.includes(pub)) {
+        candidates.push(pub)
+      }
     }
   }
 
@@ -71,27 +78,32 @@ export async function loginAction(prevState: any, formData: FormData) {
   try {
     const email = (formData.get("email") as string || "").trim()
     const password = (formData.get("password") as string || "").trim()
-    callbackUrl = (formData.get("callbackUrl") as string) || "/dashboard"
+    const rawCallbackUrl = (formData.get("callbackUrl") as string) || "/dashboard"
+
+    const headerList = await headers()
+    const host = headerList.get("x-forwarded-host") || headerList.get("host") || ""
+    const domainConfig = resolveDomain(host)
+    callbackUrl = sanitizeCallbackUrl(rawCallbackUrl, host)
 
     if (!email || !password) {
       return { error: "Por favor ingrese su correo y contraseña." }
     }
 
-    const authResult = await requestBackendToken(email, password)
+    const authResult = await requestBackendToken(email, password, host)
     if (!authResult.ok || !authResult.data) {
       return { error: authResult.error || "Error de inicio de sesión." }
     }
 
     const data = authResult.data
     const cookieStore = await cookies()
-    const isProd = process.env.NODE_ENV === "production"
+    const isHttps = domainConfig.protocol === "https"
 
     cookieStore.set("access_token", data.access_token, {
       httpOnly: false,
-      secure: isProd,
+      secure: isHttps,
       sameSite: "lax",
       path: "/",
-      domain: isProd ? ".morpheussoft.net" : undefined,
+      domain: domainConfig.cookieDomain,
       maxAge: 60 * 30, // 30 mins
     })
 
@@ -104,11 +116,20 @@ export async function loginAction(prevState: any, formData: FormData) {
 }
 
 export async function logoutAction() {
+  const headerList = await headers()
+  const host = headerList.get("x-forwarded-host") || headerList.get("host") || ""
+  const domainConfig = resolveDomain(host)
   const cookieStore = await cookies()
-  const isProd = process.env.NODE_ENV === "production"
+
+  if (domainConfig.cookieDomain) {
+    cookieStore.set("access_token", "", {
+      maxAge: 0,
+      domain: domainConfig.cookieDomain,
+      path: "/"
+    })
+  }
   cookieStore.set("access_token", "", {
     maxAge: 0,
-    domain: isProd ? ".morpheussoft.net" : undefined,
     path: "/"
   })
   redirect("/login")

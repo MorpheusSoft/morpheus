@@ -123,23 +123,28 @@ def read_products_selector(
     ).join(Product, Product.id == ProductVariant.product_id)
 
     if category_id:
-        from app.api.v1.endpoints.inventory_session import get_all_descendant_category_ids
-        descendant_cat_ids = get_all_descendant_category_ids(db, category_id)
-        query = query.filter(Product.category_id.in_(descendant_cat_ids))
+        from app.api.v1.endpoints.inventory_session import get_all_related_category_ids
+        related_cat_ids = get_all_related_category_ids(db, category_id)
+        query = query.filter(Product.category_id.in_(related_cat_ids))
 
     if q:
         clean_q = q.strip()
-        barcode_vids = db.query(ProductBarcode.product_variant_id)\
-            .filter(ProductBarcode.barcode.ilike(f"%{clean_q}%"))
-        query = query.filter(
-            or_(
-                Product.name.ilike(f"%{clean_q}%"),
-                ProductVariant.sku.ilike(f"%{clean_q}%"),
-                ProductVariant.barcode.ilike(f"%{clean_q}%"),
-                ProductVariant.part_number.ilike(f"%{clean_q}%"),
-                ProductVariant.id.in_(barcode_vids)
-            )
-        )
+        from app.core.barcode import get_barcode_candidates
+        candidates = get_barcode_candidates(clean_q)
+        barcode_conds = [ProductBarcode.barcode.ilike(f"%{c}%") for c in candidates]
+        barcode_vids = db.query(ProductBarcode.product_variant_id).filter(or_(*barcode_conds))
+        
+        variant_conds = [
+            Product.name.ilike(f"%{clean_q}%"),
+            ProductVariant.sku.ilike(f"%{clean_q}%"),
+            ProductVariant.part_number.ilike(f"%{clean_q}%"),
+            ProductVariant.id.in_(barcode_vids)
+        ]
+        for c in candidates:
+            variant_conds.append(ProductVariant.barcode.ilike(f"%{c}%"))
+            variant_conds.append(ProductVariant.sku.ilike(f"%{c}%"))
+
+        query = query.filter(or_(*variant_conds))
 
     items = query.order_by(Product.name.asc()).limit(limit).all()
     v_ids = [r.variant_id for r in items]
@@ -191,6 +196,7 @@ def read_products(
     limit: int = 100,
     q: Optional[str] = None,
     query: Optional[str] = None,
+    category_id: Optional[int] = Query(None),
     category_ids: Optional[List[int]] = Query(None),
     supplier_ids: Optional[List[int]] = Query(None)
 ) -> Any:
@@ -209,23 +215,15 @@ def read_products(
                          .join(SupplierProduct, SupplierProduct.variant_id == ProductVariant.id) \
                          .filter(SupplierProduct.supplier_id.in_(supplier_ids))
             
-        # Category filtering (including all descendants)
-        if category_ids and isinstance(category_ids, (list, tuple)):
-            all_cat_ids = set(category_ids)
-            cats = db.query(Category).filter(Category.id.in_(category_ids)).all()
-            for c in cats:
-                if c.path:
-                    sub_c = db.query(Category.id).filter(Category.path.like(f"{c.path}/%")).all()
-                    for sc in sub_c:
-                        all_cat_ids.add(sc.id)
-            to_visit = list(category_ids)
-            while to_visit:
-                curr_c = to_visit.pop(0)
-                children = db.query(Category.id).filter(Category.parent_id == curr_c).all()
-                for ch in children:
-                    if ch.id not in all_cat_ids:
-                        all_cat_ids.add(ch.id)
-                        to_visit.append(ch.id)
+        # Category filtering (including all descendants and ancestors in branch)
+        cats = list(category_ids) if (category_ids and isinstance(category_ids, (list, tuple))) else []
+        if category_id is not None and category_id not in cats:
+            cats.append(category_id)
+        if cats:
+            from app.api.v1.endpoints.inventory_session import get_all_related_category_ids
+            all_cat_ids = set()
+            for cid in cats:
+                all_cat_ids.update(get_all_related_category_ids(db, cid))
             prod_query = prod_query.filter(Product.category_id.in_(list(all_cat_ids)))
 
         search_term = (q or query or "").strip()
@@ -260,7 +258,8 @@ def read_products(
         products = prod_query.options(
             selectinload(Product.variants).selectinload(ProductVariant.barcodes),
             selectinload(Product.variants).selectinload(ProductVariant.facility_prices),
-            selectinload(Product.packagings)
+            selectinload(Product.packagings),
+            selectinload(Product.tribute)
         ).offset(skip).limit(limit).all()
         
         # --- INJECT STOCK MAGNITUDE ---
@@ -493,27 +492,8 @@ def get_product_by_code(
     from datetime import datetime, timezone
     from decimal import Decimal
 
-    code_clean = code.strip().upper()
-
-    # 1. Search in ProductBarcode
-    barcode_record = db.query(ProductBarcode).filter(ProductBarcode.barcode == code_clean).first()
-
-    variant = None
-    uom = None
-    matched_barcode = None
-
-    if barcode_record:
-        variant = db.query(ProductVariant).filter(ProductVariant.id == barcode_record.product_variant_id).first()
-        uom = barcode_record.uom
-        matched_barcode = barcode_record.barcode
-    else:
-        # 2. Search in ProductVariant (SKU or barcode directly)
-        variant = db.query(ProductVariant).filter(
-            (ProductVariant.sku == code_clean) | (ProductVariant.barcode == code_clean)
-        ).first()
-        if variant:
-            uom = variant.product.uom_base if variant.product else "UND"
-            matched_barcode = variant.barcode or variant.sku
+    from app.core.barcode import find_variant_by_code
+    variant, uom, matched_barcode = find_variant_by_code(db, code)
 
     if not variant:
         raise HTTPException(status_code=404, detail="Product variant not found")
@@ -568,6 +548,17 @@ def get_product_by_code(
     reg_price_usd = float(facility_price.sales_price) if (facility_price and facility_price.sales_price is not None) else float(variant.sales_price or 0)
     reg_price_ves = float(Decimal(str(reg_price_usd)) * rate)
 
+    # Calculate Tax & PVP with Tax
+    tax_rate = float(product.tax_rate) if hasattr(product, "tax_rate") else 0.0
+    is_exempt = (tax_rate == 0.0)
+    tax_multiplier = 1.0 + (tax_rate / 100.0)
+
+    pvp_with_tax_usd = round(reg_price_usd * tax_multiplier, 2)
+    pvp_with_tax_ves = round(float(Decimal(str(pvp_with_tax_usd)) * rate), 2)
+
+    promo_pvp_with_tax_usd = round(promo_price_usd * tax_multiplier, 2) if promo_price_usd is not None else None
+    promo_pvp_with_tax_ves = round(float(Decimal(str(promo_pvp_with_tax_usd)) * rate), 2) if promo_pvp_with_tax_usd is not None else None
+
     # Calculate margins
     settings = db.query(SystemSettings).first()
     utility_calc_method = settings.utility_calc_method if settings else 'MARGIN_ON_SALES'
@@ -604,6 +595,18 @@ def get_product_by_code(
             "quantity": qty
         })
 
+    # 30-Day Sales Performance & Category Benchmark
+    from app.services.product_analytics_service import get_sales_performance_30d
+    current_facility_stock = stock_map.get(facility_id, 0.0)
+    sales_perf = get_sales_performance_30d(
+        db=db,
+        variant_id=variant.id,
+        category_id=product.category_id,
+        facility_id=facility_id,
+        facility_stock=current_facility_stock,
+        exchange_rate=rate
+    )
+
     return {
         "variant_id": variant.id,
         "sku": variant.sku,
@@ -611,17 +614,29 @@ def get_product_by_code(
         "name": product.name,
         "brand": product.brand or "",
         "uom": uom or "UND",
+        "category_id": product.category_id,
+        "tax": {
+            "rate": tax_rate,
+            "is_exempt": is_exempt,
+            "name": product.tribute.name if product.tribute else ("Exento" if is_exempt else f"{tax_rate}%")
+        },
         "costs": {
             "standard_cost": float(variant.standard_cost or 0),
             "replacement_cost": replacement_cost,
             "average_cost": float(variant.average_cost or 0)
         },
         "prices": {
+            "base_price_usd": reg_price_usd,
+            "base_price_ves": reg_price_ves,
             "regular_price_usd": reg_price_usd,
             "regular_price_ves": reg_price_ves,
+            "pvp_with_tax_usd": pvp_with_tax_usd,
+            "pvp_with_tax_ves": pvp_with_tax_ves,
             "has_promo": has_promo,
             "promo_price_usd": promo_price_usd,
             "promo_price_ves": promo_price_ves,
+            "promo_pvp_with_tax_usd": promo_pvp_with_tax_usd,
+            "promo_pvp_with_tax_ves": promo_pvp_with_tax_ves,
             "promo_ends_at": promo_ends_at
         },
         "margins": {
@@ -631,7 +646,8 @@ def get_product_by_code(
         "stock": {
             "total_consolidated": total_consolidated,
             "by_facility": by_facility
-        }
+        },
+        "sales_performance": sales_perf
     }
 
 @router.put("/packagings/{id}")

@@ -74,6 +74,7 @@ def get_core_stats(db: Session = Depends(get_db)):
         {"name": "Neo Compras", "active": True, "port": 4002, "description": "Abastecimiento y proveedores"},
         {"name": "Neo WMS", "active": True, "port": 4003, "description": "Almacenes, recepciones y transferencias"},
         {"name": "Neo Pricing", "active": True, "port": 4004, "description": "Costos, márgenes y habladores"},
+        {"name": "Neo Producción", "active": True, "port": 4007, "description": "Recetas, desposte y transformación"},
         {"name": "Neo B2B", "active": False, "port": 4005, "description": "Portal mayorista B2B (Standby)"},
         {"name": "Neo POS", "active": False, "port": 4006, "description": "Punto de venta (Próximamente)"},
         {"name": "Neo API", "active": True, "port": 8000, "description": "FastAPI Core Engine"},

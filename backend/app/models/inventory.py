@@ -3,6 +3,8 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from app.db.base_class import Base
+import app.models.core  # noqa: F401
+import app.models.purchasing  # noqa: F401
 
 # =================
 # PHYSICAL
@@ -257,6 +259,7 @@ class StockMove(Base):
     historic_avg_cost = Column(Numeric(19, 4), default=0)
     reference = Column(String)
     date = Column(DateTime(timezone=True), server_default=func.now())
+    adjustment_reason_id = Column(Integer, ForeignKey("inv.adjustment_reasons.id"), nullable=True)
     created_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
     
     picking = relationship("StockPicking", back_populates="moves")
@@ -312,10 +315,12 @@ class InventoryLine(Base):
     difference_qty = Column(Numeric(19, 4), Computed('counted_qty - theoretical_qty')) 
     
     notes = Column(Text)
+    adjustment_reason_id = Column(Integer, ForeignKey("inv.adjustment_reasons.id"), nullable=True)
     counted_by = Column(Integer, ForeignKey("core.users.id"))
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
     
     session = relationship("InventorySession", back_populates="lines")
+    adjustment_reason = relationship("AdjustmentReason")
 
 # =================
 # PRICING ENGINE

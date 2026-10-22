@@ -1,17 +1,6 @@
 "use server"
 
-import { cookies } from "next/headers"
-
-const API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1"
-
-async function getAuthHeaders() {
-  const cookieStore = await cookies()
-  const token = cookieStore.get("access_token")?.value
-  return {
-    "Authorization": `Bearer ${token}`,
-    "Content-Type": "application/json",
-  }
-}
+import { getServerApiUrl, getAuthHeaders } from "@/lib/server-api"
 
 export interface CoreStats {
   users: {
@@ -50,8 +39,8 @@ export interface CoreStats {
 
 export async function getCoreStats(): Promise<CoreStats | null> {
   try {
-    const headers = await getAuthHeaders()
-    const res = await fetch(`${API_URL}/dashboard/core-stats`, {
+    const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+    const res = await fetch(`${apiUrl}/dashboard/core-stats`, {
       headers,
       cache: 'no-store'
     })

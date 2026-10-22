@@ -107,17 +107,12 @@ def search_product_variants(
 
     try:
         # 1. Búsqueda por Código de Barras numérico
-        digit_match = re.search(r'\b\d{7,14}\b', clean_q)
+        digit_match = re.search(r'\b\d{5,14}\b', clean_q)
         if digit_match:
             bc_val = digit_match.group(0)
-            bc = db.query(ProductBarcode).filter(ProductBarcode.barcode == bc_val).first()
-            if bc and bc.variant and bc.variant.is_active:
-                return [bc.variant]
-            v = db.query(ProductVariant).filter(
-                ProductVariant.barcode == bc_val,
-                ProductVariant.is_active == True
-            ).first()
-            if v:
+            from app.core.barcode import find_variant_by_code
+            v, _, _ = find_variant_by_code(db, bc_val)
+            if v and v.is_active:
                 return [v]
 
         # 2. Búsqueda por SKU exacto o explícito (ej. PRD-119313)

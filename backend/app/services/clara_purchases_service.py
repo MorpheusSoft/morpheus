@@ -10,6 +10,7 @@ Proporciona:
 """
 
 import re
+import os
 import uuid
 import logging
 from typing import List, Dict, Any, Optional, Tuple
@@ -247,7 +248,7 @@ def format_neo_erp_order_guidance(order_id: Optional[int] = None, order_ref: Opt
     valide, ajuste y cierre/apruebe la orden en Neo ERP (Neo Compras).
     """
     ref_txt = f"`{order_ref}`" if order_ref else "la orden"
-    base_url = "https://compras.qa.morpheussoft.net"
+    base_url = os.getenv("COMPRAS_FRONTEND_URL", "https://compras.qa.morpheussoft.net").rstrip("/")
     link_url = f"{base_url}/orders/{order_id}" if order_id else f"{base_url}/orders"
     link_label = f"Abrir {order_ref} en Neo Compras" if order_ref else "Abrir Orden en Neo Compras"
 
@@ -268,7 +269,7 @@ def format_neo_erp_multi_order_guidance() -> str:
     """
     Instrucciones para validar y cerrar múltiples órdenes generadas por sucursal.
     """
-    base_url = "https://compras.qa.morpheussoft.net"
+    base_url = os.getenv("COMPRAS_FRONTEND_URL", "https://compras.qa.morpheussoft.net").rstrip("/")
     lines = [
         "───────────────────",
         "📋 *¿Cómo validar y cerrar estas órdenes en Neo ERP?*",

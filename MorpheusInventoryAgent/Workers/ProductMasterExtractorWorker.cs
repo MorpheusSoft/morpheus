@@ -82,7 +82,30 @@ public class ProductMasterExtractorWorker : BackgroundService
         var syncState = SyncStateManager.LoadState();
         var lastSync = forceFull ? new DateTime(2000, 1, 1) : syncState.LastProductSync;
         
-        string baseSelect = "select p.c_Codigo, c_Descri, c_Departamento, case when ISNULL(p.n_CostoAct, 0) <= 0 then ISNULL(p.n_CostoRep, 0) else p.n_CostoAct end as n_CostoAct, ISNULL(p.n_CostoRep, 0) as n_CostoRep, n_precio1, n_Impuesto1, case when c_CodMoneda='0000000001' then 'VES' else 'USD' end moneda, c_Marca, null imagen, ISNULL(p.n_tipopeso, 0) as n_tipopeso from MA_PRODUCTOS p WITH (NOLOCK)";
+        using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync(stoppingToken);
+
+        var prodCols = (await connection.QueryAsync<string>(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MA_PRODUCTOS'")).ToList();
+
+        string grpCol = "c_Grupo";
+        if (!prodCols.Any(c => string.Equals(c, "c_Grupo", StringComparison.OrdinalIgnoreCase)))
+        {
+            var match = prodCols.FirstOrDefault(c => c.Contains("grupo", StringComparison.OrdinalIgnoreCase) && !c.Contains("sub", StringComparison.OrdinalIgnoreCase));
+            grpCol = match ?? "NULL";
+        }
+
+        string subGrpCol = "c_Subgrupo";
+        if (!prodCols.Any(c => string.Equals(c, "c_Subgrupo", StringComparison.OrdinalIgnoreCase)))
+        {
+            var match = prodCols.FirstOrDefault(c => c.Contains("subgrupo", StringComparison.OrdinalIgnoreCase) || c.Contains("sub_grupo", StringComparison.OrdinalIgnoreCase));
+            subGrpCol = match ?? "NULL";
+        }
+
+        string grpExpr = grpCol == "NULL" ? "NULL as c_Grupo" : $"p.{grpCol} as c_Grupo";
+        string subGrpExpr = subGrpCol == "NULL" ? "NULL as c_Subgrupo" : $"p.{subGrpCol} as c_Subgrupo";
+
+        string baseSelect = $"select p.c_Codigo, c_Descri, c_Departamento, {grpExpr}, {subGrpExpr}, case when ISNULL(p.n_CostoAct, 0) <= 0 then ISNULL(p.n_CostoRep, 0) else p.n_CostoAct end as n_CostoAct, ISNULL(p.n_CostoRep, 0) as n_CostoRep, n_precio1, n_Impuesto1, case when c_CodMoneda='0000000001' then 'VES' else 'USD' end moneda, c_Marca, null imagen, ISNULL(p.n_tipopeso, 0) as n_tipopeso from MA_PRODUCTOS p WITH (NOLOCK)";
         string typeFilter = " ISNULL(p.n_tipopeso, 0) NOT IN (3, 4, 5)";
 
         string query;
@@ -103,7 +126,6 @@ public class ProductMasterExtractorWorker : BackgroundService
         }
 
         Console.WriteLine($"  Consultando catálogo en SQL Server (Modo: {(forceFull ? "FullMaster" : config.ExportMode.ToString())}, Filtro: > {lastSync:yyyy-MM-dd})...");
-        using var connection = new SqlConnection(connectionString);
         var products = (await connection.QueryAsync(query, new { LastSync = lastSync })).ToList();
 
         if (!products.Any())

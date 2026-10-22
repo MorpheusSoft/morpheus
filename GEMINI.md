@@ -19,3 +19,26 @@
 ## 3. Restricciones Técnicas y Protección de Infraestructura
 - **No renombrar** cadenas de conexión de base de datos (`morpheus_db`), usuarios del motor (`morpheus_admin`), variables de entorno de red ni el repositorio de código fuente (`MorpheusSoft/morpheus`).
 - Se mantienen las rutas del sistema de archivos, claves de `localStorage` existentes (`morpheus_auth_token`, etc.) y dominios de servidor (`*.qa.morpheussoft.net`) para no alterar la operatividad de los servidores de desarrollo, QA y producción.
+
+## 4. Definición de Entornos y Dominios Oficiales
+- **Producción (Grupo Catania):**
+  - Dominio raíz y frontend: `https://grupocatania.com` (redirección 301) y `https://*.grupocatania.com`.
+  - Hub Central: `https://hub.grupocatania.com`
+  - Backend API: `https://api.grupocatania.com` (Puerto interno `8000`).
+  - Base de Datos: `morpheus_prod`
+  - Procesos PM2: `prod-api`, `prod-hub`, `prod-compras`, `prod-inventario`, `prod-logistica`, `prod-costos`.
+- **QA / Staging (Morpheus Soft):**
+  - Dominio: `https://*.qa.morpheussoft.net`.
+  - Hub Central: `https://hub.qa.morpheussoft.net`
+  - Backend API: `https://api.qa.morpheussoft.net` (Puerto interno `8100`).
+  - Base de Datos: `morpheus_qa`
+  - Procesos PM2: `qa-api`, `qa-hub`, `qa-compras`, `qa-inventario`, `qa-logistica`, `qa-costos`.
+
+## 5. Higiene de Base de Datos y Despliegues Seguros
+- **Prohibición de Contaminación en Producción:**
+  - `morpheus_prod` NUNCA debe contener usuarios de prueba (`usuario01`, `usuario02`, etc.), ni transacciones simuladas de QA.
+  - La carga de inventario, catálogo y ventas de tiendas físicas en producción se realiza exclusivamente a través de los extractores de `MorpheusSyncAgent` / `NeoAgentSync` o scripts de baseline autorizados.
+- **Paridad Obligatoria en Actualizaciones:**
+  - Ninguna mejora o corrección de software debe considerarse lista sin verificar la paridad en ambos entornos (`/home/lzambrano/Morpheus` y `/home/lzambrano/Morpheus-QA`).
+  - Los archivos `.env` deben mantener explícitamente sus variables de conexión internas (`INTERNAL_API_URL` puerto 8000 en Prod, puerto 8100 en QA).
+

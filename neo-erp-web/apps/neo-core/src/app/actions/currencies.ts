@@ -1,29 +1,18 @@
 "use server"
 
-import { cookies } from "next/headers"
 import { revalidatePath } from "next/cache"
-
-const API_URL = "http://127.0.0.1:8000/api/v1"
-
-async function getAuthHeaders() {
-  const cookieStore = await cookies()
-  const token = cookieStore.get("access_token")?.value
-  return {
-    "Authorization": `Bearer ${token}`,
-    "Content-Type": "application/json",
-  }
-}
+import { getServerApiUrl, getAuthHeaders } from "@/lib/server-api"
 
 export async function getCurrencies() {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/currencies/`, { headers, cache: 'no-store' })
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/currencies/`, { headers, cache: 'no-store' })
   if (!res.ok) throw new Error("Failed to fetch currencies")
   return res.json()
 }
 
 export async function createCurrency(data: any) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/currencies/`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/currencies/`, {
     method: "POST",
     headers,
     body: JSON.stringify(data),
@@ -34,8 +23,8 @@ export async function createCurrency(data: any) {
 }
 
 export async function updateCurrency(id: number, data: any) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/currencies/${id}`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/currencies/${id}`, {
     method: "PUT",
     headers,
     body: JSON.stringify(data),
@@ -46,8 +35,8 @@ export async function updateCurrency(id: number, data: any) {
 }
 
 export async function deleteCurrency(id: number) {
-  const headers = await getAuthHeaders()
-  const res = await fetch(`${API_URL}/currencies/${id}`, {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/currencies/${id}`, {
     method: "DELETE",
     headers,
   })

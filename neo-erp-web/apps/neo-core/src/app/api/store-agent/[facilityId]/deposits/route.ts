@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-
-const API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
+import { getInternalApiUrl } from "@/lib/domain";
 
 async function getAuthHeaders() {
   const cookieStore = await cookies();
@@ -12,6 +11,11 @@ async function getAuthHeaders() {
   };
 }
 
+function resolveApiUrl(request: NextRequest): string {
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "";
+  return getInternalApiUrl(host);
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ facilityId: string }> }
@@ -19,7 +23,8 @@ export async function GET(
   try {
     const { facilityId } = await params;
     const headers = await getAuthHeaders();
-    const res = await fetch(`${API_URL}/store-agent/${facilityId}/deposits`, {
+    const apiUrl = resolveApiUrl(request);
+    const res = await fetch(`${apiUrl}/store-agent/${facilityId}/deposits`, {
       headers,
       cache: "no-store",
     });
@@ -51,9 +56,10 @@ export async function POST(
     const searchParams = request.nextUrl.searchParams;
     const action = searchParams.get("action");
     const headers = await getAuthHeaders();
+    const apiUrl = resolveApiUrl(request);
 
     if (action === "discover") {
-      const res = await fetch(`${API_URL}/store-agent/${facilityId}/discover`, {
+      const res = await fetch(`${apiUrl}/store-agent/${facilityId}/discover`, {
         method: "POST",
         headers,
       });
@@ -72,7 +78,7 @@ export async function POST(
 
     const body = await request.json();
 
-    const res = await fetch(`${API_URL}/store-agent/${facilityId}/deposits`, {
+    const res = await fetch(`${apiUrl}/store-agent/${facilityId}/deposits`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -113,8 +119,9 @@ export async function PUT(
 
     const body = await request.json();
     const headers = await getAuthHeaders();
+    const apiUrl = resolveApiUrl(request);
 
-    const res = await fetch(`${API_URL}/store-agent/${facilityId}/deposits/${mappingId}`, {
+    const res = await fetch(`${apiUrl}/store-agent/${facilityId}/deposits/${mappingId}`, {
       method: "PUT",
       headers,
       body: JSON.stringify(body),
@@ -154,7 +161,8 @@ export async function DELETE(
     }
 
     const headers = await getAuthHeaders();
-    const res = await fetch(`${API_URL}/store-agent/${facilityId}/deposits/${mappingId}`, {
+    const apiUrl = resolveApiUrl(request);
+    const res = await fetch(`${apiUrl}/store-agent/${facilityId}/deposits/${mappingId}`, {
       method: "DELETE",
       headers,
     });

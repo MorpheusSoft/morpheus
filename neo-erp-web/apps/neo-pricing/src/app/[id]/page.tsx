@@ -932,7 +932,7 @@ export default function PricingValidationBoardPage() {
               <div className="flex flex-col gap-1 text-[11px] bg-rose-50 border border-rose-100 rounded-lg p-2 text-rose-800">
                   <span className="font-extrabold flex items-center gap-1 text-rose-700"><i className="pi pi-exclamation-triangle"></i> Margen Crítico</span>
                   <span>Pérdida por merma del {shrinkage}% (Neto: {netMargin.toFixed(1)}%).</span>
-                  <span className="font-bold text-slate-700">Sug. PVP: ${recommendedPrice.toFixed(2)}</span>
+                  <span className="font-bold text-slate-700">Sug. PVP (Sin IVA): ${recommendedPrice.toFixed(2)}</span>
               </div>
           );
       }
@@ -1221,14 +1221,14 @@ export default function PricingValidationBoardPage() {
              {session?.update_type !== 'COST' && (
                 <Column 
                    field="old_price" 
-                   header="PVP ACTUAL ($)" 
+                   header="PVP ACTUAL (SIN IVA) ($)" 
                    body={(r) => <span className="text-slate-500">${Number(r.old_price).toFixed(2)}</span>}
                 ></Column>
              )}
              {session?.update_type !== 'COST' && (
                 <Column 
                    field="proposed_price" 
-                   header="NUEVO PVP ($)" 
+                   header="NUEVO PVP (SIN IVA) ($)" 
                    body={(r) => <span className="text-emerald-600 font-extrabold">${Number(r.proposed_price).toFixed(2)}</span>} 
                    editor={session?.status === 'DRAFT' ? priceEditor : undefined} 
                    onCellEditComplete={onCellEditComplete} 
@@ -1238,7 +1238,18 @@ export default function PricingValidationBoardPage() {
              {session?.update_type !== 'COST' && (
                 <Column 
                    header="NUEVO PVP (CON IVA) ($)" 
-                   body={(r) => <span className="text-emerald-800 font-bold">${(Number(r.proposed_price) * 1.16).toFixed(2)}</span>} 
+                   body={(r) => {
+                      const tRate = r.tax_rate !== undefined && r.tax_rate !== null ? Number(r.tax_rate) : 16.0;
+                      const withTax = Number(r.proposed_price) * (1.0 + (tRate / 100.0));
+                      return (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-emerald-800 font-bold">${withTax.toFixed(2)}</span>
+                          {tRate === 0 && (
+                            <span className="text-[9px] bg-slate-100 text-slate-500 px-1 py-0.5 rounded font-bold">Exento</span>
+                          )}
+                        </div>
+                      );
+                   }} 
                 ></Column>
              )}
              

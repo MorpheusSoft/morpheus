@@ -243,8 +243,12 @@ export default function OrderDetailsPage() {
       })
       .catch(err => console.error(err));
 
-    api.get('/categories/')
-      .then(res => setCategories(res.data.data || res.data.items || res.data || []))
+    api.get('/categories/?limit=1000')
+      .then(res => {
+        const raw = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
+        const sorted = [...raw].sort((a: any, b: any) => (a.full_path || a.name || '').localeCompare(b.full_path || b.name || ''));
+        setCategories(sorted);
+      })
       .catch(console.error);
   }, []);
 
@@ -1568,12 +1572,13 @@ export default function OrderDetailsPage() {
                       <label className="text-[11px] font-bold text-slate-500 uppercase tracking-widest block mb-2">Categoría Maestra</label>
                       <Dropdown 
                           value={newProductForm.category_id} 
-                          options={categories} 
+                          options={(categories || []).map((c: any) => ({ ...c, displayLabel: c.full_path ? `[${c.level_name || 'Cat'}] ${c.full_path}` : c.name }))} 
                           onChange={(e) => setNewProductForm(prev => ({ ...prev, category_id: e.value }))} 
-                          optionLabel="name" 
+                          optionLabel="displayLabel" 
                           optionValue="id" 
-                          placeholder="Seleccionar..." 
-                          className="w-full border-slate-200" 
+                          filter
+                          placeholder="Seleccionar Categoría..." 
+                          className="w-full border-slate-200 text-xs" 
                       />
                   </div>
                   <div>

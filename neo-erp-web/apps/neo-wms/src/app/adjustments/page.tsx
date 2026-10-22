@@ -83,6 +83,16 @@ export default function WmsAdjustmentsPage() {
   const [aiAuditResult, setAiAuditResult] = useState<any>(null);
   const [loadingAiAudit, setLoadingAiAudit] = useState(false);
 
+  // PHASE 2 BATCH & INDIVIDUAL REASON ASSIGNMENT
+  const [batchReasonOut, setBatchReasonOut] = useState<number | null>(null);
+  const [batchReasonIn, setBatchReasonIn] = useState<number | null>(null);
+  const [savingBatchReasons, setSavingBatchReasons] = useState(false);
+  const [updatingLineReasonId, setUpdatingLineReasonId] = useState<number | null>(null);
+
+  // VIEW SESSION CONFIG CARD (READ-ONLY)
+  const [viewConfigDialogVisible, setViewConfigDialogVisible] = useState(false);
+  const [viewConfigSession, setViewConfigSession] = useState<any>(null);
+
   // Helper para saber si la sesión activa está acotada a una categoría específica
   const isSessionCategoryScoped = Boolean(
     selectedSession &&
@@ -94,15 +104,80 @@ export default function WmsAdjustmentsPage() {
 
 
   // Formateador jerárquico recursivo para TreeSelect de PrimeReact
-  const formatCategoryTreeNodes = (nodes: any[]): any[] => {
+  const formatCategoryTreeNodes = (nodes: any[], parentBreadcrumb = '', depth = 0): any[] => {
     if (!nodes || !Array.isArray(nodes)) return [];
-    return nodes.map(node => ({
-      key: String(node.id),
-      label: node.name,
-      data: node.id,
-      icon: (node.children && node.children.length > 0) ? 'pi pi-folder text-amber-600' : 'pi pi-tag text-slate-500',
-      children: (node.children && node.children.length > 0) ? formatCategoryTreeNodes(node.children) : undefined
-    }));
+    return nodes.map(node => {
+      const levelTag = node.level_name || (depth === 0 ? 'Depto' : depth === 1 ? 'Grupo' : 'Subgrupo');
+      const breadcrumb = node.full_path || (parentBreadcrumb ? `${parentBreadcrumb} > ${node.name}` : node.name);
+      const label = depth === 0 
+        ? `[${levelTag}] ${node.name}`
+        : `[${levelTag}] ${node.name} (${parentBreadcrumb || breadcrumb})`;
+
+      return {
+        key: String(node.id),
+        label: label,
+        data: node.id,
+        rawName: node.name,
+        levelTag: levelTag,
+        depth: depth,
+        fullPath: breadcrumb,
+        parentBreadcrumb: parentBreadcrumb,
+        icon: (node.children && node.children.length > 0) 
+          ? (depth === 0 ? 'pi pi-folder text-indigo-600 font-bold' : 'pi pi-folder-open text-amber-600') 
+          : 'pi pi-tag text-slate-500',
+        children: (node.children && node.children.length > 0) 
+          ? formatCategoryTreeNodes(node.children, breadcrumb, depth + 1) 
+          : undefined
+      };
+    });
+  };
+
+  const categoryTreeNodeTemplate = (node: any) => {
+    const isRoot = node.depth === 0;
+    const isGroup = node.depth === 1;
+    return (
+      <div className="flex items-center gap-2 py-0.5 text-xs">
+        <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold tracking-wider uppercase shrink-0 ${
+          isRoot ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
+          isGroup ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+          'bg-slate-100 text-slate-700 border border-slate-200'
+        }`}>
+          {node.levelTag || (isRoot ? 'Depto' : isGroup ? 'Grupo' : 'Subgrupo')}
+        </span>
+        <span className={`font-semibold ${isRoot ? 'text-indigo-950 font-bold' : isGroup ? 'text-slate-800' : 'text-slate-700'}`}>
+          {node.rawName || node.label}
+        </span>
+        {node.parentBreadcrumb && (
+          <span className="text-[10px] text-slate-400 font-mono truncate max-w-[220px]" title={node.parentBreadcrumb}>
+            ({node.parentBreadcrumb})
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const categoryTreeValueTemplate = (selectedNode: any, props: any) => {
+    if (!selectedNode) {
+      return <span className="text-slate-400">{props?.placeholder || "Todas las categorías..."}</span>;
+    }
+    const node = Array.isArray(selectedNode) ? selectedNode[0] : selectedNode;
+    if (!node) return <span className="text-slate-400">{props?.placeholder || "Todas las categorías..."}</span>;
+    const isRoot = node.depth === 0;
+    const isGroup = node.depth === 1;
+    return (
+      <div className="flex items-center gap-1.5 text-xs truncate">
+        <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold uppercase tracking-wider shrink-0 ${
+          isRoot ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
+          isGroup ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+          'bg-slate-100 text-slate-700 border border-slate-200'
+        }`}>
+          {node.levelTag || (isRoot ? 'Depto' : isGroup ? 'Grupo' : 'Subgrupo')}
+        </span>
+        <span className="font-semibold text-slate-800 truncate">
+          {node.fullPath || node.label}
+        </span>
+      </div>
+    );
   };
 
   const productOptionTemplate = (option: any) => {
@@ -141,13 +216,36 @@ export default function WmsAdjustmentsPage() {
     const clean = codeToSearch.trim().toLowerCase();
     if (!clean) return;
 
+    const candidates = [clean];
+    if (/^\d+$/.test(clean)) {
+      if (clean.length === 12) {
+        candidates.push('0' + clean);
+      } else if (clean.length === 13 && clean.startsWith('0')) {
+        candidates.push(clean.slice(1));
+      }
+      const unpadded = clean.replace(/^0+/, '');
+      if (unpadded && !candidates.includes(unpadded)) {
+        candidates.push(unpadded);
+      }
+      for (const len of [6, 13, 12, 14, 8]) {
+        const padded = (unpadded || clean).padStart(len, '0');
+        if (padded && !candidates.includes(padded)) {
+          candidates.push(padded);
+        }
+      }
+    }
+
+    const matchesProduct = (p: any) => {
+      const pSku = (p.sku || '').toLowerCase();
+      const pPrimary = (p.primary_barcode || '').toLowerCase();
+      const pBarcodes = (p.barcodes || []).map((b: string) => b.toLowerCase());
+      const pName = (p.name || '').toLowerCase();
+      return candidates.some(c => c === pSku || c === pPrimary || pBarcodes.includes(c)) ||
+             (clean.length >= 3 && pName.includes(clean));
+    };
+
     // 1. Buscar primero en los productos del alcance actual (sesión cíclica o catálogo general)
-    const foundInScope = availableCountingProducts.find(p => 
-      (p.sku && p.sku.toLowerCase() === clean) ||
-      (p.primary_barcode && p.primary_barcode.toLowerCase() === clean) ||
-      (p.barcodes && p.barcodes.some((b: string) => b.toLowerCase() === clean)) ||
-      (p.name && p.name.toLowerCase().includes(clean))
-    );
+    const foundInScope = availableCountingProducts.find(matchesProduct);
 
     if (foundInScope) {
       setCountingProdId(foundInScope.value);
@@ -164,12 +262,7 @@ export default function WmsAdjustmentsPage() {
 
     // 2. Si es conteo cíclico y no se halló en el alcance, verificar si existe en otra categoría del catálogo global
     if (isSessionCategoryScoped) {
-      const foundInGlobal = products.find(p => 
-        (p.sku && p.sku.toLowerCase() === clean) ||
-        (p.primary_barcode && p.primary_barcode.toLowerCase() === clean) ||
-        (p.barcodes && p.barcodes.some((b: string) => b.toLowerCase() === clean)) ||
-        (p.name && p.name.toLowerCase().includes(clean))
-      );
+      const foundInGlobal = products.find(matchesProduct);
 
       if (foundInGlobal) {
         toast.current?.show({
@@ -383,6 +476,16 @@ export default function WmsAdjustmentsPage() {
       value: l.id
     }));
   }, [locationsTree, selectedWarehouseId]);
+
+  // Filter Locations for Toma Física Modal by Selected Session Warehouse
+  const sessionAvailableLocations = React.useMemo(() => {
+    if (!sessionWarehouseId) return [];
+    const wh = locationsTree.find((w: any) => w.id === sessionWarehouseId);
+    return (wh?.locations || []).map((l: any) => ({
+      label: `[${l.code || 'LOC'}] ${l.name}`,
+      value: l.id
+    }));
+  }, [locationsTree, sessionWarehouseId]);
 
   // QUICK IN-LINE REASON CREATION
   const [quickReasonDialogVisible, setQuickReasonDialogVisible] = useState(false);
@@ -635,6 +738,14 @@ export default function WmsAdjustmentsPage() {
       setAiAuditResult(null);
       setManageSessionDialogVisible(true);
 
+      // Pre-seleccionar motivos por defecto para faltantes y sobrantes
+      if (reasons && reasons.length > 0) {
+        const defOut = reasons.find(r => r.default_type === 'OUT' || r.code?.includes('MERMA')) || reasons[0];
+        const defIn = reasons.find(r => r.default_type === 'IN' || r.code?.includes('SOBRANTE')) || reasons[0];
+        if (defOut) setBatchReasonOut(defOut.id);
+        if (defIn) setBatchReasonIn(defIn.id);
+      }
+
       // Si la sesión está acotada por categoría (CYCLIC / CATEGORY)
       const hasCategoryScope = (sessionData.scope_type === 'CYCLIC' || sessionData.scope_type === 'CATEGORY') && sessionData.scope_value && !isNaN(Number(sessionData.scope_value));
       if (hasCategoryScope) {
@@ -737,6 +848,77 @@ export default function WmsAdjustmentsPage() {
       toast.current?.show({ severity: 'error', summary: 'Error de Consolidación', detail: e.response?.data?.detail || 'No se pudo finalizar la toma física.' });
     }
     setValidatingSession(false);
+  };
+
+  // ACTUALIZAR MOTIVO INDIVIDUAL POR RENGLÓN EN FASE 2
+  const handleUpdateLineReason = async (lineId: number, reasonId: number | null) => {
+    if (!selectedSession) return;
+    setUpdatingLineReasonId(lineId);
+    try {
+      const res = await api.patch(`/inventory-session/${selectedSession.id}/lines/${lineId}/reason`, {
+        adjustment_reason_id: reasonId
+      });
+      const updatedLine = res.data;
+      setSelectedSession((prev: any) => {
+        if (!prev) return prev;
+        const newLines = (prev.lines || []).map((l: any) => l.id === lineId ? { ...l, ...updatedLine } : l);
+        return { ...prev, lines: newLines };
+      });
+      toast.current?.show({
+        severity: 'success',
+        summary: 'Motivo Guardado',
+        detail: 'Motivo de ajuste asignado correctamente.',
+        life: 2000
+      });
+    } catch (e: any) {
+      toast.current?.show({
+        severity: 'error',
+        summary: 'Error',
+        detail: e.response?.data?.detail || 'No se pudo guardar el motivo de ajuste.'
+      });
+    } finally {
+      setUpdatingLineReasonId(null);
+    }
+  };
+
+  // ASIGNACIÓN MASIVA DE MOTIVOS PARA FALTANTES O SOBRANTES EN FASE 2
+  const handleBatchAssignReasons = async (type: 'OUT' | 'IN') => {
+    if (!selectedSession) return;
+    setSavingBatchReasons(true);
+    try {
+      const payload: any = {};
+      if (type === 'OUT') {
+        if (!batchReasonOut) {
+          toast.current?.show({ severity: 'warn', summary: 'Selección Requerida', detail: 'Seleccione un motivo para los faltantes.' });
+          setSavingBatchReasons(false);
+          return;
+        }
+        payload.reason_id_out = batchReasonOut;
+      } else {
+        if (!batchReasonIn) {
+          toast.current?.show({ severity: 'warn', summary: 'Selección Requerida', detail: 'Seleccione un motivo para los sobrantes.' });
+          setSavingBatchReasons(false);
+          return;
+        }
+        payload.reason_id_in = batchReasonIn;
+      }
+
+      const res = await api.post(`/inventory-session/${selectedSession.id}/lines/reasons/batch`, payload);
+      setSelectedSession(res.data);
+      toast.current?.show({
+        severity: 'success',
+        summary: 'Asignación Masiva Exitosa',
+        detail: `Se aplicó el motivo seleccionado a todos los renglones de ${type === 'OUT' ? 'faltantes (-)' : 'sobrantes (+)'}.`
+      });
+    } catch (e: any) {
+      toast.current?.show({
+        severity: 'error',
+        summary: 'Error',
+        detail: e.response?.data?.detail || 'Fallo en asignación masiva de motivos.'
+      });
+    } finally {
+      setSavingBatchReasons(false);
+    }
   };
 
   const getAdjStateSeverity = (state: string) => {
@@ -974,26 +1156,69 @@ export default function WmsAdjustmentsPage() {
               stripedRows
             >
               <Column field="id" header="ID SESIÓN" body={s => <span className="font-mono font-bold text-slate-700">SES-{s.id}</span>} sortable />
-              <Column field="name" header="NOMBRE DE LA TOMA FÍSICA" body={s => <span className="font-bold text-slate-800">{s.name}</span>} sortable />
-              <Column field="facility_id" header="SUCURSAL" body={s => <span>Sucursal #{s.facility_id}</span>} sortable />
+              <Column field="name" header="NOMBRE DE LA TOMA FÍSICA" body={s => (
+                <div className="flex flex-col">
+                  <span className="font-bold text-slate-800">{s.name}</span>
+                  {s.category_full_path ? (
+                    <span className="text-[10px] text-amber-700 font-mono mt-0.5 font-semibold truncate max-w-[320px]" title={s.category_full_path}>
+                      🎯 {s.category_full_path}
+                    </span>
+                  ) : s.category_name ? (
+                    <span className="text-[10px] text-amber-700 font-mono mt-0.5 font-semibold">
+                      🎯 {s.category_name}
+                    </span>
+                  ) : null}
+                </div>
+              )} sortable />
+              <Column field="facility_id" header="CENTRO / SUCURSAL" body={s => (
+                <div className="flex flex-col">
+                  <span className="font-bold text-slate-800 text-xs">
+                    {s.facility_name || (facilities.find(f => f.id === s.facility_id)?.name) || `Sucursal #${s.facility_id}`}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-medium">
+                    {s.warehouse_name || 'Almacén Principal'}
+                  </span>
+                </div>
+              )} sortable />
               <Column field="state" header="ESTADO" body={s => (
                 <Tag
-                  severity={s.state === 'DONE' ? 'success' : s.state === 'IN_PROGRESS' ? 'warning' : 'info'}
-                  value={s.state === 'DONE' ? 'CONCILIADO & CERRADO' : s.state === 'IN_PROGRESS' ? 'EN PROCESO DE CONTEO' : s.state}
+                  severity={s.state === 'DONE' ? 'success' : s.state === 'REVIEW' ? 'info' : 'warning'}
+                  value={
+                    s.state === 'DONE'
+                      ? 'FASE 3: CONCILIADO'
+                      : s.state === 'REVIEW'
+                      ? 'FASE 2: ANÁLISIS & COTEJO'
+                      : 'FASE 1: CONTEO CIEGO'
+                  }
                   className="font-bold text-[9px] px-2 py-1"
                 />
               )} align="center" sortable />
-              <Column header="RENGLONES" body={s => <span className="font-semibold text-slate-700">{s.lines?.length || 0} ítems</span>} align="right" />
+              <Column header="RENGLONES" body={s => <span className="font-semibold text-slate-700">{s.total_lines !== undefined ? s.total_lines : (s.lines?.length || 0)} ítems</span>} align="right" />
               <Column header="ACCIONES / CONTROL" body={s => (
-                <Button
-                  label="Gestionar Conteo & Conciliación"
-                  icon="pi pi-sliders-h"
-                  severity="info"
-                  size="small"
-                  className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white"
-                  onClick={() => handleOpenSessionDetail(s.id)}
-                />
-              )} align="center" style={{ width: '16rem' }} />
+                <div className="flex items-center justify-center gap-2">
+                  <Button
+                    icon="pi pi-eye"
+                    tooltip="Ver Ficha de Configuración (Inmutable)"
+                    tooltipOptions={{ position: 'top' }}
+                    outlined
+                    severity="secondary"
+                    size="small"
+                    className="font-bold text-xs"
+                    onClick={() => {
+                      setViewConfigSession(s);
+                      setViewConfigDialogVisible(true);
+                    }}
+                  />
+                  <Button
+                    label="Gestionar Conteo & Conciliación"
+                    icon="pi pi-sliders-h"
+                    severity="info"
+                    size="small"
+                    className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white"
+                    onClick={() => handleOpenSessionDetail(s.id)}
+                  />
+                </div>
+              )} align="center" style={{ width: '20rem' }} />
             </DataTable>
           </div>
         </div>
@@ -1516,7 +1741,10 @@ export default function WmsAdjustmentsPage() {
                 options={warehouses.filter(w => !sessionFacilityId || w.facility_id === sessionFacilityId)}
                 optionLabel="name"
                 optionValue="id"
-                onChange={e => setSessionWarehouseId(e.value)}
+                onChange={e => {
+                  setSessionWarehouseId(e.value);
+                  setSessionLocationId(null);
+                }}
                 placeholder="Seleccione Almacén"
                 className="text-xs font-bold"
               />
@@ -1557,8 +1785,10 @@ export default function WmsAdjustmentsPage() {
                     onChange={e => setSessionCategoryId(e.value ? Number(e.value) : null)}
                     placeholder="Todas las categorías (desplegable)..."
                     filter
-                    filterBy="label"
+                    filterBy="label,rawName,fullPath"
                     filterMode="lenient"
+                    nodeTemplate={categoryTreeNodeTemplate}
+                    valueTemplate={categoryTreeValueTemplate}
                     showClear
                     className="text-xs w-full"
                   />
@@ -1568,9 +1798,10 @@ export default function WmsAdjustmentsPage() {
                   <label className="font-bold text-amber-900 text-[11px]">Estante / Ubicación (Opcional)</label>
                   <Dropdown
                     value={sessionLocationId}
-                    options={locationsTree.map(l => ({ label: `[${l.code || 'LOC'}] ${l.name}`, value: l.id }))}
+                    options={sessionAvailableLocations}
                     onChange={e => setSessionLocationId(e.value)}
-                    placeholder="Todas las ubicaciones..."
+                    placeholder={sessionWarehouseId ? "Todas las ubicaciones internas..." : "Seleccione primero un almacén..."}
+                    disabled={!sessionWarehouseId}
                     filter
                     showClear
                     className="text-xs"
@@ -1658,7 +1889,7 @@ export default function WmsAdjustmentsPage() {
         header={selectedSession ? `📋 Gestión de Toma Física: ${selectedSession.name}` : 'Toma Física'}
         visible={manageSessionDialogVisible}
         onHide={() => setManageSessionDialogVisible(false)}
-        style={{ width: '1150px' }}
+        style={{ width: '1280px', maxWidth: '96vw' }}
         className="rounded-2xl"
       >
         {selectedSession && (
@@ -1725,6 +1956,104 @@ export default function WmsAdjustmentsPage() {
               )}
             </div>
 
+            {/* FICHA INMUTABLE DE CONFIGURACIÓN Y PARÁMETROS DEL CONTEO */}
+            <div className="bg-slate-50/90 border border-slate-200/90 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between border-b border-slate-200/80 pb-2.5 mb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-100/70 border border-indigo-200 flex items-center justify-center text-indigo-700 font-bold">
+                    <i className="pi pi-lock text-xs"></i>
+                  </div>
+                  <div>
+                    <h5 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      Ficha de Configuración de la Toma Física
+                      <span className="text-[10px] text-slate-400 font-normal">| Parámetros Iniciales de Apertura</span>
+                    </h5>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase bg-slate-200/80 text-slate-700 border border-slate-300">
+                    <i className="pi pi-lock text-[9px] text-slate-500"></i> Parámetros Inmutables
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                {/* 1. Alcance Operativo */}
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    1. Alcance de Toma
+                  </span>
+                  <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                    {selectedSession.scope_type === 'CYCLIC' || selectedSession.scope_type === 'CATEGORY' ? (
+                      <span className="inline-flex items-center gap-1 text-amber-700 font-bold">
+                        <i className="pi pi-tags text-xs"></i> Conteo Cíclico por Categoría
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-indigo-700 font-bold">
+                        <i className="pi pi-box text-xs"></i> Conteo General de Almacén
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-slate-400 block mt-1">
+                    {selectedSession.lines?.length || 0} SKUs registrados en sesión
+                  </span>
+                </div>
+
+                {/* 2. Sucursal y Almacén */}
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    2. Centro / Sucursal
+                  </span>
+                  <div className="font-bold text-slate-800 truncate" title={selectedSession.facility_name || `Sucursal #${selectedSession.facility_id}`}>
+                    🏢 {selectedSession.facility_name || (facilities.find(f => f.id === selectedSession.facility_id)?.name) || `Sucursal #${selectedSession.facility_id}`}
+                  </div>
+                  <span className="text-[11px] text-slate-500 block truncate mt-0.5" title={selectedSession.warehouse_name || 'Almacén General'}>
+                    📦 {selectedSession.warehouse_name || (warehouses.find(w => w.id === selectedSession.warehouse_id)?.name) || 'Almacén General'}
+                  </span>
+                </div>
+
+                {/* 3. Ubicación o Estante */}
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    3. Ubicación / Estante
+                  </span>
+                  <div className="font-bold text-slate-800 truncate">
+                    📍 {selectedSession.location_name || (() => {
+                      for (const wh of locationsTree) {
+                        const found = (wh.locations || []).find((l: any) => l.id === selectedSession.location_id);
+                        if (found) return `[${found.code || 'LOC'}] ${found.name}`;
+                      }
+                      return 'Todas las ubicaciones internas';
+                    })()}
+                  </div>
+                  <span className="text-[10px] text-slate-400 block mt-1">
+                    Filtro físico de pasillo
+                  </span>
+                </div>
+
+                {/* 4. Categoría Jerárquica */}
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    4. Jerarquía de Categoría
+                  </span>
+                  {selectedSession.category_full_path || selectedSession.category_name ? (
+                    <div>
+                      <div className="font-bold text-amber-900 truncate" title={selectedSession.category_full_path || selectedSession.category_name}>
+                        🏷️ {selectedSession.category_name || selectedSession.category_full_path?.split(' > ').pop()}
+                      </div>
+                      {selectedSession.category_full_path && (
+                        <div className="text-[10px] text-amber-700 font-mono mt-0.5 line-clamp-2" title={selectedSession.category_full_path}>
+                          {selectedSession.category_full_path}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-slate-400 italic">Sin filtro categórico</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
             {/* PANEL ASISTENTE IA DE AUDITORÍA (Fase 2 & Fase 3) */}
             {(selectedSession.state === 'REVIEW' || selectedSession.state === 'DONE') && (
               <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-4 rounded-2xl border border-indigo-500/30 text-white shadow-lg space-y-3">
@@ -1789,7 +2118,7 @@ export default function WmsAdjustmentsPage() {
                         <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
                       </span>
                       <span className="font-bold text-amber-900">
-                        🎯 Conteo Cíclico Filtrado por Categoría: &quot;{selectedSession.category_name || 'HARINAS'}&quot;
+                        🎯 Conteo Cíclico Filtrado por Categoría: &quot;{selectedSession.category_full_path || selectedSession.category_name || 'HARINAS'}&quot;
                       </span>
                       <span className="text-amber-800 bg-amber-100/90 border border-amber-200 px-2 py-0.5 rounded font-mono font-bold text-[11px]">
                         {loadingSessionProducts ? 'Cargando catálogo...' : `${availableCountingProducts.length} productos habilitados`}
@@ -1913,6 +2242,107 @@ export default function WmsAdjustmentsPage() {
               </div>
             )}
 
+            {/* BARRA DE ASIGNACIÓN MASIVA DE MOTIVOS DE AJUSTE (FASE 2) */}
+            {selectedSession.state === 'REVIEW' && (
+              <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs">
+                      <i className="pi pi-tags"></i>
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800 m-0 uppercase tracking-wide">
+                        Clasificación Contable & Motivos de Ajuste (Fase 2)
+                      </h4>
+                      <p className="text-[11px] text-slate-500 m-0">
+                        Asigne individualmente o de forma masiva el motivo de ajuste (mermas, averías, hurtos, sobrantes) antes de consolidar.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                  {/* Faltantes (OUT) */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 bg-rose-50/70 p-2.5 rounded-xl border border-rose-200/70">
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                      <span className="text-[11px] font-bold text-rose-900 uppercase">Faltantes (-):</span>
+                    </div>
+                    <Dropdown
+                      value={batchReasonOut}
+                      onChange={(e) => setBatchReasonOut(e.value)}
+                      options={reasons.filter(r => r.default_type === 'OUT' || !r.default_type)}
+                      optionLabel="name"
+                      optionValue="id"
+                      itemTemplate={(opt) => (
+                        <div className="flex items-center justify-between gap-2 text-xs py-0.5">
+                          <span className="font-semibold text-slate-800">{opt.name}</span>
+                          <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200">
+                            {opt.code}
+                          </span>
+                        </div>
+                      )}
+                      valueTemplate={(opt) => opt ? (
+                        <span className="text-xs font-semibold text-slate-800 truncate">
+                          [{opt.code}] {opt.name}
+                        </span>
+                      ) : <span className="text-xs text-slate-400">Seleccionar motivo...</span>}
+                      placeholder="Motivo para faltantes..."
+                      className="text-xs p-inputtext-sm flex-1 bg-white"
+                    />
+                    <Button
+                      label="Aplicar a Faltantes"
+                      icon="pi pi-check"
+                      size="small"
+                      severity="danger"
+                      loading={savingBatchReasons}
+                      onClick={() => handleBatchAssignReasons('OUT')}
+                      className="text-[11px] font-bold shrink-0 h-[34px]"
+                    />
+                  </div>
+
+                  {/* Sobrantes (IN) */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 bg-emerald-50/70 p-2.5 rounded-xl border border-emerald-200/70">
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                      <span className="text-[11px] font-bold text-emerald-900 uppercase">Sobrantes (+):</span>
+                    </div>
+                    <Dropdown
+                      value={batchReasonIn}
+                      onChange={(e) => setBatchReasonIn(e.value)}
+                      options={reasons.filter(r => r.default_type === 'IN' || !r.default_type)}
+                      optionLabel="name"
+                      optionValue="id"
+                      itemTemplate={(opt) => (
+                        <div className="flex items-center justify-between gap-2 text-xs py-0.5">
+                          <span className="font-semibold text-slate-800">{opt.name}</span>
+                          <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200">
+                            {opt.code}
+                          </span>
+                        </div>
+                      )}
+                      valueTemplate={(opt) => opt ? (
+                        <span className="text-xs font-semibold text-slate-800 truncate">
+                          [{opt.code}] {opt.name}
+                        </span>
+                      ) : <span className="text-xs text-slate-400">Seleccionar motivo...</span>}
+                      placeholder="Motivo para sobrantes..."
+                      className="text-xs p-inputtext-sm flex-1 bg-white"
+                    />
+                    <Button
+                      label="Aplicar a Sobrantes"
+                      icon="pi pi-check"
+                      size="small"
+                      severity="success"
+                      loading={savingBatchReasons}
+                      onClick={() => handleBatchAssignReasons('IN')}
+                      className="text-[11px] font-bold shrink-0 h-[34px]"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* SECCIÓN DE MATRIZ DE TABLA DE REGISTROS */}
             <div className="space-y-3">
               <div className="flex justify-between items-center">
@@ -1934,6 +2364,7 @@ export default function WmsAdjustmentsPage() {
                           <th className="p-3 text-right">STOCK TEÓRICO (Snapshot)</th>
                           <th className="p-3 text-right">DIFERENCIA</th>
                           <th className="p-3 text-center">SEMÁFORO DISCREPANCIA</th>
+                          <th className="p-3 text-left min-w-[220px]">MOTIVO DE AJUSTE (CAUSA)</th>
                         </>
                       )}
                       {selectedSession.state === 'IN_PROGRESS' && (
@@ -1944,24 +2375,30 @@ export default function WmsAdjustmentsPage() {
                   <tbody className="divide-y divide-slate-100">
                     {(!selectedSession.lines || selectedSession.lines.length === 0) ? (
                       <tr>
-                        <td colSpan={6} className="p-6 text-center text-slate-400 font-medium">
+                        <td colSpan={selectedSession.state !== 'IN_PROGRESS' ? 6 : 3} className="p-6 text-center text-slate-400 font-medium">
                           No hay renglones en esta toma física. Registre el primer conteo arriba.
                         </td>
                       </tr>
                     ) : (
                       selectedSession.lines.map((line: any, idx: number) => {
-                        const prod = products.find(p => p.id === line.product_variant_id || p.value === line.product_variant_id || p.variant_id === line.product_variant_id);
+                        const prod = (availableCountingProducts || []).find((p: any) => p.id === line.product_variant_id || p.value === line.product_variant_id || p.variant_id === line.product_variant_id)
+                          || (sessionScopedProducts || []).find((p: any) => p.id === line.product_variant_id || p.value === line.product_variant_id || p.variant_id === line.product_variant_id)
+                          || (products || []).find((p: any) => p.id === line.product_variant_id || p.value === line.product_variant_id || p.variant_id === line.product_variant_id);
                         const counted = line.counted_qty ?? 0;
                         const theo = line.theoretical_qty ?? 0;
                         const diff = counted - theo;
-                        const uom = prod?.uom_base || 'UND';
+                        const uom = line.uom_base || prod?.uom_base || 'UND';
+                        const productName = line.product_name || prod?.name || `Variante #${line.product_variant_id}`;
+                        const productSku = line.sku || prod?.sku || '';
 
                         return (
                           <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
                             <td className="p-3">
                               <div className="flex flex-col">
-                                <span className="font-bold text-slate-800">{prod ? prod.name : `Variante #${line.product_variant_id}`}</span>
-                                <span className="font-mono text-[10px] text-slate-400">{prod?.sku || ''}</span>
+                                <span className="font-bold text-slate-800">{productName}</span>
+                                {productSku && (
+                                  <span className="font-mono text-[10px] text-slate-500 font-semibold">{productSku}</span>
+                                )}
                               </div>
                             </td>
                             <td className="p-3 text-right font-bold text-slate-900 text-sm">
@@ -2002,6 +2439,49 @@ export default function WmsAdjustmentsPage() {
                                     </div>
                                   )}
                                 </td>
+                                <td className="p-3">
+                                  {diff === 0 ? (
+                                    <span className="text-slate-400 text-[11px] italic">Sin descuadre</span>
+                                  ) : selectedSession.state === 'REVIEW' ? (
+                                    <div className="flex items-center gap-1.5 min-w-[190px]">
+                                      <Dropdown
+                                        value={line.adjustment_reason_id || null}
+                                        onChange={(e) => handleUpdateLineReason(line.id, e.value)}
+                                        options={reasons.filter(r => (diff < 0 ? r.default_type === 'OUT' : r.default_type === 'IN') || !r.default_type)}
+                                        optionLabel="name"
+                                        optionValue="id"
+                                        placeholder="Seleccione motivo..."
+                                        disabled={updatingLineReasonId === line.id}
+                                        itemTemplate={(opt) => (
+                                          <div className="flex items-center justify-between gap-2 text-xs py-0.5">
+                                            <span className="font-semibold text-slate-800">{opt.name}</span>
+                                            <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1 py-0.5 rounded border border-slate-200">
+                                              {opt.code}
+                                            </span>
+                                          </div>
+                                        )}
+                                        valueTemplate={(opt) => opt ? (
+                                          <span className="text-[11px] font-semibold text-slate-800 truncate block max-w-[170px]" title={opt.name}>
+                                            [{opt.code}] {opt.name}
+                                          </span>
+                                        ) : <span className="text-[11px] text-amber-600 font-medium italic">Asignar motivo...</span>}
+                                        className={`text-xs p-inputtext-sm w-full ${!line.adjustment_reason_id ? 'border-amber-400 bg-amber-50/40' : 'bg-white'}`}
+                                      />
+                                      {updatingLineReasonId === line.id && (
+                                        <i className="pi pi-spin pi-spinner text-indigo-600 text-xs shrink-0"></i>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    line.adjustment_reason_name || line.adjustment_reason_code ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-indigo-50 text-indigo-900 border border-indigo-200 text-[11px] font-bold">
+                                        <i className="pi pi-tag text-[10px] text-indigo-600"></i>
+                                        [{line.adjustment_reason_code}] {line.adjustment_reason_name}
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-400 text-[11px] italic">No clasificado</span>
+                                    )
+                                  )}
+                                </td>
                               </>
                             )}
 
@@ -2027,6 +2507,140 @@ export default function WmsAdjustmentsPage() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+        )}
+      </Dialog>
+
+      {/* DIÁLOGO: FICHA TÉCNICA INMUTABLE DE CONFIGURACIÓN DEL CONTEO */}
+      <Dialog
+        header={viewConfigSession ? `🔒 Ficha de Configuración: ${viewConfigSession.name} (SES-${viewConfigSession.id})` : 'Ficha de Configuración'}
+        visible={viewConfigDialogVisible}
+        onHide={() => setViewConfigDialogVisible(false)}
+        style={{ width: '650px' }}
+        className="rounded-2xl"
+      >
+        {viewConfigSession && (
+          <div className="flex flex-col gap-5 py-2">
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between border-b border-slate-200/80 pb-3 mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-100 border border-indigo-200 flex items-center justify-center text-indigo-700 font-bold">
+                    <i className="pi pi-lock text-sm"></i>
+                  </div>
+                  <div>
+                    <h5 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                      Parámetros Inmutables de la Toma Física
+                    </h5>
+                    <span className="text-[10px] text-slate-500">
+                      Configuración registrada en la apertura. No modificable para garantizar la integridad de auditoría.
+                    </span>
+                  </div>
+                </div>
+                <Tag severity="info" value="🔒 INMUTABLE" className="font-bold text-[9px] px-2 py-0.5" />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Código & Nombre de Toma
+                  </span>
+                  <div className="font-mono font-bold text-indigo-900">SES-{viewConfigSession.id}</div>
+                  <div className="font-bold text-slate-800 text-sm mt-0.5">{viewConfigSession.name}</div>
+                </div>
+
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Tipo de Alcance
+                  </span>
+                  <div className="font-bold text-slate-800">
+                    {viewConfigSession.scope_type === 'CYCLIC' || viewConfigSession.scope_type === 'CATEGORY' ? (
+                      <span className="inline-flex items-center gap-1.5 text-amber-700 font-bold">
+                        <i className="pi pi-tags"></i> Conteo Cíclico por Categoría
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 text-indigo-700 font-bold">
+                        <i className="pi pi-box"></i> Conteo General de Almacén
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-slate-500 block mt-1">
+                    {viewConfigSession.total_lines !== undefined ? viewConfigSession.total_lines : (viewConfigSession.lines?.length || 0)} renglones / SKUs
+                  </span>
+                </div>
+
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Centro / Sucursal & Almacén
+                  </span>
+                  <div className="font-bold text-slate-800">
+                    🏢 {viewConfigSession.facility_name || (facilities.find(f => f.id === viewConfigSession.facility_id)?.name) || `Sucursal #${viewConfigSession.facility_id}`}
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    📦 {viewConfigSession.warehouse_name || 'Almacén General'}
+                  </div>
+                </div>
+
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Fecha y Estado Actual
+                  </span>
+                  <div className="font-bold text-slate-800">
+                    📅 {viewConfigSession.date_start ? new Date(viewConfigSession.date_start).toLocaleString('es-ES') : 'N/D'}
+                  </div>
+                  <Tag
+                    severity={viewConfigSession.state === 'DONE' ? 'success' : viewConfigSession.state === 'REVIEW' ? 'info' : 'warning'}
+                    value={
+                      viewConfigSession.state === 'DONE'
+                        ? 'FASE 3: CONCILIADO'
+                        : viewConfigSession.state === 'REVIEW'
+                        ? 'FASE 2: ANÁLISIS & COTEJO'
+                        : 'FASE 1: CONTEO CIEGO'
+                    }
+                    className="font-bold text-[9px] px-2 py-0.5 mt-1"
+                  />
+                </div>
+
+                <div className="sm:col-span-2 bg-white p-3 rounded-xl border border-slate-200/80">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Jerarquía de Categoría Asociada
+                  </span>
+                  {viewConfigSession.category_full_path || viewConfigSession.category_name ? (
+                    <div>
+                      <span className="font-bold text-amber-900 text-xs">
+                        🏷️ {viewConfigSession.category_name || viewConfigSession.category_full_path?.split(' > ').pop()}
+                      </span>
+                      {viewConfigSession.category_full_path && (
+                        <div className="text-[11px] text-amber-700 font-mono mt-1 bg-amber-50/60 p-2 rounded-lg border border-amber-200/60">
+                          {viewConfigSession.category_full_path}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-slate-400 italic">Sin restricción categórica (Alcance General de Almacén)</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <Button
+                label="Cerrar Ficha"
+                outlined
+                severity="secondary"
+                className="font-bold text-xs"
+                onClick={() => setViewConfigDialogVisible(false)}
+              />
+              <Button
+                label="Gestionar Conteo"
+                icon="pi pi-sliders-h"
+                className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white"
+                onClick={() => {
+                  const sid = viewConfigSession.id;
+                  setViewConfigDialogVisible(false);
+                  handleOpenSessionDetail(sid);
+                }}
+              />
             </div>
           </div>
         )}

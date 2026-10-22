@@ -11,12 +11,24 @@ interface CostInfo {
   average_cost: number;
 }
 
+interface TaxInfo {
+  rate: number;
+  is_exempt: boolean;
+  name: string;
+}
+
 interface PriceInfo {
+  base_price_usd?: number;
+  base_price_ves?: number;
   regular_price_usd: number;
   regular_price_ves: number;
+  pvp_with_tax_usd?: number;
+  pvp_with_tax_ves?: number;
   has_promo: boolean;
   promo_price_usd: number | null;
   promo_price_ves: number | null;
+  promo_pvp_with_tax_usd?: number | null;
+  promo_pvp_with_tax_ves?: number | null;
   promo_ends_at: string | null;
 }
 
@@ -36,6 +48,48 @@ interface StockInfo {
   by_facility: StockFacility[];
 }
 
+interface FacilitySalesMetrics {
+  units_sold: number;
+  amount_usd: number;
+  amount_ves: number;
+  daily_avg_units: number;
+  daily_avg_usd: number;
+  tickets_count: number;
+  days_of_stock: number | null;
+}
+
+interface ChainSalesMetrics {
+  units_sold: number;
+  amount_usd: number;
+  amount_ves: number;
+  daily_avg_units: number;
+  daily_avg_usd: number;
+  tickets_count: number;
+}
+
+interface CategoryBenchmark {
+  category_id: number;
+  category_name: string;
+  category_total_usd: number;
+  category_total_units: number;
+  revenue_share_pct: number;
+  units_share_pct: number;
+  facility_revenue_share_pct: number;
+  facility_units_share_pct: number;
+  category_rank: number;
+  facility_category_rank: number;
+  category_total_skus: number;
+}
+
+interface SalesPerformanceInfo {
+  period_days: number;
+  facility_id: number;
+  facility_name: string;
+  facility_metrics: FacilitySalesMetrics;
+  chain_metrics: ChainSalesMetrics;
+  category_benchmark: CategoryBenchmark | null;
+}
+
 interface ProductDetails {
   variant_id: number;
   sku: string;
@@ -43,10 +97,12 @@ interface ProductDetails {
   name: string;
   brand: string;
   uom: string;
+  tax?: TaxInfo;
   costs: CostInfo;
   prices: PriceInfo;
   margins: MarginInfo;
   stock: StockInfo;
+  sales_performance?: SalesPerformanceInfo;
 }
 
 export default function KioskConsultorPage() {
@@ -358,14 +414,15 @@ export default function KioskConsultorPage() {
   };
 
   // Perform search query to backend
-  const searchProduct = async (code: string) => {
+  const searchProduct = async (code: string, facId?: number) => {
     if (!code.trim()) return;
     setSearching(true);
     setErrorMsg('');
     setScannedProduct(null);
 
+    const activeFacId = facId ?? selectedFacilityId;
     try {
-      const response = await api.get(`/products/by-code/${encodeURIComponent(code.trim())}?facility_id=${selectedFacilityId}`);
+      const response = await api.get(`/products/by-code/${encodeURIComponent(code.trim())}?facility_id=${activeFacId}`);
       const product = response.data;
       if (!product || typeof product !== 'object' || !product.sku || !product.prices) {
         setErrorMsg(`Producto con código "${code}" no encontrado.`);
@@ -405,9 +462,9 @@ export default function KioskConsultorPage() {
       console.error("localStorage access failed:", e);
     }
     
-    // If there is currently a scanned product, re-query it
+    // If there is currently a scanned product, re-query it immediately for the new facility
     if (scannedProduct) {
-      searchProduct(scannedProduct.barcode || scannedProduct.sku);
+      searchProduct(scannedProduct.barcode || scannedProduct.sku, facilityId);
     }
   };
 
@@ -437,15 +494,37 @@ export default function KioskConsultorPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased">
       {/* Dynamic Header */}
-      <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-xl border-b border-slate-800 px-4 py-3 shadow-md flex justify-between items-center">
-        <div className="flex items-center gap-3">
+      <header className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur-xl border-b border-slate-800 px-4 py-2.5 shadow-md flex justify-between items-center gap-2">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-rose-500 to-indigo-600 flex items-center justify-center shadow-md shadow-rose-950/20">
+            <i className="pi pi-qrcode text-white text-sm" />
+          </div>
           <div>
-            <h1 className="text-base font-extrabold tracking-tight bg-gradient-to-r from-rose-400 via-rose-500 to-indigo-500 bg-clip-text text-transparent">
+            <h1 className="text-sm font-black tracking-tight bg-gradient-to-r from-rose-400 via-rose-500 to-indigo-400 bg-clip-text text-transparent">
               Consultor Móvil
             </h1>
-            <p className="text-[10px] text-slate-400 font-medium">Neo PWA</p>
+            <p className="text-[10px] text-slate-400 font-semibold tracking-wider uppercase">Neo ERP</p>
           </div>
         </div>
+
+        {/* Tienda / Sede Selector */}
+        {facilities.length > 0 && (
+          <div className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700/80 rounded-xl px-2.5 py-1 shadow-inner focus-within:ring-2 focus-within:ring-rose-500/30">
+            <i className="pi pi-map-marker text-xs text-rose-400 shrink-0" />
+            <select
+              value={selectedFacilityId}
+              onChange={(e) => handleFacilityChange(Number(e.target.value))}
+              aria-label="Seleccionar Sede"
+              className="bg-transparent text-slate-100 text-xs font-bold outline-none cursor-pointer pr-1"
+            >
+              {facilities.map((f: any) => (
+                <option key={f.id} value={f.id} className="bg-slate-900 text-slate-200 py-1 font-medium">
+                  {f.name.replace('CATANIA ', '')}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </header>
 
       {/* Main Body */}
@@ -602,7 +681,20 @@ export default function KioskConsultorPage() {
                 </div>
               )}
               
-              <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block mb-3">Precio al Público</span>
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block">
+                  {scannedProduct.tax?.is_exempt ? 'Precio al Público (Exento)' : 'Precio al Público (Con IVA)'}
+                </span>
+                {scannedProduct.tax?.is_exempt ? (
+                  <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    Exento de IVA
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                    IVA {scannedProduct.tax?.rate ?? 16}% incluido
+                  </span>
+                )}
+              </div>
               
               <div className="flex flex-col gap-4">
                 {scannedProduct.prices?.has_promo ? (
@@ -610,20 +702,29 @@ export default function KioskConsultorPage() {
                     {/* Oferta Prices */}
                     <div>
                       <div className="flex items-baseline gap-1.5 text-amber-400">
-                        <span className="text-3xl font-black">${(scannedProduct.prices?.promo_price_usd ?? 0).toFixed(2)}</span>
+                        <span className="text-3xl font-black">
+                          ${(scannedProduct.prices?.promo_pvp_with_tax_usd ?? scannedProduct.prices?.promo_price_usd ?? 0).toFixed(2)}
+                        </span>
                         <span className="text-xs font-bold">USD</span>
                       </div>
                       <div className="text-sm font-bold text-amber-500/90 mt-0.5">
-                        Bs. {(scannedProduct.prices?.promo_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        Bs. {(scannedProduct.prices?.promo_pvp_with_tax_ves ?? scannedProduct.prices?.promo_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
+                      {!scannedProduct.tax?.is_exempt && (
+                        <div className="text-[11px] text-slate-400 mt-1.5 font-medium">
+                          Base imponible: ${(scannedProduct.prices?.promo_price_usd ?? 0).toFixed(2)} USD
+                        </div>
+                      )}
                     </div>
                     {/* Regular Price (Strikeout) */}
                     <div className="pt-2.5 border-t border-slate-800/60 flex items-center justify-between text-xs">
-                      <span className="text-slate-500 font-medium">Precio Regular:</span>
+                      <span className="text-slate-500 font-medium">Precio Regular (Con IVA):</span>
                       <div className="text-right text-slate-400">
-                        <span className="line-through font-bold">${(scannedProduct.prices?.regular_price_usd ?? 0).toFixed(2)} USD</span>
+                        <span className="line-through font-bold">
+                          ${(scannedProduct.prices?.pvp_with_tax_usd ?? scannedProduct.prices?.regular_price_usd ?? 0).toFixed(2)} USD
+                        </span>
                         <span className="block text-[10px] text-slate-500 line-through">
-                          Bs. {(scannedProduct.prices?.regular_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          Bs. {(scannedProduct.prices?.pvp_with_tax_ves ?? scannedProduct.prices?.regular_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
                     </div>
@@ -640,12 +741,24 @@ export default function KioskConsultorPage() {
                     {/* Regular Price */}
                     <div>
                       <div className="flex items-baseline gap-1.5 text-emerald-400">
-                        <span className="text-3xl font-black">${(scannedProduct.prices?.regular_price_usd ?? 0).toFixed(2)}</span>
+                        <span className="text-3xl font-black">
+                          ${(scannedProduct.prices?.pvp_with_tax_usd ?? scannedProduct.prices?.regular_price_usd ?? 0).toFixed(2)}
+                        </span>
                         <span className="text-xs font-bold">USD</span>
                       </div>
                       <div className="text-sm font-bold text-emerald-500/90 mt-0.5">
-                        Bs. {(scannedProduct.prices?.regular_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        Bs. {(scannedProduct.prices?.pvp_with_tax_ves ?? scannedProduct.prices?.regular_price_ves ?? 0).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
+                      {!scannedProduct.tax?.is_exempt ? (
+                        <div className="text-[11px] text-slate-400 mt-1.5 font-medium">
+                          Base imponible: ${(scannedProduct.prices?.regular_price_usd ?? 0).toFixed(2)} USD
+                          {scannedProduct.tax?.rate ? ` · IVA (${scannedProduct.tax.rate}%): $${((scannedProduct.prices?.pvp_with_tax_usd ?? 0) - (scannedProduct.prices?.regular_price_usd ?? 0)).toFixed(2)}` : ''}
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-emerald-400/80 mt-1.5 font-medium">
+                          Base imponible: ${(scannedProduct.prices?.regular_price_usd ?? 0).toFixed(2)} USD (Exento de IVA)
+                        </div>
+                      )}
                     </div>
                   </>
                 )}
@@ -688,6 +801,130 @@ export default function KioskConsultorPage() {
                 ))}
               </div>
             </div>
+
+            {/* ROTACIÓN Y DESEMPEÑO DE VENTAS (30 DÍAS) */}
+            {scannedProduct.sales_performance && (
+              <div className="p-5 rounded-3xl bg-slate-900/50 border border-slate-800/80 shadow-lg backdrop-blur-md relative overflow-hidden">
+                <div className="flex justify-between items-center mb-3.5">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-xs font-bold border border-emerald-500/20">
+                      <i className="pi pi-chart-line text-[11px]" />
+                    </span>
+                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">
+                      Rotación de Ventas (Últimos 30 Días)
+                    </span>
+                  </div>
+                  <span className="text-[9px] font-bold bg-slate-800/80 text-slate-300 border border-slate-700/60 px-2.5 py-0.5 rounded-full font-mono">
+                    Cadena: {scannedProduct.sales_performance.chain_metrics.units_sold.toLocaleString()} {scannedProduct.uom}
+                  </span>
+                </div>
+
+                {/* Subtitle with facility name */}
+                <div className="text-[11px] text-slate-400 mb-3 flex items-center gap-1.5 font-medium">
+                  <i className="pi pi-map-marker text-[10px] text-rose-400" />
+                  <span>En <strong className="text-white font-semibold">{scannedProduct.sales_performance.facility_name}</strong>:</span>
+                </div>
+
+                {/* KPI Grid */}
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  {/* Venta 30 Días */}
+                  <div className="bg-slate-950/60 border border-slate-850 p-3.5 rounded-2xl flex flex-col justify-between">
+                    <span className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">
+                      Venta Total 30 Días
+                    </span>
+                    <div>
+                      <div className="flex items-baseline gap-1 text-white">
+                        <strong className="text-xl font-black">
+                          {scannedProduct.sales_performance.facility_metrics.units_sold.toLocaleString()}
+                        </strong>
+                        <span className="text-[10px] text-slate-400 font-bold">{scannedProduct.uom}</span>
+                      </div>
+                      <div className="text-xs font-bold text-emerald-400 mt-0.5">
+                        ${scannedProduct.sales_performance.facility_metrics.amount_usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                      </div>
+                      <div className="text-[9px] text-slate-500 mt-0.5">
+                        Bs. {scannedProduct.sales_performance.facility_metrics.amount_ves.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                    <span className="text-[9px] text-slate-500 mt-2 block font-mono">
+                      {scannedProduct.sales_performance.facility_metrics.tickets_count} tickets
+                    </span>
+                  </div>
+
+                  {/* Venta Promedio Diaria */}
+                  <div className="bg-slate-950/60 border border-slate-850 p-3.5 rounded-2xl flex flex-col justify-between">
+                    <span className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">
+                      Venta Promedio Diaria
+                    </span>
+                    <div>
+                      <div className="flex items-baseline gap-1 text-white">
+                        <strong className="text-xl font-black text-indigo-400">
+                          {scannedProduct.sales_performance.facility_metrics.daily_avg_units}
+                        </strong>
+                        <span className="text-[10px] text-slate-400 font-bold">{scannedProduct.uom}/día</span>
+                      </div>
+                      <div className="text-xs font-bold text-slate-300 mt-0.5">
+                        ${scannedProduct.sales_performance.facility_metrics.daily_avg_usd.toFixed(2)} USD/día
+                      </div>
+                    </div>
+                    {/* Cobertura de Stock */}
+                    {scannedProduct.sales_performance.facility_metrics.days_of_stock !== null && (
+                      <div className="mt-2 pt-2 border-t border-slate-900 flex items-center justify-between text-[10px]">
+                        <span className="text-slate-500">Cobertura:</span>
+                        <span className={`font-black px-1.5 py-0.5 rounded-md ${
+                          scannedProduct.sales_performance.facility_metrics.days_of_stock > 10
+                            ? 'text-emerald-400 bg-emerald-950/40'
+                            : scannedProduct.sales_performance.facility_metrics.days_of_stock > 3
+                              ? 'text-amber-400 bg-amber-950/40'
+                              : 'text-rose-400 bg-rose-950/40'
+                        }`}>
+                          {scannedProduct.sales_performance.facility_metrics.days_of_stock} días
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* PARTICIPACIÓN EN SU CATEGORÍA */}
+                {scannedProduct.sales_performance.category_benchmark && (
+                  <div className="p-3.5 rounded-2xl bg-slate-950/50 border border-slate-850/80">
+                    <div className="flex justify-between items-center mb-2">
+                      <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                        <i className="pi pi-tag text-xs text-rose-400 flex-shrink-0" />
+                        <span className="text-[10px] font-bold text-slate-300 truncate">
+                          {scannedProduct.sales_performance.category_benchmark.category_name}
+                        </span>
+                      </div>
+                      {scannedProduct.sales_performance.category_benchmark.category_rank > 0 && (
+                        <span className="text-[9px] font-extrabold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-full flex-shrink-0">
+                          Puesto #{scannedProduct.sales_performance.category_benchmark.category_rank} de {scannedProduct.sales_performance.category_benchmark.category_total_skus}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex justify-between items-baseline mb-1.5 text-xs">
+                      <span className="text-slate-400 text-[11px]">Participación en Categoría:</span>
+                      <strong className="text-sm font-black text-emerald-400">
+                        {scannedProduct.sales_performance.category_benchmark.revenue_share_pct}%
+                      </strong>
+                    </div>
+
+                    {/* Progress Bar */}
+                    <div className="w-full bg-slate-900 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-800">
+                      <div
+                        className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-500"
+                        style={{ width: `${Math.min(Math.max(scannedProduct.sales_performance.category_benchmark.revenue_share_pct, 1), 100)}%` }}
+                      />
+                    </div>
+
+                    <div className="flex justify-between items-center text-[9px] text-slate-500 mt-1.5 font-mono">
+                      <span>Total Categoría Cadena: ${scannedProduct.sales_performance.category_benchmark.category_total_usd.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} USD</span>
+                      <span>{scannedProduct.sales_performance.category_benchmark.units_share_pct}% en volumen</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* COSTOS Y MARGENES (CONDITIONAL ROLE ROLE_GERENCIA) */}
             {showCosts && (

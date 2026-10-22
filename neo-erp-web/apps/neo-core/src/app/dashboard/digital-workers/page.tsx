@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
+import { resolveDomain } from "@/lib/domain";
 import {
   getDigitalWorkers,
   getDigitalSkills,
@@ -278,7 +279,11 @@ export default function DigitalWorkersPage() {
     setLiveBotInfo(null);
     setLoadingConfig(true);
 
-    const defaultWebhook = `https://api.qa.morpheussoft.net/api/v1/telegram/${worker.agent_code.toLowerCase()}/webhook`;
+    const domainConfig = resolveDomain();
+    const apiBase = domainConfig.env === 'development'
+      ? 'http://127.0.0.1:8000'
+      : (domainConfig.env === 'catania' ? 'https://api.grupocatania.com' : (domainConfig.env === 'qa' ? 'https://api.qa.morpheussoft.net' : 'https://api.morpheussoft.net'));
+    const defaultWebhook = `${apiBase}/api/v1/telegram/${worker.agent_code.toLowerCase()}/webhook`;
     setConfigCustomWebhookUrl(defaultWebhook);
 
     try {

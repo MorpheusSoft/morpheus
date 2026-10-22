@@ -1,5 +1,7 @@
 import Link from "next/link"
+import { headers } from "next/headers"
 import { getCoreStats } from "@/app/actions/dashboard"
+import { resolveDomain } from "@/lib/domain"
 
 export const dynamic = "force-dynamic"
 
@@ -8,6 +10,9 @@ export const metadata = {
 }
 
 export default async function DashboardPage() {
+  const headerList = await headers()
+  const host = headerList.get("x-forwarded-host") || headerList.get("host") || ""
+  const domainConfig = resolveDomain(host)
   const data = await getCoreStats()
 
   // Valores reales desde backend con fallback seguro
@@ -70,13 +75,18 @@ export default async function DashboardPage() {
     },
   ]
 
+  const apiBase = domainConfig.env === 'development'
+    ? 'http://127.0.0.1:8000'
+    : (domainConfig.env === 'catania' ? 'https://api.grupocatania.com' : (domainConfig.env === 'qa' ? 'https://api.qa.morpheussoft.net' : 'https://api.morpheussoft.net'))
+
   const nodes = [
-    { name: "Neo Core", active: true, port: 4000, desc: "Hub central y seguridad", url: "https://hub.qa.morpheussoft.net" },
-    { name: "Neo Inventory", active: true, port: 4001, desc: "Catálogo y existencias", url: "https://inventario.qa.morpheussoft.net" },
-    { name: "Neo Purchases", active: true, port: 4002, desc: "Órdenes y proveedores", url: "https://compras.qa.morpheussoft.net" },
-    { name: "Neo WMS", active: true, port: 4003, desc: "Almacén y transferencias", url: "https://logistica.qa.morpheussoft.net" },
-    { name: "Neo Pricing", active: true, port: 4004, desc: "Costos y márgenes", url: "https://costos.qa.morpheussoft.net" },
-    { name: "Neo API", active: true, port: 8000, desc: "Motor FastAPI", url: "https://api.qa.morpheussoft.net" },
+    { name: "Neo Core", active: true, port: 4000, desc: "Hub central y seguridad", url: domainConfig.hubUrl },
+    { name: "Neo Inventory", active: true, port: 4001, desc: "Catálogo y existencias", url: domainConfig.apps.inventory },
+    { name: "Neo Purchases", active: true, port: 4002, desc: "Órdenes y proveedores", url: domainConfig.apps.purchases },
+    { name: "Neo WMS", active: true, port: 4003, desc: "Almacén y transferencias", url: domainConfig.apps.wms },
+    { name: "Neo Pricing", active: true, port: 4004, desc: "Costos y márgenes", url: domainConfig.apps.pricing },
+    { name: "Neo Producción", active: true, port: 4007, desc: "Recetas y desposte", url: domainConfig.apps.production },
+    { name: "Neo API", active: true, port: 8000, desc: "Motor FastAPI", url: apiBase },
     { name: "Neo B2B", active: false, port: 4005, desc: "Portal mayorista (Standby)", url: null },
     { name: "Neo POS", active: false, port: 4006, desc: "Punto de venta (Próximamente)", url: null },
   ]

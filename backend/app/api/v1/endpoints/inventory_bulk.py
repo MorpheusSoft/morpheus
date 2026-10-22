@@ -65,8 +65,12 @@ def upload_inventory_bulk(
                 code="VIRTUAL-LOSS",
                 usage="EXTERNAL",
                 location_type="LOSS",
-                warehouse_id=1 # Assuming default WH=1
+                warehouse_id=None
             )
+            db.add(loc_loss)
+            db.flush()
+        elif loc_loss.warehouse_id is not None:
+            loc_loss.warehouse_id = None
             db.add(loc_loss)
             db.flush()
         

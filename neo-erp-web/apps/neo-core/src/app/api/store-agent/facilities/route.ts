@@ -1,10 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getInternalApiUrl } from "@/lib/domain";
 
-const API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api/v1";
-
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const res = await fetch(`${API_URL}/store-agent/facilities`, {
+    const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "";
+    const apiUrl = getInternalApiUrl(host);
+    const res = await fetch(`${apiUrl}/store-agent/facilities`, {
       cache: "no-store",
       headers: {
         "Content-Type": "application/json",

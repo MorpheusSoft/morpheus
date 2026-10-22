@@ -178,9 +178,9 @@ export default function ProductConsultationPage() {
 
   // Helper calculation for VAT (IVA)
   const getTaxRate = (product: any) => {
-    // Morpheus tax is on the product. We can deduce it or check tax_id
-    // For simplicity, if standard VAT is 16%, we show that.
-    // If we have tribute options, we can lookup
+    if (product?.tax_rate !== undefined && product?.tax_rate !== null) {
+      return Number(product.tax_rate);
+    }
     return 16.0; // default 16%
   };
 
@@ -303,7 +303,7 @@ export default function ProductConsultationPage() {
                 const firstVar = r.variants?.[0];
                 return <span className="font-mono font-bold text-slate-700">{firstVar?.sku || r.sku || 'N/A'}</span>;
               }}
-              className="w-[15%]"
+              className="w-[13%]"
             ></Column>
             <Column
               field="name"
@@ -314,7 +314,7 @@ export default function ProductConsultationPage() {
                   <div className="text-xs text-slate-400 mt-0.5">{categoryOptions.find(c => c.id === r.category_id)?.name || 'Sin Categoría'}</div>
                 </div>
               )}
-              className="w-[45%]"
+              className="w-[35%]"
             ></Column>
             <Column
               field="standard_cost"
@@ -324,17 +324,37 @@ export default function ProductConsultationPage() {
                 const cost = firstVar?.standard_cost || r.standard_cost || 0;
                 return <span className="font-medium text-slate-600">${Number(cost).toFixed(2)}</span>;
               }}
-              className="w-[12%]"
+              className="w-[11%]"
             ></Column>
             <Column
               field="sales_price"
-              header="PVP BASE"
+              header="PVP BASE (SIN IVA)"
               body={(r) => {
                 const firstVar = r.variants?.[0];
                 const price = firstVar?.sales_price || r.sales_price || 0;
-                return <span className="font-bold text-emerald-600">${Number(price).toFixed(2)}</span>;
+                return <span className="font-medium text-slate-700">${Number(price).toFixed(2)}</span>;
               }}
-              className="w-[12%]"
+              className="w-[13%]"
+            ></Column>
+            <Column
+              header="PVP (CON IVA)"
+              body={(r) => {
+                const firstVar = r.variants?.[0];
+                const price = Number(firstVar?.sales_price || r.sales_price || 0);
+                const taxRate = getTaxRate(r);
+                const pvpConIva = price * (1.0 + (taxRate / 100.0));
+                return (
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-emerald-600">${pvpConIva.toFixed(2)}</span>
+                    {taxRate === 0 ? (
+                      <span className="text-[9px] bg-slate-100 text-slate-500 px-1 py-0.5 rounded font-bold">Exento</span>
+                    ) : (
+                      <span className="text-[9px] text-slate-400 font-medium">({taxRate}%)</span>
+                    )}
+                  </div>
+                );
+              }}
+              className="w-[14%]"
             ></Column>
             <Column
               field="total_stock"
@@ -363,7 +383,7 @@ export default function ProductConsultationPage() {
                   onClick={() => handleViewProduct(r)}
                 />
               )}
-              className="w-[8%] text-center"
+              className="w-[6%] text-center"
               align="center"
             ></Column>
           </DataTable>

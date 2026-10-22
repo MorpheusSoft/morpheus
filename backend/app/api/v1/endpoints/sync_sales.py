@@ -77,6 +77,15 @@ def import_sales_batch(
         if v[0] and v[0].strip() not in variant_map:
             variant_map[v[0].strip()] = v[1]
 
+    # Expandir con candidatos normalizados (UPC-A <-> EAN-13, ceros a la izquierda)
+    from app.core.barcode import get_barcode_candidates
+    expanded_map = {}
+    for code_k, v_id in variant_map.items():
+        for cand in get_barcode_candidates(code_k):
+            if cand not in variant_map and cand not in expanded_map:
+                expanded_map[cand] = v_id
+    variant_map.update(expanded_map)
+
     # Categoría comodín para auto-creados
     default_cat = session.query(Category).first()
     default_cat_id = default_cat.id if default_cat else None
@@ -354,10 +363,8 @@ def import_sales_batch(
                 if affects_inv and loc_src_id:
                     cust_loc = session.query(Location).filter(Location.code == 'CUSTOMER').first()
                     if not cust_loc:
-                        src_loc = session.query(Location).filter(Location.id == loc_src_id).first()
-                        src_wh_id = src_loc.warehouse_id if src_loc else 1
                         cust_loc = Location(
-                            warehouse_id=src_wh_id,
+                            warehouse_id=None,
                             name="Ubicación Clientes / Consumo",
                             code="CUSTOMER",
                             usage="EXTERNAL",
@@ -365,7 +372,19 @@ def import_sales_batch(
                         )
                         session.add(cust_loc)
                         session.flush()
-                    loc_dest_id = cust_loc.id
+                    elif cust_loc.warehouse_id is not None:
+                        cust_loc.warehouse_id = None
+                        session.add(cust_loc)
+                        session.flush()
+
+                    if qty < 0:
+                        # Devolución / anulación de renglón: reingreso de mercancía al almacén
+                        m_src = cust_loc.id
+                        m_dest = loc_src_id
+                    else:
+                        # Venta POS regular: salida de mercancía hacia el cliente
+                        m_src = loc_src_id
+                        m_dest = cust_loc.id
 
                     move = StockMove(
                         picking_id=picking.id,
@@ -373,10 +392,12 @@ def import_sales_batch(
                         quantity_demand=abs(qty),
                         quantity_done=abs(qty),
                         uom_id='UND',
-                        location_src_id=loc_src_id,
-                        location_dest_id=loc_dest_id,
+                        location_src_id=m_src,
+                        location_dest_id=m_dest,
                         state='DONE',
-                        reference=f"POS Sale C{reg_code}-{doc_num}"
+                        reference=f"POS Sale C{reg_code}-{doc_num}",
+                        date=doc_date,
+                        unit_cost=price
                     )
                     session.add(move)
 

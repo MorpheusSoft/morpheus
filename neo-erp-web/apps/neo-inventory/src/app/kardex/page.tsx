@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
+import * as XLSX from 'xlsx';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { Button } from 'primereact/button';
@@ -173,35 +174,133 @@ export default function KardexPage() {
     }).format(Math.round(num * 1000) / 1000);
   };
 
-  const exportProductCSV = (result: any) => {
-    const rows: string[] = [
-      "SUCURSAL,ALMACEN,FECHA,DOCUMENTO,TIPO,DETALLE_MOVIMIENTO,ENTRADAS,SALIDAS,SALDO,UNIDAD,COSTO"
+  const buildProductWorksheetData = (result: any) => {
+    const worksheetData: any[][] = [
+      ["NEO ERP - REPORTE DE KARDEX DE INVENTARIO"],
+      [`Producto: [${result.sku}] ${result.product_name}`],
+      [
+        `Unidad de Medida: ${result.uom || 'UND'}`,
+        `Período: ${startDate || 'Apertura'} hasta ${endDate || 'Actualidad'}`,
+        `Emisión: ${new Date().toLocaleString('es-VE')}`
+      ],
+      [
+        `Saldo Inicial: ${result.total_initial_balance ?? 0} ${result.uom || 'UND'}`,
+        `Total Entradas: +${result.total_in ?? 0} ${result.uom || 'UND'}`,
+        `Total Salidas: -${result.total_out ?? 0} ${result.uom || 'UND'}`,
+        `Saldo Final: ${result.total_final_balance ?? 0} ${result.uom || 'UND'}`
+      ],
+      [],
+      [
+        "SUCURSAL",
+        "ALMACÉN",
+        "FECHA",
+        "DOCUMENTO",
+        "TIPO",
+        "DETALLE / MOVIMIENTO",
+        "UBICACIÓN",
+        "ENTRADAS",
+        "SALIDAS",
+        "SALDO",
+        "UNIDAD",
+        "COSTO UNIT. ($)"
+      ]
     ];
+
+    const pushMove = (facName: string, whName: string, h: any) => {
+      worksheetData.push([
+        facName || "",
+        whName || "",
+        h.date || "",
+        h.reference || "",
+        h.type || "",
+        h.flow_display || "",
+        h.dest_location || h.src_location || "",
+        Number(h.qty_in || 0),
+        Number(h.qty_out || 0),
+        Number(h.balance || 0),
+        result.uom || "UND",
+        Number(h.cost || 0)
+      ]);
+    };
+
     if (result.facilities && result.facilities.length > 0) {
       result.facilities.forEach((fac: any) => {
-        fac.warehouses.forEach((wh: any) => {
-          wh.history.forEach((h: any) => {
-            rows.push(
-              `"${fac.facility_name}","${wh.warehouse_name}","${h.date}","${h.reference}","${h.type}","${h.flow_display || ''}",${h.qty_in},${h.qty_out},${h.balance},"${result.uom || 'UND'}",${h.cost}`
-            );
+        fac.warehouses?.forEach((wh: any) => {
+          wh.history?.forEach((h: any) => {
+            pushMove(fac.facility_name, wh.warehouse_name, h);
           });
         });
       });
     } else if (result.history) {
       result.history.forEach((h: any) => {
-        rows.push(
-          `"${h.facility_name || ''}","${h.src_warehouse || h.dest_warehouse || ''}","${h.date}","${h.reference}","${h.type}","${h.flow_display || ''}",${h.qty_in},${h.qty_out},${h.balance},"${result.uom || 'UND'}",${h.cost}`
-        );
+        pushMove(h.facility_name || "", h.src_warehouse || h.dest_warehouse || "", h);
       });
     }
-    const csvContent = "data:text/csv;charset=utf-8," + rows.join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `kardex_${result.sku}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+
+    return worksheetData;
+  };
+
+  const exportProductExcel = (result: any) => {
+    const worksheetData = buildProductWorksheetData(result);
+    const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+
+    // Ajuste de anchos de columnas
+    worksheet['!cols'] = [
+      { wch: 25 }, // SUCURSAL
+      { wch: 32 }, // ALMACEN
+      { wch: 22 }, // FECHA
+      { wch: 38 }, // DOCUMENTO
+      { wch: 20 }, // TIPO
+      { wch: 30 }, // DETALLE
+      { wch: 22 }, // UBICACION
+      { wch: 14 }, // ENTRADAS
+      { wch: 14 }, // SALIDAS
+      { wch: 14 }, // SALDO
+      { wch: 10 }, // UNIDAD
+      { wch: 16 }  // COSTO
+    ];
+
+    const totalRows = worksheetData.length;
+    if (totalRows >= 6) {
+      worksheet['!autofilter'] = { ref: `A6:L${totalRows}` };
+    }
+
+    const workbook = XLSX.utils.book_new();
+    const sheetName = (result.sku || 'Kardex').replace(/[:\/\\?*\[\]]/g, '').slice(0, 31);
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+
+    const safeSku = (result.sku || 'producto').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `Kardex_${safeSku}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
+  };
+
+  const exportAllProductsExcel = () => {
+    if (!kardexResults || kardexResults.length === 0) return;
+    const workbook = XLSX.utils.book_new();
+
+    kardexResults.forEach((result: any, idx: number) => {
+      const worksheetData = buildProductWorksheetData(result);
+      const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+      worksheet['!cols'] = [
+        { wch: 25 }, { wch: 32 }, { wch: 22 }, { wch: 38 }, { wch: 20 },
+        { wch: 30 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+        { wch: 10 }, { wch: 16 }
+      ];
+
+      const totalRows = worksheetData.length;
+      if (totalRows >= 6) {
+        worksheet['!autofilter'] = { ref: `A6:L${totalRows}` };
+      }
+
+      let sheetName = (result.sku || `Prod_${idx + 1}`).replace(/[:\/\\?*\[\]]/g, '').slice(0, 31);
+      if (workbook.SheetNames.includes(sheetName)) {
+        sheetName = `${sheetName.slice(0, 27)}_${idx + 1}`;
+      }
+      XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+    });
+
+    const fileName = `Kardex_Consolidado_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
   };
 
   const flowLocationTemplate = (rowData: any) => {
@@ -262,6 +361,17 @@ export default function KardexPage() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <Button icon="pi pi-filter-slash" rounded text severity="secondary" onClick={clearFilters} tooltip="Limpiar Filtros" />
+            {kardexResults.length > 1 && (
+              <Button
+                icon="pi pi-file-excel"
+                label="Exportar Todos a Excel (.xlsx)"
+                rounded
+                severity="success"
+                size="small"
+                className="font-bold text-xs bg-emerald-600 border-emerald-600 hover:bg-emerald-700 shadow-sm"
+                onClick={exportAllProductsExcel}
+              />
+            )}
             <Button icon="pi pi-search" label="Generar Kardex" rounded severity="info" onClick={loadKardex} loading={loading} disabled={selectedProducts.length === 0} />
           </div>
         </div>
@@ -401,11 +511,12 @@ export default function KardexPage() {
                     
                     <Button
                       icon="pi pi-file-excel"
-                      label="Exportar CSV"
+                      label="Exportar Excel"
                       severity="success"
                       size="small"
                       rounded
-                      onClick={() => exportProductCSV(result)}
+                      className="font-bold text-xs bg-emerald-600 border-emerald-600 hover:bg-emerald-700 shadow-sm"
+                      onClick={() => exportProductExcel(result)}
                     />
                   </div>
 

@@ -29,6 +29,8 @@ class LegacyProduct(BaseModel):
     c_Codigo: str
     c_Descri: str
     c_Departamento: Optional[str] = None
+    c_Grupo: Optional[str] = None
+    c_Subgrupo: Optional[str] = None
     n_CostoAct: Optional[float] = 0.0
     n_CostoRep: Optional[float] = 0.0
     n_precio1: Optional[float] = 0.0
@@ -83,17 +85,82 @@ def import_products_legacy(
         if rate == 0: return 1 
         return None
         
-    # 2. Categorías 
-    cat_cache = {}
+    # 2. Categorías Jerárquicas (3 Niveles: Subgrupo -> Grupo -> Departamento)
+    sub_map = {}
+    grp_map = {}
+    dep_map = {}
     for cat in session.query(Category).all():
-        if cat.slug:
-            part = cat.slug.split('-')[-1]
-            cat_cache[part] = cat.id
-            clean_p = part.lstrip('0')
-            if clean_p:
-                cat_cache[clean_p] = cat.id
-                cat_cache[clean_p.zfill(2)] = cat.id
-                cat_cache[clean_p.zfill(3)] = cat.id
+        if not cat.slug:
+            continue
+        slug = cat.slug.strip()
+        parts = slug.split('-')
+        if slug.startswith("sub-") and len(parts) >= 3:
+            g_code = parts[1]
+            s_code = parts[2]
+            clean_g = g_code.lstrip('0') or '0'
+            clean_s = s_code.lstrip('0') or '0'
+            sub_map[(g_code, s_code)] = cat.id
+            sub_map[(clean_g, clean_s)] = cat.id
+            sub_map[(g_code, clean_s)] = cat.id
+            sub_map[(clean_g, s_code)] = cat.id
+            if s_code not in sub_map:
+                sub_map[s_code] = cat.id
+            elif isinstance(sub_map.get(s_code), int) and sub_map[s_code] != cat.id:
+                sub_map[s_code] = None
+        elif slug.startswith("grp-") and len(parts) >= 3:
+            d_code = parts[1]
+            g_code = parts[2]
+            clean_d = d_code.lstrip('0') or '0'
+            clean_g = g_code.lstrip('0') or '0'
+            grp_map[(d_code, g_code)] = cat.id
+            grp_map[(clean_d, clean_g)] = cat.id
+            grp_map[(d_code, clean_g)] = cat.id
+            grp_map[(clean_d, g_code)] = cat.id
+            if g_code not in grp_map:
+                grp_map[g_code] = cat.id
+            elif isinstance(grp_map.get(g_code), int) and grp_map[g_code] != cat.id:
+                grp_map[g_code] = None
+        elif slug.startswith("dep-") and len(parts) >= 2:
+            d_code = parts[1]
+            clean_d = d_code.lstrip('0') or '0'
+            dep_map[d_code] = cat.id
+            dep_map[clean_d] = cat.id
+            dep_map[clean_d.zfill(2)] = cat.id
+
+    def resolve_category(dep_val: Optional[str], grp_val: Optional[str], sub_val: Optional[str]) -> Optional[int]:
+        d = str(dep_val).strip() if dep_val is not None else ""
+        g = str(grp_val).strip() if grp_val is not None else ""
+        s = str(sub_val).strip() if sub_val is not None else ""
+        clean_d = d.lstrip('0') or '0' if d else ""
+        clean_g = g.lstrip('0') or '0' if g else ""
+        clean_s = s.lstrip('0') or '0' if s else ""
+
+        # 1. Prioridad: Subgrupo
+        if s and s not in ('0', 'NULL', 'None', ''):
+            if g and g not in ('0', 'NULL', 'None', ''):
+                cat = (sub_map.get((g, s)) or sub_map.get((clean_g, clean_s)) or
+                       sub_map.get((g, clean_s)) or sub_map.get((clean_g, s)))
+                if cat: return cat
+            single = sub_map.get(s) or sub_map.get(clean_s)
+            if single and isinstance(single, int):
+                return single
+
+        # 2. Prioridad: Grupo
+        if g and g not in ('0', 'NULL', 'None', ''):
+            if d and d not in ('0', 'NULL', 'None', ''):
+                cat = (grp_map.get((d, g)) or grp_map.get((clean_d, clean_g)) or
+                       grp_map.get((d, clean_g)) or grp_map.get((clean_d, g)))
+                if cat: return cat
+            single = grp_map.get(g) or grp_map.get(clean_g)
+            if single and isinstance(single, int):
+                return single
+
+        # 3. Prioridad: Departamento
+        if d and d not in ('0', 'NULL', 'None', ''):
+            cat = dep_map.get(d) or dep_map.get(clean_d) or dep_map.get(clean_d.zfill(2))
+            if cat: return cat
+
+        return None
             
     # Cache existing variants based on STELLAR_CODE to speed up lookups
     stellar_barcodes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
@@ -112,8 +179,6 @@ def import_products_legacy(
         uom_base = 'KG' if tipopeso in (1, 2) else 'UND'
         
         name = p.c_Descri.strip()
-        cat_code = str(p.c_Departamento).strip() if p.c_Departamento else ""
-        
         raw_cost = p.n_CostoAct if (p.n_CostoAct is not None and p.n_CostoAct > 0) else (p.n_CostoRep or 0.0)
         cost = Decimal(str(raw_cost or 0.0))
         price = Decimal(str(p.n_precio1 or 0.0))
@@ -126,18 +191,18 @@ def import_products_legacy(
         if img and img.upper() == "NULL": img = None
         
         curr_id = currencies.get(currency_code, default_currency_id)
-        cat_id = cat_cache.get(cat_code) or cat_cache.get(cat_code.lstrip('0')) or cat_cache.get(cat_code.zfill(3))
+        cat_id = resolve_category(p.c_Departamento, p.c_Grupo, p.c_Subgrupo)
         tax_id = get_tax_id(tax_rate)
         
-        # Calculate Utility Pct (MarkUp)
+        # Calculate Utility Pct (Margen sobre Ventas)
         margin_pct = Decimal(0)
-        if cost > 0:
-            margin_pct = ((price - cost) / cost) * Decimal(100)
+        if price > 0 and cost > 0:
+            margin_pct = ((price - cost) / price) * Decimal(100)
         elif price > 0:
             margin_pct = Decimal(100)
         
-        # Evitar desbordamiento en Numeric(5,2) (Max 999.99)
-        margin_pct = min(round(margin_pct, 2), Decimal('999.99'))
+        # Evitar desbordamiento en Numeric(5,2) (Rango -999.99 a 999.99)
+        margin_pct = max(Decimal('-999.99'), min(Decimal('999.99'), round(margin_pct, 2)))
             
         existing_variant = variant_map.get(legacy_stellar_code)
         
@@ -145,7 +210,8 @@ def import_products_legacy(
             # UPSERT: Update existing product and variant
             existing_product = existing_variant.product
             existing_product.name = name
-            existing_product.category_id = cat_id
+            if cat_id:
+                existing_product.category_id = cat_id
             existing_product.tax_id = tax_id
             existing_product.brand = brand
             existing_product.currency_id = curr_id
@@ -793,12 +859,15 @@ def import_supplier_products_legacy(
     
     for sp in supplier_products_in:
         stellar_code = sp.c_Codigo.strip()
-        sup_code = sp.c_CodProveedor.strip()
+        sup_code = sp.c_CodProveedor.strip() if sp.c_CodProveedor else ""
+        if not sup_code:
+            continue
         
         var_info = variant_map.get(stellar_code)
         if not var_info:
             not_found += 1
-            print(f"  [WARN] Variante no encontrada para STELLAR_CODE={stellar_code}. Saltando proveedor {sup_code}.")
+            if not_found <= 5 or not_found % 500 == 0:
+                print(f"  [WARN] Variante no encontrada para STELLAR_CODE={stellar_code}. Saltando proveedor {sup_code} (Total no encontradas: {not_found}).")
             continue
             
         variant_id, product_id = var_info
@@ -809,17 +878,32 @@ def import_supplier_products_legacy(
             supplier_id = supplier_name_map.get(sup_code)
             
         if not supplier_id:
-            # Create dummy supplier since it doesn't exist
-            new_sup = Supplier(
-                name=sup_code,
-                tax_id=sup_code,
-                lead_time_days=3, # Default
-                is_active=True
-            )
-            session.add(new_sup)
-            session.flush()
-            supplier_id = new_sup.id
-            supplier_map[sup_code] = supplier_id
+            # Check DB directly in case it exists with different casing
+            existing_sup = session.query(Supplier).filter((Supplier.tax_id == sup_code) | (Supplier.name == sup_code)).first()
+            if existing_sup:
+                supplier_id = existing_sup.id
+                supplier_map[sup_code] = supplier_id
+            else:
+                # Create dummy supplier safely
+                try:
+                    new_sup = Supplier(
+                        name=sup_code,
+                        tax_id=sup_code,
+                        lead_time_days=3,
+                        is_active=True
+                    )
+                    session.add(new_sup)
+                    session.flush()
+                    supplier_id = new_sup.id
+                    supplier_map[sup_code] = supplier_id
+                except Exception:
+                    session.rollback()
+                    existing_sup = session.query(Supplier).filter((Supplier.tax_id == sup_code) | (Supplier.name == sup_code)).first()
+                    if existing_sup:
+                        supplier_id = existing_sup.id
+                        supplier_map[sup_code] = supplier_id
+                    else:
+                        continue
             
         # Get or create pack
         pack_name = sp.empaque.strip().upper()

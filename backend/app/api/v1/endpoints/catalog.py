@@ -44,25 +44,71 @@ def create_category(
     db.refresh(db_obj)
     return db_obj
 
+def build_category_metadata_map(db: Session):
+    """
+    Builds a lookup map for all categories containing:
+    - full_path: e.g. "CIGARROS > CIGARROS/CHIMO/ENCENDEDORES > CIGARROS"
+    - level: 0, 1, 2...
+    - level_name: "Departamento", "Grupo", "Subgrupo"
+    """
+    cats = db.query(Category.id, Category.name, Category.parent_id).all()
+    cat_map = {c.id: c for c in cats}
+    level_names = {0: "Departamento", 1: "Grupo", 2: "Subgrupo"}
+    metadata = {}
+    for c in cats:
+        chain = []
+        curr = c
+        visited = set()
+        while curr and curr.id not in visited:
+            visited.add(curr.id)
+            chain.append(curr.name)
+            curr = cat_map.get(curr.parent_id) if curr.parent_id else None
+        
+        level = len(chain) - 1
+        full_path = " > ".join(reversed(chain))
+        metadata[c.id] = {
+            "full_path": full_path,
+            "level": level,
+            "level_name": level_names.get(level, f"Nivel {level + 1}")
+        }
+    return metadata
+
 @router.get("/categories", response_model=List[schemas.Category])
 def read_categories(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 1000,
 ) -> Any:
     """
-    Retrieve categories.
+    Retrieve categories with hierarchical metadata (full_path, level_name, level)
+    ordered hierarchically and alphabetically.
     """
-    return db.query(Category).offset(skip).limit(limit).all()
+    metadata = build_category_metadata_map(db)
+    categories = db.query(Category).all()
+    for cat in categories:
+        meta = metadata.get(cat.id, {})
+        cat.full_path = meta.get("full_path", cat.name)
+        cat.level_name = meta.get("level_name")
+        cat.level = meta.get("level")
+    categories.sort(key=lambda c: (c.full_path or c.name or "").lower())
+    return categories[skip : skip + limit]
 
 @router.get("/categories/tree", response_model=List[schemas.CategoryTree])
 def read_categories_tree(
     db: Session = Depends(deps.get_db),
 ) -> Any:
     """
-    Retrieve categories as a nested tree hierarchy ordered alphabetically.
+    Retrieve categories as a nested tree hierarchy ordered alphabetically,
+    annotated with hierarchical breadcrumbs (full_path, level_name, level).
     """
+    metadata = build_category_metadata_map(db)
     categories_db = db.query(Category).order_by(Category.name.asc()).all()
+    for cat in categories_db:
+        meta = metadata.get(cat.id, {})
+        cat.full_path = meta.get("full_path", cat.name)
+        cat.level_name = meta.get("level_name")
+        cat.level = meta.get("level")
+
     categories_dict = {cat.id: schemas.CategoryTree.model_validate(cat) for cat in categories_db}
     
     tree = []
@@ -85,11 +131,16 @@ def read_category(
     category_id: int,
 ) -> Any:
     """
-    Get category by ID.
+    Get category by ID with hierarchical metadata.
     """
     category = db.query(Category).get(category_id)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
+    metadata = build_category_metadata_map(db)
+    meta = metadata.get(category.id, {})
+    category.full_path = meta.get("full_path", category.name)
+    category.level_name = meta.get("level_name")
+    category.level = meta.get("level")
     return category
 
 @router.put("/categories/{category_id}", response_model=schemas.Category)

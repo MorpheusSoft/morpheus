@@ -1,7 +1,7 @@
 import axios from 'axios';
+import { clearAuthCookies, getLoginUrl, getPublicApiUrl, getInternalApiUrl } from './domain';
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api/v1',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -9,9 +9,12 @@ const api = axios.create({
 
 api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
+    if (!config.baseURL || config.baseURL.includes('127.0.0.1:8000') || config.baseURL.includes('localhost:8000')) {
+      config.baseURL = getPublicApiUrl(window.location.host);
+    }
     let token = null;
     
-    // 1. Prioridad: Cookie
+    // 1. Prioridad: Cookie (Mantenida por Next.js y sincronizada en subdominios)
     const match = document.cookie.match(/(?:^|;\s*)access_token=([^;]*)/);
     if (match && match[1]) {
       token = match[1];
@@ -23,6 +26,10 @@ api.interceptors.request.use((config) => {
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+  } else {
+    if (!config.baseURL) {
+      config.baseURL = getInternalApiUrl();
+    }
   }
   return config;
 });
@@ -33,14 +40,9 @@ api.interceptors.response.use(
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {
       if (typeof window !== 'undefined') {
         localStorage.removeItem('token');
-        const isProd = window.location.hostname.includes('.morpheussoft.net');
-        const domain = isProd ? 'domain=.morpheussoft.net;' : '';
-        document.cookie = `access_token=; Max-Age=0; path=/; ${domain}`;
-        
-        const loginUrl = isProd 
-          ? 'https://hub.qa.morpheussoft.net/login' 
-          : 'http://localhost:4000/login';
-          
+        clearAuthCookies();
+        const currentUrl = window.location.href;
+        const loginUrl = getLoginUrl(currentUrl);
         window.location.href = loginUrl;
       }
     }

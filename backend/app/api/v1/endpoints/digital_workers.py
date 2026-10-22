@@ -1,4 +1,5 @@
 import random
+import os
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -271,7 +272,8 @@ async def save_worker_telegram_config(
 
     # 2. Registrar Webhook si fue solicitado
     webhook_result = None
-    default_webhook_url = f"https://api.qa.morpheussoft.net/api/v1/telegram/{worker.agent_code.lower()}/webhook"
+    api_base = os.getenv("API_BASE_URL", "https://api.qa.morpheussoft.net").rstrip("/")
+    default_webhook_url = os.getenv("DEFAULT_TELEGRAM_WEBHOOK_URL", f"{api_base}/api/v1/telegram/{worker.agent_code.lower()}/webhook")
     webhook_url = (payload.custom_webhook_url or default_webhook_url).strip()
 
     if payload.auto_register_webhook:

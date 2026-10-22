@@ -431,7 +431,7 @@ export default function WholesalerStorePage() {
                     <div className="h-48 w-full bg-slate-50 relative flex items-center justify-center overflow-hidden border-b border-slate-50">
                       {imagesCount > 0 ? (
                         <img 
-                          src={currentImgUrl.startsWith('http') ? currentImgUrl : `http://localhost:8000${currentImgUrl}`}
+                          src={currentImgUrl.startsWith('http') ? currentImgUrl : `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace(/\/api\/v1\/?$/, "")}${currentImgUrl}`}
                           alt={item.name}
                           className="h-full w-full object-cover select-none"
                         />

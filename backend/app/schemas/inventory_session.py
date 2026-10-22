@@ -7,6 +7,7 @@ class SessionState(str, Enum):
     DRAFT = "DRAFT"
     IN_PROGRESS = "IN_PROGRESS"
     CONFIRMING = "CONFIRMING"
+    REVIEW = "REVIEW"
     DONE = "DONE"
     CANCELLED = "CANCELLED"
 
@@ -16,9 +17,18 @@ class InventoryLineBase(BaseModel):
     location_id: Optional[int] = None
     counted_qty: float
     notes: Optional[str] = None
+    adjustment_reason_id: Optional[int] = None
 
 class InventoryLineCreate(InventoryLineBase):
     pass
+
+class InventoryLineReasonUpdate(BaseModel):
+    adjustment_reason_id: Optional[int] = None
+    notes: Optional[str] = None
+
+class InventorySessionBatchReasonUpdate(BaseModel):
+    reason_id_out: Optional[int] = None # Para faltantes (difference < 0)
+    reason_id_in: Optional[int] = None  # Para sobrantes (difference > 0)
 
 class InventoryLineBulkItem(BaseModel):
     sku: str
@@ -37,6 +47,8 @@ class InventoryLine(InventoryLineBase):
     difference_qty: Optional[float] = None
     is_anomaly: Optional[bool] = False
     anomaly_reason: Optional[str] = None
+    adjustment_reason_code: Optional[str] = None
+    adjustment_reason_name: Optional[str] = None
     uom_base: Optional[str] = "UND"
     sku: Optional[str] = None
     product_name: Optional[str] = None
@@ -49,13 +61,17 @@ class InventoryLine(InventoryLineBase):
 class InventorySessionBase(BaseModel):
     name: str # e.g. "Annual Count 2026"
     facility_id: Optional[int] = None
+    facility_name: Optional[str] = None
     warehouse_id: Optional[int] = None
+    warehouse_name: Optional[str] = None
     scope_type: Optional[str] = "GENERAL"
     scope_value: Optional[str] = None
     category_id: Optional[int] = None
     category_name: Optional[str] = None
+    category_full_path: Optional[str] = None
     valid_category_ids: Optional[List[int]] = None
     location_id: Optional[int] = None
+    location_name: Optional[str] = None
 
 class InventorySessionCreate(InventorySessionBase):
     pass
