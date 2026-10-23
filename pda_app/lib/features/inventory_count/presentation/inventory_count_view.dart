@@ -22,7 +22,7 @@ class _InventoryCountViewState extends State<InventoryCountView> {
 
   List<Map<String, dynamic>> _countedItems = [];
   bool _isLoading = true;
-  bool _isContinuousMode = true; // +1 automático en cada escaneo
+  bool _isContinuousMode = false; // Modo rápido (+1) por defecto APAGADO
   String? _bannerMessage;
   Color _bannerColor = const Color(0xFF1E2030);
 
@@ -34,12 +34,6 @@ class _InventoryCountViewState extends State<InventoryCountView> {
   void initState() {
     super.initState();
     _loadInitialData();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _barcodeFocusNode.requestFocus();
-        SystemChannels.textInput.invokeMethod('TextInput.hide');
-      }
-    });
   }
 
   Future<void> _loadInitialData() async {
@@ -49,14 +43,22 @@ class _InventoryCountViewState extends State<InventoryCountView> {
 
     _isContinuousMode = config.continuousScanMode;
 
-    // Cargar sesiones activas
-    final sessions = await sync.fetchInventorySessions(facilityId: config.facilityId);
-    if (sessions.isNotEmpty) {
-      _selectedSessionId = sessions.first['id'];
-      _selectedSessionName = sessions.first['name'];
+    // Cargar únicamente sesiones planificadas y abiertas (IN_PROGRESS o DRAFT)
+    final allSessions = await sync.fetchInventorySessions(facilityId: config.facilityId);
+    final openSessions = allSessions.where((s) {
+      final state = (s['state'] ?? '').toString().toUpperCase();
+      return state == 'IN_PROGRESS' || state == 'DRAFT';
+    }).toList();
+
+    if (openSessions.isNotEmpty) {
+      _selectedSessionId = openSessions.first['id'];
+      _selectedSessionName = openSessions.first['name'];
+    } else {
+      _selectedSessionId = null;
+      _selectedSessionName = null;
     }
 
-    _availableSessions = sessions;
+    _availableSessions = openSessions;
     await _reloadLocalCounts();
     setState(() => _isLoading = false);
   }
@@ -76,6 +78,15 @@ class _InventoryCountViewState extends State<InventoryCountView> {
     final clean = barcode.trim();
     if (clean.isEmpty) return;
 
+    if (_selectedSessionId == null) {
+      HapticFeedback.vibrate();
+      setState(() {
+        _bannerMessage = '⚠️ No hay ninguna toma física abierta seleccionada.';
+        _bannerColor = Colors.amber.shade900;
+      });
+      return;
+    }
+
     var product = await PdaDatabaseHelper.instance.findProductByBarcode(clean);
     if (product == null) {
       final config = PdaConfigService.instance;
@@ -85,23 +96,65 @@ class _InventoryCountViewState extends State<InventoryCountView> {
     if (product == null) {
       HapticFeedback.vibrate();
       setState(() {
-        _bannerMessage = '⚠️ Producto no encontrado: "$clean"';
+        _bannerMessage = '⚠️ Producto no encontrado con código: "$clean"';
+        _bannerColor = Colors.red.shade900;
+      });
+      return;
+    }
+
+    final prod = product;
+
+    // Validación de Criterios de la Toma de Inventario
+    final session = _availableSessions.firstWhere(
+      (s) => s['id'] == _selectedSessionId,
+      orElse: () => <String, dynamic>{},
+    );
+
+    // 1. Criterio de Categoría
+    final validCatIds = (session['valid_category_ids'] as List?)
+            ?.map((e) => (e as num).toInt())
+            .toList() ??
+        [];
+    final prodCatId = prod['category_id'] as int?;
+
+    if (session['scope_type'] == 'CATEGORY' || validCatIds.isNotEmpty) {
+      if (prodCatId != null && validCatIds.isNotEmpty && !validCatIds.contains(prodCatId)) {
+        HapticFeedback.vibrate();
+        setState(() {
+          _bannerMessage = '⚠️ No permitido: "${prod['name']}" no pertenece a la categoría de esta toma física.';
+          _bannerColor = Colors.red.shade900;
+        });
+        return;
+      }
+    }
+
+    // 2. Criterio de Variantes planificadas específicas
+    final validVarIds = (session['valid_variant_ids'] as List?)
+            ?.map((e) => (e as num).toInt())
+            .toList() ??
+        [];
+    final prodVarId = prod['variant_id'] as int?;
+
+    if (validVarIds.isNotEmpty && prodVarId != null && !validVarIds.contains(prodVarId)) {
+      HapticFeedback.vibrate();
+      setState(() {
+        _bannerMessage = '⚠️ No permitido: "${prod['name']}" no está planificado en esta toma física.';
         _bannerColor = Colors.red.shade900;
       });
       return;
     }
 
     if (_isContinuousMode) {
-      // Modo rápido: sumar 1 unidad automáticamente
+      // Modo rápido: sumar 1 unidad automáticamente acumulando por cada escaneo
       await _registerCount(
-        product: product,
+        product: prod,
         barcode: clean,
         quantity: 1.0,
         factor: 1.0,
       );
     } else {
-      // Modo detallado: abrir modal para cantidad o selección de empaque
-      _showQuantityModal(product, clean);
+      // Modo detallado: abrir modal con campo numérico para digitar la cantidad
+      _showQuantityModal(prod, clean);
     }
   }
 
@@ -116,17 +169,19 @@ class _InventoryCountViewState extends State<InventoryCountView> {
     final now = DateTime.now().toIso8601String();
     final clientUuid = _uuid.v4();
 
+    final totalAdd = quantity * factor;
+
     final row = {
       'client_uuid': clientUuid,
       'session_id': _selectedSessionId,
-      'session_name': _selectedSessionName ?? 'Toma General',
+      'session_name': _selectedSessionName ?? 'Toma de Inventario',
       'barcode': barcode,
       'variant_id': product['variant_id'],
       'product_name': product['name'],
       'sku': product['sku'],
       'facility_id': config.facilityId,
       'warehouse_id': config.warehouseId,
-      'counted_qty': quantity * factor,
+      'counted_qty': totalAdd,
       'uom': product['uom_base'] ?? 'UND',
       'packaging_id': packagingId,
       'factor': factor,
@@ -137,30 +192,21 @@ class _InventoryCountViewState extends State<InventoryCountView> {
       'created_at': now,
     };
 
-    await PdaDatabaseHelper.instance.insertInventoryCountOutbox(row);
+    final newTotal = await PdaDatabaseHelper.instance.upsertIncrementInventoryCount(row, totalAdd);
     SystemSound.play(SystemSoundType.click);
     HapticFeedback.mediumImpact();
 
     setState(() {
-      _bannerMessage = '✅ +${(quantity * factor).toStringAsFixed(0)} ${product['uom_base'] ?? 'UND'} "${product['name']}"';
+      _bannerMessage = '✅ +${totalAdd.toStringAsFixed(0)} ${product['uom_base'] ?? 'UND'} "${product['name']}" (Total: ${newTotal.toStringAsFixed(0)} ${product['uom_base'] ?? 'UND'})';
       _bannerColor = Colors.green.shade800;
     });
 
     await _reloadLocalCounts();
-
-    // Intentar sincronizar en segundo plano si hay red
     PdaSyncService.instance.checkConnectivityAndSync();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _barcodeFocusNode.requestFocus();
-        SystemChannels.textInput.invokeMethod('TextInput.hide');
-      }
-    });
   }
 
   void _showQuantityModal(Map<String, dynamic> product, String barcode) {
-    double qty = 1.0;
+    final TextEditingController qtyController = TextEditingController(text: '1');
 
     showModalBottomSheet(
       context: context,
@@ -168,79 +214,94 @@ class _InventoryCountViewState extends State<InventoryCountView> {
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                left: 20,
-                right: 20,
-                top: 20,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                product['name'] ?? '',
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    product['name'] ?? '',
-                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  Text(
-                    'SKU: ${product['sku']} • Unidad: ${product['uom_base'] ?? 'UND'}',
-                    style: const TextStyle(color: Color(0xFF00D2FF), fontSize: 12),
-                  ),
-                  const SizedBox(height: 20),
+              Text(
+                'SKU: ${product['sku']} • Unidad: ${product['uom_base'] ?? 'UND'}',
+                style: const TextStyle(color: Color(0xFF00D2FF), fontSize: 12),
+              ),
+              const SizedBox(height: 16),
 
-                  // Selector de cantidad con botones grandes
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton.filled(
-                        style: IconButton.styleFrom(backgroundColor: const Color(0xFF2A2D45)),
-                        icon: const Icon(Icons.remove, color: Colors.white, size: 28),
-                        onPressed: () {
-                          if (qty > 1) setModalState(() => qty -= 1);
-                        },
-                      ),
-                      const SizedBox(width: 24),
-                      Text(
-                        qty.toStringAsFixed(0),
-                        style: const TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(width: 24),
-                      IconButton.filled(
-                        style: IconButton.styleFrom(backgroundColor: const Color(0xFF00D2FF)),
-                        icon: const Icon(Icons.add, color: Colors.black, size: 28),
-                        onPressed: () => setModalState(() => qty += 1),
-                      ),
-                    ],
+              // Campo de texto numérico para digitar la cantidad directamente
+              TextField(
+                controller: qtyController,
+                autofocus: true,
+                textAlign: TextAlign.center,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: const Color(0xFF141523),
+                  labelText: 'Cantidad a contar',
+                  labelStyle: const TextStyle(color: Colors.white60, fontSize: 13),
+                  suffixText: product['uom_base'] ?? 'UND',
+                  suffixStyle: const TextStyle(color: Color(0xFF00D2FF), fontSize: 15, fontWeight: FontWeight.bold),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0xFF00D2FF), width: 2),
                   ),
-                  const SizedBox(height: 24),
+                ),
+                onSubmitted: (val) {
+                  final numVal = double.tryParse(val.trim()) ?? 1.0;
+                  if (numVal > 0) {
+                    Navigator.pop(ctx);
+                    _registerCount(product: product, barcode: barcode, quantity: numVal);
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
 
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00D2FF),
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+              // Botones de incremento rápido (+1, +5, +10, +25)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [1, 5, 10, 25].map((step) {
+                  return OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF00D2FF),
+                      side: const BorderSide(color: Color(0xFF2E3048)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                     ),
                     onPressed: () {
-                      Navigator.pop(ctx);
-                      _registerCount(
-                        product: product,
-                        barcode: barcode,
-                        quantity: qty,
-                        factor: 1.0,
-                      );
+                      final current = double.tryParse(qtyController.text.trim()) ?? 0.0;
+                      qtyController.text = (current + step).toStringAsFixed(0);
                     },
-                    child: Text(
-                      'Confirmar Conteo ($qty ${product['uom_base'] ?? 'UND'})',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                    ),
-                  ),
-                ],
+                    child: Text('+$step', style: const TextStyle(fontWeight: FontWeight.bold)),
+                  );
+                }).toList(),
               ),
-            );
-          },
+              const SizedBox(height: 18),
+
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00D2FF),
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                onPressed: () {
+                  final numVal = double.tryParse(qtyController.text.trim()) ?? 1.0;
+                  if (numVal > 0) {
+                    Navigator.pop(ctx);
+                    _registerCount(product: product, barcode: barcode, quantity: numVal);
+                  }
+                },
+                child: const Text('Confirmar Conteo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -352,27 +413,25 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                         child: DropdownButton<int?>(
                           dropdownColor: const Color(0xFF1E2032),
                           value: _selectedSessionId,
-                          hint: const Text('Toma General / Libre', style: TextStyle(color: Colors.white70, fontSize: 13)),
-                          items: [
-                            const DropdownMenuItem<int?>(
-                              value: null,
-                              child: Text('Toma General / Libre', style: TextStyle(color: Colors.white, fontSize: 13)),
-                            ),
-                            ..._availableSessions.map((s) => DropdownMenuItem<int?>(
-                                  value: s['id'],
-                                  child: Text(
-                                    '#${s['id']} - ${s['name']}',
-                                    style: const TextStyle(color: Colors.white, fontSize: 13),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                )),
-                          ],
+                          hint: Text(
+                            _availableSessions.isEmpty
+                                ? 'No hay tomas abiertas'
+                                : 'Seleccione toma planificada',
+                            style: const TextStyle(color: Colors.white70, fontSize: 13),
+                          ),
+                          items: _availableSessions.map((s) => DropdownMenuItem<int?>(
+                                value: s['id'] as int,
+                                child: Text(
+                                  '#${s['id']} - ${s['name']}',
+                                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              )).toList(),
                           onChanged: (val) {
+                            if (val == null) return;
                             setState(() {
                               _selectedSessionId = val;
-                              _selectedSessionName = val != null
-                                  ? _availableSessions.firstWhere((s) => s['id'] == val)['name']
-                                  : 'Toma General';
+                              _selectedSessionName = _availableSessions.firstWhere((s) => s['id'] == val)['name'];
                             });
                             _reloadLocalCounts();
                           },
@@ -404,6 +463,26 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                 ),
               ),
 
+              // Advertencia si no hay tomas abiertas
+              if (_availableSessions.isEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  color: Colors.amber.shade900.withOpacity(0.3),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.warning_amber_rounded, color: Colors.amberAccent, size: 18),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'No hay tomas físicas abiertas en esta sucursal. Debe planificar una en Neo.',
+                          style: TextStyle(color: Colors.amberAccent, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
               // Barra activa de escaneo con láser e ingreso directo
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -414,7 +493,7 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                       child: TextField(
                         controller: _barcodeInputController,
                         focusNode: _barcodeFocusNode,
-                        autofocus: true,
+                        autofocus: false,
                         style: const TextStyle(color: Colors.white, fontSize: 14),
                         textInputAction: TextInputAction.search,
                         decoration: InputDecoration(

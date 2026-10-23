@@ -24,12 +24,6 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _barcodeFocusNode.requestFocus();
-        SystemChannels.textInput.invokeMethod('TextInput.hide');
-      }
-    });
   }
 
   Future<void> _handleScan(String code) async {
@@ -71,13 +65,6 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
       setState(() {
         _isLoading = false;
         _errorMessage = 'Error al consultar producto: $e';
-      });
-    } finally {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _barcodeFocusNode.requestFocus();
-          SystemChannels.textInput.invokeMethod('TextInput.hide');
-        }
       });
     }
   }
@@ -214,7 +201,7 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
                       child: TextField(
                         controller: _barcodeInputController,
                         focusNode: _barcodeFocusNode,
-                        autofocus: true,
+                        autofocus: false,
                         style: const TextStyle(color: Colors.white, fontSize: 15),
                         textInputAction: TextInputAction.search,
                         decoration: InputDecoration(

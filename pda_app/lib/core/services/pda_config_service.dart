@@ -32,7 +32,7 @@ class PdaConfigService extends ChangeNotifier {
   String _deviceId = 'PDA-01';
   String _operatorBadge = 'OP-01';
   String _operatorName = 'Operador PDA';
-  bool _continuousScanMode = true;
+  bool _continuousScanMode = false;
   String _adminPin = '1234';
 
   // Getters
@@ -65,7 +65,7 @@ class PdaConfigService extends ChangeNotifier {
     _deviceId = _prefs.getString(_keyDeviceId) ?? 'PDA-01';
     _operatorBadge = _prefs.getString(_keyOperatorBadge) ?? 'OP-01';
     _operatorName = _prefs.getString(_keyOperatorName) ?? 'Operador PDA';
-    _continuousScanMode = _prefs.getBool(_keyContinuousScan) ?? true;
+    _continuousScanMode = _prefs.getBool(_keyContinuousScan) ?? false;
     _adminPin = _prefs.getString(_keyAdminPin) ?? '1234';
 
     _isInitialized = true;

@@ -31,6 +31,7 @@ class BarcodeScannerListener extends StatefulWidget {
 }
 
 class _BarcodeScannerListenerState extends State<BarcodeScannerListener> {
+  static const MethodChannel _nativeChannel = MethodChannel('com.neo.wms.pda/barcode');
   final StringBuffer _buffer = StringBuffer();
   DateTime _lastCharTime = DateTime.now();
   Timer? _debounceTimer;
@@ -38,14 +39,29 @@ class _BarcodeScannerListenerState extends State<BarcodeScannerListener> {
   @override
   void initState() {
     super.initState();
+    _nativeChannel.setMethodCallHandler(_handleNativeMethodCall);
     HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
   }
 
   @override
   void dispose() {
     _debounceTimer?.cancel();
+    _nativeChannel.setMethodCallHandler(null);
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     super.dispose();
+  }
+
+  Future<void> _handleNativeMethodCall(MethodCall call) async {
+    if (!mounted || !widget.enabled) return;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return;
+
+    if (call.method == 'onBarcodeScanned') {
+      final code = call.arguments?.toString().trim();
+      if (code != null && code.length >= 3) {
+        widget.onBarcodeScanned(code);
+      }
+    }
   }
 
   bool _handleGlobalKeyEvent(KeyEvent event) {

@@ -321,6 +321,40 @@ class PdaDatabaseHelper {
     );
   }
 
+  Future<double> upsertIncrementInventoryCount(Map<String, dynamic> row, double addQty) async {
+    final db = await database;
+    final sessionId = row['session_id'];
+    final variantId = row['variant_id'];
+
+    // Buscar si ya existe una fila pendiente para esta misma variante en esta sesión
+    final existing = await db.query(
+      'inventory_counts_outbox',
+      where: 'session_id = ? AND variant_id = ? AND sync_status = ?',
+      whereArgs: [sessionId, variantId, 'PENDING'],
+      limit: 1,
+    );
+
+    if (existing.isNotEmpty) {
+      final oldQty = (existing.first['counted_qty'] as num).toDouble();
+      final newQty = oldQty + addQty;
+      final clientUuid = existing.first['client_uuid'] as String;
+      await db.update(
+        'inventory_counts_outbox',
+        {
+          'counted_qty': newQty,
+          'offline_scanned_at': DateTime.now().toIso8601String(),
+        },
+        where: 'client_uuid = ?',
+        whereArgs: [clientUuid],
+      );
+      return newQty;
+    } else {
+      row['counted_qty'] = addQty;
+      await db.insert('inventory_counts_outbox', row);
+      return addQty;
+    }
+  }
+
   Future<List<Map<String, dynamic>>> getPendingCounts() async {
     final db = await database;
     return await db.query(

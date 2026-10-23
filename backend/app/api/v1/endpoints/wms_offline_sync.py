@@ -223,6 +223,7 @@ def get_sync_catalog(
         products_data.append({
             "variant_id": v.id,
             "product_id": v.product_id,
+            "category_id": prod.category_id if prod else None,
             "sku": v.sku,
             "name": prod.name if prod else v.sku,
             "uom_base": (prod.uom_base if prod else "UND") or "UND",
@@ -506,6 +507,7 @@ def get_product_inquiry(
     return {
         "variant_id": variant.id,
         "product_id": variant.product_id,
+        "category_id": prod.category_id if prod else None,
         "sku": variant.sku,
         "name": prod.name if prod else variant.sku,
         "uom_base": (prod.uom_base if prod else "UND") or "UND",
@@ -527,24 +529,42 @@ def get_sync_inventory_sessions(
 ):
     """
     Obtiene las sesiones de inventario abiertas (IN_PROGRESS o DRAFT) para la sucursal.
+    Incluye categorías válidas y variantes planificadas para restringir conteo.
     """
+    from app.api.v1.endpoints.inventory_session import get_all_related_category_ids
+
     query = db.query(InventorySession).filter(InventorySession.state.in_(["IN_PROGRESS", "DRAFT"]))
     if facility_id:
         query = query.filter(InventorySession.facility_id == facility_id)
     sessions = query.order_by(InventorySession.id.desc()).all()
 
-    return [
-        {
+    results = []
+    for s in sessions:
+        cat_id = None
+        valid_cat_ids = []
+        if s.scope_type in ('CATEGORY', 'CYCLIC') and s.scope_value:
+            clean_val = str(s.scope_value).strip()
+            if clean_val.isdigit():
+                cat_id = int(clean_val)
+                valid_cat_ids = get_all_related_category_ids(db, cat_id)
+
+        valid_variant_ids = [line.product_variant_id for line in s.lines if line.product_variant_id] if s.lines else []
+
+        results.append({
             "id": s.id,
             "name": s.name,
             "facility_id": s.facility_id,
             "warehouse_id": s.warehouse_id,
             "scope_type": s.scope_type,
+            "scope_value": s.scope_value,
+            "category_id": cat_id,
+            "valid_category_ids": valid_cat_ids,
+            "valid_variant_ids": valid_variant_ids,
             "state": s.state,
             "date_start": s.date_start.isoformat() if s.date_start else None
-        }
-        for s in sessions
-    ]
+        })
+
+    return results
 
 # ==============================================================================
 # 6. SINCRONIZACIÓN DE CONTEOS FÍSICOS (Toma de Inventario PDA)
