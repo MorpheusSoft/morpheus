@@ -27,11 +27,19 @@ class _InventoryCountViewState extends State<InventoryCountView> {
   Color _bannerColor = const Color(0xFF1E2030);
 
   final TextEditingController _manualCodeController = TextEditingController();
+  final TextEditingController _barcodeInputController = TextEditingController();
+  final FocusNode _barcodeFocusNode = FocusNode();
 
   @override
   void initState() {
     super.initState();
     _loadInitialData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _barcodeFocusNode.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+    });
   }
 
   Future<void> _loadInitialData() async {
@@ -142,6 +150,13 @@ class _InventoryCountViewState extends State<InventoryCountView> {
 
     // Intentar sincronizar en segundo plano si hay red
     PdaSyncService.instance.checkConnectivityAndSync();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _barcodeFocusNode.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+    });
   }
 
   void _showQuantityModal(Map<String, dynamic> product, String barcode) {
@@ -273,6 +288,8 @@ class _InventoryCountViewState extends State<InventoryCountView> {
   @override
   void dispose() {
     _manualCodeController.dispose();
+    _barcodeInputController.dispose();
+    _barcodeFocusNode.dispose();
     super.dispose();
   }
 
@@ -382,6 +399,89 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                           },
                         ),
                       ],
+                    ),
+                  ],
+                ),
+              ),
+
+              // Barra activa de escaneo con láser e ingreso directo
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                color: const Color(0xFF141523),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _barcodeInputController,
+                        focusNode: _barcodeFocusNode,
+                        autofocus: true,
+                        style: const TextStyle(color: Colors.white, fontSize: 14),
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: const Color(0xFF1E2032),
+                          hintText: 'Apunta el láser o digita SKU...',
+                          hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                          prefixIcon: const Icon(Icons.qr_code_scanner, color: Color(0xFF00D2FF), size: 18),
+                          suffixIcon: _barcodeInputController.text.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear, color: Colors.white38, size: 16),
+                                  onPressed: () {
+                                    _barcodeInputController.clear();
+                                    setState(() {});
+                                  },
+                                )
+                              : null,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFF2E3048)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFF2E3048)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFF00D2FF), width: 1.5),
+                          ),
+                        ),
+                        onChanged: (val) {
+                          if (val.contains('\n') || val.contains('\r')) {
+                            final code = val.replaceAll('\n', '').replaceAll('\r', '').trim();
+                            if (code.isNotEmpty) {
+                              _barcodeInputController.clear();
+                              _handleCountScan(code);
+                            }
+                          }
+                        },
+                        onSubmitted: (val) {
+                          final code = val.trim();
+                          if (code.isNotEmpty) {
+                            _barcodeInputController.clear();
+                            _handleCountScan(code);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFF00D2FF),
+                        foregroundColor: Colors.black,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.all(10),
+                      ),
+                      icon: const Icon(Icons.search, size: 18),
+                      tooltip: 'Buscar / Contar',
+                      onPressed: () {
+                        final code = _barcodeInputController.text.trim();
+                        if (code.isNotEmpty) {
+                          _barcodeInputController.clear();
+                          _handleCountScan(code);
+                        }
+                      },
                     ),
                   ],
                 ),

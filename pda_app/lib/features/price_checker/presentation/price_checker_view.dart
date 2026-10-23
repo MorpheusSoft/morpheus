@@ -18,6 +18,19 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
   String? _errorMessage;
   bool _isSuccessFlash = false;
   final TextEditingController _manualInputController = TextEditingController();
+  final TextEditingController _barcodeInputController = TextEditingController();
+  final FocusNode _barcodeFocusNode = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _barcodeFocusNode.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+    });
+  }
 
   Future<void> _handleScan(String code) async {
     final clean = code.trim();
@@ -58,6 +71,13 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
       setState(() {
         _isLoading = false;
         _errorMessage = 'Error al consultar producto: $e';
+      });
+    } finally {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _barcodeFocusNode.requestFocus();
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
+        }
       });
     }
   }
@@ -104,6 +124,8 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
   @override
   void dispose() {
     _manualInputController.dispose();
+    _barcodeInputController.dispose();
+    _barcodeFocusNode.dispose();
     super.dispose();
   }
 
@@ -179,26 +201,86 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
                 ),
               ),
 
-              // Botón inferior para ingreso manual
+              // Barra activa de escaneo con láser e ingreso manual directo
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                color: const Color(0xFF151624),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF151624),
+                  border: Border(top: BorderSide(color: Color(0xFF26283C), width: 1)),
+                ),
                 child: Row(
                   children: [
                     Expanded(
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Color(0xFF2E3048)),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          backgroundColor: const Color(0xFF1B1C2C),
+                      child: TextField(
+                        controller: _barcodeInputController,
+                        focusNode: _barcodeFocusNode,
+                        autofocus: true,
+                        style: const TextStyle(color: Colors.white, fontSize: 15),
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: const Color(0xFF1E2032),
+                          hintText: 'Apunta el láser o digita código...',
+                          hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                          prefixIcon: const Icon(Icons.qr_code_scanner, color: Color(0xFF00D2FF), size: 20),
+                          suffixIcon: _barcodeInputController.text.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear, color: Colors.white38, size: 18),
+                                  onPressed: () {
+                                    _barcodeInputController.clear();
+                                    setState(() {});
+                                  },
+                                )
+                              : null,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: Color(0xFF2E3048)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: Color(0xFF2E3048)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: Color(0xFF00D2FF), width: 1.5),
+                          ),
                         ),
-                        icon: const Icon(Icons.edit, size: 16, color: Color(0xFF00D2FF)),
-                        label: const Text(
-                          'Digitar código / SKU manual',
-                          style: TextStyle(color: Colors.white, fontSize: 13),
-                        ),
-                        onPressed: _showManualInputDialog,
+                        onChanged: (val) {
+                          if (val.contains('\n') || val.contains('\r')) {
+                            final code = val.replaceAll('\n', '').replaceAll('\r', '').trim();
+                            if (code.isNotEmpty) {
+                              _barcodeInputController.clear();
+                              _handleScan(code);
+                            }
+                          }
+                        },
+                        onSubmitted: (val) {
+                          final code = val.trim();
+                          if (code.isNotEmpty) {
+                            _barcodeInputController.clear();
+                            _handleScan(code);
+                          }
+                        },
                       ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFF00D2FF),
+                        foregroundColor: Colors.black,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.all(12),
+                      ),
+                      icon: const Icon(Icons.search, size: 20),
+                      tooltip: 'Buscar código',
+                      onPressed: () {
+                        final code = _barcodeInputController.text.trim();
+                        if (code.isNotEmpty) {
+                          _barcodeInputController.clear();
+                          _handleScan(code);
+                        }
+                      },
                     ),
                   ],
                 ),
