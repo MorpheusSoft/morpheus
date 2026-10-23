@@ -8,6 +8,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
+import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -37,6 +39,12 @@ class MainActivity: FlutterActivity() {
                 ?: intent.getStringExtra("barcode_string")
                 ?: intent.getStringExtra("value")
                 ?: intent.getStringExtra("EXTRA_BARCODE")
+                ?: intent.getStringExtra("scan_result")
+                ?: intent.getStringExtra("barcode_data")
+                ?: intent.getStringExtra("scan_data")
+                ?: intent.getStringExtra("string")
+                ?: intent.getStringExtra("text")
+                ?: intent.getStringExtra("barcodedata")
             
             if (!barcode.isNullOrBlank()) {
                 val clean = barcode.trim()
@@ -50,17 +58,40 @@ class MainActivity: FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        methodChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "hideKeyboard" -> {
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                    imm?.hideSoftInputFromWindow(window.decorView.windowToken, 0)
+                    result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     override fun onResume() {
         super.onResume()
+        try {
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        } catch (_: Exception) {}
+
         val filter = IntentFilter().apply {
             addAction("com.custom.barcode.action")
+            addAction("com.custom.scanner.action")
+            addAction("com.custom.action.BARCODE_DATA")
+            addAction("custom.barcode.action")
             addAction("com.scanner.broadcast")
             addAction("android.intent.action.DECODE_DATA")
             addAction("com.android.server.scannerservice.broadcast")
             addAction("scan.rcv.message")
             addAction("com.barcode.sendBroadcast")
+            addAction("nlscan.action.SCANER_RESULT")
+            addAction("action.barcode.reader.value")
+            addAction("com.honeywell.decode.intent.action.EDIT_DATA")
+            addAction("com.symbol.emdk.datawedge.api.RESULT_ACTION")
+            addAction("urovo.rcv.message")
+            addAction("com.zebra.datacapture1.action")
             addCategory(Intent.CATEGORY_DEFAULT)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

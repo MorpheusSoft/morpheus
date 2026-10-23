@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -30,10 +31,35 @@ class _InventoryCountViewState extends State<InventoryCountView> {
   final TextEditingController _barcodeInputController = TextEditingController();
   final FocusNode _barcodeFocusNode = FocusNode();
 
+  Timer? _inputDebounceTimer;
+  String _lastScannedBarcode = '';
+  DateTime _lastScanTimestamp = DateTime.fromMillisecondsSinceEpoch(0);
+
   @override
   void initState() {
     super.initState();
+    _setupFocus();
     _loadInitialData();
+  }
+
+  void _setupFocus() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _barcodeFocusNode.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+    });
+
+    _barcodeFocusNode.addListener(() {
+      if (!_barcodeFocusNode.hasFocus && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+            _barcodeFocusNode.requestFocus();
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        });
+      }
+    });
   }
 
   Future<void> _loadInitialData() async {
@@ -77,6 +103,13 @@ class _InventoryCountViewState extends State<InventoryCountView> {
   Future<void> _handleCountScan(String barcode) async {
     final clean = barcode.trim();
     if (clean.isEmpty) return;
+
+    final now = DateTime.now();
+    if (clean == _lastScannedBarcode && now.difference(_lastScanTimestamp).inMilliseconds < 400) {
+      return;
+    }
+    _lastScannedBarcode = clean;
+    _lastScanTimestamp = now;
 
     if (_selectedSessionId == null) {
       HapticFeedback.vibrate();
@@ -201,6 +234,14 @@ class _InventoryCountViewState extends State<InventoryCountView> {
       _bannerColor = Colors.green.shade800;
     });
 
+    _barcodeInputController.clear();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+        _barcodeFocusNode.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+    });
+
     await _reloadLocalCounts();
     PdaSyncService.instance.checkConnectivityAndSync();
   }
@@ -304,7 +345,14 @@ class _InventoryCountViewState extends State<InventoryCountView> {
           ),
         );
       },
-    );
+    ).then((_) {
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _barcodeFocusNode.requestFocus();
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
+        });
+      }
+    });
   }
 
   void _showManualInputDialog() {
@@ -317,6 +365,7 @@ class _InventoryCountViewState extends State<InventoryCountView> {
         content: TextField(
           controller: _manualCodeController,
           autofocus: true,
+          keyboardType: TextInputType.text,
           style: const TextStyle(color: Colors.white),
           decoration: const InputDecoration(
             hintText: 'Ej. 759000123 o SKU',
@@ -343,11 +392,19 @@ class _InventoryCountViewState extends State<InventoryCountView> {
           ),
         ],
       ),
-    );
+    ).then((_) {
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _barcodeFocusNode.requestFocus();
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
+    _inputDebounceTimer?.cancel();
     _manualCodeController.dispose();
     _barcodeInputController.dispose();
     _barcodeFocusNode.dispose();
@@ -493,24 +550,23 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                       child: TextField(
                         controller: _barcodeInputController,
                         focusNode: _barcodeFocusNode,
-                        autofocus: false,
+                        autofocus: true,
+                        keyboardType: TextInputType.none, // BLOQUEA el teclado virtual de Android
+                        showCursor: false,
+                        enableInteractiveSelection: false,
+                        textInputAction: TextInputAction.none,
                         style: const TextStyle(color: Colors.white, fontSize: 14),
-                        textInputAction: TextInputAction.search,
                         decoration: InputDecoration(
                           filled: true,
                           fillColor: const Color(0xFF1E2032),
-                          hintText: 'Apunta el láser o digita SKU...',
+                          hintText: 'Láser activo... o toca para escribir',
                           hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
                           prefixIcon: const Icon(Icons.qr_code_scanner, color: Color(0xFF00D2FF), size: 18),
-                          suffixIcon: _barcodeInputController.text.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear, color: Colors.white38, size: 16),
-                                  onPressed: () {
-                                    _barcodeInputController.clear();
-                                    setState(() {});
-                                  },
-                                )
-                              : null,
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.keyboard, color: Color(0xFF00D2FF), size: 18),
+                            tooltip: 'Digitar manualmente',
+                            onPressed: _showManualInputDialog,
+                          ),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                           border: OutlineInputBorder(
@@ -526,16 +582,30 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                             borderSide: const BorderSide(color: Color(0xFF00D2FF), width: 1.5),
                           ),
                         ),
+                        onTap: () {
+                          // Si el usuario toca con su dedo en la caja, abre el teclado virtual
+                          _showManualInputDialog();
+                        },
                         onChanged: (val) {
+                          _inputDebounceTimer?.cancel();
                           if (val.contains('\n') || val.contains('\r')) {
                             final code = val.replaceAll('\n', '').replaceAll('\r', '').trim();
                             if (code.isNotEmpty) {
                               _barcodeInputController.clear();
                               _handleCountScan(code);
                             }
+                          } else if (val.trim().length >= 3) {
+                            _inputDebounceTimer = Timer(const Duration(milliseconds: 150), () {
+                              final code = _barcodeInputController.text.trim();
+                              if (code.isNotEmpty) {
+                                _barcodeInputController.clear();
+                                _handleCountScan(code);
+                              }
+                            });
                           }
                         },
                         onSubmitted: (val) {
+                          _inputDebounceTimer?.cancel();
                           final code = val.trim();
                           if (code.isNotEmpty) {
                             _barcodeInputController.clear();
@@ -552,15 +622,9 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         padding: const EdgeInsets.all(10),
                       ),
-                      icon: const Icon(Icons.search, size: 18),
-                      tooltip: 'Buscar / Contar',
-                      onPressed: () {
-                        final code = _barcodeInputController.text.trim();
-                        if (code.isNotEmpty) {
-                          _barcodeInputController.clear();
-                          _handleCountScan(code);
-                        }
-                      },
+                      icon: const Icon(Icons.keyboard, size: 18),
+                      tooltip: 'Escribir código manual',
+                      onPressed: _showManualInputDialog,
                     ),
                   ],
                 ),

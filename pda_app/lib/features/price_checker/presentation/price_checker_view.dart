@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -21,14 +22,46 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
   final TextEditingController _barcodeInputController = TextEditingController();
   final FocusNode _barcodeFocusNode = FocusNode();
 
+  Timer? _inputDebounceTimer;
+  String _lastScannedCode = '';
+  DateTime _lastScannedTime = DateTime.fromMillisecondsSinceEpoch(0);
+
   @override
   void initState() {
     super.initState();
+    _setupFocus();
+  }
+
+  void _setupFocus() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _barcodeFocusNode.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+    });
+
+    _barcodeFocusNode.addListener(() {
+      if (!_barcodeFocusNode.hasFocus && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+            _barcodeFocusNode.requestFocus();
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        });
+      }
+    });
   }
 
   Future<void> _handleScan(String code) async {
     final clean = code.trim();
     if (clean.isEmpty || _isLoading) return;
+
+    final now = DateTime.now();
+    if (clean == _lastScannedCode && now.difference(_lastScannedTime).inMilliseconds < 500) {
+      return;
+    }
+    _lastScannedCode = clean;
+    _lastScannedTime = now;
 
     setState(() {
       _isLoading = true;
@@ -66,6 +99,14 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
         _isLoading = false;
         _errorMessage = 'Error al consultar producto: $e';
       });
+    } finally {
+      _barcodeInputController.clear();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+          _barcodeFocusNode.requestFocus();
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
+        }
+      });
     }
   }
 
@@ -79,6 +120,7 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
         content: TextField(
           controller: _manualInputController,
           autofocus: true,
+          keyboardType: TextInputType.text,
           style: const TextStyle(color: Colors.white, fontSize: 16),
           decoration: const InputDecoration(
             hintText: 'Ej. 759123456789 o SKU',
@@ -105,11 +147,19 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
           ),
         ],
       ),
-    );
+    ).then((_) {
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _barcodeFocusNode.requestFocus();
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
+    _inputDebounceTimer?.cancel();
     _manualInputController.dispose();
     _barcodeInputController.dispose();
     _barcodeFocusNode.dispose();
@@ -201,24 +251,23 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
                       child: TextField(
                         controller: _barcodeInputController,
                         focusNode: _barcodeFocusNode,
-                        autofocus: false,
-                        style: const TextStyle(color: Colors.white, fontSize: 15),
-                        textInputAction: TextInputAction.search,
+                        autofocus: true,
+                        keyboardType: TextInputType.none, // BLOQUEA el teclado virtual de Android
+                        showCursor: false,
+                        enableInteractiveSelection: false,
+                        textInputAction: TextInputAction.none,
+                        style: const TextStyle(color: Colors.white, fontSize: 14),
                         decoration: InputDecoration(
                           filled: true,
                           fillColor: const Color(0xFF1E2032),
-                          hintText: 'Apunta el láser o digita código...',
+                          hintText: 'Láser activo... o toca para escribir',
                           hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
                           prefixIcon: const Icon(Icons.qr_code_scanner, color: Color(0xFF00D2FF), size: 20),
-                          suffixIcon: _barcodeInputController.text.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear, color: Colors.white38, size: 18),
-                                  onPressed: () {
-                                    _barcodeInputController.clear();
-                                    setState(() {});
-                                  },
-                                )
-                              : null,
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.keyboard, color: Color(0xFF00D2FF), size: 20),
+                            tooltip: 'Digitar manualmente',
+                            onPressed: _showManualInputDialog,
+                          ),
                           contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
@@ -233,16 +282,30 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
                             borderSide: const BorderSide(color: Color(0xFF00D2FF), width: 1.5),
                           ),
                         ),
+                        onTap: () {
+                          // Si el usuario toca con su dedo en la caja, abre el teclado virtual
+                          _showManualInputDialog();
+                        },
                         onChanged: (val) {
+                          _inputDebounceTimer?.cancel();
                           if (val.contains('\n') || val.contains('\r')) {
                             final code = val.replaceAll('\n', '').replaceAll('\r', '').trim();
                             if (code.isNotEmpty) {
                               _barcodeInputController.clear();
                               _handleScan(code);
                             }
+                          } else if (val.trim().length >= 3) {
+                            _inputDebounceTimer = Timer(const Duration(milliseconds: 150), () {
+                              final code = _barcodeInputController.text.trim();
+                              if (code.isNotEmpty) {
+                                _barcodeInputController.clear();
+                                _handleScan(code);
+                              }
+                            });
                           }
                         },
                         onSubmitted: (val) {
+                          _inputDebounceTimer?.cancel();
                           final code = val.trim();
                           if (code.isNotEmpty) {
                             _barcodeInputController.clear();
@@ -259,15 +322,9 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         padding: const EdgeInsets.all(12),
                       ),
-                      icon: const Icon(Icons.search, size: 20),
-                      tooltip: 'Buscar código',
-                      onPressed: () {
-                        final code = _barcodeInputController.text.trim();
-                        if (code.isNotEmpty) {
-                          _barcodeInputController.clear();
-                          _handleScan(code);
-                        }
-                      },
+                      icon: const Icon(Icons.keyboard, size: 20),
+                      tooltip: 'Escribir código manual',
+                      onPressed: _showManualInputDialog,
                     ),
                   ],
                 ),
