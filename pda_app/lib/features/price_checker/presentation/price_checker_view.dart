@@ -21,7 +21,7 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
 
   Future<void> _handleScan(String code) async {
     final clean = code.trim();
-    if (clean.isEmpty) return;
+    if (clean.isEmpty || _isLoading) return;
 
     setState(() {
       _isLoading = true;

@@ -68,7 +68,11 @@ class _InventoryCountViewState extends State<InventoryCountView> {
     final clean = barcode.trim();
     if (clean.isEmpty) return;
 
-    final product = await PdaDatabaseHelper.instance.findProductByBarcode(clean);
+    var product = await PdaDatabaseHelper.instance.findProductByBarcode(clean);
+    if (product == null) {
+      final config = PdaConfigService.instance;
+      product = await PdaSyncService.instance.lookupProduct(clean, facilityId: config.facilityId);
+    }
 
     if (product == null) {
       HapticFeedback.vibrate();
