@@ -1396,6 +1396,12 @@ def import_purchase_orders_legacy(
         print(f"[PAUSA] Ingesta de ODC bloqueada por administración para sede {target_facility_id or 'global'}.")
         return {"message": "Sincronización pausada", "created": 0, "updated": 0, "skipped": 0, "paused": True}
 
+    if target_facility_id:
+        cfg = session.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == target_facility_id).first()
+        if cfg and not cfg.purchase_orders_enabled:
+            print(f"[DESHABILITADO] Ingesta de ODC deshabilitada por configuración para sede {target_facility_id}.")
+            return {"message": "Extractor de ODC deshabilitado para esta sucursal", "created": 0, "updated": 0, "skipped": 0, "paused": True}
+
     if not orders_in:
         return {"message": "No se recibieron órdenes en el lote", "created": 0, "updated": 0, "skipped": 0}
 

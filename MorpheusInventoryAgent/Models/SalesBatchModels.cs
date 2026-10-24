@@ -171,6 +171,9 @@ public class RemoteAgentConfigDto
 
     [JsonPropertyName("movements_enabled")]
     public bool MovementsEnabled { get; set; } = true;
+
+    [JsonPropertyName("purchase_orders_enabled")]
+    public bool PurchaseOrdersEnabled { get; set; } = true;
 }
 
 public class StoreAgentCommandDto

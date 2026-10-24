@@ -210,10 +210,14 @@ public class HeartbeatWorker : BackgroundService
                 if (respObj != null)
                 {
                     // Procesar nueva configuración si la versión es mayor
-                    if (respObj.Config != null && respObj.Config.Version > _localConfigVersion)
+                    if (respObj.Config != null)
                     {
-                        _logger.LogInformation("[CONTROL REMOTO] Nueva configuración recibida desde Neo ERP (v{NewVersion} > v{OldVersion}).", respObj.Config.Version, _localConfigVersion);
-                        _localConfigVersion = respObj.Config.Version;
+                        SyncStateManager.SetPurchaseOrdersEnabled(respObj.Config.PurchaseOrdersEnabled);
+                        if (respObj.Config.Version > _localConfigVersion)
+                        {
+                            _logger.LogInformation("[CONTROL REMOTO] Nueva configuración recibida desde Neo ERP (v{NewVersion} > v{OldVersion}).", respObj.Config.Version, _localConfigVersion);
+                            _localConfigVersion = respObj.Config.Version;
+                        }
                     }
 
                     // Procesar órdenes y comandos remotos
@@ -315,6 +319,10 @@ public class HeartbeatWorker : BackgroundService
                         if (cmd.Parameters.TryGetProperty("is_sync_paused", out var isp))
                         {
                             SyncStateManager.SetSyncPaused(isp.GetBoolean());
+                        }
+                        if (cmd.Parameters.TryGetProperty("purchase_orders_enabled", out var poe))
+                        {
+                            SyncStateManager.SetPurchaseOrdersEnabled(poe.GetBoolean());
                         }
                     }
                     await SendCommandAckAsync(cmd.Id, "COMPLETED", new { message = "Configuración remota aplicada en memoria local." }, null, stoppingToken);

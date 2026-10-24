@@ -11,6 +11,7 @@ public class SyncState
     public DateTime LastSalesSync { get; set; } = new DateTime(2000, 1, 1);
     public DateTime LastSupplierProductSync { get; set; } = new DateTime(2000, 1, 1);
     public DateTime LastPurchaseOrderSync { get; set; } = new DateTime(2000, 1, 1);
+    public bool PurchaseOrdersEnabled { get; set; } = true;
     public bool IsSyncPaused { get; set; } = false;
 }
 
@@ -31,6 +32,33 @@ public static class SyncStateManager
         {
             return false;
         }
+    }
+
+    public static bool IsPurchaseOrdersEnabled()
+    {
+        try
+        {
+            return LoadState().PurchaseOrdersEnabled;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    public static void SetPurchaseOrdersEnabled(bool enabled)
+    {
+        try
+        {
+            lock (_lock)
+            {
+                var state = LoadStateInternal();
+                state.PurchaseOrdersEnabled = enabled;
+                var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(StateFilePath, json);
+            }
+        }
+        catch { }
     }
 
     public static void SetSyncPaused(bool paused)
@@ -105,6 +133,7 @@ public static class SyncStateManager
                 if (state.LastSalesSync > currentState.LastSalesSync) currentState.LastSalesSync = state.LastSalesSync;
                 if (state.LastSupplierProductSync > currentState.LastSupplierProductSync) currentState.LastSupplierProductSync = state.LastSupplierProductSync;
                 if (state.LastPurchaseOrderSync > currentState.LastPurchaseOrderSync) currentState.LastPurchaseOrderSync = state.LastPurchaseOrderSync;
+                currentState.PurchaseOrdersEnabled = state.PurchaseOrdersEnabled;
                 if (state.IsSyncPaused != currentState.IsSyncPaused) currentState.IsSyncPaused = state.IsSyncPaused;
                 
                 var json = JsonSerializer.Serialize(currentState, new JsonSerializerOptions { WriteIndented = true });

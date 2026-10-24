@@ -202,6 +202,7 @@ def update_store_config(
             "suppliers_enabled": cfg.suppliers_enabled,
             "supplier_products_enabled": cfg.supplier_products_enabled,
             "movements_enabled": cfg.movements_enabled,
+            "purchase_orders_enabled": cfg.purchase_orders_enabled,
             "is_sync_paused": cfg.is_sync_paused
         },
         status="PENDING"

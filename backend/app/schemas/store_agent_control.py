@@ -15,6 +15,7 @@ class StoreAgentConfigSchema(BaseModel):
     suppliers_enabled: bool
     supplier_products_enabled: bool
     movements_enabled: bool
+    purchase_orders_enabled: bool = True
     is_sync_paused: bool = False
     updated_at: Optional[datetime] = None
 
@@ -32,6 +33,7 @@ class StoreAgentConfigUpdateSchema(BaseModel):
     suppliers_enabled: Optional[bool] = None
     supplier_products_enabled: Optional[bool] = None
     movements_enabled: Optional[bool] = None
+    purchase_orders_enabled: Optional[bool] = None
     is_sync_paused: Optional[bool] = None
 
 class StoreAgentCommandCreateSchema(BaseModel):

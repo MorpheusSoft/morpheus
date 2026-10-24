@@ -338,6 +338,7 @@ export default function StoreSyncDashboardPage() {
         suppliers_enabled: configForm.suppliers_enabled,
         categories_enabled: configForm.categories_enabled,
         historical_enabled: configForm.historical_enabled,
+        purchase_orders_enabled: configForm.purchase_orders_enabled,
       });
 
       setConfigSuccessMsg(`¡Configuración actualizada (v${updated.config_version})! El agente la adoptará en su próximo latido.`);
@@ -353,7 +354,7 @@ export default function StoreSyncDashboardPage() {
   const [togglingAll, setTogglingAll] = useState(false);
 
   const handleRunCommand = async (
-    type: 'FORCE_SYNC_SALES' | 'FORCE_SYNC_MASTERS' | 'SYNC_HISTORICAL' | 'SYNC_BASELINE' | 'RESTART_SERVICE' | 'UPDATE_SOFTWARE' | 'PAUSE_SYNC' | 'RESUME_SYNC',
+    type: 'FORCE_SYNC_SALES' | 'FORCE_SYNC_MASTERS' | 'FORCE_SYNC_PURCHASE_ORDERS' | 'FORCE_SYNC_ODC' | 'SYNC_HISTORICAL' | 'SYNC_BASELINE' | 'RESTART_SERVICE' | 'UPDATE_SOFTWARE' | 'PAUSE_SYNC' | 'RESUME_SYNC',
     params: Record<string, any> = {}
   ) => {
     if (!selectedFacilityId) return;
@@ -816,13 +817,23 @@ export default function StoreSyncDashboardPage() {
                       </span>
                     </div>
 
-                    <div className="flex items-center justify-between py-1 text-slate-600">
+                    <div className="flex items-center justify-between py-1 border-b border-slate-100 text-slate-600">
                       <span className="text-[11px] font-medium flex items-center gap-1.5">
                         <i className="pi pi-dollar text-[10px] text-slate-400"></i>
                         Costos por Proveedor:
                       </span>
                       <span className="font-mono text-[11px] font-semibold text-slate-800">
                         {formatExactDateTime(selectedFacility.last_supplier_product_sync || null)}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between py-1 text-slate-600">
+                      <span className="text-[11px] font-medium flex items-center gap-1.5">
+                        <i className="pi pi-file-edit text-[10px] text-slate-400"></i>
+                        Órdenes de Compra (ODC):
+                      </span>
+                      <span className="font-mono text-[11px] font-semibold text-slate-800">
+                        {formatExactDateTime(selectedFacility.last_purchase_order_sync || null)}
                       </span>
                     </div>
                   </div>
@@ -1002,6 +1013,38 @@ export default function StoreSyncDashboardPage() {
                         <>
                           <i className="pi pi-sync"></i>
                           <span>Actualizar Maestros</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Force Sync Purchase Orders */}
+                  <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-all flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold">
+                          <i className="pi pi-file-edit text-sm"></i>
+                        </div>
+                        <h3 className="font-bold text-slate-800 text-sm">Sincronizar ODC Ahora</h3>
+                      </div>
+                      <p className="text-xs text-slate-500 leading-relaxed mb-4">
+                        Fuerza la extracción de órdenes de compra pendientes desde Stellar hacia Neo WMS.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleRunCommand('FORCE_SYNC_PURCHASE_ORDERS')}
+                      disabled={executingCmd === 'FORCE_SYNC_PURCHASE_ORDERS'}
+                      className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-700 active:scale-95 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-amber-600/20 inline-flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      {executingCmd === 'FORCE_SYNC_PURCHASE_ORDERS' ? (
+                        <>
+                          <i className="pi pi-spinner animate-spin"></i>
+                          <span>Enviando orden...</span>
+                        </>
+                      ) : (
+                        <>
+                          <i className="pi pi-sync"></i>
+                          <span>Ejecutar Extracción de ODC</span>
                         </>
                       )}
                     </button>
@@ -1254,6 +1297,7 @@ export default function StoreSyncDashboardPage() {
                     { key: 'barcodes_enabled', label: 'Extractor de Códigos de Barra', desc: 'Códigos y conversiones' },
                     { key: 'suppliers_enabled', label: 'Extractor de Proveedores', desc: 'Datos de proveedores' },
                     { key: 'categories_enabled', label: 'Extractor de Departamentos', desc: 'Líneas y departamentos' },
+                    { key: 'purchase_orders_enabled', label: 'Extractor de Órdenes de Compra (ODC)', desc: 'ODC pendientes (Stellar)' },
                     { key: 'historical_enabled', label: 'Carga Histórica de Ventas', desc: 'Habilita subida histórica' },
                   ].map((item) => {
                     const isChecked = Boolean(configForm[item.key as keyof StoreAgentConfig]);

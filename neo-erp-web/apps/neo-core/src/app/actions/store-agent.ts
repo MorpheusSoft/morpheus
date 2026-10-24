@@ -15,6 +15,7 @@ export interface StoreAgentConfig {
   categories_enabled: boolean
   sales_enabled: boolean
   historical_enabled: boolean
+  purchase_orders_enabled?: boolean
   is_sync_paused?: boolean
   config_version: number
   updated_at: string
@@ -42,6 +43,7 @@ export interface FacilityAgentStatus {
   last_supplier_product_sync?: string | null
   baseline_inventory_done?: boolean
   last_movement_sync?: string | null
+  last_purchase_order_sync?: string | null
   latest_available_version?: string
   has_update_available?: boolean
   is_sync_paused?: boolean
@@ -115,7 +117,7 @@ export async function updateStoreAgentConfig(facilityId: number, data: Partial<S
 
 export async function createStoreAgentCommand(
   facilityId: number,
-  commandType: 'FORCE_SYNC_SALES' | 'FORCE_SYNC_MASTERS' | 'SYNC_HISTORICAL' | 'SYNC_BASELINE' | 'RESTART_SERVICE' | 'UPDATE_SOFTWARE' | 'PAUSE_SYNC' | 'RESUME_SYNC',
+  commandType: 'FORCE_SYNC_SALES' | 'FORCE_SYNC_MASTERS' | 'FORCE_SYNC_PURCHASE_ORDERS' | 'FORCE_SYNC_ODC' | 'SYNC_HISTORICAL' | 'SYNC_BASELINE' | 'RESTART_SERVICE' | 'UPDATE_SOFTWARE' | 'PAUSE_SYNC' | 'RESUME_SYNC',
   parameters: Record<string, any> = {}
 ): Promise<StoreAgentCommand> {
   try {

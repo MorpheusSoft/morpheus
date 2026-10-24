@@ -36,6 +36,13 @@ public class PurchaseOrdersExtractorWorker : BackgroundService
                     continue;
                 }
 
+                if (!SyncStateManager.IsPurchaseOrdersEnabled())
+                {
+                    _logger.LogDebug("[CONFIG] Extracción de ODC deshabilitada por interruptor central.");
+                    await Task.Delay(TimeSpan.FromMinutes(2), stoppingToken);
+                    continue;
+                }
+
                 var config = _configuration.GetSection("DirectExtractors:PurchaseOrders").Get<DirectExtractorConfig>();
 
                 if (config != null && config.Enabled)
