@@ -1563,6 +1563,8 @@ def import_purchase_orders_legacy(
             # Actualizar orden existente (Idempotencia)
             existing_po.status = target_status
             existing_po.total_amount = Decimal(str(odc.N_TOTAL or 0.0))
+            if fac_id:
+                existing_po.dest_facility_id = fac_id
             if exp_date:
                 existing_po.expiration_date = exp_date
             
