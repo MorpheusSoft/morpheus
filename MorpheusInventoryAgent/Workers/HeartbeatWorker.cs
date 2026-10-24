@@ -168,7 +168,7 @@ public class HeartbeatWorker : BackgroundService
         {
             FacilityId = facilityId,
             RegisterCode = "SERVER-STORE",
-            AgentVersion = "2.5.0-neo",
+            AgentVersion = "2.5.1-neo",
             MachineName = Environment.MachineName,
             SqlServerStatus = sqlStatus,
             LastStellarSaleTime = lastStellarSale,

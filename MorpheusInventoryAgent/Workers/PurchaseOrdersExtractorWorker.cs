@@ -43,9 +43,9 @@ public class PurchaseOrdersExtractorWorker : BackgroundService
                     continue;
                 }
 
-                var config = _configuration.GetSection("DirectExtractors:PurchaseOrders").Get<DirectExtractorConfig>();
+                var config = ResolveConfig();
 
-                if (config != null && config.Enabled)
+                if (config.Enabled)
                 {
                     await ProcessExtractionAsync(config, allowExpired: false, stoppingToken: stoppingToken);
                     await Task.Delay(TimeSpan.FromMinutes(config.IntervalMinutes > 0 ? config.IntervalMinutes : 15), stoppingToken);
@@ -64,19 +64,35 @@ public class PurchaseOrdersExtractorWorker : BackgroundService
         }
     }
 
-    public async Task RunOnceAsync(bool allowExpired = false, CancellationToken stoppingToken = default)
+    private DirectExtractorConfig ResolveConfig()
     {
         var config = _configuration.GetSection("DirectExtractors:PurchaseOrders").Get<DirectExtractorConfig>();
-        if (config == null)
+        if (config != null && !string.IsNullOrWhiteSpace(config.TargetApiUrl))
         {
-            var baseApi = _configuration.GetValue<string>("DefaultTargetApiUrl", "https://api.qa.morpheussoft.net/api/v1");
-            config = new DirectExtractorConfig
-            {
-                Enabled = true,
-                IntervalMinutes = 15,
-                TargetApiUrl = $"{baseApi.TrimEnd('/')}/import/purchase-orders-legacy"
-            };
+            return config;
         }
+
+        string baseApi = "https://api.grupocatania.com/api/v1";
+        var referenceUrl = _configuration.GetValue<string>("DirectExtractors:Sales:TargetApiUrl")
+                        ?? _configuration.GetValue<string>("DirectExtractors:Products:TargetApiUrl")
+                        ?? _configuration.GetValue<string>("DefaultTargetApiUrl");
+
+        if (!string.IsNullOrWhiteSpace(referenceUrl) && Uri.TryCreate(referenceUrl, UriKind.Absolute, out var uri))
+        {
+            baseApi = $"{uri.Scheme}://{uri.Authority}/api/v1";
+        }
+
+        return new DirectExtractorConfig
+        {
+            Enabled = config?.Enabled ?? true,
+            IntervalMinutes = (config != null && config.IntervalMinutes > 0) ? config.IntervalMinutes : 15,
+            TargetApiUrl = $"{baseApi.TrimEnd('/')}/import/purchase-orders-legacy"
+        };
+    }
+
+    public async Task RunOnceAsync(bool allowExpired = false, CancellationToken stoppingToken = default)
+    {
+        var config = ResolveConfig();
 
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("=========================================================");
@@ -97,7 +113,7 @@ public class PurchaseOrdersExtractorWorker : BackgroundService
 
         string dateCondition = allowExpired
             ? "1=1"
-            : "(m.DU_FECHAVENCIMIENTO >= CAST(GETDATE() AS DATE) OR m.DU_FECHAVENCIMIENTO IS NULL)";
+            : "m.DU_FECHAVENCIMIENTO >= CAST(GETDATE() AS DATE)";
 
         string query = $@"
             SELECT 
@@ -143,6 +159,9 @@ public class PurchaseOrdersExtractorWorker : BackgroundService
             Console.ForegroundColor = ConsoleColor.DarkGray;
             Console.WriteLine("  [--] No se encontraron órdenes de compra pendientes por recepción.");
             Console.ResetColor();
+            var emptyState = SyncStateManager.LoadState();
+            emptyState.LastPurchaseOrderSync = DateTime.Now;
+            SyncStateManager.SaveState(emptyState);
             return;
         }
 
@@ -211,8 +230,7 @@ public class PurchaseOrdersExtractorWorker : BackgroundService
         string targetUrl = config.TargetApiUrl;
         if (string.IsNullOrEmpty(targetUrl))
         {
-            var baseApi = _configuration.GetValue<string>("DefaultTargetApiUrl", "https://api.qa.morpheussoft.net/api/v1");
-            targetUrl = $"{baseApi.TrimEnd('/')}/import/purchase-orders-legacy";
+            targetUrl = ResolveConfig().TargetApiUrl;
         }
 
         var queryParams = new List<string> { $"facility_id={facilityId}" };
@@ -240,6 +258,7 @@ public class PurchaseOrdersExtractorWorker : BackgroundService
             Console.WriteLine($"  [ERROR] Fallo al enviar ODC. HTTP {(int)response.StatusCode}: {errorBody}");
             Console.ResetColor();
             _logger.LogWarning("Failed to post purchase orders. Status code: {StatusCode}, Error: {Error}", response.StatusCode, errorBody);
+            throw new HttpRequestException($"Fallo al enviar ODC a {targetUrl}. HTTP {(int)response.StatusCode}: {errorBody}");
         }
     }
 }

@@ -1507,8 +1507,8 @@ def import_purchase_orders_legacy(
             continue
 
         # Validar fecha de vencimiento (a menos que se permita vencidas para testing)
-        exp_date = _parse_date(odc.DU_FECHAVENCIMIENTO) or _parse_date(odc.d_fecha_recepcion)
-        if not allow_expired and exp_date and exp_date < today:
+        exp_date = _parse_date(odc.DU_FECHAVENCIMIENTO)
+        if not allow_expired and (not exp_date or exp_date < today):
             skipped_count += 1
             continue
 

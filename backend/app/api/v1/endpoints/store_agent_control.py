@@ -22,7 +22,7 @@ from app.schemas.store_agent_control import (
 
 router = APIRouter()
 
-LATEST_AGENT_VERSION = "2.5.0-neo"
+LATEST_AGENT_VERSION = "2.5.1-neo"
 
 @router.get("/facilities", response_model=List[FacilityAgentStatusSchema])
 def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
