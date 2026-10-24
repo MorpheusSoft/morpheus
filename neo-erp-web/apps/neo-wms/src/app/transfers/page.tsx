@@ -107,42 +107,50 @@ export default function WmsTransfersPage() {
     }
 
     try {
-      const prodRes = await api.get('/products/?limit=2000');
-      let prodList: any[] = [];
-      if (Array.isArray(prodRes.data)) {
-        prodList = prodRes.data;
-      } else if (prodRes.data?.items && Array.isArray(prodRes.data.items)) {
-        prodList = prodRes.data.items;
-      } else if (prodRes.data?.data && Array.isArray(prodRes.data.data)) {
-        prodList = prodRes.data.data;
-      }
-
-      const variants: any[] = [];
-      prodList.forEach((p: any) => {
-        if (p && p.variants && p.variants.length > 0) {
-          p.variants.forEach((v: any) => {
-            variants.push({
-              label: `${p.name || 'Producto'} ${v.sku ? `(SKU: ${v.sku})` : ''}`,
-              value: v.id,
-              sku: v.sku || 'N/A',
-              product_name: p.name || 'Producto',
-              uom_base: p.uom_base || v.uom_base || 'UND'
-            });
-          });
-        } else if (p && p.id) {
-          variants.push({
-            label: `${p.name || 'Producto'} (ID: ${p.id})`,
-            value: p.id,
-            sku: p.sku || 'N/A',
-            product_name: p.name || 'Producto',
-            uom_base: p.uom_base || 'UND'
-          });
-        }
-      });
+      const prodRes = await api.get('/products/selector?limit=300');
+      const prodList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.items || prodRes.data?.data || []);
+      const variants = prodList.map((item: any) => ({
+        ...item,
+        label: item.label || `${item.product_name || item.name || 'Producto'} (SKU: ${item.sku || 'N/A'})`,
+        value: item.value || item.variant_id || item.id,
+        sku: item.sku || 'N/A',
+        product_name: item.product_name || item.name || 'Producto',
+        uom_base: item.uom_base || 'UND'
+      }));
       setProductsList(variants);
     } catch (e) {
       console.error("Error al cargar productos:", e);
     }
+  };
+
+  const productFilterTimeoutRef = useRef<any>(null);
+  const handleProductFilter = (filterText: string) => {
+    if (productFilterTimeoutRef.current) clearTimeout(productFilterTimeoutRef.current);
+    productFilterTimeoutRef.current = setTimeout(async () => {
+      try {
+        const q = (filterText || '').trim();
+        const url = q ? `/products/selector?q=${encodeURIComponent(q)}&limit=100` : '/products/selector?limit=300';
+        const prodRes = await api.get(url);
+        const prodList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.items || prodRes.data?.data || []);
+        const variants = prodList.map((item: any) => ({
+          ...item,
+          label: item.label || `${item.product_name || item.name || 'Producto'} (SKU: ${item.sku || 'N/A'})`,
+          value: item.value || item.variant_id || item.id,
+          sku: item.sku || 'N/A',
+          product_name: item.product_name || item.name || 'Producto',
+          uom_base: item.uom_base || 'UND'
+        }));
+        setProductsList(prev => {
+          const sel = prev.find(p => p.value === selectedVariantId);
+          if (sel && !variants.some((v: any) => v.value === sel.value)) {
+            return [sel, ...variants];
+          }
+          return variants;
+        });
+      } catch (e) {
+        console.error("Error filtrando productos:", e);
+      }
+    }, 200);
   };
 
   useEffect(() => {
@@ -632,10 +640,11 @@ export default function WmsTransfersPage() {
                 optionLabel="label"
                 optionValue="value"
                 filter
-                filterBy="label,sku,product_name"
+                filterBy="search_key,label,sku,product_name,barcodes_str"
+                onFilter={(e) => handleProductFilter(e.filter)}
                 showClear
                 onChange={(e) => setSelectedVariantId(e.value)}
-                placeholder="Buscar por nombre o SKU de producto..."
+                placeholder="Buscar por nombre, SKU o cualquier código..."
                 className="w-full text-xs font-bold bg-white"
                 style={{ width: '100%' }}
                 valueTemplate={(option, props) => {
@@ -787,10 +796,11 @@ export default function WmsTransfersPage() {
                 optionLabel="label"
                 optionValue="value"
                 filter
-                filterBy="label,sku,product_name"
+                filterBy="search_key,label,sku,product_name,barcodes_str"
+                onFilter={(e) => handleProductFilter(e.filter)}
                 showClear
                 onChange={(e) => setSelectedVariantId(e.value)}
-                placeholder="Buscar por nombre o SKU de producto..."
+                placeholder="Buscar por nombre, SKU o cualquier código..."
                 className="w-full text-xs font-bold bg-white"
                 style={{ width: '100%' }}
                 valueTemplate={(option, props) => {

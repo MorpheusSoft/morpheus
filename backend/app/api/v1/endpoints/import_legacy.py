@@ -7,7 +7,7 @@ from sqlalchemy import text
 from app.api import deps
 from app.models.inventory import Product, ProductVariant, Category, ProductFacilityPrice, ProductBarcode, ProductPackaging
 from app.models.core import Currency, Tribute, Supplier, Facility
-from app.models.purchasing import SupplierProduct
+from app.models.purchasing import SupplierProduct, PurchaseOrder, PurchaseOrderLine
 from app.models.store_agent_control import StoreAgentConfig
 
 router = APIRouter()
@@ -89,12 +89,14 @@ def import_products_legacy(
     sub_map = {}
     grp_map = {}
     dep_map = {}
+    cat_level_by_id = {}
     for cat in session.query(Category).all():
         if not cat.slug:
             continue
         slug = cat.slug.strip()
         parts = slug.split('-')
         if slug.startswith("sub-") and len(parts) >= 3:
+            cat_level_by_id[cat.id] = 3
             g_code = parts[1]
             s_code = parts[2]
             clean_g = g_code.lstrip('0') or '0'
@@ -108,6 +110,7 @@ def import_products_legacy(
             elif isinstance(sub_map.get(s_code), int) and sub_map[s_code] != cat.id:
                 sub_map[s_code] = None
         elif slug.startswith("grp-") and len(parts) >= 3:
+            cat_level_by_id[cat.id] = 2
             d_code = parts[1]
             g_code = parts[2]
             clean_d = d_code.lstrip('0') or '0'
@@ -121,6 +124,7 @@ def import_products_legacy(
             elif isinstance(grp_map.get(g_code), int) and grp_map[g_code] != cat.id:
                 grp_map[g_code] = None
         elif slug.startswith("dep-") and len(parts) >= 2:
+            cat_level_by_id[cat.id] = 1
             d_code = parts[1]
             clean_d = d_code.lstrip('0') or '0'
             dep_map[d_code] = cat.id
@@ -162,15 +166,110 @@ def import_products_legacy(
 
         return None
             
-    # Cache existing variants based on STELLAR_CODE to speed up lookups
-    stellar_barcodes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
-    variant_map = {bc.barcode: bc.variant for bc in stellar_barcodes_db}
-    existing_barcodes_all = set(b[0] for b in session.query(ProductBarcode.barcode).all())
-    
+    # Cache existing products, variants, barcodes, and facility prices in 4 bulk queries (avoiding 100,000+ N+1 lazy loads)
+    variants_by_id = {v.id: v for v in session.query(ProductVariant).all()}
+    products_by_id = {pr.id: pr for pr in session.query(Product).all()}
+
+    all_barcodes_db = session.query(ProductBarcode).all()
+    existing_barcodes_all = {bc.barcode for bc in all_barcodes_db}
+    variant_map = {}
+    unit_barcodes_by_variant = {}
+    for bc in all_barcodes_db:
+        if bc.code_type == 'STELLAR_CODE':
+            v_obj = variants_by_id.get(bc.product_variant_id)
+            if v_obj is not None:
+                variant_map[bc.barcode] = v_obj
+        if bc.code_type == 'STELLAR_CODE' or (bc.conversion_factor is not None and float(bc.conversion_factor) == 1.0):
+            unit_barcodes_by_variant.setdefault(bc.product_variant_id, []).append(bc)
+
+    fp_by_variant = {}
+    for fp in session.query(ProductFacilityPrice).all():
+        if fp.variant_id not in fp_by_variant:
+            fp_by_variant[fp.variant_id] = fp
+
+    pending_new_batch = []
+
+    def flush_new_products_batch():
+        if not pending_new_batch:
+            return
+        new_products = []
+        for item in pending_new_batch:
+            parent_product = Product(
+                name=item["name"],
+                category_id=item["cat_id"],
+                currency_id=item["curr_id"],
+                tax_id=item["tax_id"],
+                brand=item["brand"],
+                product_type='STOCKED',
+                uom_base=item["uom_base"],
+                origin='NACIONAL',
+                is_active=True,
+                has_variants=False,
+                image_main=item["img"]
+            )
+            new_products.append(parent_product)
+            item["product_obj"] = parent_product
+
+        session.add_all(new_products)
+        session.flush()
+
+        new_variants = []
+        for item in pending_new_batch:
+            parent_product = item["product_obj"]
+            products_by_id[parent_product.id] = parent_product
+            variant = ProductVariant(
+                product_id=parent_product.id,
+                sku=f"PRD-{parent_product.id}",
+                currency_id=item["curr_id"],
+                standard_cost=item["cost"],
+                replacement_cost=item["cost"],
+                average_cost=item["cost"],
+                last_cost=item["cost"],
+                sales_price=item["price"],
+                is_active=True
+            )
+            new_variants.append(variant)
+            item["variant_obj"] = variant
+
+        session.add_all(new_variants)
+        session.flush()
+
+        new_bcs_and_fps = []
+        for item in pending_new_batch:
+            variant = item["variant_obj"]
+            code = item["code"]
+            variants_by_id[variant.id] = variant
+            variant_map[code] = variant
+
+            if code not in existing_barcodes_all:
+                stellar_barcode = ProductBarcode(
+                    product_variant_id=variant.id,
+                    barcode=code,
+                    code_type='STELLAR_CODE',
+                    uom=item["uom_base"],
+                    conversion_factor=1.0
+                )
+                new_bcs_and_fps.append(stellar_barcode)
+                existing_barcodes_all.add(code)
+                unit_barcodes_by_variant.setdefault(variant.id, []).append(stellar_barcode)
+
+            facility_price = ProductFacilityPrice(
+                variant_id=variant.id,
+                facility_id=default_fac_id,
+                sales_price=item["price"],
+                target_utility_pct=item["margin_pct"]
+            )
+            new_bcs_and_fps.append(facility_price)
+            fp_by_variant[variant.id] = facility_price
+
+        session.add_all(new_bcs_and_fps)
+        pending_new_batch.clear()
+
+    pending_new_by_code = {}
     count = 0
     for p in products_in:
         legacy_stellar_code = p.c_Codigo.strip()
-        if legacy_stellar_code.lower() in ('codigo', 'sku'): continue
+        if not legacy_stellar_code or legacy_stellar_code.lower() in ('codigo', 'sku'): continue
         
         # Validar tipo de producto (n_tipopeso): 0 = Unidad (UND), 1 y 2 = Volumen/Pesado (KG), 3, 4 y 5 = Omitir
         tipopeso = int(p.n_tipopeso) if p.n_tipopeso is not None else 0
@@ -207,91 +306,90 @@ def import_products_legacy(
         existing_variant = variant_map.get(legacy_stellar_code)
         
         if existing_variant:
-            # UPSERT: Update existing product and variant
-            existing_product = existing_variant.product
-            existing_product.name = name
-            if cat_id:
-                existing_product.category_id = cat_id
-            existing_product.tax_id = tax_id
-            existing_product.brand = brand
-            existing_product.currency_id = curr_id
-            existing_product.uom_base = uom_base
-            if img:
-                existing_product.image_main = img
+            # UPSERT: Update existing product and variant only when values changed
+            existing_product = products_by_id.get(existing_variant.product_id)
+            if existing_product:
+                if existing_product.name != name:
+                    existing_product.name = name
+                if cat_id and existing_product.category_id != cat_id:
+                    cur_lvl = cat_level_by_id.get(existing_product.category_id, 0)
+                    new_lvl = cat_level_by_id.get(cat_id, 0)
+                    if new_lvl >= cur_lvl:
+                        existing_product.category_id = cat_id
+                if existing_product.tax_id != tax_id:
+                    existing_product.tax_id = tax_id
+                if existing_product.brand != brand:
+                    existing_product.brand = brand
+                if existing_product.currency_id != curr_id:
+                    existing_product.currency_id = curr_id
+                if existing_product.uom_base != uom_base:
+                    existing_product.uom_base = uom_base
+                if img and existing_product.image_main != img:
+                    existing_product.image_main = img
                 
-            existing_variant.standard_cost = cost
-            existing_variant.replacement_cost = cost
-            existing_variant.average_cost = cost
-            existing_variant.last_cost = cost
-            existing_variant.sales_price = price
+            if existing_variant.standard_cost != cost:
+                existing_variant.standard_cost = cost
+            if existing_variant.replacement_cost != cost:
+                existing_variant.replacement_cost = cost
+            if existing_variant.average_cost != cost:
+                existing_variant.average_cost = cost
+            if existing_variant.last_cost != cost:
+                existing_variant.last_cost = cost
+            if existing_variant.sales_price != price:
+                existing_variant.sales_price = price
             
-            for bc in existing_variant.barcodes:
-                if bc.code_type == 'STELLAR_CODE' or (bc.conversion_factor and float(bc.conversion_factor) == 1.0):
+            for bc in unit_barcodes_by_variant.get(existing_variant.id, ()):
+                if bc.uom != uom_base:
                     bc.uom = uom_base
             
             # Update facility price
-            if existing_variant.facility_prices:
-                fp = existing_variant.facility_prices[0]
-                fp.sales_price = price
-                fp.target_utility_pct = margin_pct
+            fp = fp_by_variant.get(existing_variant.id)
+            if fp:
+                if fp.sales_price != price:
+                    fp.sales_price = price
+                if fp.target_utility_pct != margin_pct:
+                    fp.target_utility_pct = margin_pct
+        elif legacy_stellar_code in pending_new_by_code:
+            item = pending_new_by_code[legacy_stellar_code]
+            item.update({
+                "name": name,
+                "cat_id": cat_id,
+                "curr_id": curr_id,
+                "tax_id": tax_id,
+                "brand": brand,
+                "uom_base": uom_base,
+                "img": img,
+                "cost": cost,
+                "price": price,
+                "margin_pct": margin_pct,
+            })
         else:
-            # CREATE NEW
-            parent_product = Product(
-                name=name,
-                category_id=cat_id,
-                currency_id=curr_id,
-                tax_id=tax_id,
-                brand=brand,
-                product_type='STOCKED',
-                uom_base=uom_base,
-                origin='NACIONAL',
-                is_active=True,
-                has_variants=False,
-                image_main=img
-            )
-            session.add(parent_product)
-            session.flush() # To get ID
-            
-            variant = ProductVariant(
-                product_id=parent_product.id,
-                sku=f"PRD-{parent_product.id}",
-                currency_id=curr_id,
-                standard_cost=cost,
-                replacement_cost=cost,
-                average_cost=cost,
-                last_cost=cost,
-                sales_price=price,
-                is_active=True
-            )
-            session.add(variant)
-            session.flush()
-            
-            if legacy_stellar_code not in existing_barcodes_all:
-                stellar_barcode = ProductBarcode(
-                    product_variant_id=variant.id,
-                    barcode=legacy_stellar_code,
-                    code_type='STELLAR_CODE',
-                    uom=uom_base,
-                    conversion_factor=1.0
-                )
-                session.add(stellar_barcode)
-                existing_barcodes_all.add(legacy_stellar_code)
-            
-            facility_price = ProductFacilityPrice(
-                variant_id=variant.id,
-                facility_id=default_fac_id,
-                sales_price=price,
-                target_utility_pct=margin_pct
-            )
-            session.add(facility_price)
-            
-            # Also add to map so subsequent duplicates in the same payload are ignored or updated
-            variant_map[legacy_stellar_code] = variant
+            item = {
+                "code": legacy_stellar_code,
+                "name": name,
+                "cat_id": cat_id,
+                "curr_id": curr_id,
+                "tax_id": tax_id,
+                "brand": brand,
+                "uom_base": uom_base,
+                "img": img,
+                "cost": cost,
+                "price": price,
+                "margin_pct": margin_pct,
+            }
+            pending_new_batch.append(item)
+            pending_new_by_code[legacy_stellar_code] = item
+            if len(pending_new_batch) >= 1000:
+                flush_new_products_batch()
+                pending_new_by_code.clear()
             
         count += 1
-        if count % 500 == 0:
-            session.flush()
+        if count % 5000 == 0:
             print(f"  ... Procesados {count} productos")
+
+    if pending_new_batch:
+        flush_new_products_batch()
+        pending_new_by_code.clear()
             
     session.commit()
     print(f"✅ ¡Carga Maestro terminada! Total productos procesados con Costo, Impuesto y Margen Utilidad: {count}")
@@ -319,12 +417,15 @@ def import_barcodes_legacy(
     count = 0
     not_found = 0
     
-    # Pre-cache variants based on STELLAR_CODE to optimize inserts
-    stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
-    variant_map = {bc.barcode: bc.product_variant_id for bc in stellar_codes_db}
+    # Pre-cache variants based on STELLAR_CODE using lightweight column tuple query
+    stellar_codes_db = session.query(ProductBarcode.barcode, ProductBarcode.product_variant_id).filter(
+        ProductBarcode.code_type == 'STELLAR_CODE'
+    ).all()
+    variant_map = {row[0]: row[1] for row in stellar_codes_db}
     
-    # Pre-cache existing barcodes in memory to avoid 14,000 DB roundtrips and timeouts
+    # Pre-cache existing barcodes in memory to avoid DB roundtrips and timeouts
     existing_barcodes = set(b[0] for b in session.query(ProductBarcode.barcode).all())
+    new_barcodes = []
     
     for b in barcodes_in:
         stellar_code = b.c_Codigo.strip()
@@ -347,14 +448,15 @@ def import_barcodes_legacy(
                 uom="UND",
                 conversion_factor=b.n_Cantidad or 1.0
             )
-            session.add(new_barcode)
+            new_barcodes.append(new_barcode)
             existing_barcodes.add(alterno)
             count += 1
             
-            if count % 1000 == 0:
-                session.commit()
-                print(f"  ... Insertados {count} códigos de barra")
-                
+            if count % 5000 == 0:
+                print(f"  ... Preparados {count} códigos de barra")
+
+    if new_barcodes:
+        session.bulk_save_objects(new_barcodes)
     session.commit()
     print(f"✅ ¡Carga de Códigos terminada! Insertados: {count}, No encontrados: {not_found}")
     return {"message": "Success", "imported": count, "not_found": not_found}
@@ -836,27 +938,100 @@ def import_supplier_products_legacy(
     count = 0
     not_found = 0
     
-    # 1. Pre-cache variants based on STELLAR_CODE (c_Codigo) mapping to (variant_id, product_id)
-    stellar_codes_db = session.query(ProductBarcode).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
-    variant_map = {}
-    for bc in stellar_codes_db:
-        if bc.variant:
-            variant_map[bc.barcode] = (bc.product_variant_id, bc.variant.product_id)
+    # 1. Pre-cache variants based on STELLAR_CODE (c_Codigo) mapping to (variant_id, product_id) in 1 JOIN query
+    stellar_rows = session.query(
+        ProductBarcode.barcode,
+        ProductBarcode.product_variant_id,
+        ProductVariant.product_id
+    ).join(
+        ProductVariant, ProductBarcode.product_variant_id == ProductVariant.id
+    ).filter(
+        ProductBarcode.code_type == 'STELLAR_CODE'
+    ).all()
+    variant_map = {r[0]: (r[1], r[2]) for r in stellar_rows}
     
-    # 2. Pre-cache suppliers by code
+    # 2. Pre-cache suppliers by tax_id, GEN-code, and name
     suppliers_db = session.query(Supplier).all()
-    supplier_map = {s.tax_id: s.id for s in suppliers_db if s.tax_id} # Asumiendo que guardamos el código como tax_id o name
-    
-    # Check if we should match by tax_id or name
-    # We will map by name as well just in case
-    supplier_name_map = {s.name: s.id for s in suppliers_db}
+    supplier_map = {}
+    supplier_name_map = {}
+    for s in suppliers_db:
+        if s.tax_id:
+            t_clean = s.tax_id.strip()
+            supplier_map[t_clean] = s.id
+            supplier_map[t_clean.upper()] = s.id
+            if t_clean.upper().startswith("GEN-"):
+                raw_c = t_clean[4:].strip()
+                supplier_map[raw_c] = s.id
+                supplier_map[raw_c.upper()] = s.id
+        if s.name:
+            n_clean = s.name.strip()
+            supplier_name_map[n_clean] = s.id
+            supplier_name_map[n_clean.upper()] = s.id
 
     # 3. Pre-cache packagings by (product_id, name.upper())
     pack_map = {(p.product_id, p.name.upper()): p.id for p in session.query(ProductPackaging).all()}
     
-    # 4. Pre-cache existing SupplierProducts to avoid 10,000 DB queries
+    # 4. Pre-cache existing SupplierProducts to avoid DB roundtrips
     existing_sps = {(sp.variant_id, sp.supplier_id): sp for sp in session.query(SupplierProduct).all()}
-    
+
+    # Batch-create any missing suppliers first
+    missing_sup_codes = {}
+    for sp in supplier_products_in:
+        sup_code = sp.c_CodProveedor.strip() if sp.c_CodProveedor else ""
+        if not sup_code:
+            continue
+        if (sup_code not in supplier_map and sup_code.upper() not in supplier_map
+                and sup_code not in supplier_name_map and sup_code.upper() not in supplier_name_map):
+            missing_sup_codes.setdefault(sup_code.upper(), sup_code)
+
+    if missing_sup_codes:
+        try:
+            with session.begin_nested():
+                new_sups = [
+                    Supplier(name=sc, tax_id=sc, lead_time_days=3, is_active=True)
+                    for sc in missing_sup_codes.values()
+                ]
+                session.add_all(new_sups)
+                session.flush()
+                for ns in new_sups:
+                    supplier_map[ns.tax_id] = ns.id
+                    supplier_map[ns.tax_id.upper()] = ns.id
+        except Exception:
+            for sc in missing_sup_codes.values():
+                try:
+                    with session.begin_nested():
+                        ns = Supplier(name=sc, tax_id=sc, lead_time_days=3, is_active=True)
+                        session.add(ns)
+                        session.flush()
+                        supplier_map[ns.tax_id] = ns.id
+                        supplier_map[ns.tax_id.upper()] = ns.id
+                except Exception:
+                    pass
+
+    # Batch-create any missing packagings
+    missing_packs = {}
+    for sp in supplier_products_in:
+        stellar_code = sp.c_Codigo.strip()
+        var_info = variant_map.get(stellar_code)
+        if not var_info:
+            continue
+        _, product_id = var_info
+        pack_name = sp.empaque.strip().upper()
+        key = (product_id, pack_name)
+        if key not in pack_map and key not in missing_packs:
+            missing_packs[key] = Decimal(str(sp.n_CantiBul))
+
+    if missing_packs:
+        new_packs = [
+            ProductPackaging(product_id=pid, name=pname, qty_per_unit=qty)
+            for (pid, pname), qty in missing_packs.items()
+        ]
+        session.add_all(new_packs)
+        session.flush()
+        for np in new_packs:
+            pack_map[(np.product_id, np.name.upper())] = np.id
+
+    new_sps = []
     for sp in supplier_products_in:
         stellar_code = sp.c_Codigo.strip()
         sup_code = sp.c_CodProveedor.strip() if sp.c_CodProveedor else ""
@@ -866,83 +1041,54 @@ def import_supplier_products_legacy(
         var_info = variant_map.get(stellar_code)
         if not var_info:
             not_found += 1
-            if not_found <= 5 or not_found % 500 == 0:
+            if not_found <= 5 or not_found % 2000 == 0:
                 print(f"  [WARN] Variante no encontrada para STELLAR_CODE={stellar_code}. Saltando proveedor {sup_code} (Total no encontradas: {not_found}).")
             continue
             
         variant_id, product_id = var_info
             
-        # Get or create supplier
-        supplier_id = supplier_map.get(sup_code)
+        supplier_id = (
+            supplier_map.get(sup_code)
+            or supplier_map.get(sup_code.upper())
+            or supplier_name_map.get(sup_code)
+            or supplier_name_map.get(sup_code.upper())
+        )
         if not supplier_id:
-            supplier_id = supplier_name_map.get(sup_code)
+            continue
             
-        if not supplier_id:
-            # Check DB directly in case it exists with different casing
-            existing_sup = session.query(Supplier).filter((Supplier.tax_id == sup_code) | (Supplier.name == sup_code)).first()
-            if existing_sup:
-                supplier_id = existing_sup.id
-                supplier_map[sup_code] = supplier_id
-            else:
-                # Create dummy supplier safely
-                try:
-                    new_sup = Supplier(
-                        name=sup_code,
-                        tax_id=sup_code,
-                        lead_time_days=3,
-                        is_active=True
-                    )
-                    session.add(new_sup)
-                    session.flush()
-                    supplier_id = new_sup.id
-                    supplier_map[sup_code] = supplier_id
-                except Exception:
-                    session.rollback()
-                    existing_sup = session.query(Supplier).filter((Supplier.tax_id == sup_code) | (Supplier.name == sup_code)).first()
-                    if existing_sup:
-                        supplier_id = existing_sup.id
-                        supplier_map[sup_code] = supplier_id
-                    else:
-                        continue
-            
-        # Get or create pack
         pack_name = sp.empaque.strip().upper()
         pack_id = pack_map.get((product_id, pack_name))
-        if not pack_id:
-            new_pack = ProductPackaging(
-                product_id=product_id,
-                name=pack_name,
-                qty_per_unit=Decimal(str(sp.n_CantiBul))
-            )
-            session.add(new_pack)
-            session.flush()
-            pack_id = new_pack.id
-            pack_map[(product_id, pack_name)] = pack_id
             
         # Upsert SupplierProduct
         existing_sp = existing_sps.get((variant_id, supplier_id))
+        rep_cost = Decimal(str(sp.costo))
+        min_qty = Decimal(str(sp.compMin))
         
         if existing_sp:
-            existing_sp.replacement_cost = Decimal(str(sp.costo))
-            existing_sp.min_order_qty = Decimal(str(sp.compMin))
-            existing_sp.pack_id = pack_id
+            if existing_sp.replacement_cost != rep_cost:
+                existing_sp.replacement_cost = rep_cost
+            if existing_sp.min_order_qty != min_qty:
+                existing_sp.min_order_qty = min_qty
+            if existing_sp.pack_id != pack_id:
+                existing_sp.pack_id = pack_id
         else:
             new_sp = SupplierProduct(
                 variant_id=variant_id,
                 supplier_id=supplier_id,
-                replacement_cost=Decimal(str(sp.costo)),
-                min_order_qty=Decimal(str(sp.compMin)),
+                replacement_cost=rep_cost,
+                min_order_qty=min_qty,
                 pack_id=pack_id,
                 is_active=True
             )
-            session.add(new_sp)
+            new_sps.append(new_sp)
             existing_sps[(variant_id, supplier_id)] = new_sp
             
         count += 1
-        if count % 500 == 0:
-            session.flush()
+        if count % 5000 == 0:
             print(f"  ... Procesados {count} cruces")
-            
+
+    if new_sps:
+        session.add_all(new_sps)
     session.commit()
     print(f"✅ ¡Carga de Proveedores terminada! Registros: {count}, No encontrados: {not_found}")
     return {"message": "Success", "imported": count, "not_found": not_found}
@@ -965,6 +1111,8 @@ def import_suppliers_legacy(
     print(f"Iniciando carga de {len(suppliers_in)} Proveedores...")
     from app.models.core import Supplier
     
+    existing_by_tax_id = {s.tax_id: s for s in session.query(Supplier).all() if s.tax_id}
+    new_suppliers = []
     count = 0
     
     for s in suppliers_in:
@@ -972,15 +1120,21 @@ def import_suppliers_legacy(
         # Fallback to GEN-{codigo} if RIF/tax_id is empty or null to avoid UniqueViolation
         tax_id = s.rif.strip() if s.rif and s.rif.strip() else f"GEN-{s.codigo.strip()}"
         
-        existing = session.query(Supplier).filter(Supplier.tax_id == tax_id).first()
+        existing = existing_by_tax_id.get(tax_id)
         
         if existing:
-            existing.name = s.razon_social
-            existing.commercial_name = s.nombre_comercial
-            existing.fiscal_address = s.direccion
-            existing.commercial_contact_phone = s.telefono
-            existing.commercial_email = s.email
-            existing.is_active = is_active
+            if existing.name != s.razon_social:
+                existing.name = s.razon_social
+            if existing.commercial_name != s.nombre_comercial:
+                existing.commercial_name = s.nombre_comercial
+            if existing.fiscal_address != s.direccion:
+                existing.fiscal_address = s.direccion
+            if existing.commercial_contact_phone != s.telefono:
+                existing.commercial_contact_phone = s.telefono
+            if existing.commercial_email != s.email:
+                existing.commercial_email = s.email
+            if existing.is_active != is_active:
+                existing.is_active = is_active
         else:
             new_sup = Supplier(
                 tax_id=tax_id,
@@ -991,13 +1145,15 @@ def import_suppliers_legacy(
                 commercial_email=s.email,
                 is_active=is_active
             )
-            session.add(new_sup)
+            new_suppliers.append(new_sup)
+            existing_by_tax_id[tax_id] = new_sup
             
         count += 1
-        if count % 500 == 0:
-            session.flush()
+        if count % 1000 == 0:
             print(f"  ... Procesados {count} proveedores")
-            
+
+    if new_suppliers:
+        session.add_all(new_suppliers)
     session.commit()
     print(f"✅ ¡Carga de Proveedores terminada! Registros procesados: {count}")
     return {"message": "Success", "imported": count}
@@ -1172,4 +1328,338 @@ def import_categories_legacy(
         "subgroups_processed": len(payload.subgroups),
         "total_categories_in_db": total
     }
+
+
+# ==============================================================================
+# Ingesta de Órdenes de Compra (ODC) desde Stellar (Fase de Transición Temporal)
+# ==============================================================================
+
+class LegacyPurchaseOrderLinePayload(BaseModel):
+    c_LINEA: int
+    c_CODARTICULO: str
+    c_descripcion: Optional[str] = None
+    n_CANTIDAD: float
+    n_CANT_RECIBIDA: Optional[float] = 0.0
+    n_COSTO: float
+    n_subtotal: Optional[float] = 0.0
+    n_impuesto: Optional[float] = 0.0
+    n_total: Optional[float] = 0.0
+    n_porcentajeimp: Optional[float] = 16.0
+    ns_cantidadempaque: Optional[float] = 1.0
+
+
+class LegacyPurchaseOrderPayload(BaseModel):
+    c_DOCUMENTO: str
+    d_FECHA: Optional[str] = None
+    d_fecha_recepcion: Optional[str] = None
+    DU_FECHAVENCIMIENTO: Optional[str] = None
+    c_DESCRIPCION: Optional[str] = None
+    c_status: Optional[str] = "DPE"
+    c_CODPROVEEDOR: str
+    c_CODLOCALIDAD: Optional[str] = None
+    C_CODMONEDA: Optional[str] = "USD"
+    n_FACTORCAMBIO: Optional[float] = 1.0
+    N_SUBTOTAL: Optional[float] = 0.0
+    N_IMPUESTO: Optional[float] = 0.0
+    N_TOTAL: Optional[float] = 0.0
+    c_OBSERVACION: Optional[str] = None
+    lines: List[LegacyPurchaseOrderLinePayload] = []
+
+
+class LegacyPurchaseOrdersBatch(BaseModel):
+    facility_id: Optional[int] = None
+    orders: List[LegacyPurchaseOrderPayload]
+
+
+@router.post("/purchase-orders-legacy")
+def import_purchase_orders_legacy(
+    payload: Union[LegacyPurchaseOrdersBatch, List[LegacyPurchaseOrderPayload]],
+    facility_id: Optional[int] = None,
+    allow_expired: Optional[bool] = False,
+    session: Session = Depends(deps.get_db)
+):
+    """
+    Ingesta temporal de Órdenes de Compra (ODC) desde Stellar (MA_ODC + TR_ODC).
+    Registra las ODC pendientes por recepción en Neo ERP en estado 'approved' o 'partial',
+    garantizando idempotencia absoluta y cero duplicados por número de documento.
+    """
+    from datetime import datetime, date
+
+    if isinstance(payload, LegacyPurchaseOrdersBatch):
+        orders_in = payload.orders
+        target_facility_id = payload.facility_id or facility_id
+    else:
+        orders_in = payload
+        target_facility_id = facility_id
+
+    if is_facility_sync_paused(session, target_facility_id):
+        print(f"[PAUSA] Ingesta de ODC bloqueada por administración para sede {target_facility_id or 'global'}.")
+        return {"message": "Sincronización pausada", "created": 0, "updated": 0, "skipped": 0, "paused": True}
+
+    if not orders_in:
+        return {"message": "No se recibieron órdenes en el lote", "created": 0, "updated": 0, "skipped": 0}
+
+    print(f"📦 [ODC Sync] Iniciando procesamiento de {len(orders_in)} órdenes de compra...")
+
+    def _parse_date(d_str: Optional[str]) -> Optional[date]:
+        if not d_str: return None
+        try:
+            clean = d_str.split('T')[0].split(' ')[0].strip()
+            return datetime.strptime(clean, "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+    def _parse_datetime(dt_str: Optional[str]) -> Optional[datetime]:
+        if not dt_str: return None
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(dt_str.strip()[:26], fmt)
+            except Exception:
+                continue
+        return None
+
+    today = date.today()
+
+    # 1. Pre-cargar Sucursales
+    facilities = session.query(Facility).all()
+    facility_by_id = {f.id: f for f in facilities}
+    facility_by_code = {f.code.strip().upper(): f.id for f in facilities if f.code}
+    default_facility_id = target_facility_id or (facilities[0].id if facilities else 1)
+
+    # 2. Pre-cargar Monedas
+    currencies = {c.code.strip().upper(): c.id for c in session.query(Currency).all() if c.code}
+    default_currency_id = currencies.get("USD") or (list(currencies.values())[0] if currencies else 1)
+
+    # 3. Pre-cargar Proveedores existentes por RIF normalizado
+    all_suppliers = session.query(Supplier).all()
+    suppliers_by_tax_id = {}
+    for sup in all_suppliers:
+        if sup.tax_id:
+            clean_rif = sup.tax_id.replace("-", "").replace(".", "").replace(" ", "").upper()
+            suppliers_by_tax_id[clean_rif] = sup
+            suppliers_by_tax_id[sup.tax_id.upper()] = sup
+
+    # 4. Pre-cargar Variantes por código Stellar
+    all_codes = set()
+    for odc in orders_in:
+        for line in odc.lines:
+            c = line.c_CODARTICULO.strip()
+            if c:
+                all_codes.add(c)
+                all_codes.add(c.lstrip('0') or '0')
+
+    variant_by_code = {}
+    if all_codes:
+        # Cruce vía ProductBarcode (code_type == 'STELLAR_CODE')
+        bc_rows = session.query(
+            ProductBarcode.barcode,
+            ProductBarcode.product_variant_id
+        ).filter(
+            ProductBarcode.code_type == 'STELLAR_CODE',
+            ProductBarcode.barcode.in_(list(all_codes))
+        ).all()
+        for b, vid in bc_rows:
+            variant_by_code[b] = vid
+            variant_by_code[b.lstrip('0') or '0'] = vid
+
+        # Cruce complementario vía ProductVariant.sku
+        missing = all_codes - set(variant_by_code.keys())
+        if missing:
+            v_rows = session.query(ProductVariant.id, ProductVariant.sku).filter(
+                ProductVariant.sku.in_(list(missing))
+            ).all()
+            for vid, sku in v_rows:
+                if sku:
+                    variant_by_code[sku] = vid
+                    variant_by_code[sku.lstrip('0') or '0'] = vid
+
+    # 5. Pre-cargar órdenes existentes por reference para garantizar IDEMPOTENCIA
+    references = [f"ODC-{odc.c_DOCUMENTO.strip()}" for odc in orders_in if odc.c_DOCUMENTO]
+    existing_orders = {}
+    if references:
+        po_rows = session.query(PurchaseOrder).filter(PurchaseOrder.reference.in_(references)).all()
+        for po in po_rows:
+            existing_orders[po.reference] = po
+
+    created_count = 0
+    updated_count = 0
+    skipped_count = 0
+    total_lines_created = 0
+
+    for odc in orders_in:
+        doc_num = odc.c_DOCUMENTO.strip()
+        if not doc_num:
+            skipped_count += 1
+            continue
+
+        ref = f"ODC-{doc_num}"
+        raw_status = (odc.c_status or "DPE").strip().upper()
+
+        # Descartar órdenes completadas en Stellar o anuladas
+        if raw_status in ('DCO', 'ANU'):
+            skipped_count += 1
+            continue
+
+        # Validar fecha de vencimiento (a menos que se permita vencidas para testing)
+        exp_date = _parse_date(odc.DU_FECHAVENCIMIENTO) or _parse_date(odc.d_fecha_recepcion)
+        if not allow_expired and exp_date and exp_date < today:
+            skipped_count += 1
+            continue
+
+        # Resolver Sucursal Destino
+        fac_id = target_facility_id
+        if not fac_id and odc.c_CODLOCALIDAD:
+            loc_code = odc.c_CODLOCALIDAD.strip().upper()
+            fac_id = facility_by_code.get(loc_code)
+        if not fac_id or fac_id not in facility_by_id:
+            fac_id = default_facility_id
+
+        # Resolver Proveedor
+        prov_code = odc.c_CODPROVEEDOR.strip()
+        clean_prov_rif = prov_code.replace("-", "").replace(".", "").replace(" ", "").upper()
+        supplier = suppliers_by_tax_id.get(clean_prov_rif) or suppliers_by_tax_id.get(prov_code.upper())
+        if not supplier:
+            # Auto-crear proveedor provisional para garantizar que ninguna orden se pierda
+            sup_name = odc.c_DESCRIPCION.strip() if odc.c_DESCRIPCION else f"PROVEEDOR {clean_prov_rif}"
+            supplier = Supplier(
+                tax_id=clean_prov_rif or prov_code,
+                name=sup_name,
+                commercial_name=sup_name,
+                is_active=True
+            )
+            session.add(supplier)
+            session.flush()
+            suppliers_by_tax_id[clean_prov_rif] = supplier
+
+        # Moneda
+        moneda_str = (odc.C_CODMONEDA or "USD").strip().upper()
+        curr_id = currencies.get(moneda_str, default_currency_id)
+        rate = Decimal(str(odc.n_FACTORCAMBIO or 1.0))
+
+        # Determinar estado de la orden en Neo según avance de líneas
+        tot_ordered = sum(l.n_CANTIDAD for l in odc.lines)
+        tot_received = sum(l.n_CANT_RECIBIDA or 0.0 for l in odc.lines)
+        
+        if tot_received >= tot_ordered and tot_ordered > 0:
+            target_status = 'received'
+        elif tot_received > 0:
+            target_status = 'partial'
+        else:
+            target_status = 'approved'
+
+        # Si ya fue totalmente recibida en Stellar o Neo, no la mostramos como pendiente
+        if target_status == 'received':
+            skipped_count += 1
+            continue
+
+        existing_po = existing_orders.get(ref)
+
+        if existing_po:
+            # Si en Neo ya está marcada como 'received' por el almacén, no sobreescribir
+            if existing_po.status == 'received':
+                skipped_count += 1
+                continue
+
+            # Actualizar orden existente (Idempotencia)
+            existing_po.status = target_status
+            existing_po.total_amount = Decimal(str(odc.N_TOTAL or 0.0))
+            if exp_date:
+                existing_po.expiration_date = exp_date
+            
+            # Sincronizar renglones existentes
+            existing_lines = {pol.variant_id: pol for pol in existing_po.lines}
+            for l in odc.lines:
+                art_code = l.c_CODARTICULO.strip()
+                var_id = variant_by_code.get(art_code) or variant_by_code.get(art_code.lstrip('0') or '0')
+                if not var_id:
+                    continue
+
+                q_ord = Decimal(str(l.n_CANTIDAD))
+                q_rec = Decimal(str(l.n_CANT_RECIBIDA or 0.0))
+                q_exp = Decimal(str(max(0.0, l.n_CANTIDAD - (l.n_CANT_RECIBIDA or 0.0))))
+                cost = Decimal(str(l.n_COSTO or 0.0))
+
+                line_obj = existing_lines.get(var_id)
+                if line_obj:
+                    line_obj.qty_ordered = q_ord
+                    line_obj.received_base_qty = q_rec
+                    line_obj.expected_base_qty = q_exp
+                    line_obj.unit_cost = cost
+                else:
+                    new_line = PurchaseOrderLine(
+                        order_id=existing_po.id,
+                        variant_id=var_id,
+                        qty_ordered=q_ord,
+                        received_base_qty=q_rec,
+                        expected_base_qty=q_exp,
+                        unit_cost=cost,
+                        billed_qty=q_rec,
+                        line_discount_str="0"
+                    )
+                    session.add(new_line)
+                    total_lines_created += 1
+
+            updated_count += 1
+        else:
+            # Crear nueva Orden de Compra en Neo
+            notes_str = f"[Sincronizada de Stellar ODC #{doc_num}] {odc.c_OBSERVACION or odc.c_DESCRIPCION or ''}".strip()
+            created_at_dt = _parse_datetime(odc.d_FECHA)
+
+            new_po = PurchaseOrder(
+                reference=ref,
+                supplier_id=supplier.id,
+                dest_facility_id=fac_id,
+                status=target_status,
+                total_amount=Decimal(str(odc.N_TOTAL or 0.0)),
+                notes=notes_str,
+                expiration_date=exp_date,
+                allow_partial_deliveries=True,
+                currency_id=curr_id,
+                exchange_rate=rate
+            )
+            if created_at_dt:
+                new_po.created_at = created_at_dt
+
+            session.add(new_po)
+            session.flush()
+
+            # Insertar renglones
+            for l in odc.lines:
+                art_code = l.c_CODARTICULO.strip()
+                var_id = variant_by_code.get(art_code) or variant_by_code.get(art_code.lstrip('0') or '0')
+                if not var_id:
+                    continue
+
+                q_ord = Decimal(str(l.n_CANTIDAD))
+                q_rec = Decimal(str(l.n_CANT_RECIBIDA or 0.0))
+                q_exp = Decimal(str(max(0.0, l.n_CANTIDAD - (l.n_CANT_RECIBIDA or 0.0))))
+                cost = Decimal(str(l.n_COSTO or 0.0))
+
+                new_line = PurchaseOrderLine(
+                    order_id=new_po.id,
+                    variant_id=var_id,
+                    qty_ordered=q_ord,
+                    received_base_qty=q_rec,
+                    expected_base_qty=q_exp,
+                    unit_cost=cost,
+                    billed_qty=q_rec,
+                    line_discount_str="0"
+                )
+                session.add(new_line)
+                total_lines_created += 1
+
+            existing_orders[ref] = new_po
+            created_count += 1
+
+    session.commit()
+    print(f"✅ [ODC Sync] Finalizado: Creadas={created_count}, Actualizadas={updated_count}, Omitidas={skipped_count}, Renglones={total_lines_created}")
+
+    return {
+        "message": "Success",
+        "created": created_count,
+        "updated": updated_count,
+        "skipped": skipped_count,
+        "total_lines_created": total_lines_created
+    }
+
 

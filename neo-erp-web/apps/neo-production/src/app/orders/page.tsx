@@ -57,14 +57,36 @@ interface BOMOption {
   primary_product_name?: string;
 }
 
+interface FacilityOption {
+  id: number;
+  code: string;
+  name: string;
+  is_active?: boolean;
+}
+
+interface WarehouseOption {
+  id: number;
+  facility_id: number;
+  facility_name?: string;
+  code: string;
+  name: string;
+  is_scrap?: boolean;
+  is_scrap_warehouse?: boolean;
+}
+
 interface WorkCenterOption {
   id: number;
+  facility_id: number;
+  facility_name?: string;
+  warehouse_wip_id?: number | null;
+  warehouse_wip_name?: string | null;
   code: string;
   name: string;
   sector: string;
   hourly_labor_rate: number;
   hourly_overhead_rate: number;
   overhead_per_kg: number;
+  is_active?: boolean;
 }
 
 interface AdHocInputRow {
@@ -107,7 +129,17 @@ interface ExplodePreviewResponse {
   bom_name: string;
   bom_type: string;
   sector: string;
+  facility_id?: number;
+  facility_name?: string;
+  source_warehouse_id?: number;
+  source_warehouse_name?: string;
+  dest_warehouse_id?: number;
+  dest_warehouse_name?: string;
+  work_center_id?: number | null;
+  work_center_code?: string | null;
   work_center_name?: string | null;
+  hourly_labor_rate?: number;
+  hourly_overhead_rate?: number;
   primary_product_sku?: string | null;
   primary_product_name?: string | null;
   exchange_rate: number;
@@ -174,7 +206,13 @@ export default function ProductionOrdersPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [filterState, setFilterState] = useState<string>("");
   const [filterSector, setFilterSector] = useState<string>("");
+  const [filterFacility, setFilterFacility] = useState<string>("");
   const [search, setSearch] = useState<string>("");
+
+  // Infraestructura Multi-Sede, Multi-Almacén y Multi-Estación (1..N por Sede)
+  const [facilities, setFacilities] = useState<FacilityOption[]>([]);
+  const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
+  const [workCenters, setWorkCenters] = useState<WorkCenterOption[]>([]);
 
   // Modal de Nueva Orden + Explosión FEFO
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
@@ -183,6 +221,8 @@ export default function ProductionOrdersPage() {
   const [boms, setBoms] = useState<BOMOption[]>([]);
   const [selectedBomId, setSelectedBomId] = useState<number>(0);
   const [plannedQty, setPlannedQty] = useState<number>(100);
+  const [selectedFacilityId, setSelectedFacilityId] = useState<number>(1);
+  const [selectedWorkCenterId, setSelectedWorkCenterId] = useState<number>(0);
   const [sourceWarehouseId, setSourceWarehouseId] = useState<number>(1);
   const [destWarehouseId, setDestWarehouseId] = useState<number>(1);
   const [startImmediately, setStartImmediately] = useState<boolean>(true);
@@ -194,31 +234,53 @@ export default function ProductionOrdersPage() {
 
   // Estado para modo Transformación Libre (Ad-Hoc sin fórmula)
   const [variants, setVariants] = useState<CatalogVariant[]>([]);
-  const [workCenters, setWorkCenters] = useState<WorkCenterOption[]>([]);
   const [adhocOutputVariantId, setAdhocOutputVariantId] = useState<number>(0);
   const [adhocOutputQty, setAdhocOutputQty] = useState<number>(10);
   const [adhocSector, setAdhocSector] = useState<string>("GASTRONOMY");
-  const [adhocWorkCenterId, setAdhocWorkCenterId] = useState<number>(0);
   const [adhocInputs, setAdhocInputs] = useState<AdHocInputRow[]>([
     { component_variant_id: 0, planned_qty: 5, input_role: "INGREDIENT" },
   ]);
 
-  const searchCatalogVariants = useCallback(async (queryText: string) => {
+  const loadInfrastructure = useCallback(async () => {
     try {
-      const res = await api.get("/mfg/catalog/variants", {
-        params: { search: queryText, limit: 80 },
-      });
-      const fetched: CatalogVariant[] = res.data.items || [];
-      setVariants((prev) => {
-        const map = new Map<number, CatalogVariant>();
-        for (const v of prev) map.set(v.id, v);
-        for (const v of fetched) map.set(v.id, v);
-        return Array.from(map.values());
-      });
+      const res = await api.get("/mfg/facilities-and-warehouses");
+      const facList: FacilityOption[] = res.data?.facilities || [];
+      const whList: WarehouseOption[] = res.data?.warehouses || [];
+      const wcList: WorkCenterOption[] = res.data?.work_centers || [];
+      setFacilities(facList);
+      setWarehouses(whList);
+      setWorkCenters(wcList);
+      return { facList, whList, wcList };
     } catch (err) {
-      console.error("Error buscando variantes:", err);
+      console.error("Error cargando infraestructura de sedes y almacenes:", err);
+      return { facList: facilities, whList: warehouses, wcList: workCenters };
     }
+  }, [facilities, warehouses, workCenters]);
+
+  useEffect(() => {
+    loadInfrastructure();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const searchCatalogVariants = useCallback(
+    async (queryText: string) => {
+      try {
+        const res = await api.get("/mfg/catalog/variants", {
+          params: { search: queryText, facility_id: selectedFacilityId, limit: 80 },
+        });
+        const fetched: CatalogVariant[] = res.data.items || [];
+        setVariants((prev) => {
+          const map = new Map<number, CatalogVariant>();
+          for (const v of prev) map.set(v.id, v);
+          for (const v of fetched) map.set(v.id, v);
+          return Array.from(map.values());
+        });
+      } catch (err) {
+        console.error("Error buscando variantes:", err);
+      }
+    },
+    [selectedFacilityId]
+  );
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -259,6 +321,7 @@ export default function ProductionOrdersPage() {
       const params: Record<string, string> = {};
       if (filterState) params.state = filterState;
       if (filterSector) params.sector = filterSector;
+      if (filterFacility) params.facility_id = filterFacility;
       if (search.trim()) params.search = search.trim();
 
       const res = await api.get("/mfg/orders", { params });
@@ -270,62 +333,165 @@ export default function ProductionOrdersPage() {
     } finally {
       setLoading(false);
     }
-  }, [filterState, filterSector, search]);
+  }, [filterState, filterSector, filterFacility, search]);
 
   useEffect(() => {
     fetchOrders();
   }, [fetchOrders]);
 
+  const syncFacilityDependencies = useCallback(
+    (
+      newFacId: number,
+      whList: WarehouseOption[],
+      wcList: WorkCenterOption[],
+      currentBom?: BOMOption | null
+    ) => {
+      setSelectedFacilityId(newFacId);
+      const facWarehouses = whList.filter(
+        (w) => w.facility_id === newFacId && !w.is_scrap && !w.is_scrap_warehouse
+      );
+      const facStations = wcList.filter(
+        (wc) => wc.facility_id === newFacId && wc.is_active !== false
+      );
+
+      let chosenWc: WorkCenterOption | undefined;
+      if (currentBom) {
+        if (currentBom.work_center_id) {
+          chosenWc = facStations.find((wc) => wc.id === currentBom.work_center_id);
+        }
+        if (!chosenWc) {
+          chosenWc = facStations.find((wc) => wc.sector === currentBom.sector);
+        }
+      }
+      if (!chosenWc && facStations.length > 0) {
+        chosenWc = facStations[0];
+      }
+
+      const nextWcId = chosenWc ? chosenWc.id : 0;
+      setSelectedWorkCenterId(nextWcId);
+
+      const wipWh =
+        chosenWc?.warehouse_wip_id != null
+          ? facWarehouses.find((w) => w.id === chosenWc.warehouse_wip_id)
+          : undefined;
+      const defaultWhId = wipWh?.id || facWarehouses[0]?.id || whList[0]?.id || 1;
+      setSourceWarehouseId(defaultWhId);
+      setDestWarehouseId(defaultWhId);
+    },
+    []
+  );
+
   const openNewOrderModal = async () => {
     setActionError(null);
     setShowCreateModal(true);
     try {
-      const promises: Promise<unknown>[] = [];
-      if (boms.length === 0) {
-        promises.push(
-          api.get("/mfg/boms").then((res) => {
-            const list: BOMOption[] = res.data || [];
-            setBoms(list);
-            const firstConvergent = list.find((b) => b.bom_type === "CONVERGENT_RECIPE") || list[0];
-            if (firstConvergent) {
-              setSelectedBomId(firstConvergent.id);
-              setPlannedQty(firstConvergent.base_qty || 100);
-            }
-          })
+      const infraPromise =
+        facilities.length === 0 || warehouses.length === 0 || workCenters.length === 0
+          ? loadInfrastructure()
+          : Promise.resolve({ facList: facilities, whList: warehouses, wcList: workCenters });
+
+      const bomsPromise =
+        boms.length === 0
+          ? api.get("/mfg/boms").then((res) => (res.data || []) as BOMOption[])
+          : Promise.resolve(boms);
+
+      const [{ facList, whList, wcList }, loadedBoms] = await Promise.all([
+        infraPromise,
+        bomsPromise,
+      ]);
+
+      if (boms.length === 0 && loadedBoms.length > 0) {
+        setBoms(loadedBoms);
+      }
+
+      const defaultFacId =
+        filterFacility && Number(filterFacility) > 0
+          ? Number(filterFacility)
+          : facList[0]?.id || 1;
+
+      const activeBom =
+        loadedBoms.find((b) => b.id === selectedBomId) ||
+        loadedBoms.find((b) => b.bom_type === "CONVERGENT_RECIPE") ||
+        loadedBoms[0] ||
+        null;
+
+      if (activeBom && !selectedBomId) {
+        setSelectedBomId(activeBom.id);
+        setPlannedQty(activeBom.base_qty || 100);
+      }
+
+      syncFacilityDependencies(defaultFacId, whList, wcList, activeBom);
+
+      const vRes = await api.get("/mfg/catalog/variants", {
+        params: { facility_id: defaultFacId, limit: 150 },
+      });
+      const vList: CatalogVariant[] = vRes.data.items || [];
+      setVariants(vList);
+      if (vList.length > 0) {
+        setAdhocOutputVariantId((prev) => prev || vList[0].id);
+        setAdhocInputs((prev) =>
+          prev.length === 1 && prev[0].component_variant_id === 0
+            ? [
+                {
+                  component_variant_id: vList[Math.min(1, vList.length - 1)].id,
+                  planned_qty: 5,
+                  input_role: "INGREDIENT",
+                },
+              ]
+            : prev
         );
       }
-      if (variants.length === 0) {
-        promises.push(
-          api.get("/mfg/catalog/variants", { params: { limit: 150 } }).then((res) => {
-            const vList: CatalogVariant[] = res.data.items || [];
-            setVariants(vList);
-            if (vList.length > 0) {
-              setAdhocOutputVariantId((prev) => prev || vList[0].id);
-              setAdhocInputs((prev) =>
-                prev.length === 1 && prev[0].component_variant_id === 0
-                  ? [
-                      {
-                        component_variant_id: vList[Math.min(1, vList.length - 1)].id,
-                        planned_qty: 5,
-                        input_role: "INGREDIENT",
-                      },
-                    ]
-                  : prev
-              );
-            }
-          })
-        );
-      }
-      if (workCenters.length === 0) {
-        promises.push(
-          api.get("/mfg/work-centers").then((res) => {
-            setWorkCenters(res.data || []);
-          })
-        );
-      }
-      await Promise.all(promises);
     } catch (err) {
       console.error("Error inicializando catálogo de Nueva Orden:", err);
+    }
+  };
+
+  const handleFacilitySelectChange = async (newFacId: number) => {
+    const currentBom = boms.find((b) => b.id === selectedBomId) || null;
+    syncFacilityDependencies(newFacId, warehouses, workCenters, currentBom);
+    try {
+      const selectedIds = Array.from(
+        new Set(
+          [adhocOutputVariantId, ...adhocInputs.map((i) => i.component_variant_id)].filter(
+            (id) => id > 0
+          )
+        )
+      );
+      const [baseRes, extraRes] = await Promise.all([
+        api.get("/mfg/catalog/variants", {
+          params: { facility_id: newFacId, limit: 150 },
+        }),
+        selectedIds.length > 0
+          ? api.get("/mfg/catalog/variants", {
+              params: { facility_id: newFacId, ids: selectedIds.join(","), limit: 150 },
+            })
+          : Promise.resolve({ data: { items: [] } }),
+      ]);
+      const fetched: CatalogVariant[] = baseRes.data.items || [];
+      const extraFetched: CatalogVariant[] = extraRes.data.items || [];
+      if (fetched.length > 0 || extraFetched.length > 0) {
+        const map = new Map<number, CatalogVariant>();
+        for (const v of fetched) map.set(v.id, v);
+        for (const v of extraFetched) map.set(v.id, v);
+        setVariants(Array.from(map.values()));
+      }
+    } catch (err) {
+      console.error("Error actualizando catálogo por sucursal:", err);
+    }
+  };
+
+  const handleWorkCenterSelectChange = (newWcId: number) => {
+    setSelectedWorkCenterId(newWcId);
+    if (newWcId > 0) {
+      const wcObj = workCenters.find((w) => w.id === newWcId);
+      if (wcObj?.warehouse_wip_id) {
+        const whMatchesFac = warehouses.some(
+          (w) => w.id === wcObj.warehouse_wip_id && w.facility_id === selectedFacilityId
+        );
+        if (whMatchesFac) {
+          setSourceWarehouseId(wcObj.warehouse_wip_id);
+        }
+      }
     }
   };
 
@@ -343,7 +509,8 @@ export default function ProductionOrdersPage() {
           const res = await api.post("/mfg/orders/explode-preview", {
             bom_id: selectedBomId,
             planned_base_qty: plannedQty,
-            facility_id: 1,
+            facility_id: selectedFacilityId,
+            work_center_id: selectedWorkCenterId > 0 ? selectedWorkCenterId : undefined,
             source_warehouse_id: sourceWarehouseId,
             dest_warehouse_id: destWarehouseId,
           });
@@ -368,10 +535,10 @@ export default function ProductionOrdersPage() {
           const res = await api.post("/mfg/orders/explode-preview", {
             bom_id: null,
             planned_base_qty: adhocOutputQty,
-            facility_id: 1,
+            facility_id: selectedFacilityId,
             source_warehouse_id: sourceWarehouseId,
             dest_warehouse_id: destWarehouseId,
-            work_center_id: adhocWorkCenterId > 0 ? adhocWorkCenterId : undefined,
+            work_center_id: selectedWorkCenterId > 0 ? selectedWorkCenterId : undefined,
             sector: adhocSector,
             order_type: "CONVERGENT_BATCH",
             inputs: validInputs.map((inp) => ({
@@ -409,12 +576,13 @@ export default function ProductionOrdersPage() {
     createMode,
     selectedBomId,
     plannedQty,
+    selectedFacilityId,
+    selectedWorkCenterId,
     sourceWarehouseId,
     destWarehouseId,
     adhocOutputVariantId,
     adhocOutputQty,
     adhocSector,
-    adhocWorkCenterId,
     adhocInputs,
   ]);
 
@@ -423,6 +591,24 @@ export default function ProductionOrdersPage() {
     const found = boms.find((b) => b.id === bomId);
     if (found) {
       setPlannedQty(found.base_qty || 100);
+      const facStations = workCenters.filter(
+        (wc) => wc.facility_id === selectedFacilityId && wc.is_active !== false
+      );
+      const matchWc =
+        (found.work_center_id
+          ? facStations.find((wc) => wc.id === found.work_center_id)
+          : undefined) || facStations.find((wc) => wc.sector === found.sector);
+      if (matchWc) {
+        setSelectedWorkCenterId(matchWc.id);
+        if (matchWc.warehouse_wip_id) {
+          const whOk = warehouses.some(
+            (w) => w.id === matchWc.warehouse_wip_id && w.facility_id === selectedFacilityId
+          );
+          if (whOk) {
+            setSourceWarehouseId(matchWc.warehouse_wip_id);
+          }
+        }
+      }
     }
   };
 
@@ -438,7 +624,8 @@ export default function ProductionOrdersPage() {
         }
         const res = await api.post("/mfg/orders", {
           bom_id: selectedBomId,
-          facility_id: 1,
+          facility_id: selectedFacilityId,
+          work_center_id: selectedWorkCenterId > 0 ? selectedWorkCenterId : undefined,
           source_warehouse_id: sourceWarehouseId,
           dest_warehouse_id: destWarehouseId,
           planned_base_qty: plannedQty,
@@ -464,10 +651,10 @@ export default function ProductionOrdersPage() {
         }
         const res = await api.post("/mfg/orders", {
           bom_id: null,
-          facility_id: 1,
+          facility_id: selectedFacilityId,
           source_warehouse_id: sourceWarehouseId,
           dest_warehouse_id: destWarehouseId,
-          work_center_id: adhocWorkCenterId > 0 ? adhocWorkCenterId : undefined,
+          work_center_id: selectedWorkCenterId > 0 ? selectedWorkCenterId : undefined,
           sector: adhocSector,
           order_type: "CONVERGENT_BATCH",
           planned_base_qty: adhocOutputQty,
@@ -500,6 +687,13 @@ export default function ProductionOrdersPage() {
       setCreatingOrder(false);
     }
   };
+
+  const facilityWarehouses = warehouses.filter(
+    (w) => w.facility_id === selectedFacilityId && !w.is_scrap && !w.is_scrap_warehouse
+  );
+  const facilityWorkCenters = workCenters.filter(
+    (wc) => wc.facility_id === selectedFacilityId && wc.is_active !== false
+  );
 
   return (
     <div className="p-2 sm:p-6 w-full max-w-[1440px] mx-auto space-y-6">
@@ -648,6 +842,19 @@ export default function ProductionOrdersPage() {
 
         <div className="flex flex-wrap items-center gap-2">
           <select
+            value={filterFacility}
+            onChange={(e) => setFilterFacility(e.target.value)}
+            className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:border-orange-500"
+          >
+            <option value="">🏢 Todas las Sucursales / Sedes</option>
+            {facilities.map((fac) => (
+              <option key={fac.id} value={String(fac.id)}>
+                🏢 [{fac.code}] {fac.name}
+              </option>
+            ))}
+          </select>
+
+          <select
             value={filterSector}
             onChange={(e) => setFilterSector(e.target.value)}
             className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:border-orange-500"
@@ -679,7 +886,7 @@ export default function ProductionOrdersPage() {
               <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                 <th className="py-3.5 px-4">Folio OP / Lote</th>
                 <th className="py-3.5 px-4">Producto / Fórmula</th>
-                <th className="py-3.5 px-4">Sector / Estación</th>
+                <th className="py-3.5 px-4">Sucursal / Estación</th>
                 <th className="py-3.5 px-4">Estado</th>
                 <th className="py-3.5 px-4 text-right">Meta vs. Bueno</th>
                 <th className="py-3.5 px-4 text-right">Mermas (Nat / Anorm)</th>
@@ -743,11 +950,16 @@ export default function ProductionOrdersPage() {
                       </td>
 
                       <td className="py-3.5 px-4">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${sec.color}`}>
-                          {sec.label}
-                        </span>
-                        <div className="text-xs text-slate-500 mt-1 font-medium">
-                          {op.work_center_name || "Estación General"}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                            🏢 {op.facility_name || `Sede #${op.facility_id}`}
+                          </span>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${sec.color}`}>
+                            {sec.label}
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-600 mt-1 font-semibold">
+                          ⚙️ {op.work_center_name || "Estación General"}
                         </div>
                       </td>
 
@@ -867,6 +1079,95 @@ export default function ProductionOrdersPage() {
                 </div>
               )}
 
+              {/* BLOQUE DESTACADO: UBICACIÓN OPERATIVA EN PLANTA (SUCURSAL, ESTACIÓN 1..N Y ALMACENES) */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/90 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <i className="pi pi-building text-orange-600 text-xs"></i>
+                    Ubicación Operativa en Planta (Sucursal, Estación 1..N y Almacenes)
+                  </span>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    {facilityWorkCenters.length} {facilityWorkCenters.length === 1 ? "estación disponible" : "estaciones disponibles"} •{" "}
+                    {facilityWarehouses.length} {facilityWarehouses.length === 1 ? "almacén" : "almacenes"} en la sucursal
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      🏢 Sucursal / Sede *
+                    </label>
+                    <select
+                      value={selectedFacilityId}
+                      onChange={(e) => handleFacilitySelectChange(Number(e.target.value))}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
+                    >
+                      {facilities.map((fac) => (
+                        <option key={fac.id} value={fac.id}>
+                          [{fac.code}] {fac.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      ⚙️ Estación / Centro ({facilityWorkCenters.length} en Sede)
+                    </label>
+                    <select
+                      value={selectedWorkCenterId}
+                      onChange={(e) => handleWorkCenterSelectChange(Number(e.target.value))}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
+                    >
+                      <option value={0}>
+                        {createMode === "BOM"
+                          ? "-- Estación por defecto de Receta / Sede --"
+                          : "-- Sin MOD/CIF Fijo ($0.00/h) --"}
+                      </option>
+                      {facilityWorkCenters.map((wc) => (
+                        <option key={wc.id} value={wc.id}>
+                          [{wc.code}] {wc.name} — MOD ${wc.hourly_labor_rate.toFixed(2)}/h | CIF ${wc.hourly_overhead_rate.toFixed(2)}/h
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      📦 Almacén Origen Insumos (MFG-OUT) *
+                    </label>
+                    <select
+                      value={sourceWarehouseId}
+                      onChange={(e) => setSourceWarehouseId(Number(e.target.value))}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
+                    >
+                      {(facilityWarehouses.length > 0 ? facilityWarehouses : warehouses).map((w) => (
+                        <option key={w.id} value={w.id}>
+                          [{w.code}] {w.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      🏪 Almacén Destino PT (MFG-IN) *
+                    </label>
+                    <select
+                      value={destWarehouseId}
+                      onChange={(e) => setDestWarehouseId(Number(e.target.value))}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
+                    >
+                      {(facilityWarehouses.length > 0 ? facilityWarehouses : warehouses).map((w) => (
+                        <option key={w.id} value={w.id}>
+                          [{w.code}] {w.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
               {/* Selector de Modalidad: Con Fórmula BOM vs Transformación Libre (Ad-Hoc) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-1.5 bg-slate-100 rounded-2xl border border-slate-200">
                 <button
@@ -940,7 +1241,7 @@ export default function ProductionOrdersPage() {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-                    <div className="md:col-span-6">
+                    <div className="md:col-span-7">
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                         Producto Resultante a Obtener (Salida PT)
                       </label>
@@ -965,7 +1266,7 @@ export default function ProductionOrdersPage() {
                         className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-mono font-black text-orange-600"
                       />
                     </div>
-                    <div className="md:col-span-2">
+                    <div className="md:col-span-3">
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                         Sector Operativo
                       </label>
@@ -977,23 +1278,6 @@ export default function ProductionOrdersPage() {
                         <option value="GASTRONOMY">Cocina & Gastronomía</option>
                         <option value="BAKERY">Panadería & Pastelería</option>
                         <option value="MEAT_PROCESSING">Cárnicos & Porcionado</option>
-                      </select>
-                    </div>
-                    <div className="md:col-span-2">
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                        Estación (Opcional)
-                      </label>
-                      <select
-                        value={adhocWorkCenterId}
-                        onChange={(e) => setAdhocWorkCenterId(Number(e.target.value))}
-                        className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2.5 text-xs font-bold text-slate-700"
-                      >
-                        <option value={0}>Sin MOD/CIF Fijo</option>
-                        {workCenters.map((wc) => (
-                          <option key={wc.id} value={wc.id}>
-                            [{wc.code}] {wc.name}
-                          </option>
-                        ))}
                       </select>
                     </div>
                   </div>
@@ -1100,48 +1384,27 @@ export default function ProductionOrdersPage() {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Almacén Origen Insumos (MFG-OUT)
-                  </label>
-                  <select
-                    value={sourceWarehouseId}
-                    onChange={(e) => setSourceWarehouseId(Number(e.target.value))}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-700"
-                  >
-                    <option value={1}>WH01 — Almacén General / Piso WIP</option>
-                    <option value={4}>MAIN_WH — Almacén Principal</option>
-                  </select>
-                </div>
+              <div className="flex items-center justify-between gap-3">
+                <label className="flex items-center gap-2.5 bg-orange-50/70 border border-orange-200 rounded-xl px-3.5 py-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={startImmediately}
+                    onChange={(e) => setStartImmediately(e.target.checked)}
+                    className="rounded text-orange-600 focus:ring-orange-500"
+                  />
+                  <span className="text-xs font-bold text-slate-800">
+                    Iniciar en Piso Inmediatamente (`IN_PROGRESS`)
+                  </span>
+                </label>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Almacén Destino PT (MFG-IN)
-                  </label>
-                  <select
-                    value={destWarehouseId}
-                    onChange={(e) => setDestWarehouseId(Number(e.target.value))}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-700"
-                  >
-                    <option value={1}>WH01 — Almacén General / Tienda</option>
-                    <option value={4}>MAIN_WH — Almacén Principal</option>
-                  </select>
-                </div>
-
-                <div className="flex items-end">
-                  <label className="flex items-center gap-2.5 bg-orange-50/70 border border-orange-200 rounded-xl px-3.5 py-2.5 w-full cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={startImmediately}
-                      onChange={(e) => setStartImmediately(e.target.checked)}
-                      className="rounded text-orange-600 focus:ring-orange-500"
-                    />
-                    <span className="text-xs font-bold text-slate-800">
-                      Iniciar en Piso Inmediatamente (`IN_PROGRESS`)
-                    </span>
-                  </label>
-                </div>
+                {explodePreview?.work_center_name && (
+                  <span className="text-xs font-bold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
+                    ⚙️ Estación Activa:{" "}
+                    <strong className="text-slate-900">{explodePreview.work_center_name}</strong>{" "}
+                    (MOD ${(explodePreview.hourly_labor_rate ?? 0).toFixed(2)}/h | CIF $
+                    {(explodePreview.hourly_overhead_rate ?? 0).toFixed(2)}/h)
+                  </span>
+                )}
               </div>
 
               {/* SEMÁFORO Y RESUMEN DE EXPLOSIÓN FEFO */}

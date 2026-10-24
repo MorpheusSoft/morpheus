@@ -22,7 +22,7 @@ from app.schemas.store_agent_control import (
 
 router = APIRouter()
 
-LATEST_AGENT_VERSION = "2.4.5-neo"
+LATEST_AGENT_VERSION = "2.4.6-neo"
 
 @router.get("/facilities", response_model=List[FacilityAgentStatusSchema])
 def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
@@ -101,6 +101,7 @@ def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
         last_bc = parse_meta_dt("last_barcode_sync")
         last_sup_prod = parse_meta_dt("last_supplier_product_sync")
         last_mov = parse_meta_dt("last_movement_sync")
+        last_odc = parse_meta_dt("last_purchase_order_sync")
         baseline_done = bool(meta.get("baseline_done", False))
 
         # Fallback inteligente contra base de datos si la telemetría aún no reporta las marcas:
@@ -146,6 +147,7 @@ def list_facilities_agent_status(db: Session = Depends(deps.get_db)):
             last_supplier_product_sync=last_sup_prod,
             baseline_inventory_done=baseline_done,
             last_movement_sync=last_mov,
+            last_purchase_order_sync=last_odc,
             is_sync_paused=bool(cfg.is_sync_paused if cfg else False)
         ))
 

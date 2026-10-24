@@ -1,13 +1,21 @@
 "use client"
 
-import { useActionState, Suspense } from "react"
+import { useActionState, Suspense, useEffect } from "react"
 import { useSearchParams } from "next/navigation"
 import { loginAction } from "../actions/auth"
+import { clearAuthCookies } from "@/lib/domain"
 
 function LoginFormComponent() {
   const [state, action, isPending] = useActionState(loginAction, null)
   const searchParams = useSearchParams()
   const callbackUrl = searchParams.get("callbackUrl") || "/dashboard"
+  const isLogout = searchParams.get("logout") === "1"
+
+  useEffect(() => {
+    if (isLogout) {
+      clearAuthCookies()
+    }
+  }, [isLogout])
 
   return (
     <form action={action} className="flex flex-col space-y-6">

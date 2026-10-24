@@ -278,16 +278,37 @@ export function getLoginUrl(callbackUrl?: string, currentHost?: string): string 
   return `${base}?callbackUrl=${encodeURIComponent(sanitized)}`;
 }
 
+export function getLogoutUrl(currentHost?: string): string {
+  const config = resolveDomain(currentHost);
+  return `${config.loginUrl}?logout=1`;
+}
+
 export function clearAuthCookies(currentHost?: string): void {
   if (typeof document === 'undefined') return;
   const config = resolveDomain(currentHost);
-  if (config.cookieDomain) {
-    document.cookie = `access_token=; Max-Age=0; path=/; domain=${config.cookieDomain};`;
+  const domains = [
+    config.cookieDomain,
+    '.grupocatania.com',
+    '.qa.morpheussoft.net',
+    '.morpheussoft.net',
+    typeof window !== 'undefined' ? window.location.hostname : undefined,
+    undefined,
+  ];
+  const uniqueDomains = Array.from(new Set(domains));
+  for (const d of uniqueDomains) {
+    const domPart = d ? ` domain=${d};` : '';
+    document.cookie = `access_token=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;${domPart}`;
+    document.cookie = `access_token=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;${domPart} Secure; SameSite=Lax;`;
   }
-  document.cookie = 'access_token=; Max-Age=0; path=/;';
-  document.cookie = 'access_token=; Max-Age=0; path=/; domain=.grupocatania.com;';
-  document.cookie = 'access_token=; Max-Age=0; path=/; domain=.qa.morpheussoft.net;';
-  document.cookie = 'access_token=; Max-Age=0; path=/; domain=.morpheussoft.net;';
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('token');
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('morpheus_auth_token');
+    }
+  } catch {
+    // ignore storage errors
+  }
 }
 
 export function getInternalApiUrl(host?: string): string {

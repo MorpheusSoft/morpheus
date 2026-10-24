@@ -120,17 +120,27 @@ export async function logoutAction() {
   const host = headerList.get("x-forwarded-host") || headerList.get("host") || ""
   const domainConfig = resolveDomain(host)
   const cookieStore = await cookies()
+  const isHttps = domainConfig.protocol === "https"
 
   if (domainConfig.cookieDomain) {
     cookieStore.set("access_token", "", {
+      httpOnly: false,
+      secure: isHttps,
+      sameSite: "lax",
       maxAge: 0,
+      expires: new Date(0),
       domain: domainConfig.cookieDomain,
       path: "/"
     })
+  } else {
+    cookieStore.set("access_token", "", {
+      httpOnly: false,
+      secure: isHttps,
+      sameSite: "lax",
+      maxAge: 0,
+      expires: new Date(0),
+      path: "/"
+    })
   }
-  cookieStore.set("access_token", "", {
-    maxAge: 0,
-    path: "/"
-  })
-  redirect("/login")
+  redirect("/login?logout=1")
 }

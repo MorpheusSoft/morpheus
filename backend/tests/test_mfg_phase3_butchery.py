@@ -952,3 +952,133 @@ def test_mfg_adhoc_orders_convergent_and_divergent_without_bom(client: TestClien
             db2.close()
 
 
+def test_mfg_phase3_multi_facility_and_multi_work_center_butchery(client: TestClient, auth_headers: dict):
+    """
+    Tests Multi-Facility (1..N facilities) and Multi-Work-Center (1..N butchery stations per facility)
+    for MEAT_DISASSEMBLY orders:
+    1. Verifies Facility 1 has >= 2 meat disassembly stations (DESPOSTE_CARNES_1 and DESPOSTE_MESA_VACIO_2)
+       and Facility 10 (Cumboto) has CUMBOTO_DESPOSTE_1.
+    2. Explode-preview on DES-RES-001 overriding work_center_id to DESPOSTE_MESA_VACIO_2 applies its MOD/CIF rates.
+    3. Ad-Hoc MEAT_DISASSEMBLY order in Facility 10 with CUMBOTO_DESPOSTE_1 is listed when filtering by
+       sector='MEAT_PROCESSING' and facility_id=10.
+    """
+    res_fw = client.get("/api/v1/mfg/facilities-and-warehouses", headers=auth_headers)
+    assert res_fw.status_code == 200, res_fw.text
+    fw = res_fw.json()
+
+    fac1_meat_wcs = [
+        w for w in fw["work_centers"]
+        if w["facility_id"] == 1 and w["sector"] in ("CARNICERIA", "MEAT_PROCESSING")
+    ]
+    assert len(fac1_meat_wcs) >= 2
+    mesa_vacio = next((w for w in fac1_meat_wcs if w["code"] == "DESPOSTE_MESA_VACIO_2"), None)
+    assert mesa_vacio is not None
+
+    cumboto_meat_wc = next((w for w in fw["work_centers"] if w["code"] == "CUMBOTO_DESPOSTE_1"), None)
+    assert cumboto_meat_wc is not None
+    assert cumboto_meat_wc["facility_id"] == 10
+    cumboto_wh = next(w for w in fw["warehouses"] if w["facility_id"] == 10 and not w["is_scrap"])
+
+    db = SessionLocal()
+    try:
+        bom_des = db.query(BOMHeader).filter(BOMHeader.code == "DES-RES-001").first()
+        assert bom_des is not None
+        bom_des_id = bom_des.id
+    finally:
+        db.close()
+
+    # Override work_center_id on DES-RES-001 to DESPOSTE_MESA_VACIO_2 ($5.80/hr MOD, $3.60/hr CIF, $0.06/kg overhead)
+    res_exp = client.post(
+        "/api/v1/mfg/orders/explode-preview",
+        headers=auth_headers,
+        json={
+            "bom_id": bom_des_id,
+            "planned_base_qty": 100.0,
+            "facility_id": 1,
+            "work_center_id": mesa_vacio["id"],
+        },
+    )
+    assert res_exp.status_code == 200, res_exp.text
+    exp = res_exp.json()
+    assert exp["work_center_id"] == mesa_vacio["id"]
+    assert exp["work_center_code"] == "DESPOSTE_MESA_VACIO_2"
+    assert exp["hourly_labor_rate"] == 5.8
+    assert exp["hourly_overhead_rate"] == 3.6
+    assert exp["overhead_per_kg"] == 0.06
+
+    # Create Ad-Hoc MEAT_DISASSEMBLY order in Facility 10 (Cumboto) with CUMBOTO_DESPOSTE_1
+    res_create = client.post(
+        "/api/v1/mfg/orders",
+        headers=auth_headers,
+        json={
+            "bom_id": None,
+            "order_type": "MEAT_DISASSEMBLY",
+            "sector": "CARNICERIA",
+            "facility_id": 10,
+            "work_center_id": cumboto_meat_wc["id"],
+            "source_warehouse_id": cumboto_wh["id"],
+            "dest_warehouse_id": cumboto_wh["id"],
+            "planned_base_qty": 40.0,
+            "standard_labor_hours": 1.0,
+            "expected_shrinkage_pct": 2.5,
+            "start_immediately": False,
+            "notes": "OP Desposte Cumboto Multi-Estacion",
+            "inputs": [
+                {
+                    "component_variant_id": 122109,
+                    "planned_qty": 40.0,
+                    "input_role": "PRIMARY_MATRIX",
+                }
+            ],
+            "outputs": [
+                {
+                    "output_variant_id": 122000,
+                    "planned_qty": 22.0,
+                    "output_type": "MAIN_CUT",
+                    "cost_allocation_method": "SALES_VALUE_NRV",
+                    "market_reference_price": 10.0,
+                },
+                {
+                    "output_variant_id": 123630,
+                    "planned_qty": 17.0,
+                    "output_type": "MAIN_CUT",
+                    "cost_allocation_method": "SALES_VALUE_NRV",
+                    "market_reference_price": 8.0,
+                },
+            ],
+        },
+    )
+    assert res_create.status_code == 200, res_create.text
+    op_cumboto = res_create.json()
+    op_cumboto_id = op_cumboto["id"]
+
+    try:
+        assert op_cumboto["facility_id"] == 10
+        assert op_cumboto["work_center_id"] == cumboto_meat_wc["id"]
+
+        # Verify GET /api/v1/mfg/orders?order_type=MEAT_DISASSEMBLY&sector=MEAT_PROCESSING&facility_id=10 returns it
+        res_list = client.get(
+            "/api/v1/mfg/orders",
+            params={
+                "order_type": "MEAT_DISASSEMBLY",
+                "sector": "MEAT_PROCESSING",
+                "facility_id": 10,
+            },
+            headers=auth_headers,
+        )
+        assert res_list.status_code == 200, res_list.text
+        body = res_list.json()
+        assert any(it["id"] == op_cumboto_id for it in body["items"])
+        assert all(it["facility_id"] == 10 for it in body["items"])
+    finally:
+        db2 = SessionLocal()
+        try:
+            order_obj = db2.query(ProductionOrder).filter_by(id=op_cumboto_id).first()
+            if order_obj:
+                db2.delete(order_obj)
+                db2.commit()
+        finally:
+            db2.close()
+
+
+

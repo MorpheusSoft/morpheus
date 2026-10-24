@@ -2,7 +2,11 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname } from 'next/navigation';
-import { clearAuthCookies, getLoginUrl } from '@/lib/domain';
+import { clearAuthCookies, getLoginUrl, resolveDomain } from '@/lib/domain';
+import { canAccessModule } from '@/lib/rbac';
+
+const MODULE_KEY = 'neo_core';
+const MODULE_LABEL = 'Neo Core (Mando Central)';
 
 interface SessionGuardProps {
   children: React.ReactNode;
@@ -30,9 +34,11 @@ function parseJwt(token: string): { exp?: number; sub?: string } | null {
 export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: SessionGuardProps) {
   const pathname = usePathname() || '';
   const [isExpired, setIsExpired] = useState(false);
+  const [isForbidden, setIsForbidden] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const redirectingRef = useRef(false);
 
-  // Determinar si la ruta es pública
+  // Determinar si la ruta es pública o es el Portal Hub Central (/)
   const isPublic = 
     pathname === '/' ||
     pathname.startsWith('/login') || 
@@ -58,6 +64,34 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
   }, [isPublic]);
 
   useEffect(() => {
+    if (isPublic) {
+      setIsForbidden(false);
+      return;
+    }
+
+    import('@/lib/api').then(({ default: api }) => {
+      api.get('/users/me')
+        .then(res => {
+          const user = res.data;
+          setCurrentUser(user);
+          if (user && !canAccessModule(user, MODULE_KEY)) {
+            if (pathname === '/dashboard') {
+              // Redirigir suavemente al Portal Hub Central cuando viene de /login
+              window.location.href = '/';
+              return;
+            }
+            setIsForbidden(true);
+          } else {
+            setIsForbidden(false);
+          }
+        })
+        .catch(() => {
+          // Si falla por 401, el interceptor o checkSession manejará la sesión
+        });
+    });
+  }, [isPublic, pathname]);
+
+  useEffect(() => {
     if (isPublic) return;
 
     let timeoutTimer: NodeJS.Timeout | null = null;
@@ -67,7 +101,6 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
     const checkSession = () => {
       if (typeof window === 'undefined') return;
 
-      // 1. Obtener token de acceso
       let token: string | null = null;
       const match = document.cookie.match(/(?:^|;\s*)access_token=([^;]*)/);
       if (match && match[1]) {
@@ -76,13 +109,11 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
         token = localStorage.getItem('token');
       }
 
-      // Si no existe token en ruta protegida -> desconexión inmediata
       if (!token) {
         redirectToLogin();
         return;
       }
 
-      // 2. Decodificar JWT y verificar expiración matemática
       const payload = parseJwt(token);
       if (!payload || !payload.exp) {
         redirectToLogin();
@@ -93,19 +124,16 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
       const expiresAtMs = payload.exp * 1000;
       const remainingMs = expiresAtMs - now;
 
-      // Token JWT ya expiró
       if (remainingMs <= 0) {
         redirectToLogin();
         return;
       }
 
-      // Inactividad del usuario superó el límite permitido
       if (inactivityTimeoutMinutes > 0 && now - lastActivityTime >= maxInactivityMs) {
         redirectToLogin();
         return;
       }
 
-      // Programar temporizador exacto para el próximo vencimiento
       if (timeoutTimer) clearTimeout(timeoutTimer);
       const remainingInactivity = maxInactivityMs - (now - lastActivityTime);
       const nextDelay = Math.min(
@@ -119,7 +147,6 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
       }, safeDelay);
     };
 
-    // Actualizar actividad del usuario
     const onUserActivity = () => {
       lastActivityTime = Date.now();
     };
@@ -129,13 +156,10 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
       window.addEventListener(event, onUserActivity, { passive: true });
     });
 
-    // Verificación inicial inmediata
     checkSession();
 
-    // Heartbeat periódico cada 10 segundos
     const heartbeatInterval = setInterval(checkSession, 10000);
 
-    // Detección al reactivar pestaña o desbloquear equipo
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         checkSession();
@@ -155,7 +179,6 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
     };
   }, [isPublic, redirectToLogin, inactivityTimeoutMinutes]);
 
-  // Si la sesión expiró, desmontar completamente la interfaz protegida para no mostrar datos
   if (isExpired) {
     return (
       <div className="fixed inset-0 z-[99999] bg-slate-950 flex flex-col items-center justify-center text-white p-6 font-sans">
@@ -169,6 +192,35 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
           El tiempo de conexión ha expirado por seguridad. Redirigiendo al inicio de sesión...
         </p>
         <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (isForbidden) {
+    const hubUrl = resolveDomain().hubUrl || '/';
+    const roleName = currentUser?.active_role?.name || currentUser?.roles?.[0]?.name || 'Sin Rol';
+    return (
+      <div className="fixed inset-0 z-[99999] bg-slate-950 flex flex-col items-center justify-center text-white p-6 font-sans">
+        <div className="max-w-md w-full bg-slate-900/90 border border-slate-800 rounded-3xl p-8 text-center shadow-2xl">
+          <div className="w-16 h-16 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto mb-5">
+            <i className="pi pi-shield text-2xl text-rose-400"></i>
+          </div>
+          <h2 className="text-xl font-extrabold text-white mb-2">Acceso Restringido</h2>
+          <p className="text-slate-400 text-sm leading-relaxed mb-4">
+            Tu perfil actual (<span className="text-slate-200 font-bold">{roleName}</span>) no cuenta con privilegios habilitados para acceder a <span className="text-indigo-400 font-bold">{MODULE_LABEL}</span>.
+          </p>
+          <p className="text-xs text-slate-500 mb-6">
+            Si necesitas acceso a este módulo, solicita la habilitación en <strong>Neo Core → Roles y Privilegios</strong>.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <a
+              href={hubUrl}
+              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20"
+            >
+              <i className="pi pi-th-large text-xs"></i> Ir al Hub Central
+            </a>
+          </div>
+        </div>
       </div>
     );
   }

@@ -1,9 +1,15 @@
 'use client';
 import { AppSwitcher } from './AppSwitcher';
 import { useSidebar } from '@/context/SidebarContext';
+import { clearAuthCookies, getLogoutUrl } from '@/lib/domain';
 
 export function AppTopbar() {
   const { toggleSidebar } = useSidebar();
+
+  const handleLogout = () => {
+    clearAuthCookies();
+    window.location.href = getLogoutUrl();
+  };
 
   return (
     <header className="h-16 bg-white/70 backdrop-blur-xl border-b border-gray-200/50 flex items-center justify-between px-4 sm:px-6 sticky top-0 z-10 shadow-sm transition-all duration-300">
@@ -24,20 +30,14 @@ export function AppTopbar() {
       {/* Right side icons */}
       <div className="flex items-center gap-3 ml-auto">
         <AppSwitcher />
+        <div className="w-[1px] h-8 bg-gray-200 mx-1"></div>
         <button 
-          className="relative w-10 h-10 flex items-center justify-center text-gray-500 hover:bg-amber-50 hover:text-amber-600 rounded-full transition-all duration-200 active:scale-95 cursor-pointer"
-          title="Notificaciones"
+          onClick={handleLogout}
+          className="w-10 h-10 flex items-center justify-center rounded-full text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors duration-200 cursor-pointer"
+          title="Cerrar Sesión"
           type="button"
         >
-          <i className="pi pi-bell text-xl"></i>
-          <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-rose-500 border-2 border-white rounded-full animate-pulse"></span>
-        </button>
-        <button 
-          className="w-10 h-10 flex items-center justify-center text-gray-500 hover:bg-amber-50 hover:text-amber-600 rounded-full transition-all duration-200 active:scale-95 cursor-pointer"
-          title="Configuración"
-          type="button"
-        >
-          <i className="pi pi-cog text-xl transform hover:rotate-90 transition-transform duration-500"></i>
+          <i className="pi pi-power-off text-lg"></i>
         </button>
       </div>
     </header>

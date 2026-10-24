@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { Button } from 'primereact/button';
@@ -92,6 +93,360 @@ export default function WmsAdjustmentsPage() {
   // VIEW SESSION CONFIG CARD (READ-ONLY)
   const [viewConfigDialogVisible, setViewConfigDialogVisible] = useState(false);
   const [viewConfigSession, setViewConfigSession] = useState<any>(null);
+
+  // COUNT SHEET REPORT (IMPRIMIR / EXCEL) DIALOG STATE
+  const [countSheetDialogVisible, setCountSheetDialogVisible] = useState(false);
+  const [sheetSessionId, setSheetSessionId] = useState<number | null>(null);
+  const [sheetFacilityId, setSheetFacilityId] = useState<number | null>(null);
+  const [sheetWarehouseId, setSheetWarehouseId] = useState<number | null>(null);
+  const [sheetCategoryId, setSheetCategoryId] = useState<number | null>(null);
+  const [sheetResponsible, setSheetResponsible] = useState('');
+  const [sheetShowTheoretical, setSheetShowTheoretical] = useState<boolean>(true);
+  const [sheetIncludeZero, setSheetIncludeZero] = useState<boolean>(true);
+  const [sheetLoading, setSheetLoading] = useState<boolean>(false);
+  const [sheetData, setSheetData] = useState<any>(null);
+
+  const loadCountSheetReport = async (overrides?: {
+    session_id?: number | null;
+    facility_id?: number | null;
+    warehouse_id?: number | null;
+    category_id?: number | null;
+    include_zero?: boolean;
+  }) => {
+    setSheetLoading(true);
+    try {
+      const sessId = overrides?.session_id !== undefined ? overrides.session_id : sheetSessionId;
+      const facId = overrides?.facility_id !== undefined ? overrides.facility_id : sheetFacilityId;
+      const whId = overrides?.warehouse_id !== undefined ? overrides.warehouse_id : sheetWarehouseId;
+      const catId = overrides?.category_id !== undefined ? overrides.category_id : sheetCategoryId;
+      const incZero = overrides?.include_zero !== undefined ? overrides.include_zero : sheetIncludeZero;
+
+      const params = new URLSearchParams();
+      if (sessId) {
+        params.append('session_id', String(sessId));
+      } else {
+        if (facId) params.append('facility_id', String(facId));
+        if (whId) params.append('warehouse_id', String(whId));
+        if (catId) params.append('category_id', String(catId));
+      }
+      params.append('include_zero_stock', String(incZero));
+
+      const res = await api.get(`/inventory-valuation/physical-count-sheet?${params.toString()}`);
+      setSheetData(res.data);
+      return res.data;
+    } catch (e) {
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: 'No se pudo generar el reporte de conteo físico.' });
+      return null;
+    } finally {
+      setSheetLoading(false);
+    }
+  };
+
+  const openSessionCountSheet = (s: any) => {
+    if (!s) return;
+    setSheetSessionId(s.id);
+    setSheetFacilityId(s.facility_id || null);
+    setSheetWarehouseId(s.warehouse_id || null);
+    setSheetCategoryId(s.category_id || null);
+    setSheetIncludeZero(true);
+    setCountSheetDialogVisible(true);
+    loadCountSheetReport({ session_id: s.id, include_zero: true });
+  };
+
+  const printCountSheetData = (dataToPrint: any, showTheo: boolean, responsible: string) => {
+    if (!dataToPrint) return;
+    const printWindow = window.open('', '_blank', 'width=1050,height=800');
+    if (!printWindow) {
+      toast.current?.show({ severity: 'warn', summary: 'Ventana bloqueada', detail: 'Permita las ventanas emergentes para imprimir.' });
+      return;
+    }
+    const items: any[] = dataToPrint.items || [];
+    const formatNum = (val: any) => Number(val ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const rowsHtml = items.map(item => `
+      <tr>
+        <td class="col-code">${item.product_code || item.sku || ''}</td>
+        <td class="col-desc">${item.description || ''}</td>
+        ${showTheo ? `<td class="col-theo">${formatNum(item.theoretical_qty)}</td>` : ''}
+        <td class="col-real"><div class="real-line"></div></td>
+      </tr>
+    `).join('');
+
+    printWindow.document.open();
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html lang="es">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Neo ERP - Reporte de Productos - Toma de Inventario</title>
+        <style>
+          @page { size: letter portrait; margin: 12mm 12mm 15mm 12mm; }
+          * { box-sizing: border-box; }
+          body { font-family: Arial, Helvetica, sans-serif; color: #000; margin: 0; padding: 0; font-size: 11px; background: #fff; }
+          .neo-brand-bar { display: flex; justify-content: space-between; font-size: 9px; font-weight: bold; color: #334155; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; margin-bottom: 10px; }
+          .report-header { display: grid; grid-template-columns: 45% 55%; align-items: start; margin-bottom: 14px; }
+          .header-left { text-align: center; padding-right: 10px; }
+          .company-title { font-size: 16px; margin: 0 0 6px 0; }
+          .locality-subtitle { font-size: 13px; margin: 0; }
+          .header-right { text-align: center; }
+          .report-title { font-size: 13px; margin: 0 0 4px 0; padding-bottom: 3px; border-bottom: 1px solid #000; }
+          .report-scope { font-size: 12px; font-weight: bold; margin: 3px 0; padding-bottom: 4px; border-bottom: 1px solid #000; line-height: 1.35; }
+          .report-meta { display: flex; justify-content: space-between; font-size: 12px; margin-top: 4px; padding: 0 4px; }
+          .deposit-bar { display: grid; grid-template-columns: 90px 80px 1fr 240px; align-items: center; font-size: 10.5px; font-weight: bold; margin-top: 10px; margin-bottom: 4px; }
+          table { width: 100%; border-collapse: collapse; }
+          thead th { font-size: 10.5px; font-weight: bold; text-align: left; padding: 4px 6px 6px 6px; border-bottom: 3px double #000; }
+          tbody td { padding: 3.5px 6px; font-size: 10px; vertical-align: bottom; }
+          .col-code { width: 125px; white-space: nowrap; }
+          .col-theo { width: 100px; text-align: right !important; padding-right: 16px !important; font-variant-numeric: tabular-nums; }
+          .col-real { width: 125px; text-align: center !important; }
+          .real-line { border-bottom: 1px solid #000; width: 105px; height: 12px; margin: 0 auto; }
+          .report-footer { margin-top: 28px; padding-top: 10px; border-top: 1px solid #cbd5e1; display: flex; justify-content: space-between; align-items: flex-end; font-size: 9.5px; color: #334155; page-break-inside: avoid; }
+          .sig-block { width: 200px; text-align: center; }
+          .sig-line { border-bottom: 1px solid #000; height: 24px; margin-bottom: 4px; }
+        </style>
+      </head>
+      <body>
+        <div class="neo-brand-bar">
+          <span>NEO ERP — MÓDULO DE INVENTARIO Y AUDITORÍA FÍSICA</span>
+          <span>MODO: ${showTheo ? 'CON EXISTENCIA TEÓRICA' : 'CONTEO CIEGO (SIN EXISTENCIA)'}</span>
+        </div>
+        <div class="report-header">
+          <div class="header-left">
+            <div class="company-title">${dataToPrint.company_name || 'CATANIA HIPERMERCADO, C.A.'}</div>
+            <div class="locality-subtitle">Localidades: ${dataToPrint.facility_name || 'TODAS'}</div>
+            ${dataToPrint.session_code ? `<div style="font-size: 11px; font-weight: bold; margin-top: 4px;">Toma Física: [${dataToPrint.session_code}] ${dataToPrint.session_name || ''}</div>` : ''}
+          </div>
+          <div class="header-right">
+            <div class="report-title">REPORTE DE PRODUCTOS - TOMA DE INVENTARIO</div>
+            <div class="report-scope">
+              Depósito: ${dataToPrint.deposit_name || 'TODOS'}, Departamento:<br/>
+              ${dataToPrint.department_name || 'TODOS'}, Moneda: ${dataToPrint.currency_name || 'BOLIVAR DIGITAL'}
+            </div>
+            <div class="report-meta">
+              <span>Fecha de Emisión <strong>${dataToPrint.emission_date || ''}</strong></span>
+              <span>Total Items: <strong>${items.length}</strong></span>
+            </div>
+          </div>
+        </div>
+        <div class="deposit-bar">
+          <span>Depósito</span>
+          <span>${dataToPrint.deposit_code || ''}</span>
+          <span>${dataToPrint.deposit_name || ''}</span>
+          <span>Responsable: ${responsible ? `<u>${responsible}</u>` : '________________________'}</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th class="col-code">Producto</th>
+              <th class="col-desc">Descripción del Producto</th>
+              ${showTheo ? '<th class="col-theo">Existencia</th>' : ''}
+              <th class="col-real">Existencia Real</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <div class="report-footer">
+          <div class="sig-block"><div class="sig-line"></div><strong>Contado por (Firma y Fecha)</strong></div>
+          <div style="text-align: center; font-size: 9px;">Documento generado por <strong>Neo ERP</strong> — ${new Date().toLocaleString('es-VE')}</div>
+          <div class="sig-block"><div class="sig-line"></div><strong>Verificado / Supervisor</strong></div>
+        </div>
+        <script>window.onload = function() { setTimeout(function() { window.print(); }, 250); };</script>
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  const printCountSheetThermal80mm = (dataToPrint: any, showTheo: boolean, responsible: string) => {
+    if (!dataToPrint) return;
+    const printWindow = window.open('', '_blank', 'width=420,height=740');
+    if (!printWindow) {
+      toast.current?.show({ severity: 'warn', summary: 'Ventana bloqueada', detail: 'Permita las ventanas emergentes para imprimir en la tickera.' });
+      return;
+    }
+    const items: any[] = dataToPrint.items || [];
+    const formatNum = (val: any) => Number(val ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const estHeightMm = Math.max(95, 78 + items.length * 10);
+
+    const rowsHtml = items.map(item => `
+      <tr>
+        <td style="padding: 3px 0; border-bottom: 1px dotted #000; max-width: 44mm; word-wrap: break-word;">
+          <div style="font-weight: 900; font-size: 10.5px;">${item.product_code || item.sku || ''}</div>
+          <div style="font-weight: 700; font-size: 10px;">${item.description || ''}</div>
+        </td>
+        ${showTheo ? `<td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: right; font-weight: 800; font-size: 10.5px;">${formatNum(item.theoretical_qty)}</td>` : ''}
+        <td style="padding: 3px 0; border-bottom: 1px dotted #000; text-align: right; font-weight: 800; font-size: 10.5px;">[ &nbsp; &nbsp; &nbsp; ]</td>
+      </tr>
+    `).join('');
+
+    printWindow.document.open();
+    printWindow.document.write(`<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Neo ERP - Toma de Inventario 80mm</title>
+  <style id="thermal-page-style">
+    @page { size: 80mm ${estHeightMm}mm; margin: 0mm; }
+  </style>
+  <style>
+    * { box-sizing: border-box; color: #000000 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    html, body {
+      width: 72mm;
+      max-width: 72mm;
+      margin: 0;
+      padding: 2mm 2mm 4mm 2mm;
+      font-family: Arial, Helvetica, 'Courier New', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.25;
+      background: #ffffff !important;
+      color: #000000 !important;
+      height: auto !important;
+      min-height: 0 !important;
+      overflow: hidden !important;
+    }
+    .no-print-bar {
+      background: #0f172a;
+      color: #fff !important;
+      padding: 8px;
+      margin-bottom: 8px;
+      border-radius: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: sans-serif;
+      font-size: 11px;
+    }
+    .no-print-bar button {
+      background: #10b981;
+      color: #fff !important;
+      border: none;
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    @media print {
+      .no-print-bar { display: none !important; }
+    }
+    .header-title { text-align: center; font-weight: 900; font-size: 13px; margin-bottom: 2px; }
+    .header-sub { text-align: center; font-weight: 800; font-size: 10.5px; border-bottom: 1.5px dashed #000; padding-bottom: 4px; margin-bottom: 5px; }
+    .meta-row { margin: 2px 0; font-size: 10.5px; font-weight: 700; word-wrap: break-word; }
+    .divider { border-bottom: 1.5px dashed #000; margin: 5px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 10px; }
+    th { border-bottom: 1.5px solid #000; padding: 3px 0; font-size: 10px; font-weight: 900; }
+    .sig-block { margin-top: 16px; text-align: center; font-size: 10px; font-weight: 800; page-break-inside: avoid; }
+    .sig-line { border-bottom: 1.5px solid #000; width: 100%; height: 18px; margin-bottom: 3px; }
+    .footer-note { margin-top: 8px; text-align: center; font-size: 9px; font-weight: 700; border-top: 1.5px dashed #000; padding-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="no-print-bar">
+    <span style="color:#fff !important;">Formato Tickera 80mm</span>
+    <button onclick="window.print()">🖨️ Imprimir</button>
+  </div>
+  <div id="ticket-root">
+    <div class="header-title">${dataToPrint.company_name || 'CATANIA HIPERMERCADO, C.A.'}</div>
+    <div class="header-sub">TOMA DE INVENTARIO (${showTheo ? 'CON EXIST.' : 'CIEGO'})</div>
+    ${dataToPrint.session_code ? `<div class="meta-row"><strong>SESIÓN:</strong> [${dataToPrint.session_code}] ${dataToPrint.session_name || ''}</div>` : ''}
+    <div class="meta-row"><strong>LOCALIDAD:</strong> ${dataToPrint.facility_name || 'TODAS'}</div>
+    <div class="meta-row"><strong>DEPÓSITO:</strong> ${dataToPrint.deposit_code || ''} ${dataToPrint.deposit_name || 'TODOS'}</div>
+    <div class="meta-row"><strong>DEPTO:</strong> ${dataToPrint.department_name || 'TODOS'}</div>
+    <div class="meta-row"><strong>EMISIÓN:</strong> ${dataToPrint.emission_date || ''} | <strong>ITEMS:</strong> ${items.length}</div>
+    <div class="meta-row"><strong>RESP:</strong> ${responsible || '________________________'}</div>
+    <div class="divider"></div>
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align: left;">PRODUCTO</th>
+          ${showTheo ? '<th style="text-align: right;">EXIST.</th>' : ''}
+          <th style="text-align: right;">REAL</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div class="divider"></div>
+    <div class="sig-block"><div class="sig-line"></div><div>Contado por (Firma y Fecha)</div></div>
+    <div class="sig-block"><div class="sig-line"></div><div>Verificado / Supervisor</div></div>
+    <div class="footer-note">Neo ERP — ${new Date().toLocaleString('es-VE')}</div>
+  </div>
+  <script>
+    window.onload = function() {
+      var root = document.getElementById('ticket-root');
+      var hPx = root ? root.offsetHeight : document.body.scrollHeight;
+      var exactMm = Math.max(75, Math.ceil((hPx * 25.4) / 96) + 8);
+      var pageStyle = document.getElementById('thermal-page-style');
+      if (pageStyle) {
+        pageStyle.innerHTML = '@page { size: 80mm ' + exactMm + 'mm; margin: 0mm; }';
+      }
+      setTimeout(function() {
+        window.focus();
+        window.print();
+      }, 200);
+    };
+  </script>
+</body>
+</html>`);
+    printWindow.document.close();
+  };
+
+  const exportCountSheetExcelData = (dataToExport: any, showTheo: boolean, responsible: string) => {
+    if (!dataToExport || !dataToExport.items || dataToExport.items.length === 0) return;
+    const rows: any[][] = [
+      ["NEO ERP - REPORTE DE PRODUCTOS - TOMA DE INVENTARIO"],
+      [
+        dataToExport.company_name || "CATANIA HIPERMERCADO, C.A.",
+        dataToExport.session_code ? `Toma Física: [${dataToExport.session_code}] ${dataToExport.session_name || ''}` : ""
+      ],
+      [
+        `Localidades: ${dataToExport.facility_name || 'TODAS'}`,
+        `Depósito: ${dataToExport.deposit_code || ''} ${dataToExport.deposit_name || 'TODOS'}`,
+        `Departamento: ${dataToExport.department_name || 'TODOS'}`
+      ],
+      [
+        `Moneda: ${dataToExport.currency_name || 'BOLIVAR DIGITAL'}`,
+        `Fecha de Emisión: ${dataToExport.emission_date || new Date().toLocaleDateString('es-VE')}`,
+        `Responsable: ${responsible || '______________________'}`
+      ],
+      [],
+      showTheo
+        ? ["Producto", "SKU Interno", "Descripción del Producto", "Departamento / Categoría", "Unidad", "Existencia", "Existencia Real"]
+        : ["Producto", "SKU Interno", "Descripción del Producto", "Departamento / Categoría", "Unidad", "Existencia Real"]
+    ];
+
+    dataToExport.items.forEach((item: any) => {
+      if (showTheo) {
+        rows.push([
+          item.product_code || item.sku || "",
+          item.sku || "",
+          item.description || "",
+          item.category || "",
+          item.uom || "UND",
+          Number(Number(item.theoretical_qty ?? 0).toFixed(2)),
+          ""
+        ]);
+      } else {
+        rows.push([
+          item.product_code || item.sku || "",
+          item.sku || "",
+          item.description || "",
+          item.category || "",
+          item.uom || "UND",
+          ""
+        ]);
+      }
+    });
+
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    worksheet['!cols'] = showTheo
+      ? [{ wch: 18 }, { wch: 16 }, { wch: 46 }, { wch: 26 }, { wch: 10 }, { wch: 16 }, { wch: 18 }]
+      : [{ wch: 18 }, { wch: 16 }, { wch: 46 }, { wch: 26 }, { wch: 10 }, { wch: 18 }];
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Toma de Inventario');
+    const safeDept = (dataToExport.department_name || 'General').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 25);
+    const modeSuffix = showTheo ? 'ConExistencia' : 'ConteoCiego';
+    XLSX.writeFile(workbook, `NeoERP_Toma_Inventario_${safeDept}_${modeSuffix}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
 
   // Helper para saber si la sesión activa está acotada a una categoría específica
   const isSessionCategoryScoped = Boolean(
@@ -342,6 +697,28 @@ export default function WmsAdjustmentsPage() {
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const productFilterTimeoutRef = useRef<any>(null);
+  const handleProductFilter = (filterText: string) => {
+    if (productFilterTimeoutRef.current) clearTimeout(productFilterTimeoutRef.current);
+    productFilterTimeoutRef.current = setTimeout(async () => {
+      try {
+        const q = (filterText || '').trim();
+        const url = q ? `/products/selector?q=${encodeURIComponent(q)}&limit=100` : '/products/selector?limit=500';
+        const res = await api.get(url);
+        const list = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.items || []);
+        if (list.length > 0 && list[0].search_key) {
+          setProducts(prev => {
+            const selectedIds = new Set(adjLines.map((l: any) => l.product_variant_id).filter(Boolean));
+            const preserved = prev.filter((p: any) => selectedIds.has(p.value) && !list.some((m: any) => m.value === p.value));
+            return [...preserved, ...list];
+          });
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }, 200);
   };
 
   const fetchProducts = async () => {
@@ -1131,18 +1508,34 @@ export default function WmsAdjustmentsPage() {
       {/* TAB 1: TOMAS FÍSICAS MASIVAS */}
       {activeTab === 1 && (
         <div className="space-y-6">
-          <div className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
             <div>
               <h3 className="text-lg font-bold text-slate-800">Tomas Físicas y Recuentos por Pasillo</h3>
-              <p className="text-slate-500 text-xs mt-0.5">Genera una captura masiva teórica e ingresa conteos ciegos para conciliar inventario.</p>
+              <p className="text-slate-500 text-xs mt-0.5">Genera una captura masiva teórica, imprime o exporta planillas de conteo físico e ingresa conteos ciegos para conciliar inventario.</p>
             </div>
-            <Button
-              label="+ Nueva Toma Física"
-              icon="pi pi-plus"
-              severity="info"
-              className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white"
-              onClick={() => setNewSessionDialogVisible(true)}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                label="Reporte / Planilla de Conteo"
+                icon="pi pi-print"
+                outlined
+                severity="secondary"
+                className="font-bold text-xs border-slate-300 text-slate-800 hover:bg-slate-50"
+                onClick={() => {
+                  const defaultFac = facilities.length > 0 ? facilities[0].id : null;
+                  setSheetSessionId(null);
+                  setSheetFacilityId(defaultFac);
+                  setCountSheetDialogVisible(true);
+                  loadCountSheetReport({ session_id: null, facility_id: defaultFac });
+                }}
+              />
+              <Button
+                label="+ Nueva Toma Física"
+                icon="pi pi-plus"
+                severity="info"
+                className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white"
+                onClick={() => setNewSessionDialogVisible(true)}
+              />
+            </div>
           </div>
 
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
@@ -1195,7 +1588,18 @@ export default function WmsAdjustmentsPage() {
               )} align="center" sortable />
               <Column header="RENGLONES" body={s => <span className="font-semibold text-slate-700">{s.total_lines !== undefined ? s.total_lines : (s.lines?.length || 0)} ítems</span>} align="right" />
               <Column header="ACCIONES / CONTROL" body={s => (
-                <div className="flex items-center justify-center gap-2">
+                <div className="flex items-center justify-center gap-1.5">
+                  <Button
+                    icon="pi pi-print"
+                    label="Planilla"
+                    tooltip="Imprimir o Exportar Excel de los productos de esta Toma Física"
+                    tooltipOptions={{ position: 'top' }}
+                    outlined
+                    severity="help"
+                    size="small"
+                    className="font-bold text-xs border-slate-300 text-slate-800 hover:bg-slate-100"
+                    onClick={() => openSessionCountSheet(s)}
+                  />
                   <Button
                     icon="pi pi-eye"
                     tooltip="Ver Ficha de Configuración (Inmutable)"
@@ -1218,7 +1622,7 @@ export default function WmsAdjustmentsPage() {
                     onClick={() => handleOpenSessionDetail(s.id)}
                   />
                 </div>
-              )} align="center" style={{ width: '20rem' }} />
+              )} align="center" style={{ width: '25rem' }} />
             </DataTable>
           </div>
         </div>
@@ -1410,8 +1814,9 @@ export default function WmsAdjustmentsPage() {
                             placeholder="Buscar por Código de Barra, SKU o Nombre..."
                             className="w-full text-xs"
                             filter
-                            filterBy="label,search_key,sku,name,barcodes_str"
+                            filterBy="label,search_key,sku,name,product_name,barcodes_str"
                             filterMatchMode="contains"
+                            onFilter={e => handleProductFilter(e.filter)}
                             itemTemplate={productOptionTemplate}
                             showClear
                           />
@@ -1923,37 +2328,48 @@ export default function WmsAdjustmentsPage() {
                 </div>
               </div>
 
-              {/* BOTONES DE TRANSICIÓN DE FASE */}
-              {selectedSession.state === 'IN_PROGRESS' && (
+              {/* BOTONES DE TRANSICIÓN DE FASE Y PLANILLA */}
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
-                  label="🔒 Finalizar Conteo Ciego y Pasar a Análisis de Cotejo (Fase 2)"
-                  icon="pi pi-arrow-right"
-                  severity="info"
-                  className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md hover:bg-indigo-700"
-                  onClick={() => handleAdvancePhase('REVIEW')}
+                  label="🖨️ Imprimir / Excel Planilla de esta Toma"
+                  icon="pi pi-print"
+                  outlined
+                  size="small"
+                  className="font-bold text-xs border-slate-300 text-slate-800 bg-white hover:bg-slate-50"
+                  onClick={() => openSessionCountSheet(selectedSession)}
                 />
-              )}
 
-              {selectedSession.state === 'REVIEW' && (
-                <div className="flex gap-2">
+                {selectedSession.state === 'IN_PROGRESS' && (
                   <Button
-                    label="🔓 Reabrir Conteo Ciego"
-                    icon="pi pi-lock-open"
-                    outlined
-                    severity="warning"
-                    className="font-bold text-xs"
-                    onClick={() => handleAdvancePhase('IN_PROGRESS')}
+                    label="🔒 Finalizar Conteo Ciego y Pasar a Análisis de Cotejo (Fase 2)"
+                    icon="pi pi-arrow-right"
+                    severity="info"
+                    className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md hover:bg-indigo-700"
+                    onClick={() => handleAdvancePhase('REVIEW')}
                   />
-                  <Button
-                    label="✅ Consolidar & Generar Ajustes Automáticos (Fase 3)"
-                    icon="pi pi-check-circle"
-                    severity="success"
-                    loading={validatingSession}
-                    className="font-bold text-xs bg-emerald-600 border-emerald-600 text-white shadow-md hover:bg-emerald-700"
-                    onClick={() => handleValidateSession(selectedSession.id)}
-                  />
-                </div>
-              )}
+                )}
+
+                {selectedSession.state === 'REVIEW' && (
+                  <>
+                    <Button
+                      label="🔓 Reabrir Conteo Ciego"
+                      icon="pi pi-lock-open"
+                      outlined
+                      severity="warning"
+                      className="font-bold text-xs"
+                      onClick={() => handleAdvancePhase('IN_PROGRESS')}
+                    />
+                    <Button
+                      label="✅ Consolidar & Generar Ajustes Automáticos (Fase 3)"
+                      icon="pi pi-check-circle"
+                      severity="success"
+                      loading={validatingSession}
+                      className="font-bold text-xs bg-emerald-600 border-emerald-600 text-white shadow-md hover:bg-emerald-700"
+                      onClick={() => handleValidateSession(selectedSession.id)}
+                    />
+                  </>
+                )}
+              </div>
             </div>
 
             {/* FICHA INMUTABLE DE CONFIGURACIÓN Y PARÁMETROS DEL CONTEO */}
@@ -2644,6 +3060,270 @@ export default function WmsAdjustmentsPage() {
             </div>
           </div>
         )}
+      </Dialog>
+
+      {/* DIÁLOGO: REPORTE / PLANILLA DE PRODUCTOS PARA TOMA DE INVENTARIO (IMPRIMIR Y EXCEL) */}
+      <Dialog
+        header="🖨️ Reporte de Productos — Toma de Inventario (Conteo Físico)"
+        visible={countSheetDialogVisible}
+        onHide={() => setCountSheetDialogVisible(false)}
+        style={{ width: '1150px', maxWidth: '96vw' }}
+        className="rounded-2xl"
+      >
+        <div className="flex flex-col gap-5 py-2">
+          {/* Controls bar */}
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setSheetShowTheoretical(prev => !prev)}
+                className={`px-3.5 py-2 rounded-xl text-xs font-extrabold border transition-all flex items-center gap-2 cursor-pointer ${
+                  sheetShowTheoretical
+                    ? 'bg-blue-50 text-blue-800 border-blue-200'
+                    : 'bg-amber-50 text-amber-900 border-amber-300'
+                }`}
+              >
+                <i className={`pi ${sheetShowTheoretical ? 'pi-eye text-blue-600' : 'pi-eye-slash text-amber-600'}`}></i>
+                <span>{sheetShowTheoretical ? 'Mostrar Existencia Teórica: SÍ' : 'Mostrar Existencia Teórica: NO (Conteo Ciego)'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !sheetIncludeZero;
+                  setSheetIncludeZero(next);
+                  loadCountSheetReport({ include_zero: next });
+                }}
+                className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-2 cursor-pointer ${
+                  sheetIncludeZero ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-300'
+                }`}
+              >
+                <i className={`pi ${sheetIncludeZero ? 'pi-check-circle text-cyan-400' : 'pi-circle text-slate-400'} text-xs`}></i>
+                <span>Incluir existencia en 0.00</span>
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                icon="pi pi-refresh"
+                label="Generar / Actualizar"
+                size="small"
+                outlined
+                loading={sheetLoading}
+                className="font-bold text-xs"
+                onClick={() => loadCountSheetReport()}
+              />
+              <Button
+                icon="pi pi-print"
+                label="Imprimir Carta"
+                size="small"
+                disabled={!sheetData?.items?.length}
+                className="font-bold text-xs bg-slate-900 border-slate-900 text-white"
+                onClick={() => printCountSheetData(sheetData, sheetShowTheoretical, sheetResponsible)}
+              />
+              <Button
+                icon="pi pi-receipt"
+                label="Tickera 80mm"
+                size="small"
+                disabled={!sheetData?.items?.length}
+                className="font-bold text-xs bg-amber-600 border-amber-600 text-white"
+                onClick={() => printCountSheetThermal80mm(sheetData, sheetShowTheoretical, sheetResponsible)}
+              />
+              <Button
+                icon="pi pi-file-excel"
+                label="Exportar Excel"
+                size="small"
+                severity="success"
+                disabled={!sheetData?.items?.length}
+                className="font-bold text-xs bg-emerald-600 border-emerald-600 text-white"
+                onClick={() => exportCountSheetExcelData(sheetData, sheetShowTheoretical, sheetResponsible)}
+              />
+            </div>
+          </div>
+
+          {/* Selector de Toma Física Abierta (Sin Conciliar) */}
+          <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-3.5 flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                <i className="pi pi-check-square text-sm"></i>
+              </div>
+              <div>
+                <label className="font-extrabold text-indigo-950 text-xs block">
+                  Extraer productos de una Toma Física pendiente por conciliar
+                </label>
+                <span className="text-[11px] text-indigo-700">
+                  Seleccione una sesión abierta (Fase 1 o Fase 2) para mostrar exactamente los productos que pertenecen a esa toma física, o déjelo vacío para filtrar libremente por departamento.
+                </span>
+              </div>
+            </div>
+            <div className="w-full md:w-[440px] shrink-0">
+              <Dropdown
+                value={sheetSessionId}
+                options={sessions
+                  .filter(s => s.state !== 'DONE')
+                  .map(s => {
+                    const count = s.total_lines !== undefined ? s.total_lines : (s.lines?.length || 0);
+                    const facLabel = s.facility_name || (facilities.find(f => f.id === s.facility_id)?.name) || '';
+                    const phaseLabel = s.state === 'REVIEW' ? 'Fase 2: Análisis' : 'Fase 1: Conteo Ciego';
+                    return {
+                      id: s.id,
+                      label: `[SES-${s.id}] ${s.name} — ${facLabel} (${count} ítems · ${phaseLabel})`
+                    };
+                  })}
+                optionLabel="label"
+                optionValue="id"
+                onChange={e => {
+                  const sid = e.value || null;
+                  setSheetSessionId(sid);
+                  if (sid) {
+                    const found = sessions.find(s => s.id === sid);
+                    if (found) {
+                      setSheetFacilityId(found.facility_id || null);
+                      setSheetWarehouseId(found.warehouse_id || null);
+                      setSheetCategoryId(found.category_id || null);
+                    }
+                    loadCountSheetReport({ session_id: sid });
+                  } else {
+                    loadCountSheetReport({ session_id: null });
+                  }
+                }}
+                placeholder="📋 Seleccionar Toma Física sin conciliar (ej. SES-2)..."
+                showClear
+                filter
+                emptyMessage="No hay tomas físicas abiertas sin conciliar"
+                className="text-xs w-full border-indigo-300"
+              />
+            </div>
+          </div>
+
+          {/* Filter controls */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            <div className="flex flex-col gap-1">
+              <label className="font-bold text-slate-600 uppercase text-[10px]">Localidad / Sucursal</label>
+              <Dropdown
+                value={sheetFacilityId}
+                options={facilities}
+                optionLabel="name"
+                optionValue="id"
+                disabled={Boolean(sheetSessionId)}
+                onChange={e => {
+                  setSheetFacilityId(e.value);
+                  setSheetWarehouseId(null);
+                  loadCountSheetReport({ facility_id: e.value, warehouse_id: null });
+                }}
+                placeholder="Todas las localidades"
+                showClear
+                className="text-xs w-full"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="font-bold text-slate-600 uppercase text-[10px]">Depósito / Almacén</label>
+              <Dropdown
+                value={sheetWarehouseId}
+                options={warehouses.filter(w => !sheetFacilityId || w.facility_id === sheetFacilityId)}
+                optionLabel="name"
+                optionValue="id"
+                disabled={Boolean(sheetSessionId)}
+                onChange={e => {
+                  setSheetWarehouseId(e.value);
+                  loadCountSheetReport({ warehouse_id: e.value });
+                }}
+                placeholder="Todos los depósitos"
+                showClear
+                filter
+                className="text-xs w-full"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="font-bold text-slate-600 uppercase text-[10px]">Departamento / Categoría</label>
+              <TreeSelect
+                value={sheetCategoryId ? String(sheetCategoryId) : null}
+                options={categoriesTree}
+                disabled={Boolean(sheetSessionId)}
+                onChange={e => {
+                  const val = e.value ? Number(e.value) : null;
+                  setSheetCategoryId(val);
+                  loadCountSheetReport({ category_id: val });
+                }}
+                placeholder="Todos los departamentos..."
+                filter
+                filterBy="label,rawName,fullPath"
+                filterMode="lenient"
+                showClear
+                className="text-xs w-full"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="font-bold text-slate-600 uppercase text-[10px]">Responsable</label>
+              <InputText
+                value={sheetResponsible}
+                onChange={e => setSheetResponsible(e.target.value)}
+                placeholder="Opcional..."
+                className="text-xs p-inputtext-sm"
+              />
+            </div>
+          </div>
+
+          {/* Paper preview */}
+          <div className="border-2 border-slate-200 rounded-2xl p-5 bg-white">
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start mb-4">
+              <div className="md:col-span-5 text-center">
+                <div className="text-base font-normal text-slate-900">{sheetData?.company_name || 'CATANIA HIPERMERCADO, C.A.'}</div>
+                <div className="text-xs text-slate-800 mt-1">Localidades: <strong>{sheetData?.facility_name || 'TODAS'}</strong></div>
+                {sheetData?.session_code && (
+                  <div className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-800 text-[11px] font-bold">
+                    <span>Toma Física: [{sheetData.session_code}] {sheetData.session_name}</span>
+                  </div>
+                )}
+              </div>
+              <div className="md:col-span-7 text-center">
+                <div className="border-b border-slate-900 pb-1 text-xs text-slate-900">REPORTE DE PRODUCTOS - TOMA DE INVENTARIO</div>
+                <div className="border-b border-slate-900 py-1 text-xs font-bold text-slate-900">
+                  Depósito: {sheetData?.deposit_name || 'TODOS'}, Departamento: {sheetData?.department_name || 'TODOS'}, Moneda: {sheetData?.currency_name || 'BOLIVAR DIGITAL'}
+                </div>
+                <div className="flex justify-between pt-1 text-xs text-slate-900">
+                  <span>Fecha de Emisión <strong>{sheetData?.emission_date || ''}</strong></span>
+                  <span>Total: <strong>{sheetData?.total_items ?? 0}</strong></span>
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-auto max-h-[45vh] border-t border-slate-200">
+              <table className="w-full border-collapse text-xs text-left">
+                <thead className="sticky top-0 bg-white border-b-4 border-double border-slate-900">
+                  <tr>
+                    <th className="py-2 px-2 w-[150px]">Producto</th>
+                    <th className="py-2 px-2">Descripción del Producto</th>
+                    {sheetShowTheoretical && <th className="py-2 px-3 text-right w-[120px]">Existencia</th>}
+                    <th className="py-2 px-2 text-center w-[140px]">Existencia Real</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {sheetLoading ? (
+                    <tr>
+                      <td colSpan={sheetShowTheoretical ? 4 : 3} className="py-8 text-center text-slate-400">
+                        Cargando productos...
+                      </td>
+                    </tr>
+                  ) : (sheetData?.items || []).map((it: any) => (
+                    <tr key={it.variant_id}>
+                      <td className="py-1.5 px-2 font-mono">{it.product_code || it.sku}</td>
+                      <td className="py-1.5 px-2">{it.description}</td>
+                      {sheetShowTheoretical && (
+                        <td className="py-1.5 px-3 text-right font-mono tabular-nums">
+                          {Number(it.theoretical_qty ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                      )}
+                      <td className="py-1.5 px-2 text-center">
+                        <div className="border-b border-slate-900 w-24 h-3.5 mx-auto"></div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </Dialog>
     </div>
   );

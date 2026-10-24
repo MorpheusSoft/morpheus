@@ -16,6 +16,7 @@ public class Program
         string? monthsStr = null;
         string? batchSizeStr = null;
         string? depositStr = null;
+        bool allowExpired = args.Any(a => a.Equals("--allow-expired", StringComparison.OrdinalIgnoreCase) || a.Equals("-all", StringComparison.OrdinalIgnoreCase));
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -89,6 +90,7 @@ public class Program
             builder.Services.AddTransient<InventoryMovementsWorker>();
             builder.Services.AddTransient<SalesExtractorWorker>();
             builder.Services.AddTransient<SupplierProductsExtractorWorker>();
+            builder.Services.AddTransient<PurchaseOrdersExtractorWorker>();
             builder.Services.AddTransient<HeartbeatWorker>();
             
             var host = builder.Build();
@@ -163,6 +165,11 @@ public class Program
                     var worker = host.Services.GetRequiredService<SupplierProductsExtractorWorker>();
                     await worker.RunOnceAsync();
                 }
+                else if (runName.Equals("odc", StringComparison.OrdinalIgnoreCase) || runName.Equals("purchase-orders", StringComparison.OrdinalIgnoreCase))
+                {
+                    var worker = host.Services.GetRequiredService<PurchaseOrdersExtractorWorker>();
+                    await worker.RunOnceAsync(allowExpired);
+                }
                 else
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
@@ -192,6 +199,7 @@ public class Program
             builder.Services.AddSingleton<SuppliersExtractorWorker>();
             builder.Services.AddSingleton<CategoryExtractorWorker>();
             builder.Services.AddSingleton<InventoryBaselineWorker>();
+            builder.Services.AddSingleton<PurchaseOrdersExtractorWorker>();
             builder.Services.AddSingleton<HeartbeatWorker>();
 
             builder.Services.AddHostedService(sp => sp.GetRequiredService<HeartbeatWorker>());
@@ -203,6 +211,7 @@ public class Program
             builder.Services.AddHostedService(sp => sp.GetRequiredService<SuppliersExtractorWorker>());
             builder.Services.AddHostedService(sp => sp.GetRequiredService<CategoryExtractorWorker>());
             builder.Services.AddHostedService(sp => sp.GetRequiredService<InventoryBaselineWorker>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<PurchaseOrdersExtractorWorker>());
 
             var host = builder.Build();
             host.Run();

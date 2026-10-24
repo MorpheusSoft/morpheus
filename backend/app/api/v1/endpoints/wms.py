@@ -5,13 +5,13 @@ from pydantic import BaseModel
 from typing import List, Optional, Any
 from datetime import date, datetime
 from app.api.deps import get_db, get_current_active_user
-from app.models.purchasing import PurchaseOrder, PurchaseOrderLine
+from app.models.purchasing import PurchaseOrder, PurchaseOrderLine, SupplierProduct
 from app.models.inventory import (
     StockPicking, StockMove, StockPickingType, Batch, InventorySnapshot,
     Location, Warehouse, ProductVariant, Product, ProductFacilityPrice, ProductBarcode,
     AdjustmentReason, InventoryAdjustment, InventoryAdjustmentLine, ProductPackaging
 )
-from app.models.core import Facility, Supplier, User
+from app.models.core import Facility, Supplier, User, Currency
 from app.schemas.adjustment import (
     AdjustmentReasonCreate, AdjustmentReasonResponse,
     InventoryAdjustmentCreate, InventoryAdjustmentResponse
@@ -86,9 +86,15 @@ class PutawayPayload(BaseModel):
 
 class DirectReceiptLineInput(BaseModel):
     variant_id: int
+    pack_id: Optional[int] = None
+    pack_name: Optional[str] = None
+    qty_per_pack: Optional[float] = 1.0
+    pack_expected_qty: Optional[float] = None
+    pack_received_qty: Optional[float] = None
     expected_qty: Optional[float] = None
     received_qty: float
     unit_cost: Optional[float] = 0.0
+    billed_unit_cost: Optional[float] = None
     damaged_qty: Optional[float] = 0.0
     rejection_reason: Optional[str] = None
     lot_number: Optional[str] = None
@@ -100,6 +106,8 @@ class DirectReceiptPayload(BaseModel):
     warehouse_id: Optional[int] = None
     invoice_number: Optional[str] = None
     receipt_date: Optional[date] = None
+    currency_code: Optional[str] = "VES"
+    exchange_rate: Optional[float] = None
     notes: Optional[str] = None
     lines: List[DirectReceiptLineInput]
 
@@ -135,7 +143,20 @@ def create_direct_receipt(
     if not facility:
         raise HTTPException(status_code=404, detail="Sucursal especificada no existe.")
 
-    # 3. Crear Registro de Orden de Compra Directa (REC-DIR-...)
+    # 3. Resolver Moneda y Tasa de Cambio Histórica del Documento
+    curr_code = (payload.currency_code or "VES").strip().upper()
+    doc_currency = db.query(Currency).filter(Currency.code == curr_code).first()
+    ves_currency = db.query(Currency).filter(Currency.code == "VES").first()
+    usd_currency = db.query(Currency).filter(Currency.code == "USD").first()
+
+    if curr_code == "VES":
+        doc_currency_id = doc_currency.id if doc_currency else (ves_currency.id if ves_currency else supplier.currency_id)
+        doc_rate = float(payload.exchange_rate) if (payload.exchange_rate and payload.exchange_rate > 0) else float(ves_currency.exchange_rate if ves_currency else 1.0)
+    else:
+        doc_currency_id = doc_currency.id if doc_currency else (usd_currency.id if usd_currency else 1)
+        doc_rate = float(payload.exchange_rate) if (payload.exchange_rate and payload.exchange_rate > 0) else float(ves_currency.exchange_rate if ves_currency else 1.0)
+
+    # 4. Crear Registro de Orden de Compra Directa (REC-DIR-...)
     ref_code = f"REC-DIR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     
     total_amount = sum(float(l.received_qty * (l.unit_cost or 0)) for l in payload.lines)
@@ -150,13 +171,14 @@ def create_direct_receipt(
         total_amount=total_amount,
         invoice_number=payload.invoice_number,
         invoice_date=receipt_dt,
-        notes=f"Recepción Directa sin ODC. Factura/Guía: {payload.invoice_number or 'S/N'}. {payload.notes or ''}".strip(),
-        currency_id=supplier.currency_id
+        notes=f"Recepción Directa sin ODC ({curr_code} @ Tasa {doc_rate:,.4f}). Factura/Guía: {payload.invoice_number or 'S/N'}. {payload.notes or ''}".strip(),
+        currency_id=doc_currency_id,
+        exchange_rate=doc_rate
     )
     db.add(order)
     db.flush()
 
-    # 4. Determinar Almacén y Ubicación de Destino
+    # 5. Determinar Almacén y Ubicación de Destino
     warehouse = None
     if payload.warehouse_id:
         warehouse = db.query(Warehouse).filter(
@@ -221,7 +243,7 @@ def create_direct_receipt(
     db.add(picking)
     db.flush()
 
-    # 5. Crear Renglones e Ingresar a Inventario
+    # 6. Crear Renglones, Actualizar Empaques, Lotes, Kardex, Snapshots y Costos Maestros
     for l in payload.lines:
         variant = db.query(ProductVariant).filter(ProductVariant.id == l.variant_id).first()
         if not variant:
@@ -232,29 +254,87 @@ def create_direct_receipt(
         validate_quantity_uom(l.expected_qty, uom_base, f"El producto [{sku_label}]")
         validate_quantity_uom(l.received_qty, uom_base, f"El producto [{sku_label}]")
 
-        cost = float(l.unit_cost or variant.average_cost or variant.standard_cost or 0)
+        # 6.1 Resolver / Actualizar Empaque en inv.product_packagings
+        final_pack_id = l.pack_id if (l.pack_id and l.pack_id > 0) else None
+        factor = float(l.qty_per_pack or 1.0)
+        if factor > 1.0 and variant.product_id:
+            if final_pack_id:
+                pk_obj = db.query(ProductPackaging).filter(ProductPackaging.id == final_pack_id).first()
+                if pk_obj and abs(float(pk_obj.qty_per_unit or 1.0) - factor) > 0.0001:
+                    pk_obj.qty_per_unit = factor
+            else:
+                pk_name = (l.pack_name or "EMPAQUE").strip().upper()
+                pk_obj = db.query(ProductPackaging).filter(
+                    ProductPackaging.product_id == variant.product_id,
+                    ProductPackaging.name == pk_name
+                ).first()
+                if pk_obj:
+                    pk_obj.qty_per_unit = factor
+                else:
+                    pk_obj = ProductPackaging(
+                        product_id=variant.product_id,
+                        name=pk_name,
+                        qty_per_unit=factor
+                    )
+                    db.add(pk_obj)
+                    db.flush()
+                final_pack_id = pk_obj.id
+
+        cost = float(l.unit_cost or variant.replacement_cost or variant.average_cost or variant.standard_cost or 0)
         expected = float(l.expected_qty if l.expected_qty is not None else l.received_qty)
+        qty_good = float(l.received_qty or 0)
+        qty_ordered_val = float(l.pack_expected_qty if l.pack_expected_qty is not None else expected)
+        billed_qty_val = float(l.pack_received_qty if l.pack_received_qty is not None else qty_good)
+        billed_cost_val = float(l.billed_unit_cost if l.billed_unit_cost is not None else cost)
+
         po_line = PurchaseOrderLine(
             order_id=order.id,
             variant_id=l.variant_id,
-            qty_ordered=expected,
+            pack_id=final_pack_id,
+            qty_ordered=qty_ordered_val,
             expected_base_qty=expected,
-            received_base_qty=l.received_qty,
-            unit_cost=cost
+            received_base_qty=qty_good,
+            unit_cost=cost,
+            billed_qty=billed_qty_val,
+            billed_unit_cost=billed_cost_val
         )
         db.add(po_line)
         db.flush()
 
-        qty_good = float(l.received_qty or 0)
+        # 6.2 Resolver / Crear Lote (FEFO) en inv.batches
+        batch_id = None
+        lot_str = (l.lot_number or "").strip()
+        if not lot_str and l.expiration_date:
+            lot_str = f"FEFO-{l.expiration_date.strftime('%Y%m%d')}"
+        if lot_str:
+            batch = db.query(Batch).filter(
+                Batch.product_variant_id == l.variant_id,
+                Batch.batch_number == lot_str
+            ).first()
+            if not batch:
+                batch = Batch(
+                    product_variant_id=l.variant_id,
+                    batch_number=lot_str,
+                    expiry_date=l.expiration_date
+                )
+                db.add(batch)
+                db.flush()
+            elif l.expiration_date and not batch.expiry_date:
+                batch.expiry_date = l.expiration_date
+            batch_id = batch.id
+
+        # 6.3 Asentar Movimiento en Kardex (inv.stock_moves) y Snapshot (inv.inventory_snapshots)
+        new_avg_cost = cost
         if qty_good > 0:
             move = StockMove(
                 picking_id=picking.id,
                 product_id=l.variant_id,
                 location_src_id=supplier_loc.id,
                 location_dest_id=dest_loc.id,
-                quantity_demand=qty_good,
+                quantity_demand=expected,
                 quantity_done=qty_good,
                 state='DONE',
+                batch_id=batch_id,
                 supplier_id=payload.supplier_id,
                 unit_cost=cost,
                 reference=ref_code,
@@ -270,19 +350,55 @@ def create_direct_receipt(
             if snapshot:
                 old_qty = float(snapshot.stock_qty or 0)
                 old_cost = float(snapshot.avg_cost or 0)
-                total_val = (old_qty * old_cost) + (qty_good * cost)
-                new_qty = old_qty + qty_good
+                if old_qty > 0 and cost > 0:
+                    total_val = (old_qty * old_cost) + (qty_good * cost)
+                    new_qty = old_qty + qty_good
+                    new_avg_cost = (total_val / new_qty) if new_qty > 0 else cost
+                else:
+                    new_qty = old_qty + qty_good
+                    new_avg_cost = cost if cost > 0 else old_cost
                 snapshot.stock_qty = new_qty
-                snapshot.avg_cost = (total_val / new_qty) if new_qty > 0 else cost
+                snapshot.avg_cost = new_avg_cost
+                if cost > 0:
+                    snapshot.current_cost = cost
+                    snapshot.replacement_cost = cost
             else:
                 snapshot = InventorySnapshot(
                     variant_id=l.variant_id,
                     facility_id=payload.facility_id,
+                    batch_id=batch_id,
                     stock_qty=qty_good,
                     avg_cost=cost,
-                    current_cost=cost
+                    current_cost=cost,
+                    replacement_cost=cost
                 )
                 db.add(snapshot)
+
+        # 6.4 Actualizar Costos en Ficha Maestra (inv.product_variants) y Proveedor (pur.supplier_products)
+        if cost > 0:
+            variant.last_cost = cost
+            variant.replacement_cost = cost
+            variant.average_cost = new_avg_cost if new_avg_cost > 0 else cost
+
+            sup_prod = db.query(SupplierProduct).filter(
+                SupplierProduct.supplier_id == payload.supplier_id,
+                SupplierProduct.variant_id == l.variant_id
+            ).first()
+            if sup_prod:
+                sup_prod.replacement_cost = cost
+                if final_pack_id:
+                    sup_prod.pack_id = final_pack_id
+            else:
+                sup_prod = SupplierProduct(
+                    supplier_id=payload.supplier_id,
+                    variant_id=l.variant_id,
+                    pack_id=final_pack_id,
+                    currency_id=usd_currency.id if usd_currency else 1,
+                    replacement_cost=cost,
+                    min_order_qty=1,
+                    is_active=True
+                )
+                db.add(sup_prod)
 
     db.commit()
     db.refresh(order)

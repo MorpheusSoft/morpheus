@@ -119,6 +119,11 @@ def build_installer():
                 "Enabled": False,
                 "IntervalMinutes": 60,
                 "TargetApiUrl": "https://api.qa.morpheussoft.net/api/v1/import/suppliers-legacy"
+            },
+            "PurchaseOrders": {
+                "Enabled": True,
+                "IntervalMinutes": 15,
+                "TargetApiUrl": "https://api.qa.morpheussoft.net/api/v1/import/purchase-orders-legacy"
             }
         },
         "StoreFacilityId": 10,

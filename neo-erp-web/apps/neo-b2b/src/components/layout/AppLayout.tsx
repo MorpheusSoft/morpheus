@@ -3,7 +3,7 @@ import React from 'react';
 import { usePathname } from 'next/navigation';
 import api from '@/lib/api';
 import { SessionGuard } from '../auth/SessionGuard';
-import { clearAuthCookies, getLoginUrl } from '@/lib/domain';
+import { clearAuthCookies, getLogoutUrl } from '@/lib/domain';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || '';
@@ -27,9 +27,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   const handleLogout = () => {
     if (typeof window !== 'undefined') {
-      localStorage.removeItem('token');
       clearAuthCookies();
-      window.location.href = getLoginUrl();
+      window.location.href = getLogoutUrl();
     }
   };
 

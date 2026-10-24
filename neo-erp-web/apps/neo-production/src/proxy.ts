@@ -11,7 +11,7 @@ export function proxy(request: NextRequest) {
     const proto = request.headers.get('x-forwarded-proto') || domainConfig.protocol
 
     const basePath = request.nextUrl.basePath || ''
-    let pathname = request.nextUrl.pathname
+    const pathname = request.nextUrl.pathname
     let fullPath = pathname
     if (basePath) {
       if (pathname === '/' || !pathname) {

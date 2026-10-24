@@ -177,27 +177,32 @@ export default function ProductionOrderExecutionConsole() {
   const [showSaveBomForm, setShowSaveBomForm] = useState<boolean>(false);
   const [saveBomName, setSaveBomName] = useState<string>("");
 
-  const searchCatalogVariants = useCallback(async (queryText: string) => {
-    try {
-      const res = await api.get("/mfg/catalog/variants", {
-        params: { search: queryText, limit: 80 },
-      });
-      const fetched: CatalogVariant[] = res.data.items || [];
-      setVariants((prev) => {
-        const map = new Map<number, CatalogVariant>();
-        for (const v of prev) map.set(v.id, v);
-        for (const v of fetched) map.set(v.id, v);
-        return Array.from(map.values());
-      });
-    } catch (err) {
-      console.error("Error buscando variantes:", err);
-    }
-  }, []);
+  const searchCatalogVariants = useCallback(
+    async (queryText: string) => {
+      try {
+        const res = await api.get("/mfg/catalog/variants", {
+          params: { search: queryText, facility_id: order?.facility_id, limit: 80 },
+        });
+        const fetched: CatalogVariant[] = res.data.items || [];
+        setVariants((prev) => {
+          const map = new Map<number, CatalogVariant>();
+          for (const v of prev) map.set(v.id, v);
+          for (const v of fetched) map.set(v.id, v);
+          return Array.from(map.values());
+        });
+      } catch (err) {
+        console.error("Error buscando variantes:", err);
+      }
+    },
+    [order?.facility_id]
+  );
 
   const ensureCatalogLoaded = useCallback(async () => {
     if (variants.length > 0) return;
     try {
-      const res = await api.get("/mfg/catalog/variants", { params: { limit: 150 } });
+      const res = await api.get("/mfg/catalog/variants", {
+        params: { facility_id: order?.facility_id, limit: 150 },
+      });
       const vList: CatalogVariant[] = res.data.items || [];
       setVariants(vList);
       if (vList.length > 0) {
@@ -206,7 +211,7 @@ export default function ProductionOrderExecutionConsole() {
     } catch (err) {
       console.error("Error cargando variantes del catálogo:", err);
     }
-  }, [variants.length]);
+  }, [variants.length, order?.facility_id]);
 
   const applyOrderData = useCallback((data: OrderDetailResponse) => {
     setOrder(data);

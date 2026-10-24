@@ -107,17 +107,22 @@ def read_products_selector(
     """
     Ultra-lightweight endpoint for fast UI dropdown selectors and barcode lookups.
     Returns variant_id, sku, name, uom_base, cost, category_id, and all associated barcodes in <150ms.
-    Supports filtering by category hierarchy (includes all descendant categories).
+    Supports filtering by category hierarchy (includes all descendant categories) and multi-token search
+    across product name, brand, SKU, ID, barcode, alternate barcodes, part number, and supplier SKUs.
     """
-    from sqlalchemy import or_
+    from sqlalchemy import or_, and_
     query = db.query(
         ProductVariant.id.label("variant_id"),
         ProductVariant.sku,
         ProductVariant.barcode,
         ProductVariant.part_number,
+        ProductVariant.replacement_cost,
         ProductVariant.average_cost,
         ProductVariant.standard_cost,
+        ProductVariant.last_cost,
+        Product.id.label("product_id"),
         Product.name.label("product_name"),
+        Product.brand.label("brand"),
         Product.uom_base.label("prod_uom"),
         Product.category_id.label("category_id")
     ).join(Product, Product.id == ProductVariant.product_id)
@@ -127,27 +132,85 @@ def read_products_selector(
         related_cat_ids = get_all_related_category_ids(db, category_id)
         query = query.filter(Product.category_id.in_(related_cat_ids))
 
-    if q:
-        clean_q = q.strip()
+    clean_q = (q or "").strip()
+    from sqlalchemy import case
+    priority_expr = None
+
+    if clean_q:
         from app.core.barcode import get_barcode_candidates
-        candidates = get_barcode_candidates(clean_q)
-        barcode_conds = [ProductBarcode.barcode.ilike(f"%{c}%") for c in candidates]
-        barcode_vids = db.query(ProductBarcode.product_variant_id).filter(or_(*barcode_conds))
-        
-        variant_conds = [
-            Product.name.ilike(f"%{clean_q}%"),
-            ProductVariant.sku.ilike(f"%{clean_q}%"),
-            ProductVariant.part_number.ilike(f"%{clean_q}%"),
-            ProductVariant.id.in_(barcode_vids)
+        tokens = [t.strip() for t in clean_q.split() if t.strip()]
+        token_filters = []
+
+        for tok in tokens:
+            candidates = get_barcode_candidates(tok)
+            if tok not in candidates:
+                candidates.append(tok)
+
+            barcode_vids = db.query(ProductBarcode.product_variant_id).filter(
+                or_(
+                    ProductBarcode.barcode.in_(candidates),
+                    ProductBarcode.barcode.ilike(f"%{tok}%")
+                )
+            )
+
+            supplier_vids = db.query(SupplierProduct.variant_id).filter(
+                or_(
+                    SupplierProduct.supplier_sku.in_(candidates),
+                    SupplierProduct.supplier_sku.ilike(f"%{tok}%")
+                )
+            )
+
+            tok_conds = [
+                Product.name.ilike(f"%{tok}%"),
+                Product.brand.ilike(f"%{tok}%"),
+                ProductVariant.sku.ilike(f"%{tok}%"),
+                ProductVariant.barcode.ilike(f"%{tok}%"),
+                ProductVariant.part_number.ilike(f"%{tok}%"),
+                ProductVariant.barcode.in_(candidates),
+                ProductVariant.sku.in_(candidates),
+                ProductVariant.id.in_(barcode_vids),
+                ProductVariant.id.in_(supplier_vids),
+            ]
+
+            if tok.isdigit() and len(tok) <= 9:
+                num_id = int(tok)
+                tok_conds.append(Product.id == num_id)
+                tok_conds.append(ProductVariant.id == num_id)
+                tok_conds.append(ProductVariant.sku.ilike(f"PRD-{num_id}"))
+
+            token_filters.append(or_(*tok_conds))
+
+        if token_filters:
+            query = query.filter(and_(*token_filters))
+
+        q_candidates = get_barcode_candidates(clean_q)
+        if clean_q not in q_candidates:
+            q_candidates.append(clean_q)
+        exact_bc_vids = db.query(ProductBarcode.product_variant_id).filter(ProductBarcode.barcode.in_(q_candidates))
+        exact_conds = [
+            ProductVariant.sku.ilike(clean_q),
+            ProductVariant.barcode.in_(q_candidates),
+            ProductVariant.part_number.ilike(clean_q),
+            ProductVariant.id.in_(exact_bc_vids),
         ]
-        for c in candidates:
-            variant_conds.append(ProductVariant.barcode.ilike(f"%{c}%"))
-            variant_conds.append(ProductVariant.sku.ilike(f"%{c}%"))
+        if clean_q.isdigit() and len(clean_q) <= 9:
+            q_num = int(clean_q)
+            exact_conds.append(Product.id == q_num)
+            exact_conds.append(ProductVariant.id == q_num)
+            exact_conds.append(ProductVariant.sku.ilike(f"PRD-{q_num}"))
 
-        query = query.filter(or_(*variant_conds))
+        priority_expr = case(
+            (or_(*exact_conds), 0),
+            (or_(Product.name.ilike(f"{clean_q}%"), ProductVariant.sku.ilike(f"{clean_q}%")), 1),
+            else_=2
+        )
 
-    items = query.order_by(Product.name.asc()).limit(limit).all()
+    if priority_expr is not None:
+        items = query.order_by(priority_expr.asc(), Product.name.asc()).limit(limit).all()
+    else:
+        items = query.order_by(Product.name.asc()).limit(limit).all()
     v_ids = [r.variant_id for r in items]
+    p_ids = list({r.product_id for r in items if r.product_id})
 
     bc_map = {}
     if v_ids:
@@ -156,6 +219,28 @@ def read_products_selector(
         for vid, bc in barcodes:
             if bc:
                 bc_map.setdefault(vid, []).append(bc)
+
+        sup_skus = db.query(SupplierProduct.variant_id, SupplierProduct.supplier_sku)\
+            .filter(SupplierProduct.variant_id.in_(v_ids), SupplierProduct.supplier_sku.isnot(None)).all()
+        for vid, ssku in sup_skus:
+            if ssku and ssku not in bc_map.get(vid, []):
+                bc_map.setdefault(vid, []).append(ssku)
+
+    pack_map = {}
+    if p_ids:
+        from app.models.inventory import ProductPackaging
+        packs = db.query(
+            ProductPackaging.id,
+            ProductPackaging.product_id,
+            ProductPackaging.name,
+            ProductPackaging.qty_per_unit
+        ).filter(ProductPackaging.product_id.in_(p_ids)).order_by(ProductPackaging.id.asc()).all()
+        for pk in packs:
+            pack_map.setdefault(pk.product_id, []).append({
+                "id": pk.id,
+                "name": pk.name or "EMPAQUE",
+                "qty_per_unit": float(pk.qty_per_unit or 1.0)
+            })
 
     results = []
     for r in items:
@@ -169,22 +254,29 @@ def read_products_selector(
         sku_code = r.sku or f"PRD-{r.variant_id}"
         prod_name = r.product_name or "Producto Sin Nombre"
         barcodes_str = " ".join(all_bc)
-        search_key = f"{sku_code} {prod_name} {barcodes_str}".lower()
-        display_label = f"[{sku_code}] {prod_name} (Barra: {primary_bc})" if primary_bc else f"[{sku_code}] {prod_name}"
+        codes_preview = ", ".join(all_bc[:3])
+        search_key = f"{sku_code} {r.variant_id} {r.product_id} {prod_name} {r.brand or ''} {barcodes_str} {clean_q}".lower()
+        display_label = f"[{sku_code}] {prod_name} (Cód: {codes_preview})" if all_bc else f"[{sku_code}] {prod_name}"
+        cost_val = float(r.replacement_cost or r.average_cost or r.standard_cost or r.last_cost or 0.0)
+        prod_packs = pack_map.get(r.product_id, [])
 
         results.append({
             "id": r.variant_id,
             "value": r.variant_id,
             "variant_id": r.variant_id,
+            "product_id": r.product_id,
             "sku": sku_code,
             "name": prod_name,
+            "product_name": prod_name,
+            "brand": r.brand or "",
             "category_id": r.category_id,
             "uom_base": r.prod_uom or "UND",
-            "cost": float(r.average_cost or r.standard_cost or 0.0),
+            "cost": cost_val,
             "label": display_label,
             "primary_barcode": primary_bc,
             "barcodes": all_bc,
             "barcodes_str": barcodes_str,
+            "packagings": prod_packs,
             "search_key": search_key
         })
     return results
@@ -205,7 +297,7 @@ def read_products(
     """
     try:
         from sqlalchemy.orm import selectinload
-        from sqlalchemy import or_
+        from sqlalchemy import or_, and_
         
         prod_query = db.query(Product)
         
@@ -228,27 +320,57 @@ def read_products(
 
         search_term = (q or query or "").strip()
         if search_term:
-            clean_q = search_term
-            barcode_prod_ids = db.query(ProductVariant.product_id)\
-                .join(ProductBarcode, ProductBarcode.product_variant_id == ProductVariant.id)\
-                .filter(ProductBarcode.barcode.ilike(f"%{clean_q}%"))
-
-            supplier_prod_ids = db.query(ProductVariant.product_id)\
-                .join(SupplierProduct, SupplierProduct.variant_id == ProductVariant.id)\
-                .filter(SupplierProduct.supplier_sku.ilike(f"%{clean_q}%"))
-
+            from app.core.barcode import get_barcode_candidates
             if not (supplier_ids and isinstance(supplier_ids, (list, tuple))):
                 prod_query = prod_query.outerjoin(ProductVariant)
-            prod_query = prod_query.filter(
-                or_(
-                    Product.name.ilike(f"%{clean_q}%"),
-                    ProductVariant.sku.ilike(f"%{clean_q}%"),
-                    ProductVariant.barcode.ilike(f"%{clean_q}%"),
-                    ProductVariant.part_number.ilike(f"%{clean_q}%"),
+
+            tokens = [t.strip() for t in search_term.split() if t.strip()]
+            token_filters = []
+            for tok in tokens:
+                candidates = get_barcode_candidates(tok)
+                if tok not in candidates:
+                    candidates.append(tok)
+
+                barcode_prod_ids = db.query(ProductVariant.product_id)\
+                    .join(ProductBarcode, ProductBarcode.product_variant_id == ProductVariant.id)\
+                    .filter(
+                        or_(
+                            ProductBarcode.barcode.in_(candidates),
+                            ProductBarcode.barcode.ilike(f"%{tok}%")
+                        )
+                    )
+
+                supplier_prod_ids = db.query(ProductVariant.product_id)\
+                    .join(SupplierProduct, SupplierProduct.variant_id == ProductVariant.id)\
+                    .filter(
+                        or_(
+                            SupplierProduct.supplier_sku.in_(candidates),
+                            SupplierProduct.supplier_sku.ilike(f"%{tok}%")
+                        )
+                    )
+
+                tok_conds = [
+                    Product.name.ilike(f"%{tok}%"),
+                    Product.brand.ilike(f"%{tok}%"),
+                    ProductVariant.sku.ilike(f"%{tok}%"),
+                    ProductVariant.barcode.ilike(f"%{tok}%"),
+                    ProductVariant.part_number.ilike(f"%{tok}%"),
+                    ProductVariant.barcode.in_(candidates),
+                    ProductVariant.sku.in_(candidates),
                     Product.id.in_(barcode_prod_ids),
-                    Product.id.in_(supplier_prod_ids)
-                )
-            )
+                    Product.id.in_(supplier_prod_ids),
+                ]
+
+                if tok.isdigit() and len(tok) <= 9:
+                    num_id = int(tok)
+                    tok_conds.append(Product.id == num_id)
+                    tok_conds.append(ProductVariant.id == num_id)
+                    tok_conds.append(ProductVariant.sku.ilike(f"PRD-{num_id}"))
+
+                token_filters.append(or_(*tok_conds))
+
+            if token_filters:
+                prod_query = prod_query.filter(and_(*token_filters))
 
         if (supplier_ids and isinstance(supplier_ids, (list, tuple))) or search_term:
             prod_query = prod_query.distinct()

@@ -221,7 +221,7 @@ class AdHocOrderOutputCreate(BaseModel):
 class ExplodePreviewRequest(BaseModel):
     bom_id: Optional[int] = None
     planned_base_qty: Optional[float] = None
-    facility_id: int = 1
+    facility_id: Optional[int] = None
     work_center_id: Optional[int] = None
     source_warehouse_id: Optional[int] = None
     dest_warehouse_id: Optional[int] = None
@@ -238,7 +238,7 @@ class ExplodePreviewRequest(BaseModel):
 
 class ProductionOrderCreate(BaseModel):
     bom_id: Optional[int] = None
-    facility_id: int = 1
+    facility_id: Optional[int] = None
     work_center_id: Optional[int] = None
     source_warehouse_id: Optional[int] = None
     dest_warehouse_id: Optional[int] = None

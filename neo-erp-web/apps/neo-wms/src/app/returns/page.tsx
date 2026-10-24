@@ -100,12 +100,44 @@ export default function ReturnsAndSwapsPage() {
     }
   }, [activeTab, selectedFacility, selectedSupplier, statusFilter, searchTerm]);
 
+  const productFilterTimeoutRef = useRef<any>(null);
+  const handleProductFilter = (filterText: string) => {
+    if (productFilterTimeoutRef.current) clearTimeout(productFilterTimeoutRef.current);
+    productFilterTimeoutRef.current = setTimeout(async () => {
+      try {
+        const q = (filterText || '').trim();
+        const url = q ? `/products/selector?q=${encodeURIComponent(q)}&limit=100` : '/products/selector?limit=300';
+        const prodRes = await api.get(url);
+        const prodList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.data || prodRes.data?.items || []);
+        const mapped = prodList.map((item: any) => ({
+          ...item,
+          label: item.label || `${item.product_name || item.name} (SKU: ${item.sku})`,
+          value: item.value || item.variant_id || item.id,
+          cost: Number(item.cost || 0),
+          sku: item.sku,
+          product_name: item.product_name || item.name,
+          uom_base: item.uom_base || 'UND'
+        }));
+        setProducts(prev => {
+          const selectedIds = new Set([
+            newSwapVariantId,
+            ...newRtvLines.map((l: any) => l.variant_id)
+          ].filter(Boolean));
+          const preserved = prev.filter(p => selectedIds.has(p.value) && !mapped.some((m: any) => m.value === p.value));
+          return [...preserved, ...mapped];
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }, 200);
+  };
+
   const loadCatalogs = async () => {
     try {
       const [supRes, facRes, prodRes, lotsRes] = await Promise.all([
         api.get('/suppliers/?limit=5000').catch(() => ({ data: [] })),
         api.get('/facilities/').catch(() => ({ data: [] })),
-        api.get('/products/?limit=1000').catch(() => ({ data: [] })),
+        api.get('/products/selector?limit=300').catch(() => ({ data: [] })),
         api.get('/wms/lots').catch(() => ({ data: [] }))
       ]);
 
@@ -116,21 +148,15 @@ export default function ReturnsAndSwapsPage() {
       setFacilities(facilitiesList.map((f: any) => ({ label: f.name, value: f.id })));
 
       const productsList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.data || prodRes.data?.items || []);
-      const variantList: any[] = [];
-      productsList.forEach((p: any) => {
-        if (p.variants && p.variants.length > 0) {
-          p.variants.forEach((v: any) => {
-            variantList.push({
-              label: `${p.name} (SKU: ${v.sku})`,
-              value: v.id,
-              cost: Number(v.average_cost || v.standard_cost || 0),
-              sku: v.sku,
-              product_name: p.name,
-              uom_base: p.uom_base || v.uom_base || 'UND'
-            });
-          });
-        }
-      });
+      const variantList = productsList.map((item: any) => ({
+        ...item,
+        label: item.label || `${item.product_name || item.name} (SKU: ${item.sku})`,
+        value: item.value || item.variant_id || item.id,
+        cost: Number(item.cost || 0),
+        sku: item.sku,
+        product_name: item.product_name || item.name,
+        uom_base: item.uom_base || 'UND'
+      }));
       setProducts(variantList);
 
       const rawLots = Array.isArray(lotsRes.data) ? lotsRes.data : (lotsRes.data?.items || lotsRes.data?.data || []);
@@ -921,9 +947,13 @@ export default function ReturnsAndSwapsPage() {
                           <Dropdown
                             value={line.variant_id}
                             options={products}
+                            optionLabel="label"
+                            optionValue="value"
                             onChange={(e) => handleRtvLineChange(idx, 'variant_id', e.value)}
-                            placeholder="Seleccione..."
+                            placeholder="Buscar por nombre o código..."
                             filter
+                            filterBy="search_key,label,sku,name,product_name,barcodes_str"
+                            onFilter={(e) => handleProductFilter(e.filter)}
                             className="w-full text-xs"
                           />
                         </td>
@@ -1139,9 +1169,13 @@ export default function ReturnsAndSwapsPage() {
             <Dropdown
               value={newSwapVariantId}
               options={products}
+              optionLabel="label"
+              optionValue="value"
               onChange={(e) => setNewSwapVariantId(e.value)}
-              placeholder="Buscar producto averiado..."
+              placeholder="Buscar producto por nombre o código..."
               filter
+              filterBy="search_key,label,sku,name,product_name,barcodes_str"
+              onFilter={(e) => handleProductFilter(e.filter)}
               className="w-full text-xs"
             />
           </div>
@@ -1587,7 +1621,140 @@ export default function ReturnsAndSwapsPage() {
                 label="Imprimir Ticket 80mm"
                 icon="pi pi-print"
                 size="small"
-                onClick={() => window.print()}
+                onClick={() => {
+                  const items = Array.isArray(ticketData.items) ? ticketData.items : [];
+                  const rowsHtml = items.map((it: any) => `
+                    <tr>
+                      <td style="padding: 3px 0; border-bottom: 1px dotted #000; max-width: 42mm; word-wrap: break-word;">
+                        <div style="font-weight: 800; font-size: 11px;">${it.sku || ''}</div>
+                        <div style="font-size: 10px;">${it.product_name || ''}</div>
+                        <div style="font-size: 9px;">Lote: ${it.batch_number || 'N/A'} | ${it.reason || ''}</div>
+                      </td>
+                      <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 700;">${formatQuantity(it.quantity, it.uom_base, true)}</td>
+                      <td style="padding: 3px 0; border-bottom: 1px dotted #000; text-align: right; font-weight: 800;">$${Number(it.subtotal || 0).toFixed(2)}</td>
+                    </tr>
+                  `).join('');
+
+                  const estHeightMm = Math.max(90, 75 + items.length * 10);
+                  const htmlContent = `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Devolución 80mm - Neo WMS</title>
+  <style id="thermal-page-style">
+    @page { size: 80mm ${estHeightMm}mm; margin: 0mm; }
+  </style>
+  <style>
+    * { box-sizing: border-box; color: #000000 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    html, body {
+      width: 72mm;
+      max-width: 72mm;
+      margin: 0;
+      padding: 2mm 2mm 4mm 2mm;
+      font-family: Arial, Helvetica, 'Courier New', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.25;
+      background: #ffffff !important;
+      color: #000000 !important;
+      height: auto !important;
+      min-height: 0 !important;
+      overflow: hidden !important;
+    }
+    .no-print-bar {
+      background: #0f172a;
+      color: #fff !important;
+      padding: 8px;
+      margin-bottom: 8px;
+      border-radius: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: sans-serif;
+      font-size: 11px;
+    }
+    .no-print-bar button {
+      background: #10b981;
+      color: #fff !important;
+      border: none;
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    @media print {
+      .no-print-bar { display: none !important; }
+    }
+    .header-title { text-align: center; font-weight: 900; font-size: 14px; margin-bottom: 2px; }
+    .header-sub { text-align: center; font-weight: 800; font-size: 10.5px; border-bottom: 1.5px dashed #000; padding-bottom: 4px; margin-bottom: 6px; text-transform: uppercase; }
+    .meta-row { margin: 2px 0; font-size: 11px; word-wrap: break-word; font-weight: 700; }
+    .divider { border-bottom: 1.5px dashed #000; margin: 6px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+    th { border-bottom: 1.5px solid #000; padding: 3px 0; font-size: 10px; font-weight: 900; }
+    .sig-block { margin-top: 16px; text-align: center; font-size: 10px; font-weight: 800; page-break-inside: avoid; }
+    .sig-line { border-bottom: 1.5px solid #000; width: 100%; height: 18px; margin-bottom: 3px; }
+    .footer-note { margin-top: 8px; text-align: center; font-size: 9px; font-weight: 700; border-top: 1.5px dashed #000; padding-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="no-print-bar">
+    <span style="color:#fff !important;">Ticket 80mm listo</span>
+    <button onclick="window.print()">🖨️ Imprimir</button>
+  </div>
+  <div id="ticket-root">
+    <div class="header-title">NEO WMS LOGÍSTICA</div>
+    <div class="header-sub">ACTA DE DEVOLUCIÓN A PROVEEDOR</div>
+    <div class="meta-row"><strong>DOC:</strong> ${ticketData.return_number || ticketData.reference || ''}</div>
+    <div class="meta-row"><strong>FECHA:</strong> ${ticketData.created_at || ''}</div>
+    <div class="meta-row"><strong>PROVEEDOR:</strong> ${ticketData.supplier_name || ''}</div>
+    <div class="meta-row"><strong>SUCURSAL:</strong> ${ticketData.facility_name || ''}</div>
+    <div class="divider"></div>
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align: left;">CÓD/PRODUCTO</th>
+          <th style="text-align: center;">CANT</th>
+          <th style="text-align: right;">TOTAL</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div class="divider"></div>
+    <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: 11px; margin-top: 4px;">
+      <span>TOTAL ESTIMADO:</span>
+      <span>$${Number(ticketData.total_amount || 0).toFixed(2)}</span>
+    </div>
+    <div class="sig-block"><div class="sig-line"></div><div>Firma Chofer / Transportista Proveedor</div></div>
+    <div class="sig-block"><div class="sig-line"></div><div>Firma Despachador WMS / Muelle</div></div>
+    <div class="footer-note">Impreso por Neo ERP — ${new Date().toLocaleString('es-VE')}</div>
+  </div>
+  <script>
+    window.onload = function() {
+      var root = document.getElementById('ticket-root');
+      var hPx = root ? root.offsetHeight : document.body.scrollHeight;
+      var exactMm = Math.max(75, Math.ceil((hPx * 25.4) / 96) + 8);
+      var pageStyle = document.getElementById('thermal-page-style');
+      if (pageStyle) {
+        pageStyle.innerHTML = '@page { size: 80mm ' + exactMm + 'mm; margin: 0mm; }';
+      }
+      setTimeout(function() {
+        window.focus();
+        window.print();
+      }, 200);
+    };
+  </script>
+</body>
+</html>`;
+
+                  const printWin = window.open('', '_blank', 'width=420,height=720');
+                  if (!printWin) {
+                    toast.current?.show({ severity: 'warn', summary: 'Ventana bloqueada', detail: 'Permita las ventanas emergentes para imprimir en la tickera.' });
+                    return;
+                  }
+                  printWin.document.open();
+                  printWin.document.write(htmlContent);
+                  printWin.document.close();
+                }}
                 className="font-bold bg-amber-600 border-none text-white"
               />
             </div>

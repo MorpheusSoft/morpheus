@@ -72,7 +72,38 @@ class ProductionService:
         5. Lotes FEFO iniciales para insumos de recetas maestras si aún no tienen lotes.
         """
         dirty = False
+        current_db_name = (db.execute(text("SELECT current_database()")).scalar() or "").strip()
+        is_prod_db = current_db_name == "morpheus_prod"
+
         if not ProductionService._INFRA_SEEDED:
+            for seq_tbl in [
+                "inv.locations",
+                "inv.stock_picking_types",
+                "inv.adjustment_reasons",
+                "inv.batches",
+                "inv.stock_pickings",
+                "inv.stock_moves",
+                "mfg.work_centers",
+                "mfg.bom_headers",
+                "mfg.bom_inputs",
+                "mfg.bom_outputs",
+                "mfg.production_orders",
+                "mfg.production_order_inputs",
+                "mfg.production_order_outputs",
+            ]:
+                db.execute(
+                    text(
+                        f"""
+                        SELECT setval(
+                            pg_get_serial_sequence('{seq_tbl}', 'id'),
+                            COALESCE((SELECT MAX(id) FROM {seq_tbl}), 1),
+                            (SELECT MAX(id) IS NOT NULL FROM {seq_tbl})
+                        )
+                        WHERE pg_get_serial_sequence('{seq_tbl}', 'id') IS NOT NULL
+                        """
+                    )
+                )
+
             col_exists = db.execute(
                 text(
                     """
@@ -251,54 +282,241 @@ class ProductionService:
             dirty = True
 
         if not ProductionService._INFRA_SEEDED:
-            # Sembrar lotes FEFO iniciales para los insumos de BOM si no tienen lotes registrados
-            today = date.today()
-            bom_inputs = db.query(BOMInput).all()
-            for idx, bi in enumerate(bom_inputs):
-                existing_batch = (
-                    db.query(Batch)
-                    .filter(Batch.product_variant_id == bi.component_variant_id)
+            # Garantizar que cada sucursal activa en core.facilities tenga al menos un almacén seleccionable en inv.warehouses
+            all_facilities = db.query(Facility).order_by(Facility.id.asc()).all()
+            for fac_item in all_facilities:
+                has_wh = (
+                    db.query(Warehouse)
+                    .filter(
+                        Warehouse.facility_id == fac_item.id,
+                        Warehouse.is_scrap == False,
+                        Warehouse.code != "VIRTUAL",
+                    )
                     .first()
                 )
-                if not existing_batch:
-                    comp_var = db.query(ProductVariant).filter(ProductVariant.id == bi.component_variant_id).first()
-                    sku_short = (comp_var.sku[-6:] if comp_var and comp_var.sku else str(bi.component_variant_id)).upper()
-                    b1 = Batch(
-                        product_variant_id=bi.component_variant_id,
-                        batch_number=f"L-MP-{sku_short}-A",
-                        manufacturing_date=today - timedelta(days=20),
-                        expiry_date=today + timedelta(days=25 + (idx % 5) * 10),
-                        is_quarantined=False,
+                if not has_wh:
+                    base_wh_code = f"WH-{fac_item.id:02d}"
+                    wh_code = base_wh_code
+                    suffix = 1
+                    while (
+                        db.query(Warehouse)
+                        .filter(Warehouse.facility_id == fac_item.id, Warehouse.code == wh_code)
+                        .first()
+                    ):
+                        suffix += 1
+                        wh_code = f"{base_wh_code}-{suffix}"
+                    new_wh = Warehouse(
+                        facility_id=fac_item.id,
+                        name=f"Almacén General {fac_item.name}",
+                        code=wh_code,
+                        is_scrap=False,
+                        is_transit=False,
                     )
-                    b2 = Batch(
-                        product_variant_id=bi.component_variant_id,
-                        batch_number=f"L-MP-{sku_short}-B",
-                        manufacturing_date=today - timedelta(days=5),
-                        expiry_date=today + timedelta(days=75 + (idx % 5) * 10),
-                        is_quarantined=False,
-                    )
-                    db.add_all([b1, b2])
+                    db.add(new_wh)
                     db.flush()
                     dirty = True
 
-                # Asegurar que el snapshot del insumo tenga su avg_cost inicializado si está en None/0
-                snap = (
-                    db.query(InventorySnapshot)
+            if not is_prod_db:
+                # Sembrar múltiples estaciones (WorkCenters) por sucursal en QA/Dev para demostrar soporte 1..N estaciones por sede
+                today = date.today()
+                default_fac = db.query(Facility).order_by(Facility.id.asc()).first()
+                default_fac_id = default_fac.id if default_fac else 1
+                default_wh = (
+                    db.query(Warehouse)
                     .filter(
-                        InventorySnapshot.variant_id == bi.component_variant_id,
-                        InventorySnapshot.facility_id == 1,
+                        Warehouse.facility_id == default_fac_id,
+                        Warehouse.is_scrap == False,
+                        Warehouse.code != "VIRTUAL",
                     )
+                    .order_by(Warehouse.id.asc())
                     .first()
                 )
-                if snap and (snap.avg_cost is None or float(snap.avg_cost or 0) <= 0):
-                    comp_var = db.query(ProductVariant).filter(ProductVariant.id == bi.component_variant_id).first()
-                    c_usd = get_variant_unit_cost_usd(db, comp_var, 1)
-                    if c_usd > 0:
-                        snap.avg_cost = Decimal(str(round(c_usd, 4)))
-                        snap.current_cost = Decimal(str(round(c_usd, 4)))
-                        snap.replacement_cost = Decimal(str(round(c_usd, 4)))
-                        db.add(snap)
+                default_wh_id = default_wh.id if default_wh else 1
+
+                # Segunda sucursal real (ej. CUMBOTO id=10) para pruebas multi-sede
+                secondary_fac = (
+                    db.query(Facility)
+                    .filter(
+                        Facility.id != default_fac_id,
+                        Facility.is_active == True,
+                        ~Facility.code.ilike("%TEST%"),
+                    )
+                    .order_by(Facility.id.asc())
+                    .first()
+                )
+                if not secondary_fac:
+                    secondary_fac = (
+                        db.query(Facility)
+                        .filter(Facility.id != default_fac_id)
+                        .order_by(Facility.id.asc())
+                        .first()
+                    )
+                sec_fac_id = secondary_fac.id if secondary_fac else default_fac_id
+                sec_wh = (
+                    db.query(Warehouse)
+                    .filter(
+                        Warehouse.facility_id == sec_fac_id,
+                        Warehouse.is_scrap == False,
+                        Warehouse.code != "VIRTUAL",
+                    )
+                    .order_by(Warehouse.id.asc())
+                    .first()
+                )
+                sec_wh_id = sec_wh.id if sec_wh else default_wh_id
+
+                extra_stations = [
+                    {
+                        "code": "PANADERIA_HORNO_PISO",
+                        "name": "Horno de Piso Artesanal #2",
+                        "sector": "BAKERY",
+                        "facility_id": default_fac_id,
+                        "warehouse_wip_id": default_wh_id,
+                        "capacity_per_batch": Decimal("60.00"),
+                        "capacity_uom": "KG",
+                        "hourly_labor_rate": Decimal("5.00"),
+                        "hourly_overhead_rate": Decimal("3.20"),
+                        "overhead_per_kg": Decimal("0.0500"),
+                    },
+                    {
+                        "code": "DESPOSTE_MESA_VACIO_2",
+                        "name": "Mesa de Corte y Empaque al Vacío #2",
+                        "sector": "MEAT_PROCESSING",
+                        "facility_id": default_fac_id,
+                        "warehouse_wip_id": default_wh_id,
+                        "capacity_per_batch": Decimal("120.00"),
+                        "capacity_uom": "KG",
+                        "hourly_labor_rate": Decimal("5.80"),
+                        "hourly_overhead_rate": Decimal("3.60"),
+                        "overhead_per_kg": Decimal("0.0600"),
+                    },
+                ]
+                if sec_fac_id != default_fac_id:
+                    sec_name = secondary_fac.name.title() if secondary_fac else "Sucursal 2"
+                    extra_stations.extend([
+                        {
+                            "code": "CUMBOTO_PANADERIA_1",
+                            "name": f"Horno Rotativo {sec_name} #1",
+                            "sector": "BAKERY",
+                            "facility_id": sec_fac_id,
+                            "warehouse_wip_id": sec_wh_id,
+                            "capacity_per_batch": Decimal("80.00"),
+                            "capacity_uom": "KG",
+                            "hourly_labor_rate": Decimal("4.60"),
+                            "hourly_overhead_rate": Decimal("2.90"),
+                            "overhead_per_kg": Decimal("0.0400"),
+                        },
+                        {
+                            "code": "CUMBOTO_DESPOSTE_1",
+                            "name": f"Sala de Desposte {sec_name} #1",
+                            "sector": "MEAT_PROCESSING",
+                            "facility_id": sec_fac_id,
+                            "warehouse_wip_id": sec_wh_id,
+                            "capacity_per_batch": Decimal("150.00"),
+                            "capacity_uom": "KG",
+                            "hourly_labor_rate": Decimal("5.40"),
+                            "hourly_overhead_rate": Decimal("3.40"),
+                            "overhead_per_kg": Decimal("0.0500"),
+                        },
+                    ])
+
+                for st_def in extra_stations:
+                    exists_wc = (
+                        db.query(WorkCenter)
+                        .filter(WorkCenter.code == st_def["code"])
+                        .first()
+                    )
+                    if not exists_wc:
+                        db.add(
+                            WorkCenter(
+                                facility_id=st_def["facility_id"],
+                                warehouse_wip_id=st_def["warehouse_wip_id"],
+                                code=st_def["code"],
+                                name=st_def["name"],
+                                sector=st_def["sector"],
+                                capacity_per_batch=st_def["capacity_per_batch"],
+                                capacity_uom=st_def["capacity_uom"],
+                                hourly_labor_rate=st_def["hourly_labor_rate"],
+                                hourly_overhead_rate=st_def["hourly_overhead_rate"],
+                                overhead_per_kg=st_def["overhead_per_kg"],
+                                is_active=True,
+                            )
+                        )
+                        db.flush()
                         dirty = True
+
+                # Sembrar lotes FEFO iniciales para los insumos de BOM en QA/Dev si no tienen lotes registrados
+                bom_inputs = db.query(BOMInput).all()
+                for idx, bi in enumerate(bom_inputs):
+                    existing_batch = (
+                        db.query(Batch)
+                        .filter(Batch.product_variant_id == bi.component_variant_id)
+                        .first()
+                    )
+                    if not existing_batch:
+                        comp_var = db.query(ProductVariant).filter(ProductVariant.id == bi.component_variant_id).first()
+                        sku_short = (comp_var.sku[-6:] if comp_var and comp_var.sku else str(bi.component_variant_id)).upper()
+                        b1 = Batch(
+                            product_variant_id=bi.component_variant_id,
+                            batch_number=f"L-MP-{sku_short}-A",
+                            manufacturing_date=today - timedelta(days=20),
+                            expiry_date=today + timedelta(days=25 + (idx % 5) * 10),
+                            is_quarantined=False,
+                        )
+                        b2 = Batch(
+                            product_variant_id=bi.component_variant_id,
+                            batch_number=f"L-MP-{sku_short}-B",
+                            manufacturing_date=today - timedelta(days=5),
+                            expiry_date=today + timedelta(days=75 + (idx % 5) * 10),
+                            is_quarantined=False,
+                        )
+                        db.add_all([b1, b2])
+                        db.flush()
+                        dirty = True
+
+                    # Asegurar que el snapshot del insumo tenga su avg_cost inicializado si está en None/0
+                    snap = (
+                        db.query(InventorySnapshot)
+                        .filter(
+                            InventorySnapshot.variant_id == bi.component_variant_id,
+                            InventorySnapshot.facility_id == default_fac_id,
+                        )
+                        .first()
+                    )
+                    if snap and (snap.avg_cost is None or float(snap.avg_cost or 0) <= 0):
+                        comp_var = db.query(ProductVariant).filter(ProductVariant.id == bi.component_variant_id).first()
+                        c_usd = get_variant_unit_cost_usd(db, comp_var, default_fac_id)
+                        if c_usd > 0:
+                            snap.avg_cost = Decimal(str(round(c_usd, 4)))
+                            snap.current_cost = Decimal(str(round(c_usd, 4)))
+                            snap.replacement_cost = Decimal(str(round(c_usd, 4)))
+                            db.add(snap)
+                            dirty = True
+
+                    # Si existe segunda sucursal en QA/Dev y no tiene snapshot del insumo de receta, crear snapshot inicial de prueba
+                    if sec_fac_id != default_fac_id:
+                        sec_snap = (
+                            db.query(InventorySnapshot)
+                            .filter(
+                                InventorySnapshot.variant_id == bi.component_variant_id,
+                                InventorySnapshot.facility_id == sec_fac_id,
+                            )
+                            .first()
+                        )
+                        if not sec_snap:
+                            comp_var = db.query(ProductVariant).filter(ProductVariant.id == bi.component_variant_id).first()
+                            c_usd = get_variant_unit_cost_usd(db, comp_var, default_fac_id)
+                            base_stock = float(snap.stock_qty) if (snap and snap.stock_qty and float(snap.stock_qty) > 0) else 250.0
+                            db.add(
+                                InventorySnapshot(
+                                    facility_id=sec_fac_id,
+                                    variant_id=bi.component_variant_id,
+                                    stock_qty=Decimal(str(round(base_stock, 4))),
+                                    avg_cost=Decimal(str(round(c_usd, 4))),
+                                    current_cost=Decimal(str(round(c_usd, 4))),
+                                    replacement_cost=Decimal(str(round(c_usd, 4))),
+                                )
+                            )
+                            dirty = True
 
             ProductionService._INFRA_SEEDED = True
 
@@ -386,18 +604,98 @@ class ProductionService:
         wc: Optional[WorkCenter] = None
         if req.work_center_id:
             wc = db.query(WorkCenter).filter(WorkCenter.id == req.work_center_id).first()
-        elif bom and bom.work_center:
-            wc = bom.work_center
 
-        facility_id = req.facility_id or (wc.facility_id if wc else 1)
-        source_warehouse_id = req.source_warehouse_id or (
-            wc.warehouse_wip_id if wc and wc.warehouse_wip_id else 1
-        )
-        dest_warehouse_id = req.dest_warehouse_id or source_warehouse_id
+        # 1. Resolve facility_id first
+        cand_fac_id = req.facility_id or (wc.facility_id if wc else None)
+        fac = db.query(Facility).filter(Facility.id == cand_fac_id).first() if cand_fac_id else None
+        if not fac and req.source_warehouse_id:
+            req_src_wh = db.query(Warehouse).filter(Warehouse.id == req.source_warehouse_id).first()
+            if req_src_wh and req_src_wh.facility_id:
+                fac = db.query(Facility).filter(Facility.id == req_src_wh.facility_id).first()
+        if not fac and bom and bom.work_center and bom.work_center.facility_id:
+            fac = db.query(Facility).filter(Facility.id == bom.work_center.facility_id).first()
+        if not fac:
+            fac = db.query(Facility).order_by(Facility.id.asc()).first()
+        facility_id = fac.id if fac else 1
 
-        src_wh = db.query(Warehouse).filter(Warehouse.id == source_warehouse_id).first()
+        # 2. Prevent cross-facility work_center mismatch and resolve work_center for facility_id
+        wc_had_mismatch = False
+        mismatched_sector: Optional[str] = None
+        if wc and req.facility_id and wc.facility_id and wc.facility_id != facility_id:
+            wc_had_mismatch = True
+            mismatched_sector = wc.sector
+            wc = None
+
+        if not wc and (bom or wc_had_mismatch):
+            target_sector = bom.sector if bom else (mismatched_sector or req.sector)
+            if bom and bom.work_center and (
+                not req.facility_id or bom.work_center.facility_id == facility_id
+            ):
+                wc = bom.work_center
+            else:
+                wc = (
+                    (
+                        db.query(WorkCenter)
+                        .filter(
+                            WorkCenter.facility_id == facility_id,
+                            WorkCenter.sector == target_sector,
+                            WorkCenter.is_active.is_(True),
+                        )
+                        .order_by(WorkCenter.id.asc())
+                        .first()
+                        if target_sector
+                        else None
+                    )
+                    or (
+                        db.query(WorkCenter)
+                        .filter(
+                            WorkCenter.facility_id == facility_id,
+                            WorkCenter.is_active.is_(True),
+                        )
+                        .order_by(WorkCenter.id.asc())
+                        .first()
+                    )
+                    or (bom.work_center if bom else None)
+                )
+
+        # 3. Resolve source_warehouse_id and dest_warehouse_id matching facility_id
+        src_wh: Optional[Warehouse] = None
+        if req.source_warehouse_id:
+            cand_wh = db.query(Warehouse).filter(Warehouse.id == req.source_warehouse_id).first()
+            if cand_wh and (not req.facility_id or cand_wh.facility_id == facility_id):
+                src_wh = cand_wh
+        if not src_wh and wc and wc.warehouse_wip_id:
+            cand_wh = db.query(Warehouse).filter(Warehouse.id == wc.warehouse_wip_id).first()
+            if cand_wh and cand_wh.facility_id == facility_id:
+                src_wh = cand_wh
+        if not src_wh:
+            src_wh = (
+                db.query(Warehouse)
+                .filter(
+                    Warehouse.facility_id == facility_id,
+                    Warehouse.is_scrap == False,
+                    Warehouse.code != "VIRTUAL",
+                )
+                .order_by(Warehouse.id.asc())
+                .first()
+                or db.query(Warehouse)
+                .filter(Warehouse.facility_id == facility_id)
+                .order_by(Warehouse.id.asc())
+                .first()
+                or db.query(Warehouse).order_by(Warehouse.id.asc()).first()
+            )
+        source_warehouse_id = src_wh.id if src_wh else 1
+
+        dest_wh: Optional[Warehouse] = None
+        if req.dest_warehouse_id:
+            cand_dest = db.query(Warehouse).filter(Warehouse.id == req.dest_warehouse_id).first()
+            if cand_dest and (not req.facility_id or cand_dest.facility_id == facility_id):
+                dest_wh = cand_dest
+        if not dest_wh:
+            dest_wh = src_wh
+        dest_warehouse_id = dest_wh.id if dest_wh else source_warehouse_id
+
         src_facility_id = src_wh.facility_id if (src_wh and src_wh.facility_id) else facility_id
-        dest_wh = db.query(Warehouse).filter(Warehouse.id == dest_warehouse_id).first()
         dest_facility_id = dest_wh.facility_id if (dest_wh and dest_wh.facility_id) else facility_id
 
         today = date.today()
@@ -1131,10 +1429,17 @@ class ProductionService:
             "bom_type": bom_type,
             "sector": sector,
             "facility_id": facility_id,
+            "facility_name": fac.name if fac else f"Sucursal #{facility_id}",
             "source_warehouse_id": source_warehouse_id,
+            "source_warehouse_name": src_wh.name if src_wh else f"Almacén #{source_warehouse_id}",
             "dest_warehouse_id": dest_warehouse_id,
+            "dest_warehouse_name": dest_wh.name if dest_wh else f"Almacén #{dest_warehouse_id}",
             "work_center_id": wc.id if wc else (bom.work_center_id if bom else None),
+            "work_center_code": wc.code if wc else None,
             "work_center_name": wc.name if wc else None,
+            "hourly_labor_rate": round(float(wc.hourly_labor_rate or 0.0), 4) if wc else 0.0,
+            "hourly_overhead_rate": round(float(wc.hourly_overhead_rate or 0.0), 4) if wc else 0.0,
+            "overhead_per_kg": round(float(wc.overhead_per_kg or 0.0), 4) if wc else 0.0,
             "primary_product_variant_id": primary_variant_id,
             "primary_product_sku": primary_variant.sku if primary_variant else None,
             "primary_product_name": (
@@ -1255,7 +1560,7 @@ class ProductionService:
         order = ProductionOrder(
             order_number=ProductionService._generate_order_number(db),
             facility_id=preview["facility_id"],
-            work_center_id=req.work_center_id or preview["work_center_id"],
+            work_center_id=preview["work_center_id"],
             bom_id=req.bom_id,
             order_type=order_type,
             state=initial_state,
@@ -1432,17 +1737,30 @@ class ProductionService:
                 .first()
             )
 
-        facility_id = (
-            order.facility_id
-            if order
-            else (req.facility_id or (bom.work_center.facility_id if bom and bom.work_center else 1))
-        )
-        dest_warehouse_id = (
+        cand_dest_wh_id = (
             req.dest_warehouse_id
             or (order.dest_warehouse_id if order else None)
             or (bom.work_center.warehouse_wip_id if bom and bom.work_center and bom.work_center.warehouse_wip_id else 1)
         )
-        dest_wh = db.query(Warehouse).filter(Warehouse.id == dest_warehouse_id).first()
+        dest_wh = db.query(Warehouse).filter(Warehouse.id == cand_dest_wh_id).first()
+        if not dest_wh:
+            dest_wh = db.query(Warehouse).order_by(Warehouse.id.asc()).first()
+        dest_warehouse_id = dest_wh.id if dest_wh else 1
+
+        cand_fac_id = (
+            order.facility_id
+            if order
+            else (req.facility_id or (bom.work_center.facility_id if bom and bom.work_center else None))
+        )
+        fac = db.query(Facility).filter(Facility.id == cand_fac_id).first() if cand_fac_id else None
+        if not fac and bom and bom.work_center and bom.work_center.facility_id:
+            fac = db.query(Facility).filter(Facility.id == bom.work_center.facility_id).first()
+        if not fac and dest_wh and dest_wh.facility_id:
+            fac = db.query(Facility).filter(Facility.id == dest_wh.facility_id).first()
+        if not fac:
+            fac = db.query(Facility).order_by(Facility.id.asc()).first()
+        facility_id = fac.id if fac else 1
+
         dest_facility_id = dest_wh.facility_id if (dest_wh and dest_wh.facility_id) else facility_id
 
         wc = (order.work_center if order and order.work_center else None) or (bom.work_center if bom else None)
@@ -3269,7 +3587,6 @@ class ProductionService:
                 sector_clauses.append(
                     and_(
                         ProductionOrder.bom_id.is_(None),
-                        ProductionOrder.work_center_id.is_(None),
                         ProductionOrder.order_type == "MEAT_DISASSEMBLY",
                     )
                 )
@@ -3306,11 +3623,10 @@ class ProductionService:
         orders = query.order_by(ProductionOrder.id.desc()).all()
         items = [ProductionService.serialize_order_summary(db, o, rate) for o in orders]
 
-        all_orders = (
-            db.query(ProductionOrder)
-            .options(selectinload(ProductionOrder.outputs))
-            .all()
-        )
+        all_orders_q = db.query(ProductionOrder).options(selectinload(ProductionOrder.outputs))
+        if facility_id:
+            all_orders_q = all_orders_q.filter(ProductionOrder.facility_id == facility_id)
+        all_orders = all_orders_q.all()
         completed_val_usd = sum(float(o.net_production_cost or 0.0) for o in all_orders if o.state == "COMPLETED")
 
         butchery_orders = [o for o in all_orders if o.order_type == "MEAT_DISASSEMBLY"]
@@ -3643,171 +3959,198 @@ class ProductionService:
     @staticmethod
     def ensure_initial_sample_orders(db: Session) -> None:
         """
-        Garantiza que existan en mfg.production_orders las semillas de demostración:
-        - Fase 2 (Órdenes Convergentes):
-          1) OP-2026-0001 en estado COMPLETED (Pan Campesino & Artesanal - 100 UND).
-          2) OP-2026-0002 en estado IN_PROGRESS (Bandeja Gastronómica Chorizo Artesanal al Ajo - 25 KG).
-        - Fase 3 (Sala de Desposte Cárnico — DES-RES-001):
-          3) OP-2026-0003 en estado COMPLETED (Desposte Media Canal Bovina 100 KG — Liquidada en Kardex con sus 6 cortes y lotes sanitarios).
-          4) OP-2026-0004 en estado IN_PROGRESS (Desposte Media Canal Bovina 120 KG — En mesa de corte lista para ajuste en balanza y liquidación).
+        Garantiza que exista la infraestructura WMS/Kardex de manufactura en cualquier entorno y,
+        en entornos de prueba/QA (excluyendo morpheus_prod), siembra las órdenes de demostración iniciales.
         """
-        ProductionService.ensure_mfg_wms_infrastructure(db)
+        ProductionService.ensure_mfg_wms_infrastructure(db, commit=True)
 
-        existing_convergent = (
-            db.query(ProductionOrder)
-            .filter(ProductionOrder.order_type == "CONVERGENT_PRODUCTION")
-            .order_by(ProductionOrder.id.asc())
-            .all()
-        )
-        if len(existing_convergent) < 2:
-            bom_pan = db.query(BOMHeader).filter(BOMHeader.code == "BOM-PAN-001").first()
-            bom_gas = db.query(BOMHeader).filter(BOMHeader.code == "BOM-GAS-001").first()
-            if not bom_pan:
-                bom_pan = db.query(BOMHeader).filter(BOMHeader.bom_type == "CONVERGENT_RECIPE").order_by(BOMHeader.id.asc()).first()
-            if not bom_gas:
-                bom_gas = db.query(BOMHeader).filter(BOMHeader.bom_type == "CONVERGENT_RECIPE").order_by(BOMHeader.id.desc()).first()
+        current_db_name = (db.execute(text("SELECT current_database()")).scalar() or "").strip()
+        if current_db_name == "morpheus_prod":
+            return
 
-            if len(existing_convergent) == 1 and existing_convergent[0].state != "COMPLETED":
-                op1_id = existing_convergent[0].id
-                ProductionService.complete_order(
-                    db,
-                    order_id=op1_id,
-                    req=CompleteOrderRequest(
-                        actual_labor_hours=float(bom_pan.standard_labor_hours or 2.5) if bom_pan else 2.5,
-                        actual_good_qty=86.0,
-                        explicit_damaged_qty=2.0,
-                        natural_shrinkage_qty=12.0,
-                        notes="Liquidación horneado matutino: 86 panes buenos, 12 eq. merma térmica de horneado y 2 unidades dañadas en desmolde.",
-                    ),
-                )
-            elif len(existing_convergent) == 0 and bom_pan:
-                op1 = ProductionService.create_order(
-                    db,
-                    ProductionOrderCreate(
-                        bom_id=bom_pan.id,
-                        facility_id=1,
-                        work_center_id=bom_pan.work_center_id,
-                        source_warehouse_id=1,
-                        dest_warehouse_id=1,
-                        planned_base_qty=float(bom_pan.base_qty or 100.0),
-                        notes="Tanda matutina hornos rotativos — Pan Campesino & Artesanal.",
-                        start_immediately=True,
-                    ),
-                )
-                ProductionService.complete_order(
-                    db,
-                    order_id=op1["id"],
-                    req=CompleteOrderRequest(
-                        actual_labor_hours=float(bom_pan.standard_labor_hours or 2.5),
-                        actual_good_qty=86.0,
-                        explicit_damaged_qty=2.0,
-                        natural_shrinkage_qty=12.0,
-                        notes="Liquidación horneado matutino: 86 panes buenos, 12 eq. merma térmica de horneado y 2 unidades dañadas en desmolde.",
-                    ),
-                )
+        default_fac = db.query(Facility).order_by(Facility.id.asc()).first()
+        default_wh = db.query(Warehouse).order_by(Warehouse.id.asc()).first()
+        fallback_fac_id = default_fac.id if default_fac else 1
+        fallback_wh_id = default_wh.id if default_wh else 1
 
-            if (
-                db.query(ProductionOrder).filter(ProductionOrder.order_type == "CONVERGENT_PRODUCTION").count() < 2
-                and bom_gas
-            ):
-                ProductionService.create_order(
-                    db,
-                    ProductionOrderCreate(
-                        bom_id=bom_gas.id,
-                        facility_id=1,
-                        work_center_id=bom_gas.work_center_id,
-                        source_warehouse_id=1,
-                        dest_warehouse_id=1,
-                        planned_base_qty=float(bom_gas.base_qty or 25.0),
-                        notes="Tanda en proceso en Cocina Central — Lista para pesaje final y liquidación al Kardex.",
-                        start_immediately=True,
-                    ),
-                )
+        try:
+            existing_convergent = (
+                db.query(ProductionOrder)
+                .filter(ProductionOrder.order_type == "CONVERGENT_PRODUCTION")
+                .order_by(ProductionOrder.id.asc())
+                .all()
+            )
+            if len(existing_convergent) < 2:
+                bom_pan = db.query(BOMHeader).filter(BOMHeader.code == "BOM-PAN-001").first()
+                bom_gas = db.query(BOMHeader).filter(BOMHeader.code == "BOM-GAS-001").first()
+                if not bom_pan:
+                    bom_pan = db.query(BOMHeader).filter(BOMHeader.bom_type == "CONVERGENT_RECIPE").order_by(BOMHeader.id.asc()).first()
+                if not bom_gas:
+                    bom_gas = db.query(BOMHeader).filter(BOMHeader.bom_type == "CONVERGENT_RECIPE").order_by(BOMHeader.id.desc()).first()
 
-        # Semillas de Fase 3: Sala de Desposte Cárnico (DES-RES-001)
-        existing_butchery = (
-            db.query(ProductionOrder)
-            .filter(ProductionOrder.order_type == "MEAT_DISASSEMBLY")
-            .order_by(ProductionOrder.id.asc())
-            .all()
-        )
-        if len(existing_butchery) < 2:
-            bom_des = db.query(BOMHeader).filter(BOMHeader.code == "DES-RES-001").first()
-            if not bom_des:
-                bom_des = (
-                    db.query(BOMHeader)
-                    .filter(BOMHeader.bom_type == "DIVERGENT_DISASSEMBLY")
-                    .order_by(BOMHeader.id.asc())
-                    .first()
-                )
-            if bom_des:
-                has_completed_butchery = any(o.state == "COMPLETED" for o in existing_butchery)
-                if not has_completed_butchery:
-                    op_des_completed = ProductionService.create_order(
+                if len(existing_convergent) == 1 and existing_convergent[0].state != "COMPLETED":
+                    op1_id = existing_convergent[0].id
+                    ProductionService.complete_order(
+                        db,
+                        order_id=op1_id,
+                        req=CompleteOrderRequest(
+                            actual_labor_hours=float(bom_pan.standard_labor_hours or 2.5) if bom_pan else 2.5,
+                            actual_good_qty=86.0,
+                            explicit_damaged_qty=2.0,
+                            natural_shrinkage_qty=12.0,
+                            notes="Liquidación horneado matutino: 86 panes buenos, 12 eq. merma térmica de horneado y 2 unidades dañadas en desmolde.",
+                        ),
+                    )
+                elif len(existing_convergent) == 0 and bom_pan:
+                    pan_fac_id = bom_pan.work_center.facility_id if (bom_pan.work_center and bom_pan.work_center.facility_id) else fallback_fac_id
+                    pan_wh_id = bom_pan.work_center.warehouse_wip_id if (bom_pan.work_center and bom_pan.work_center.warehouse_wip_id) else fallback_wh_id
+                    op1 = ProductionService.create_order(
                         db,
                         ProductionOrderCreate(
-                            bom_id=bom_des.id,
-                            facility_id=1,
-                            work_center_id=bom_des.work_center_id,
-                            source_warehouse_id=1,
-                            dest_warehouse_id=1,
-                            planned_base_qty=100.0,
-                            notes="Desposte matutino Media Canal Bovina 100 Kg — Liquidación NIC 2 por Valor Relativo de Mercado.",
+                            bom_id=bom_pan.id,
+                            facility_id=pan_fac_id,
+                            work_center_id=bom_pan.work_center_id,
+                            source_warehouse_id=pan_wh_id,
+                            dest_warehouse_id=pan_wh_id,
+                            planned_base_qty=float(bom_pan.base_qty or 100.0),
+                            notes="Tanda matutina hornos rotativos — Pan Campesino & Artesanal.",
                             start_immediately=True,
                         ),
                     )
-                    # Pesos reales para cuadrar exactamente 100.00 Kg (87.50 kg cortes + 9.20 kg hueso/sebo + 2.80 kg oreo + 0.50 kg merma dañada = 100.00 kg)
-                    real_weights_map = {
-                        126014: (4.20, 0.0, 14.0),   # Lomito
-                        122000: (27.80, 0.0, 10.0),  # Solomo
-                        123630: (31.50, 0.0, 8.0),   # Pulpa
-                        122003: (14.10, 0.0, 5.5),   # Costilla
-                        122002: (9.90, 0.50, 5.3),   # Recorte / Molida
-                        121996: (9.20, 0.0, 1.0),    # Hueso / Sebo (BY_PRODUCT)
-                    }
-                    out_lines = []
-                    for out_item in op_des_completed["outputs"]:
-                        vid = out_item["output_variant_id"]
-                        good_w, dmg_w, ref_p = real_weights_map.get(
-                            vid,
-                            (out_item["planned_qty"], 0.0, out_item["market_reference_price_usd"]),
-                        )
-                        out_lines.append(
-                            CompleteOrderOutputLine(
-                                output_id=out_item["id"],
-                                output_variant_id=vid,
-                                actual_good_qty=good_w,
-                                explicit_damaged_qty=dmg_w,
-                                market_reference_price=ref_p,
-                            )
-                        )
                     ProductionService.complete_order(
                         db,
-                        order_id=op_des_completed["id"],
+                        order_id=op1["id"],
                         req=CompleteOrderRequest(
-                            actual_input_weight_kg=100.0,
-                            actual_labor_hours=2.5,
-                            natural_shrinkage_qty=2.80,
-                            explicit_waste_qty=0.50,
-                            outputs=out_lines,
-                            notes="Liquidación Sala de Desposte: 87.50 kg cortes nobles/industriales, 9.20 kg hueso/sebo, 2.80 kg merma natural por oreo y 0.50 kg recorte descartado.",
+                            actual_labor_hours=float(bom_pan.standard_labor_hours or 2.5),
+                            actual_good_qty=86.0,
+                            explicit_damaged_qty=2.0,
+                            natural_shrinkage_qty=12.0,
+                            notes="Liquidación horneado matutino: 86 panes buenos, 12 eq. merma térmica de horneado y 2 unidades dañadas en desmolde.",
                         ),
                     )
 
-                has_active_butchery = any(o.state in ("IN_PROGRESS", "PLANNED", "DRAFT") for o in existing_butchery)
-                if not has_active_butchery:
+                if (
+                    db.query(ProductionOrder).filter(ProductionOrder.order_type == "CONVERGENT_PRODUCTION").count() < 2
+                    and bom_gas
+                ):
+                    gas_fac_id = bom_gas.work_center.facility_id if (bom_gas.work_center and bom_gas.work_center.facility_id) else fallback_fac_id
+                    gas_wh_id = bom_gas.work_center.warehouse_wip_id if (bom_gas.work_center and bom_gas.work_center.warehouse_wip_id) else fallback_wh_id
                     ProductionService.create_order(
                         db,
                         ProductionOrderCreate(
-                            bom_id=bom_des.id,
-                            facility_id=1,
-                            work_center_id=bom_des.work_center_id,
-                            source_warehouse_id=1,
-                            dest_warehouse_id=1,
-                            planned_base_qty=120.0,
-                            notes="Media Canal Bovina 120 Kg en riel de Sala de Desposte — Lista para pesaje de cortes y liquidación NIC 2 con 1 clic.",
+                            bom_id=bom_gas.id,
+                            facility_id=gas_fac_id,
+                            work_center_id=bom_gas.work_center_id,
+                            source_warehouse_id=gas_wh_id,
+                            dest_warehouse_id=gas_wh_id,
+                            planned_base_qty=float(bom_gas.base_qty or 25.0),
+                            notes="Tanda en proceso en Cocina Central — Lista para pesaje final y liquidación al Kardex.",
                             start_immediately=True,
                         ),
                     )
+
+            # Semillas de Fase 3: Sala de Desposte Cárnico (DES-RES-001)
+            existing_butchery = (
+                db.query(ProductionOrder)
+                .filter(ProductionOrder.order_type == "MEAT_DISASSEMBLY")
+                .order_by(ProductionOrder.id.asc())
+                .all()
+            )
+            if len(existing_butchery) < 2:
+                bom_des = db.query(BOMHeader).filter(BOMHeader.code == "DES-RES-001").first()
+                if not bom_des:
+                    bom_des = (
+                        db.query(BOMHeader)
+                        .filter(BOMHeader.bom_type == "DIVERGENT_DISASSEMBLY")
+                        .order_by(BOMHeader.id.asc())
+                        .first()
+                    )
+                if bom_des:
+                    des_fac_id = bom_des.work_center.facility_id if (bom_des.work_center and bom_des.work_center.facility_id) else fallback_fac_id
+                    des_wh_id = bom_des.work_center.warehouse_wip_id if (bom_des.work_center and bom_des.work_center.warehouse_wip_id) else fallback_wh_id
+                    has_completed_butchery = any(o.state == "COMPLETED" for o in existing_butchery)
+                    if not has_completed_butchery:
+                        op_des_completed = ProductionService.create_order(
+                            db,
+                            ProductionOrderCreate(
+                                bom_id=bom_des.id,
+                                facility_id=des_fac_id,
+                                work_center_id=bom_des.work_center_id,
+                                source_warehouse_id=des_wh_id,
+                                dest_warehouse_id=des_wh_id,
+                                planned_base_qty=100.0,
+                                notes="Desposte matutino Media Canal Bovina 100 Kg — Liquidación NIC 2 por Valor Relativo de Mercado.",
+                                start_immediately=True,
+                            ),
+                        )
+                        real_weights_map = {
+                            126014: (4.20, 0.0, 14.0),   # Lomito
+                            122000: (27.80, 0.0, 10.0),  # Solomo
+                            123630: (31.50, 0.0, 8.0),   # Pulpa
+                            122003: (14.10, 0.0, 5.5),   # Costilla
+                            122002: (9.90, 0.50, 5.3),   # Recorte / Molida
+                            121996: (9.20, 0.0, 1.0),    # Hueso / Sebo (BY_PRODUCT)
+                        }
+                        positional_weights = [
+                            (4.20, 0.0, 14.0),
+                            (27.80, 0.0, 10.0),
+                            (31.50, 0.0, 8.0),
+                            (14.10, 0.0, 5.5),
+                            (9.90, 0.50, 5.3),
+                            (9.20, 0.0, 1.0),
+                        ]
+                        out_lines = []
+                        for idx, out_item in enumerate(op_des_completed["outputs"]):
+                            vid = out_item["output_variant_id"]
+                            fallback_tuple = (
+                                positional_weights[idx]
+                                if idx < len(positional_weights)
+                                else (out_item["planned_qty"], 0.0, out_item["market_reference_price_usd"])
+                            )
+                            good_w, dmg_w, ref_p = real_weights_map.get(vid, fallback_tuple)
+                            out_lines.append(
+                                CompleteOrderOutputLine(
+                                    output_id=out_item["id"],
+                                    output_variant_id=vid,
+                                    actual_good_qty=good_w,
+                                    explicit_damaged_qty=dmg_w,
+                                    market_reference_price=ref_p,
+                                )
+                            )
+                        sum_good_w = sum(float(l.actual_good_qty or 0.0) for l in out_lines)
+                        sum_dmg_w = max(0.50, sum(float(l.explicit_damaged_qty or 0.0) for l in out_lines))
+                        nat_shrink_w = round(max(0.0, 100.0 - sum_good_w - sum_dmg_w), 4)
+                        ProductionService.complete_order(
+                            db,
+                            order_id=op_des_completed["id"],
+                            req=CompleteOrderRequest(
+                                actual_input_weight_kg=100.0,
+                                actual_labor_hours=2.5,
+                                natural_shrinkage_qty=nat_shrink_w,
+                                explicit_waste_qty=sum_dmg_w,
+                                outputs=out_lines,
+                                notes="Liquidación Sala de Desposte: 87.50 kg cortes nobles/industriales, 9.20 kg hueso/sebo, 2.80 kg merma natural por oreo y 0.50 kg recorte descartado.",
+                            ),
+                        )
+
+                    has_active_butchery = any(o.state in ("IN_PROGRESS", "PLANNED", "DRAFT") for o in existing_butchery)
+                    if not has_active_butchery:
+                        ProductionService.create_order(
+                            db,
+                            ProductionOrderCreate(
+                                bom_id=bom_des.id,
+                                facility_id=des_fac_id,
+                                work_center_id=bom_des.work_center_id,
+                                source_warehouse_id=des_wh_id,
+                                dest_warehouse_id=des_wh_id,
+                                planned_base_qty=120.0,
+                                notes="Media Canal Bovina 120 Kg en riel de Sala de Desposte — Lista para pesaje de cortes y liquidación NIC 2 con 1 clic.",
+                                start_immediately=True,
+                            ),
+                        )
+        except Exception as exc:
+            db.rollback()
+            print(f"[MFG SAMPLE ORDERS WARNING] No se pudieron sembrar órdenes demo iniciales: {exc}")
+
 
 

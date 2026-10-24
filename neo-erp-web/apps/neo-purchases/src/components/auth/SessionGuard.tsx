@@ -2,7 +2,11 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname } from 'next/navigation';
-import { clearAuthCookies, getLoginUrl } from '@/lib/domain';
+import { clearAuthCookies, getLoginUrl, resolveDomain } from '@/lib/domain';
+import { canAccessModule, canReadFeature } from '@/lib/rbac';
+
+const MODULE_KEY: string = 'neo_purchases';
+const MODULE_LABEL = 'Neo Purchases (Compras y Adquisiciones)';
 
 interface SessionGuardProps {
   children: React.ReactNode;
@@ -30,6 +34,8 @@ function parseJwt(token: string): { exp?: number; sub?: string } | null {
 export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: SessionGuardProps) {
   const pathname = usePathname() || '';
   const [isExpired, setIsExpired] = useState(false);
+  const [isForbidden, setIsForbidden] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const redirectingRef = useRef(false);
 
   const isPublic = 
@@ -53,6 +59,26 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
       }
     }
   }, [isPublic]);
+
+  useEffect(() => {
+    if (isPublic) {
+      setIsForbidden(false);
+      return;
+    }
+
+    import('@/lib/api').then(({ default: api }) => {
+      api.get('/users/me')
+        .then(res => {
+          const user = res.data;
+          setCurrentUser(user);
+          if (user) {
+            const allowed = canAccessModule(user, MODULE_KEY) || (MODULE_KEY === 'neo_pricing' && pathname.startsWith('/kiosco') && canReadFeature(user, 'neo_pricing', 'pricing_kiosk'));
+            setIsForbidden(!allowed);
+          }
+        })
+        .catch(() => {});
+    });
+  }, [isPublic, pathname]);
 
   useEffect(() => {
     if (isPublic) return;
@@ -152,9 +178,38 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
         </div>
         <h2 className="text-xl font-bold mb-2">Sesión Finalizada</h2>
         <p className="text-slate-400 text-sm mb-6 text-center max-w-sm">
-          El tiempo de conexión ha expirado por seguridad. Redirigiendo al inicio de sesión...
+          El tiempo de conexión ha expirado por seguridad. Redirigiendo al inicio de sesión de Neo ERP...
         </p>
         <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (isForbidden) {
+    const hubUrl = resolveDomain().hubUrl || '/';
+    const roleName = currentUser?.active_role?.name || currentUser?.roles?.[0]?.name || 'Sin Rol';
+    return (
+      <div className="fixed inset-0 z-[99999] bg-slate-950 flex flex-col items-center justify-center text-white p-6 font-sans">
+        <div className="max-w-md w-full bg-slate-900/90 border border-slate-800 rounded-3xl p-8 text-center shadow-2xl">
+          <div className="w-16 h-16 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto mb-5">
+            <i className="pi pi-shield text-2xl text-rose-400"></i>
+          </div>
+          <h2 className="text-xl font-extrabold text-white mb-2">Acceso Restringido</h2>
+          <p className="text-slate-400 text-sm leading-relaxed mb-4">
+            Tu perfil actual (<span className="text-slate-200 font-bold">{roleName}</span>) no cuenta con privilegios habilitados para acceder a <span className="text-indigo-400 font-bold">{MODULE_LABEL}</span>.
+          </p>
+          <p className="text-xs text-slate-500 mb-6">
+            Si necesitas acceso a este módulo, solicita la habilitación en <strong>Neo Core → Roles y Privilegios</strong>.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <a
+              href={hubUrl}
+              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20"
+            >
+              <i className="pi pi-th-large text-xs"></i> Volver al Hub Central
+            </a>
+          </div>
+        </div>
       </div>
     );
   }

@@ -9,6 +9,8 @@ export interface CatalogVariant {
   name: string;
   category_name: string;
   uom_base: string;
+  facility_id?: number | null;
+  stock_qty?: number;
   unit_cost_usd: number;
   unit_cost_ves: number;
   sales_price_usd: number;
@@ -220,7 +222,11 @@ export function VariantCombobox({
               <span className="text-slate-500">({selectedVariant.uom_base})</span>
               <span className="text-slate-400">
                 {" "}
-                — Costo: ${selectedVariant.unit_cost_usd.toFixed(2)} | PVP: $
+                —{" "}
+                {typeof selectedVariant.stock_qty === "number"
+                  ? `Stock: ${selectedVariant.stock_qty} ${selectedVariant.uom_base} | `
+                  : ""}
+                Costo: ${selectedVariant.unit_cost_usd.toFixed(2)} | PVP: $
                 {selectedVariant.sales_price_usd.toFixed(2)}
               </span>
             </>
@@ -318,7 +324,21 @@ export function VariantCombobox({
                       <span className="text-[11px] font-mono text-slate-500">({v.uom_base})</span>
                       <span className="text-[11px] text-slate-500">
                         {" "}
-                        — Costo: <strong className="font-mono">${v.unit_cost_usd.toFixed(2)}</strong>{" "}
+                        —{" "}
+                        {typeof v.stock_qty === "number" && (
+                          <>
+                            Stock:{" "}
+                            <strong
+                              className={`font-mono ${
+                                v.stock_qty > 0 ? "text-emerald-700" : "text-slate-400"
+                              }`}
+                            >
+                              {v.stock_qty}
+                            </strong>{" "}
+                            |{" "}
+                          </>
+                        )}
+                        Costo: <strong className="font-mono">${v.unit_cost_usd.toFixed(2)}</strong>{" "}
                         | PVP: <strong className="font-mono">${v.sales_price_usd.toFixed(2)}</strong>
                       </span>
                     </div>

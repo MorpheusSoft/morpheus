@@ -37,6 +37,8 @@ El servidor VPS ahora opera con **dos instancias completamente aisladas** que no
 | **Neo Inventario** | **`4002`** | `prod-inventario` | **`4102`** | `qa-inventario` |
 | **Neo Logística / WMS** | **`4003`** | `prod-logistica` | **`4103`** | `qa-logistica` |
 | **Neo Pricing (Costos)**| **`4004`** | `prod-costos` | **`4104`** | `qa-costos` |
+| **Neo B2B** | **`4005`** | `prod-b2b` | **`4105`** | `qa-b2b` |
+| **Neo Producción** | **`4007`** | `prod-produccion` | **`4107`** | `qa-produccion` |
 
 ---
 
@@ -52,16 +54,20 @@ El servidor VPS ahora opera con **dos instancias completamente aisladas** que no
   * `https://compras.qa.morpheussoft.net` ➔ `http://127.0.0.1:4101`
   * `https://inventario.qa.morpheussoft.net` ➔ `http://127.0.0.1:4102`
   * `https://costos.qa.morpheussoft.net` ➔ `http://127.0.0.1:4104`
+  * `https://b2b.qa.morpheussoft.net` ➔ `http://127.0.0.1:4105`
+  * `https://produccion.qa.morpheussoft.net` ➔ `http://127.0.0.1:4107`
 
-### Entorno de Producción (`http://*.morpheussoft.net`)
+### Entorno de Producción (`https://*.grupocatania.com` y `http://*.morpheussoft.net`)
 * **Archivo Nginx:** `/etc/nginx/sites-available/morpheus_prod`
 * **Enrutamiento:**
-  * `api.morpheussoft.net` ➔ `http://127.0.0.1:8000`
-  * `hub.morpheussoft.net` ➔ `http://127.0.0.1:4000`
-  * `logistica.morpheussoft.net` ➔ `http://127.0.0.1:4003`
-  * `compras.morpheussoft.net` ➔ `http://127.0.0.1:4001`
-  * `inventario.morpheussoft.net` ➔ `http://127.0.0.1:4002`
-  * `costos.morpheussoft.net` ➔ `http://127.0.0.1:4004`
+  * `api.grupocatania.com` / `api.morpheussoft.net` ➔ `http://127.0.0.1:8000`
+  * `hub.grupocatania.com` / `hub.morpheussoft.net` ➔ `http://127.0.0.1:4000`
+  * `logistica.grupocatania.com` / `logistica.morpheussoft.net` ➔ `http://127.0.0.1:4003`
+  * `compras.grupocatania.com` / `compras.morpheussoft.net` ➔ `http://127.0.0.1:4001`
+  * `inventario.grupocatania.com` / `inventario.morpheussoft.net` ➔ `http://127.0.0.1:4002`
+  * `costos.grupocatania.com` / `costos.morpheussoft.net` ➔ `http://127.0.0.1:4004`
+  * `b2b.grupocatania.com` / `b2b.morpheussoft.net` ➔ `http://127.0.0.1:4005`
+  * `produccion.grupocatania.com` / `produccion.morpheussoft.net` ➔ `http://127.0.0.1:4007`
 * **Paso Pendiente de DNS para Activar SSL (HTTPS):**
   1. En el panel de DNS (GoDaddy) de `morpheussoft.net`, crear el registro A para `*` (o para `api`, `hub`, `logistica`, etc.) apuntando a `217.216.83.151`.
   2. Ejecutar en el servidor:

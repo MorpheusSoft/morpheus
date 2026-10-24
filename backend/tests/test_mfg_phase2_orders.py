@@ -28,6 +28,15 @@ def client():
 
 
 def test_mfg_phase2_explode_preview_and_seeded_orders(client: TestClient, auth_headers: dict):
+    # 0. Verify catalog/variants and dashboard-summary endpoints
+    res_cat = client.get("/api/v1/mfg/catalog/variants?limit=10", headers=auth_headers)
+    assert res_cat.status_code == 200, res_cat.text
+    assert isinstance(res_cat.json().get("items"), list)
+
+    res_dash = client.get("/api/v1/mfg/dashboard-summary", headers=auth_headers)
+    assert res_dash.status_code == 200, res_dash.text
+    assert "kpis" in res_dash.json()
+
     # 1. Verify seeded orders exist (1 COMPLETED, 1 IN_PROGRESS)
     res_list = client.get("/api/v1/mfg/orders", headers=auth_headers)
     assert res_list.status_code == 200, res_list.text
@@ -418,4 +427,170 @@ def test_mfg_phase2_adhoc_convergent_order_without_bom(client: TestClient, auth_
                 db2.commit()
         finally:
             db2.close()
+
+
+def test_mfg_phase2_multi_facility_and_multi_work_center(client: TestClient, auth_headers: dict):
+    """
+    Tests Multi-Facility (1..N facilities), Multi-Work-Center (1..N stations per facility),
+    and Dynamic Warehouses in Neo Producción:
+    1. GET /api/v1/mfg/facilities-and-warehouses returns multiple facilities, warehouses per facility,
+       and multiple WorkCenter stations per facility (including PANADERIA_HORNO_PISO in Facility 1
+       and CUMBOTO_PANADERIA_1 in Facility 10).
+    2. Explode-preview overriding work_center_id on BOM-PAN-001 (Facility 1) uses the secondary station's MOD/CIF rates.
+    3. Explode-preview and order creation overriding facility_id=10 (Cumboto) resolves Cumboto's work center and warehouse,
+       and GET /api/v1/mfg/orders?facility_id=10 filters orders and KPIs by facility.
+    """
+    res_fw = client.get("/api/v1/mfg/facilities-and-warehouses", headers=auth_headers)
+    assert res_fw.status_code == 200, res_fw.text
+    fw = res_fw.json()
+    assert len(fw["facilities"]) >= 2
+    assert len(fw["warehouses"]) >= 2
+    assert len(fw["work_centers"]) >= 4
+
+    # Verify Facility 1 has >= 2 BAKERY stations (PANADERIA_HORNO_1 and PANADERIA_HORNO_PISO)
+    fac1_bakery_wcs = [
+        w for w in fw["work_centers"]
+        if w["facility_id"] == 1 and w["sector"] in ("BAKERY", "PANADERIA", "BAKERY_PASTRY")
+    ]
+    assert len(fac1_bakery_wcs) >= 2
+    horno_piso = next((w for w in fac1_bakery_wcs if w["code"] == "PANADERIA_HORNO_PISO"), None)
+    assert horno_piso is not None
+
+    # Verify Facility 10 (Cumboto) has its warehouse and CUMBOTO_PANADERIA_1 station
+    cumboto_whs = [w for w in fw["warehouses"] if w["facility_id"] == 10 and not w["is_scrap"]]
+    assert len(cumboto_whs) >= 1
+    cumboto_wc = next((w for w in fw["work_centers"] if w["code"] == "CUMBOTO_PANADERIA_1"), None)
+    assert cumboto_wc is not None
+    assert cumboto_wc["facility_id"] == 10
+
+    db = SessionLocal()
+    try:
+        bom_pan = db.query(BOMHeader).filter(BOMHeader.code == "BOM-PAN-001").first()
+        assert bom_pan is not None
+        bom_pan_id = bom_pan.id
+    finally:
+        db.close()
+
+    # 2. Explode-preview on Facility 1 overriding work_center_id to PANADERIA_HORNO_PISO ($5.00/hr MOD, $3.20/hr CIF)
+    res_exp_wc2 = client.post(
+        "/api/v1/mfg/orders/explode-preview",
+        headers=auth_headers,
+        json={
+            "bom_id": bom_pan_id,
+            "planned_base_qty": 100.0,
+            "facility_id": 1,
+            "work_center_id": horno_piso["id"],
+        },
+    )
+    assert res_exp_wc2.status_code == 200, res_exp_wc2.text
+    exp_wc2 = res_exp_wc2.json()
+    assert exp_wc2["work_center_id"] == horno_piso["id"]
+    assert exp_wc2["work_center_code"] == "PANADERIA_HORNO_PISO"
+    assert exp_wc2["hourly_labor_rate"] == 5.0
+    assert exp_wc2["hourly_overhead_rate"] == 3.2
+
+    # 3. Explode-preview on Facility 10 (Cumboto) without specifying work_center_id -> auto-resolves CUMBOTO_PANADERIA_1
+    res_exp_f10 = client.post(
+        "/api/v1/mfg/orders/explode-preview",
+        headers=auth_headers,
+        json={
+            "bom_id": bom_pan_id,
+            "planned_base_qty": 50.0,
+            "facility_id": 10,
+        },
+    )
+    assert res_exp_f10.status_code == 200, res_exp_f10.text
+    exp_f10 = res_exp_f10.json()
+    assert exp_f10["facility_id"] == 10
+    assert exp_f10["work_center_id"] == cumboto_wc["id"]
+    assert exp_f10["source_warehouse_id"] == cumboto_whs[0]["id"]
+    assert exp_f10["dest_warehouse_id"] == cumboto_whs[0]["id"]
+
+    # 3b. Cross-facility work_center_id protection: passing facility_id=10 with a Facility 1 work_center_id must resolve Facility 10's station
+    res_exp_cross = client.post(
+        "/api/v1/mfg/orders/explode-preview",
+        headers=auth_headers,
+        json={
+            "bom_id": bom_pan_id,
+            "planned_base_qty": 50.0,
+            "facility_id": 10,
+            "work_center_id": horno_piso["id"],
+        },
+    )
+    assert res_exp_cross.status_code == 200, res_exp_cross.text
+    exp_cross = res_exp_cross.json()
+    assert exp_cross["facility_id"] == 10
+    assert exp_cross["work_center_id"] == cumboto_wc["id"]
+
+    # 3c. Omitting facility_id while passing work_center_id from Facility 10 infers facility_id=10
+    res_exp_infer = client.post(
+        "/api/v1/mfg/orders/explode-preview",
+        headers=auth_headers,
+        json={
+            "bom_id": bom_pan_id,
+            "planned_base_qty": 50.0,
+            "work_center_id": cumboto_wc["id"],
+        },
+    )
+    assert res_exp_infer.status_code == 200, res_exp_infer.text
+    exp_infer = res_exp_infer.json()
+    assert exp_infer["facility_id"] == 10
+    assert exp_infer["work_center_id"] == cumboto_wc["id"]
+
+    # 3d. Verify GET /api/v1/mfg/catalog/variants?facility_id=10 returns facility-scoped stock_qty
+    res_cat_f10 = client.get(
+        "/api/v1/mfg/catalog/variants",
+        params={"facility_id": 10, "ids": "128236", "limit": 10},
+        headers=auth_headers,
+    )
+    assert res_cat_f10.status_code == 200, res_cat_f10.text
+    cat_f10_items = res_cat_f10.json()["items"]
+    assert len(cat_f10_items) == 1
+    assert cat_f10_items[0]["id"] == 128236
+    assert cat_f10_items[0]["facility_id"] == 10
+    assert "stock_qty" in cat_f10_items[0]
+
+    # Create PLANNED order in Facility 10 and verify facility_id filter on GET /api/v1/mfg/orders
+    res_create_f10 = client.post(
+        "/api/v1/mfg/orders",
+        headers=auth_headers,
+        json={
+            "bom_id": bom_pan_id,
+            "facility_id": 10,
+            "work_center_id": horno_piso["id"],  # Also verify create_order auto-corrects cross-facility station
+            "source_warehouse_id": cumboto_whs[0]["id"],
+            "dest_warehouse_id": cumboto_whs[0]["id"],
+            "planned_base_qty": 50.0,
+            "start_immediately": False,
+            "notes": "OP Prueba Multi-Sucursal Cumboto",
+        },
+    )
+    assert res_create_f10.status_code == 200, res_create_f10.text
+    op_f10 = res_create_f10.json()
+    op_f10_id = op_f10["id"]
+    try:
+        assert op_f10["facility_id"] == 10
+        assert op_f10["work_center_id"] == cumboto_wc["id"]
+
+        res_list_f10 = client.get(
+            "/api/v1/mfg/orders",
+            params={"facility_id": 10},
+            headers=auth_headers,
+        )
+        assert res_list_f10.status_code == 200
+        list_f10 = res_list_f10.json()
+        assert any(it["id"] == op_f10_id for it in list_f10["items"])
+        assert all(it["facility_id"] == 10 for it in list_f10["items"])
+        assert list_f10["kpis"]["total_orders"] >= 1
+    finally:
+        db2 = SessionLocal()
+        try:
+            order_obj = db2.query(ProductionOrder).filter_by(id=op_f10_id).first()
+            if order_obj:
+                db2.delete(order_obj)
+                db2.commit()
+        finally:
+            db2.close()
+
+
 

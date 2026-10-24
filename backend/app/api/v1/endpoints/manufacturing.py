@@ -564,6 +564,82 @@ def serialize_bom(db: Session, bom: BOMHeader) -> dict:
 
 
 # ==============================================================================
+# 0. INFRAESTRUCTURA DE SEDES, ALMACENES Y ESTACIONES (/api/v1/mfg/facilities-and-warehouses)
+# ==============================================================================
+@router.get("/facilities-and-warehouses")
+@router.get("/facilities-options")
+def get_mfg_facilities_and_warehouses(
+    db: Session = Depends(deps.get_db),
+) -> Any:
+    from app.services.production_service import ProductionService
+
+    ProductionService.ensure_mfg_wms_infrastructure(db, commit=True)
+
+    facilities = db.query(Facility).order_by(Facility.id.asc()).all()
+    fac_map = {f.id: f.name for f in facilities}
+    warehouses = (
+        db.query(Warehouse)
+        .filter(Warehouse.code != "VIRTUAL")
+        .order_by(Warehouse.facility_id.asc(), Warehouse.id.asc())
+        .all()
+    )
+    work_centers = (
+        db.query(WorkCenter)
+        .options(
+            selectinload(WorkCenter.facility),
+            selectinload(WorkCenter.warehouse_wip),
+            selectinload(WorkCenter.boms),
+        )
+        .order_by(WorkCenter.facility_id.asc(), WorkCenter.id.asc())
+        .all()
+    )
+
+    return {
+        "facilities": [
+            {
+                "id": f.id,
+                "code": f.code,
+                "name": f.name,
+                "is_active": bool(f.is_active) if f.is_active is not None else True,
+            }
+            for f in facilities
+        ],
+        "warehouses": [
+            {
+                "id": w.id,
+                "facility_id": w.facility_id,
+                "facility_name": fac_map.get(w.facility_id, f"Sucursal #{w.facility_id}"),
+                "code": w.code,
+                "name": w.name,
+                "is_scrap": bool(w.is_scrap),
+                "is_scrap_warehouse": bool(w.is_scrap),
+            }
+            for w in warehouses
+        ],
+        "work_centers": [
+            {
+                "id": wc.id,
+                "facility_id": wc.facility_id,
+                "facility_name": wc.facility.name if wc.facility else f"Sucursal #{wc.facility_id}",
+                "warehouse_wip_id": wc.warehouse_wip_id,
+                "warehouse_wip_name": wc.warehouse_wip.name if wc.warehouse_wip else None,
+                "code": wc.code,
+                "name": wc.name,
+                "sector": wc.sector,
+                "capacity_per_batch": float(wc.capacity_per_batch or 0),
+                "capacity_uom": wc.capacity_uom or "KG",
+                "hourly_labor_rate": float(wc.hourly_labor_rate or 0),
+                "hourly_overhead_rate": float(wc.hourly_overhead_rate or 0),
+                "overhead_per_kg": float(wc.overhead_per_kg or 0),
+                "is_active": bool(wc.is_active),
+                "boms_count": len(wc.boms) if wc.boms else 0,
+            }
+            for wc in work_centers
+        ],
+    }
+
+
+# ==============================================================================
 # 1. CENTROS DE TRABAJO (/api/v1/mfg/work-centers)
 # ==============================================================================
 @router.get("/work-centers", response_model=List[WorkCenterResponse])
@@ -573,6 +649,10 @@ def list_work_centers(
     active_only: bool = False,
     db: Session = Depends(deps.get_db),
 ) -> Any:
+    from app.services.production_service import ProductionService
+
+    ProductionService.ensure_mfg_wms_infrastructure(db, commit=True)
+
     query = db.query(WorkCenter).options(
         selectinload(WorkCenter.facility),
         selectinload(WorkCenter.warehouse_wip),
@@ -619,9 +699,14 @@ def create_work_center(
     if existing:
         raise HTTPException(status_code=400, detail=f"Ya existe un Centro de Trabajo con el código {wc_in.code}")
 
+    fac = db.query(Facility).filter(Facility.id == wc_in.facility_id).first()
+    if not fac:
+        fac = db.query(Facility).order_by(Facility.id.asc()).first()
+    wh = db.query(Warehouse).filter(Warehouse.id == wc_in.warehouse_wip_id).first() if wc_in.warehouse_wip_id else None
+
     wc = WorkCenter(
-        facility_id=wc_in.facility_id,
-        warehouse_wip_id=wc_in.warehouse_wip_id,
+        facility_id=fac.id if fac else wc_in.facility_id,
+        warehouse_wip_id=wh.id if wh else None,
         code=wc_in.code.strip().upper(),
         name=wc_in.name.strip(),
         sector=wc_in.sector.strip().upper(),
@@ -960,6 +1045,7 @@ def simulate_bom_cost(
 def search_catalog_variants_for_mfg(
     search: Optional[str] = Query(None),
     ids: Optional[str] = Query(None, description="Lista separada por comas de IDs de variantes a incluir"),
+    facility_id: Optional[int] = Query(None, description="Sucursal/Sede para consultar stock y costos específicos"),
     limit: int = Query(40, le=200),
     db: Session = Depends(deps.get_db),
 ) -> Any:
@@ -991,10 +1077,22 @@ def search_catalog_variants_for_mfg(
             )
 
     variants = query.order_by(Product.name.asc()).limit(limit).all()
+    variant_ids = [v.id for v in variants]
+    stock_by_variant: dict[int, float] = {}
+    if variant_ids:
+        snap_q = db.query(
+            InventorySnapshot.variant_id,
+            func.coalesce(func.sum(InventorySnapshot.stock_qty), 0),
+        ).filter(InventorySnapshot.variant_id.in_(variant_ids))
+        if facility_id:
+            snap_q = snap_q.filter(InventorySnapshot.facility_id == facility_id)
+        for vid, total_stock in snap_q.group_by(InventorySnapshot.variant_id).all():
+            stock_by_variant[int(vid)] = float(total_stock or 0.0)
+
     results = []
     for v in variants:
-        unit_cost_usd = get_variant_unit_cost_usd(db, v)
-        pvp_usd = get_variant_sales_price_usd(db, v)
+        unit_cost_usd = get_variant_unit_cost_usd(db, v, facility_id=facility_id)
+        pvp_usd = get_variant_sales_price_usd(db, v, facility_id=facility_id)
         results.append({
             "id": v.id,
             "sku": v.sku,
@@ -1002,12 +1100,28 @@ def search_catalog_variants_for_mfg(
             "name": v.product.name if v.product else v.sku,
             "category_name": v.product.category.name if v.product and v.product.category else "General",
             "uom_base": v.product.uom_base if v.product else "UND",
+            "facility_id": facility_id,
+            "stock_qty": round(stock_by_variant.get(v.id, 0.0), 4),
             "unit_cost_usd": round(unit_cost_usd, 4),
             "unit_cost_ves": round(unit_cost_usd * rate, 2),
             "sales_price_usd": round(pvp_usd, 4),
             "sales_price_ves": round(pvp_usd * rate, 2),
         })
     return results
+
+
+@router.get("/catalog/variants")
+def search_catalog_variants_for_mfg_v2(
+    search: Optional[str] = Query(None),
+    ids: Optional[str] = Query(None, description="Lista separada por comas de IDs de variantes a incluir"),
+    facility_id: Optional[int] = Query(None, description="Sucursal/Sede para consultar stock y costos específicos"),
+    limit: int = Query(40, le=200),
+    db: Session = Depends(deps.get_db),
+) -> Any:
+    items = search_catalog_variants_for_mfg(
+        search=search, ids=ids, facility_id=facility_id, limit=limit, db=db
+    )
+    return {"items": items, "total": len(items)}
 
 
 # ==============================================================================

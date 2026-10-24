@@ -611,3 +611,383 @@ def get_inventory_book(
         items=items,
         totals=serialized_totals
     )
+
+
+class PhysicalCountSheetItem(BaseModel):
+    variant_id: int
+    product_code: str
+    barcode: Optional[str] = None
+    sku: str
+    description: str
+    category: str
+    uom: str
+    theoretical_qty: float
+    counted_qty: Optional[float] = None
+
+
+class PhysicalCountSheetResponse(BaseModel):
+    session_id: Optional[int] = None
+    session_code: Optional[str] = None
+    session_name: Optional[str] = None
+    session_state: Optional[str] = None
+    company_name: str
+    facility_name: str
+    facility_code: str
+    deposit_code: str
+    deposit_name: str
+    department_name: str
+    currency_name: str
+    emission_date: str
+    total_items: int
+    total_theoretical_qty: float
+    items: List[PhysicalCountSheetItem]
+
+
+@router.get("/physical-count-sheet", response_model=PhysicalCountSheetResponse)
+def get_physical_count_sheet(
+    db: Session = Depends(deps.get_db),
+    session_id: Optional[int] = None,
+    facility_id: Optional[int] = None,
+    warehouse_id: Optional[int] = None,
+    location_id: Optional[int] = None,
+    category_id: Optional[int] = None,
+    include_zero_stock: bool = True,
+    search: Optional[str] = None
+):
+    """
+    Genera la planilla/reporte para Toma de Inventario (Conteo Físico).
+    Puede generarse directamente a partir de una Toma Física abierta (`session_id`) mostrando exactamente
+    los productos de esa toma física, o libremente por Sucursal, Depósito, Ubicación y Categoría.
+    """
+    from sqlalchemy.orm import joinedload
+    from app.models.core import Company, Facility
+    from app.models.inventory import InventorySession, InventoryLine
+    from app.api.v1.endpoints.inventory_session import get_all_related_category_ids
+    from app.api.v1.endpoints.reports import resolve_variant_barcodes_batch
+
+    session_obj = None
+    session_code = None
+    session_name = None
+    session_state = None
+
+    if session_id:
+        session_obj = db.query(InventorySession).filter(InventorySession.id == session_id).first()
+        if not session_obj:
+            raise HTTPException(status_code=404, detail=f"Toma física #{session_id} no encontrada.")
+        session_code = f"SES-{session_obj.id}"
+        session_name = session_obj.name
+        session_state = session_obj.state
+        if not facility_id and session_obj.facility_id:
+            facility_id = session_obj.facility_id
+        if not warehouse_id and session_obj.warehouse_id:
+            warehouse_id = session_obj.warehouse_id
+        if not category_id and session_obj.scope_type in ('CATEGORY', 'CYCLIC') and session_obj.scope_value:
+            clean_val = str(session_obj.scope_value).strip()
+            if clean_val.isdigit():
+                category_id = int(clean_val)
+
+    # 1. Resolver metadatos de encabezado (Compañía, Localidad, Depósito, Departamento, Moneda)
+    company = db.query(Company).order_by(Company.id.asc()).first()
+    company_name = company.name if company else "GRUPO CATANIA, C.A."
+
+    facility_name = "TODAS LAS LOCALIDADES"
+    facility_code = "GLOBAL"
+    fac_obj = None
+    if facility_id:
+        fac_obj = db.query(Facility).filter(Facility.id == facility_id).first()
+        if fac_obj:
+            if company is None and fac_obj.company_id:
+                comp = db.query(Company).filter(Company.id == fac_obj.company_id).first()
+                if comp:
+                    company_name = comp.name
+            facility_name = fac_obj.name.upper()
+            if not facility_name.startswith("CATANIA"):
+                facility_name = f"CATANIA {facility_name}"
+            facility_code = fac_obj.code or str(fac_obj.id)
+
+    deposit_code = "TODOS"
+    deposit_name = "TODOS LOS DEPÓSITOS"
+    wh_obj = None
+    if warehouse_id:
+        wh_obj = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+        if wh_obj:
+            deposit_code = wh_obj.code or str(wh_obj.id)
+            deposit_name = wh_obj.name.upper()
+            if not fac_obj and wh_obj.facility_id:
+                fac_obj = db.query(Facility).filter(Facility.id == wh_obj.facility_id).first()
+                if fac_obj:
+                    facility_name = fac_obj.name.upper()
+                    if not facility_name.startswith("CATANIA"):
+                        facility_name = f"CATANIA {facility_name}"
+                    facility_code = fac_obj.code or str(fac_obj.id)
+    elif fac_obj:
+        main_wh = db.query(Warehouse).filter(Warehouse.facility_id == fac_obj.id).order_by(Warehouse.id.asc()).first()
+        if main_wh:
+            deposit_code = main_wh.code or str(main_wh.id)
+            deposit_name = main_wh.name.upper() if main_wh.name else f"GENERAL - {fac_obj.name.upper()}"
+
+    if location_id:
+        loc_obj = db.query(Location).filter(Location.id == location_id).first()
+        if loc_obj:
+            deposit_code = loc_obj.code or str(loc_obj.id)
+            deposit_name = f"{deposit_name} / {loc_obj.name.upper()}" if wh_obj else loc_obj.name.upper()
+
+    department_name = "TODOS LOS DEPARTAMENTOS"
+    rel_cat_ids = None
+    if category_id:
+        cat_obj = db.query(Category).filter(Category.id == category_id).first()
+        if cat_obj:
+            department_name = cat_obj.name.upper()
+        rel_cat_ids = get_all_related_category_ids(db, category_id)
+    elif session_obj and session_obj.name:
+        department_name = session_obj.name.upper()
+
+    ves_curr = db.query(Currency).filter(Currency.code == "VES").first()
+    currency_name = (ves_curr.name.upper() if ves_curr and ves_curr.name else "BOLIVAR DIGITAL")
+
+    # Si se seleccionó una Toma Física (session_id) y tiene renglones registrados, extraer directamente sus productos
+    if session_obj:
+        session_lines = db.query(InventoryLine).filter(InventoryLine.session_id == session_obj.id).all()
+        if session_lines:
+            line_by_vid = {}
+            for l in session_lines:
+                if l.product_variant_id:
+                    line_by_vid[l.product_variant_id] = l
+
+            vids = list(line_by_vid.keys())
+            variants_q = db.query(ProductVariant).join(Product, ProductVariant.product_id == Product.id).options(
+                joinedload(ProductVariant.product).joinedload(Product.category)
+            ).filter(ProductVariant.id.in_(vids))
+
+            if search and search.strip():
+                from sqlalchemy import or_
+                q_str = f"%{search.strip()}%"
+                variants_q = variants_q.filter(
+                    or_(
+                        Product.name.ilike(q_str),
+                        ProductVariant.sku.ilike(q_str),
+                        ProductVariant.barcode.ilike(q_str),
+                        ProductVariant.part_number.ilike(q_str)
+                    )
+                )
+
+            variants = variants_q.order_by(Product.name.asc(), ProductVariant.sku.asc()).all()
+            barcode_map = resolve_variant_barcodes_batch(db, variants)
+
+            sheet_items: List[PhysicalCountSheetItem] = []
+            total_theo = 0.0
+
+            for var in variants:
+                l_obj = line_by_vid.get(var.id)
+                theo_qty = round(float(l_obj.theoretical_qty or 0.0), 4) if l_obj else 0.0
+                cnt_qty = round(float(l_obj.counted_qty or 0.0), 4) if (l_obj and l_obj.counted_qty is not None) else None
+
+                if not include_zero_stock and abs(theo_qty) <= 1e-4:
+                    continue
+
+                total_theo += theo_qty
+                bc_info = barcode_map.get(var.id, {})
+                primary_bc = bc_info.get("barcode") or var.barcode or ""
+                prod_code = primary_bc if primary_bc else (var.sku or "")
+
+                cat_name = var.product.category.name if (var.product and var.product.category) else department_name
+                uom_val = (var.product.uom_base if var.product and var.product.uom_base else "UND").upper()
+                desc = f"{var.product.name if var.product else ''} {var.part_number or ''}".strip().upper()
+
+                sheet_items.append(PhysicalCountSheetItem(
+                    variant_id=var.id,
+                    product_code=prod_code,
+                    barcode=primary_bc or None,
+                    sku=var.sku,
+                    description=desc,
+                    category=cat_name.upper(),
+                    uom=uom_val,
+                    theoretical_qty=theo_qty,
+                    counted_qty=cnt_qty
+                ))
+
+            return PhysicalCountSheetResponse(
+                session_id=session_obj.id,
+                session_code=session_code,
+                session_name=session_name,
+                session_state=session_state,
+                company_name=company_name,
+                facility_name=facility_name,
+                facility_code=facility_code,
+                deposit_code=deposit_code,
+                deposit_name=deposit_name,
+                department_name=department_name,
+                currency_name=currency_name,
+                emission_date=datetime.now().strftime("%d/%m/%Y"),
+                total_items=len(sheet_items),
+                total_theoretical_qty=round(total_theo, 4),
+                items=sheet_items
+            )
+
+    # 2. Calcular existencias teóricas según el alcance seleccionado
+    variant_stocks = {}
+
+    if location_id:
+        loc_ids = [location_id]
+        in_query = db.query(
+            StockMove.product_id,
+            func.sum(StockMove.quantity_done).label('qty')
+        ).filter(StockMove.state == 'DONE', StockMove.location_dest_id.in_(loc_ids))\
+         .group_by(StockMove.product_id).all()
+
+        out_query = db.query(
+            StockMove.product_id,
+            func.sum(StockMove.quantity_done).label('qty')
+        ).filter(StockMove.state == 'DONE', StockMove.location_src_id.in_(loc_ids))\
+         .group_by(StockMove.product_id).all()
+
+        for vid, qty in in_query:
+            variant_stocks[vid] = variant_stocks.get(vid, 0.0) + float(qty or 0)
+        for vid, qty in out_query:
+            variant_stocks[vid] = variant_stocks.get(vid, 0.0) - float(qty or 0)
+    elif warehouse_id:
+        loc_ids = get_target_locations(db, facility_id, warehouse_id)
+        if loc_ids:
+            in_query = db.query(
+                StockMove.product_id,
+                func.sum(StockMove.quantity_done).label('qty')
+            ).filter(StockMove.state == 'DONE', StockMove.location_dest_id.in_(loc_ids))\
+             .group_by(StockMove.product_id).all()
+
+            out_query = db.query(
+                StockMove.product_id,
+                func.sum(StockMove.quantity_done).label('qty')
+            ).filter(StockMove.state == 'DONE', StockMove.location_src_id.in_(loc_ids))\
+             .group_by(StockMove.product_id).all()
+
+            for vid, qty in in_query:
+                variant_stocks[vid] = variant_stocks.get(vid, 0.0) + float(qty or 0)
+            for vid, qty in out_query:
+                variant_stocks[vid] = variant_stocks.get(vid, 0.0) - float(qty or 0)
+
+        # Si el almacén seleccionado es el almacén general/principal de la sucursal y no registra movimientos directos,
+        # usar los snapshots de la sucursal para reflejar la existencia teórica real.
+        is_general_wh = bool(
+            wh_obj and (
+                wh_obj.code in ('WH01', 'MAIN_WH') or
+                (fac_obj and wh_obj.code == fac_obj.code) or
+                'PRINCIPAL' in (wh_obj.name or '').upper() or
+                'GENERAL' in (wh_obj.name or '').upper()
+            )
+        )
+        if is_general_wh and len(variant_stocks) < 50:
+            snap_query = db.query(
+                InventorySnapshot.variant_id,
+                func.sum(InventorySnapshot.stock_qty).label('qty')
+            ).group_by(InventorySnapshot.variant_id)
+            target_fac_id = facility_id or (wh_obj.facility_id if wh_obj else None)
+            if target_fac_id:
+                snap_query = snap_query.filter(InventorySnapshot.facility_id == target_fac_id)
+            for vid, qty in snap_query.all():
+                if vid not in variant_stocks or variant_stocks[vid] == 0:
+                    variant_stocks[vid] = float(qty or 0)
+    else:
+        snap_query = db.query(
+            InventorySnapshot.variant_id,
+            func.sum(InventorySnapshot.stock_qty).label('qty')
+        ).group_by(InventorySnapshot.variant_id)
+        if facility_id:
+            snap_query = snap_query.filter(InventorySnapshot.facility_id == facility_id)
+        for vid, qty in snap_query.all():
+            variant_stocks[vid] = float(qty or 0)
+
+    # 3. Consultar productos y variantes activas del catálogo
+    variants_query = db.query(ProductVariant).join(Product, ProductVariant.product_id == Product.id).options(
+        joinedload(ProductVariant.product).joinedload(Product.category)
+    ).filter(
+        Product.is_active.isnot(False),
+        ProductVariant.is_active.isnot(False)
+    )
+
+    if rel_cat_ids is not None:
+        variants_query = variants_query.filter(Product.category_id.in_(rel_cat_ids))
+
+    if search and search.strip():
+        from sqlalchemy import or_
+        q_str = f"%{search.strip()}%"
+        variants_query = variants_query.filter(
+            or_(
+                Product.name.ilike(q_str),
+                ProductVariant.sku.ilike(q_str),
+                ProductVariant.barcode.ilike(q_str),
+                ProductVariant.part_number.ilike(q_str)
+            )
+        )
+
+    # Si no se filtró por categoría ni búsqueda y NO se desean productos en 0, limitar en SQL a los que tienen stock != 0
+    if not include_zero_stock:
+        non_zero_vids = [vid for vid, q in variant_stocks.items() if abs(q) > 1e-4]
+        if not non_zero_vids:
+            return PhysicalCountSheetResponse(
+                session_id=session_obj.id if session_obj else None,
+                session_code=session_code,
+                session_name=session_name,
+                session_state=session_state,
+                company_name=company_name,
+                facility_name=facility_name,
+                facility_code=facility_code,
+                deposit_code=deposit_code,
+                deposit_name=deposit_name,
+                department_name=department_name,
+                currency_name=currency_name,
+                emission_date=datetime.now().strftime("%d/%m/%Y"),
+                total_items=0,
+                total_theoretical_qty=0.0,
+                items=[]
+            )
+        variants_query = variants_query.filter(ProductVariant.id.in_(non_zero_vids))
+
+    variants = variants_query.order_by(Product.name.asc(), ProductVariant.sku.asc()).all()
+    barcode_map = resolve_variant_barcodes_batch(db, variants)
+
+    sheet_items: List[PhysicalCountSheetItem] = []
+    total_theo = 0.0
+
+    for var in variants:
+        qty = round(variant_stocks.get(var.id, 0.0), 4)
+        if not include_zero_stock and abs(qty) <= 1e-4:
+            continue
+
+        total_theo += qty
+        bc_info = barcode_map.get(var.id, {})
+        primary_bc = bc_info.get("barcode") or var.barcode or ""
+        prod_code = primary_bc if primary_bc else (var.sku or "")
+
+        cat_name = var.product.category.name if (var.product and var.product.category) else "SIN DEPARTAMENTO"
+        uom_val = (var.product.uom_base if var.product and var.product.uom_base else "UND").upper()
+        desc = f"{var.product.name if var.product else ''} {var.part_number or ''}".strip().upper()
+
+        sheet_items.append(PhysicalCountSheetItem(
+            variant_id=var.id,
+            product_code=prod_code,
+            barcode=primary_bc or None,
+            sku=var.sku,
+            description=desc,
+            category=cat_name.upper(),
+            uom=uom_val,
+            theoretical_qty=qty
+        ))
+
+    return PhysicalCountSheetResponse(
+        session_id=session_obj.id if session_obj else None,
+        session_code=session_code,
+        session_name=session_name,
+        session_state=session_state,
+        company_name=company_name,
+        facility_name=facility_name,
+        facility_code=facility_code,
+        deposit_code=deposit_code,
+        deposit_name=deposit_name,
+        department_name=department_name,
+        currency_name=currency_name,
+        emission_date=datetime.now().strftime("%d/%m/%Y"),
+        total_items=len(sheet_items),
+        total_theoretical_qty=round(total_theo, 4),
+        items=sheet_items
+    )
+

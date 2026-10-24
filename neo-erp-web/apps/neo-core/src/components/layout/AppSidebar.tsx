@@ -3,6 +3,14 @@ import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSidebar } from '@/context/SidebarContext';
+import { canReadFeature } from '@/lib/rbac';
+
+interface NavItem {
+  label: string;
+  icon: string;
+  href: string;
+  featureKey?: string | string[];
+}
 
 export function AppSidebar() {
   const { isCollapsed, isMobileOpen, closeMobile } = useSidebar();
@@ -11,18 +19,26 @@ export function AppSidebar() {
   const [userName, setUserName] = React.useState('Cargando...');
   const [userRole, setUserRole] = React.useState('Verificando...');
   const [userInitials, setUserInitials] = React.useState('--');
+  const [currentUser, setCurrentUser] = React.useState<any>(null);
 
   React.useEffect(() => {
     import('@/lib/api').then(({ default: api }) => {
       api.get('/users/me')
         .then(res => {
-          if (res.data && res.data.full_name) {
-            const nameParts = res.data.full_name.split(' ');
-            const initials = nameParts.length > 1 ? nameParts[0][0] + nameParts[1][0] : nameParts[0].substring(0, 2);
-            setUserName(res.data.full_name);
-            setUserInitials(initials.toUpperCase());
-            if (res.data.active_role) {
+          if (res.data) {
+            setCurrentUser(res.data);
+            if (res.data.full_name) {
+              const nameParts = res.data.full_name.split(' ');
+              const initials = nameParts.length > 1 ? nameParts[0][0] + nameParts[1][0] : nameParts[0].substring(0, 2);
+              setUserName(res.data.full_name);
+              setUserInitials(initials.toUpperCase());
+            }
+            if (res.data.is_superuser) {
+              setUserRole("Superusuario Global");
+            } else if (res.data.active_role) {
               setUserRole(res.data.active_role.name);
+            } else if (res.data.roles?.length > 0) {
+              setUserRole(res.data.roles[0].name);
             } else {
               setUserRole("Staff");
             }
@@ -34,25 +50,25 @@ export function AppSidebar() {
 
   const pathname = usePathname() || '';
 
-  const dashboardItems = [
+  const dashboardItems: NavItem[] = [
     { label: 'Visión Global', icon: 'pi pi-chart-pie', href: '/dashboard' },
   ];
 
-  const securityItems = [
-    { label: 'Usuarios del Sistema', icon: 'pi pi-users', href: '/dashboard/users' },
-    { label: 'Usuarios Digitales (IA)', icon: 'pi pi-android', href: '/dashboard/digital-workers' },
-    { label: 'Roles y Privilegios', icon: 'pi pi-id-card', href: '/dashboard/roles' },
+  const securityItems: NavItem[] = [
+    { label: 'Usuarios del Sistema', icon: 'pi pi-users', href: '/dashboard/users', featureKey: 'users' },
+    { label: 'Usuarios Digitales (IA)', icon: 'pi pi-android', href: '/dashboard/digital-workers', featureKey: 'digital_workers' },
+    { label: 'Roles y Privilegios', icon: 'pi pi-id-card', href: '/dashboard/roles', featureKey: 'roles' },
   ];
 
-  const orgItems = [
-    { label: 'Empresas Base', icon: 'pi pi-building', href: '/dashboard/companies' },
-    { label: 'Sucursales / Sedes', icon: 'pi pi-sitemap', href: '/dashboard/facilities' },
-    { label: 'Agentes de Tienda (Sync)', icon: 'pi pi-sync', href: '/dashboard/store-sync' },
+  const orgItems: NavItem[] = [
+    { label: 'Empresas Base', icon: 'pi pi-building', href: '/dashboard/companies', featureKey: 'companies' },
+    { label: 'Sucursales / Sedes', icon: 'pi pi-sitemap', href: '/dashboard/facilities', featureKey: 'facilities' },
+    { label: 'Agentes de Tienda (Sync)', icon: 'pi pi-sync', href: '/dashboard/store-sync', featureKey: 'store_sync' },
   ];
 
-  const settingsItems = [
-    { label: 'Monedas / Divisas', icon: 'pi pi-money-bill', href: '/dashboard/currencies' },
-    { label: 'Trabajos en Segundo Plano', icon: 'pi pi-server', href: '/dashboard/jobs' },
+  const settingsItems: NavItem[] = [
+    { label: 'Monedas / Divisas', icon: 'pi pi-money-bill', href: '/dashboard/currencies', featureKey: 'currencies' },
+    { label: 'Trabajos en Segundo Plano', icon: 'pi pi-server', href: '/dashboard/jobs', featureKey: 'jobs' },
   ];
 
   const isActivePath = (href: string) => {
@@ -60,48 +76,56 @@ export function AppSidebar() {
     return pathname === href || (pathname.startsWith(href) && href !== '/dashboard');
   };
 
-  const renderNavGroup = (title: string, items: {label: string, icon: string, href: string}[]) => (
-    <div className="mb-6">
-      <div className={`text-[11px] font-bold text-slate-500 tracking-widest uppercase mb-[10px] px-[8px] transition-opacity duration-200 ${isCollapsed ? 'lg:hidden' : ''}`}>
-        {title}
+  const renderNavGroup = (title: string, items: NavItem[]) => {
+    const visibleItems = currentUser
+      ? items.filter(item => !item.featureKey || canReadFeature(currentUser, 'neo_core', item.featureKey))
+      : items;
+
+    if (visibleItems.length === 0) return null;
+
+    return (
+      <div className="mb-6">
+        <div className={`text-[11px] font-bold text-slate-500 tracking-widest uppercase mb-[10px] px-[8px] transition-opacity duration-200 ${isCollapsed ? 'lg:hidden' : ''}`}>
+          {title}
+        </div>
+        {isCollapsed && (
+          <div className="hidden lg:block w-8 h-[1px] bg-slate-800 mx-auto my-3" />
+        )}
+        <ul className="flex flex-col gap-[4px]">
+          {visibleItems.map((item) => {
+            const isActive = isActivePath(item.href);
+            return (
+              <li key={item.href}>
+                <Link 
+                  href={item.href} 
+                  onClick={closeMobile}
+                  title={item.label}
+                  className={`flex items-center gap-[12px] py-[10px] rounded-lg transition-all duration-300 group relative overflow-hidden ${
+                    isCollapsed ? 'lg:justify-center lg:px-0 px-[12px]' : 'px-[12px]'
+                  } ${
+                    isActive ? 'bg-[#1e293b]/60 text-white font-medium' : 'text-slate-400 hover:bg-[#1e293b]/40 hover:text-slate-200'
+                  }`}
+                >
+                  {isActive && (
+                    <>
+                      <div className="absolute left-0 top-0 h-full w-[4px] bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.5)] z-20"></div>
+                      <div className="absolute left-0 top-0 h-full w-[96px] bg-gradient-to-r from-indigo-500/25 to-transparent z-10"></div>
+                    </>
+                  )}
+                  <i className={`${item.icon} text-[18px] transition-transform duration-300 z-30 shrink-0 ${
+                    isActive ? 'text-indigo-400 scale-110 drop-shadow-sm' : 'text-slate-500 group-hover:text-slate-400 group-hover:scale-110'
+                  }`}></i>
+                  <span className={`text-[14px] z-30 truncate ${isCollapsed ? 'lg:hidden' : ''}`}>
+                    {item.label}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
       </div>
-      {isCollapsed && (
-        <div className="hidden lg:block w-8 h-[1px] bg-slate-800 mx-auto my-3" />
-      )}
-      <ul className="flex flex-col gap-[4px]">
-        {items.map((item) => {
-          const isActive = isActivePath(item.href);
-          return (
-            <li key={item.href}>
-              <Link 
-                href={item.href} 
-                onClick={closeMobile}
-                title={item.label}
-                className={`flex items-center gap-[12px] py-[10px] rounded-lg transition-all duration-300 group relative overflow-hidden ${
-                  isCollapsed ? 'lg:justify-center lg:px-0 px-[12px]' : 'px-[12px]'
-                } ${
-                  isActive ? 'bg-[#1e293b]/60 text-white font-medium' : 'text-slate-400 hover:bg-[#1e293b]/40 hover:text-slate-200'
-                }`}
-              >
-                {isActive && (
-                  <>
-                    <div className="absolute left-0 top-0 h-full w-[4px] bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.5)] z-20"></div>
-                    <div className="absolute left-0 top-0 h-full w-[96px] bg-gradient-to-r from-indigo-500/25 to-transparent z-10"></div>
-                  </>
-                )}
-                <i className={`${item.icon} text-[18px] transition-transform duration-300 z-30 shrink-0 ${
-                  isActive ? 'text-indigo-400 scale-110 drop-shadow-sm' : 'text-slate-500 group-hover:text-slate-400 group-hover:scale-110'
-                }`}></i>
-                <span className={`text-[14px] z-30 truncate ${isCollapsed ? 'lg:hidden' : ''}`}>
-                  {item.label}
-                </span>
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
+    );
+  };
 
   return (
     <aside 

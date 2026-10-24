@@ -64,27 +64,34 @@ export default function WmsShipmentsPage() {
         setSelectedFacilityId(facRes.data[0].id);
       }
 
-      const prodRes = await api.get('/products/?limit=100');
-      const variants: any[] = [];
-      (prodRes.data || []).forEach((p: any) => {
-        if (p.variants && p.variants.length > 0) {
-          p.variants.forEach((v: any) => {
-            variants.push({
-              label: `${p.name} - SKU: ${v.sku || 'N/A'} (ID: ${v.id})`,
-              value: v.id
-            });
-          });
-        } else {
-          variants.push({
-            label: `${p.name} (ID: ${p.id})`,
-            value: p.id
-          });
-        }
-      });
-      setProductsList(variants);
+      const prodRes = await api.get('/products/selector?limit=300');
+      const prodList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.items || prodRes.data?.data || []);
+      setProductsList(prodList);
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const productFilterTimeoutRef = React.useRef<any>(null);
+  const handleProductFilter = (filterText: string) => {
+    if (productFilterTimeoutRef.current) clearTimeout(productFilterTimeoutRef.current);
+    productFilterTimeoutRef.current = setTimeout(async () => {
+      try {
+        const q = (filterText || '').trim();
+        const url = q ? `/products/selector?q=${encodeURIComponent(q)}&limit=100` : '/products/selector?limit=300';
+        const prodRes = await api.get(url);
+        const prodList = Array.isArray(prodRes.data) ? prodRes.data : (prodRes.data?.items || prodRes.data?.data || []);
+        setProductsList(prev => {
+          const sel = prev.find(p => p.value === selectedVariantId);
+          if (sel && !prodList.some((v: any) => v.value === sel.value)) {
+            return [sel, ...prodList];
+          }
+          return prodList;
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }, 200);
   };
 
   useEffect(() => {
@@ -324,9 +331,13 @@ export default function WmsShipmentsPage() {
                 <Dropdown
                   value={selectedVariantId}
                   options={productsList}
+                  optionLabel="label"
+                  optionValue="value"
                   onChange={(e) => setSelectedVariantId(e.value)}
-                  placeholder="Seleccionar producto..."
+                  placeholder="Buscar por nombre, SKU o cualquier código..."
                   filter
+                  filterBy="search_key,label,sku,name,product_name,barcodes_str"
+                  onFilter={(e) => handleProductFilter(e.filter)}
                   className="w-full text-xs font-bold"
                 />
               </div>

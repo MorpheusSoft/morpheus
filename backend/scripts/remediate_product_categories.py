@@ -250,6 +250,14 @@ def remediate_categories(dry_run: bool = False):
     for p in db_prods:
         pid, pname, cur_cat_id, stellar_code = p[0], p[1], p[2], p[3]
         target_cat = stellar_code_to_cat.get(stellar_code)
+        if not target_cat and cur_cat_id == 16:
+            pname_up = (pname or "").upper()
+            if "CHIMO" in pname_up:
+                target_cat = sub_cat_map.get(('169', '162'))
+            elif any(w in pname_up for w in ("ENCENDEDOR", "FOSFORO", "PORTA FUEGO", "SOPLETE")):
+                target_cat = sub_cat_map.get(('169', '161'))
+            elif "CIGARR" in pname_up:
+                target_cat = sub_cat_map.get(('169', '160'))
         if target_cat and target_cat != cur_cat_id:
             updates.append((target_cat, pid))
 

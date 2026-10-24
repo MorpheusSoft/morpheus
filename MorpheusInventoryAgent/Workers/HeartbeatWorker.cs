@@ -168,7 +168,7 @@ public class HeartbeatWorker : BackgroundService
         {
             FacilityId = facilityId,
             RegisterCode = "SERVER-STORE",
-            AgentVersion = "2.4.5-neo",
+            AgentVersion = "2.4.6-neo",
             MachineName = Environment.MachineName,
             SqlServerStatus = sqlStatus,
             LastStellarSaleTime = lastStellarSale,
@@ -187,6 +187,7 @@ public class HeartbeatWorker : BackgroundService
                 ["last_sales_sync"] = syncState.LastSalesSync > new DateTime(2000, 1, 1) ? syncState.LastSalesSync.ToString("o") : null!,
                 ["baseline_done"] = syncState.BaselineInventoryDone,
                 ["last_movement_sync"] = syncState.LastMovementSync > new DateTime(2000, 1, 1) ? syncState.LastMovementSync.ToString("o") : null!,
+                ["last_purchase_order_sync"] = syncState.LastPurchaseOrderSync > new DateTime(2000, 1, 1) ? syncState.LastPurchaseOrderSync.ToString("o") : null!,
                 ["is_sync_paused"] = SyncStateManager.IsSyncPaused(),
                 ["deposits"] = discoveredDeposits
             }
@@ -375,6 +376,18 @@ public class HeartbeatWorker : BackgroundService
                     await ExecuteSoftwareUpdateAsync(cmd, stoppingToken);
                     break;
 
+                case "FORCE_SYNC_ODC":
+                case "FORCE_SYNC_PURCHASE_ORDERS":
+                    var odcWorker = _serviceProvider.GetRequiredService<PurchaseOrdersExtractorWorker>();
+                    bool allowExpired = false;
+                    if (cmd.Parameters.ValueKind == JsonValueKind.Object && cmd.Parameters.TryGetProperty("allow_expired", out var ae))
+                    {
+                        allowExpired = ae.GetBoolean();
+                    }
+                    await odcWorker.RunOnceAsync(allowExpired, stoppingToken);
+                    await SendCommandAckAsync(cmd.Id, "COMPLETED", new { message = "Órdenes de compra sincronizadas exitosamente hacia Neo ERP." }, null, stoppingToken);
+                    break;
+
                 default:
                     await SendCommandAckAsync(cmd.Id, "FAILED", null, $"Comando desconocido: '{cmdType}'", stoppingToken);
                     break;
@@ -455,7 +468,7 @@ public class HeartbeatWorker : BackgroundService
 
     private async Task ExecuteSoftwareUpdateAsync(StoreAgentCommandDto cmd, CancellationToken stoppingToken)
     {
-        string targetVersion = "2.4.5-neo";
+        string targetVersion = "2.4.6-neo";
         string packageUrl = ResolveInstallerUrl();
 
         if (cmd.Parameters.ValueKind == JsonValueKind.Object)

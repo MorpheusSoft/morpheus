@@ -50,6 +50,12 @@ const initialPermissions: any = {
     pricing_kiosk: { read: false, write: false, delete: false, approve: false },
     pricing_reports: { read: false, write: false, delete: false, approve: false },
   },
+  neo_production: {
+    work_centers: { read: false, write: false, delete: false, approve: false },
+    recipes: { read: false, write: false, delete: false, approve: false },
+    production_orders: { read: false, write: false, delete: false, approve: false },
+    butchery: { read: false, write: false, delete: false, approve: false },
+  },
   neo_b2b: {
     b2b_catalog: { read: false, write: false, delete: false, approve: false },
     b2b_orders: { read: false, write: false, delete: false, approve: false },
@@ -63,6 +69,7 @@ const moduleNames: any = {
   neo_inventory: "Catálogo y Existencias (Neo Inventory)",
   neo_purchases: "Compras y Adquisiciones (Neo Purchases)",
   neo_pricing: "Costos, Precios y Habladores (Neo Pricing)",
+  neo_production: "Manufactura y Fórmulas (Neo Producción)",
   neo_b2b: "Portal Mayorista (Neo B2B)",
 };
 
@@ -113,6 +120,12 @@ const featureNames: any = {
   pricing_kiosk: "Kiosco Consultor en Tienda",
   pricing_reports: "Reportes de Precios y Márgenes",
 
+  // Neo Producción
+  work_centers: "Centros de Trabajo y Líneas",
+  recipes: "Recetas, Fórmulas y Simulador",
+  production_orders: "Órdenes de Producción",
+  butchery: "Sala de Desposte y Cortes",
+
   // Neo B2B
   b2b_catalog: "Catálogo Mayorista y Carrito",
   b2b_orders: "Historial de Pedidos B2B",
@@ -154,24 +167,56 @@ export default function RolesPage() {
     });
   };
 
+  const toggleModuleAllRead = (modKey: string) => {
+    setPermissions((prev: any) => {
+      const copy = JSON.parse(JSON.stringify(prev));
+      const feats = Object.keys(copy[modKey] || {});
+      const anyRead = feats.some(f => copy[modKey][f].read);
+      for (const f of feats) {
+        copy[modKey][f].read = !anyRead;
+        if (anyRead) {
+          copy[modKey][f].write = false;
+          copy[modKey][f].delete = false;
+          copy[modKey][f].approve = false;
+        }
+      }
+      return copy;
+    });
+  };
+
   const mergePermissions = (savedPerms: any) => {
     const base = JSON.parse(JSON.stringify(initialPermissions));
     if (!savedPerms) return base;
 
-    // Normalización de claves legadas
-    const normalized: any = { ...savedPerms };
-    if (normalized.neo_logistics && !normalized.neo_wms) {
-      normalized.neo_wms = normalized.neo_logistics;
-    }
-    if (normalized.wms && !normalized.neo_wms) {
-      normalized.neo_wms = normalized.wms;
-    }
-    if (normalized.purchasing && !normalized.neo_purchases) {
-      normalized.neo_purchases = normalized.purchasing;
-    }
-    if (normalized.inventory && !normalized.neo_inventory) {
-      normalized.neo_inventory = normalized.inventory;
-    }
+    // Normalización de claves legadas de módulos y features
+    const normalized: any = JSON.parse(JSON.stringify(savedPerms));
+    const mergeMod = (srcKey: string, dstKey: string) => {
+      if (normalized[srcKey]) {
+        normalized[dstKey] = { ...(normalized[srcKey] || {}), ...(normalized[dstKey] || {}) };
+      }
+    };
+    mergeMod("neo_logistics", "neo_wms");
+    mergeMod("wms", "neo_wms");
+    mergeMod("purchasing", "neo_purchases");
+    mergeMod("inventory", "neo_inventory");
+    mergeMod("production", "neo_production");
+
+    const mergeFeat = (modKey: string, srcFeat: string, dstFeat: string) => {
+      if (normalized[modKey]?.[srcFeat]) {
+        const src = normalized[modKey][srcFeat];
+        const dst = normalized[modKey][dstFeat] || {};
+        normalized[modKey][dstFeat] = {
+          read: Boolean(src.read || dst.read),
+          write: Boolean(src.write || dst.write),
+          delete: Boolean(src.delete || dst.delete),
+          approve: Boolean(src.approve || dst.approve),
+        };
+      }
+    };
+    mergeFeat("neo_wms", "direct_receipts", "receipts");
+    mergeFeat("neo_wms", "routes", "shipments");
+    mergeFeat("neo_wms", "vehicles", "shipments");
+    mergeFeat("neo_pricing", "pricing_metrics", "pricing_reports");
 
     for (const modKey in normalized) {
       if (base[modKey]) {
@@ -407,8 +452,17 @@ export default function RolesPage() {
                          <div className="max-h-[500px] overflow-y-auto bg-slate-50">
                             {Object.keys(permissions).map((modKey) => (
                                <div key={modKey} className="border-b border-slate-200 last:border-0 bg-white">
-                                  <div className="px-5 py-2.5 bg-slate-100/80 border-b border-slate-200">
+                                  <div className="px-5 py-2.5 bg-slate-100/80 border-b border-slate-200 flex items-center justify-between">
                                      <h5 className="font-bold text-slate-700 text-xs uppercase tracking-widest">{moduleNames[modKey] || modKey}</h5>
+                                     <button
+                                       type="button"
+                                       onClick={() => toggleModuleAllRead(modKey)}
+                                       className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 bg-white hover:bg-indigo-50 border border-slate-200 px-2.5 py-1 rounded-lg transition-colors"
+                                     >
+                                       {Object.values(permissions[modKey] || {}).some((f: any) => f.read)
+                                         ? "Desmarcar Módulo"
+                                         : "Habilitar Módulo"}
+                                     </button>
                                   </div>
                                   <table className="w-full text-left text-sm text-slate-600">
                                      <thead className="bg-white border-b border-slate-100 text-[10px] uppercase font-bold text-slate-400">

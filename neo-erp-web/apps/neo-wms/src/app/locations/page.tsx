@@ -172,36 +172,33 @@ export default function WmsLocationsPage() {
     setLoading(false);
   };
 
+  const productFilterTimeoutRef = useRef<any>(null);
+  const handleProductFilter = (filterText: string) => {
+    if (productFilterTimeoutRef.current) clearTimeout(productFilterTimeoutRef.current);
+    productFilterTimeoutRef.current = setTimeout(async () => {
+      try {
+        const q = (filterText || '').trim();
+        const url = q ? `/products/selector?q=${encodeURIComponent(q)}&limit=100` : '/products/selector?limit=300';
+        const res = await api.get(url);
+        const list = Array.isArray(res.data) ? res.data : (res.data?.items || res.data?.data || []);
+        setProductsList(prev => {
+          const sel = prev.find((p: any) => p.value === variantId);
+          if (sel && !list.some((m: any) => m.value === sel.value)) {
+            return [sel, ...list];
+          }
+          return list;
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }, 200);
+  };
+
   const fetchProducts = async () => {
     try {
-      const res = await api.get('/products/?limit=2000');
-      const formattedOptions: any[] = [];
-      let prodList: any[] = [];
-      if (Array.isArray(res.data)) {
-        prodList = res.data;
-      } else if (res.data?.items && Array.isArray(res.data.items)) {
-        prodList = res.data.items;
-      } else if (res.data?.data && Array.isArray(res.data.data)) {
-        prodList = res.data.data;
-      }
-
-      prodList.forEach((p: any) => {
-        if (p && p.variants && Array.isArray(p.variants) && p.variants.length > 0) {
-          p.variants.forEach((v: any) => {
-            formattedOptions.push({
-              label: `${p.name || 'Producto'} ${v.sku ? `(SKU: ${v.sku})` : ''}`,
-              value: v.id
-            });
-          });
-        } else if (p && p.id) {
-          formattedOptions.push({
-            label: `${p.name || 'Producto'} (ID: ${p.id})`,
-            value: p.id
-          });
-        }
-      });
-
-      setProductsList(formattedOptions);
+      const res = await api.get('/products/selector?limit=300');
+      const prodList = Array.isArray(res.data) ? res.data : (res.data?.items || res.data?.data || []);
+      setProductsList(prodList);
     } catch (e) {
       console.error("Error cargando productos:", e);
     }
@@ -1004,8 +1001,10 @@ export default function WmsLocationsPage() {
                   setCurrentProductUom('UND');
                 }
               }}
-              placeholder="Seleccionar variante o SKU..."
+              placeholder="Buscar por nombre, SKU o cualquier código..."
               filter
+              filterBy="search_key,label,sku,name,product_name,barcodes_str"
+              onFilter={(e) => handleProductFilter(e.filter)}
               showClear
               className="w-full text-xs font-bold"
             />

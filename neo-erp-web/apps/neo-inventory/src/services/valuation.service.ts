@@ -46,5 +46,33 @@ export const ValuationService = {
   getCategoriesTree: async () => {
     const { data } = await api.get('/categories/tree');
     return data;
+  },
+
+  getLocationsTree: async (facilityId?: number) => {
+    const url = facilityId ? `/wms/locations/tree?facility_id=${facilityId}` : '/wms/locations/tree';
+    const { data } = await api.get(url);
+    return data;
+  },
+
+  getPhysicalCountSheet: async (params: {
+    session_id?: number | null;
+    facility_id?: number | null;
+    warehouse_id?: number | null;
+    location_id?: number | null;
+    category_id?: number | null;
+    include_zero_stock?: boolean;
+    search?: string;
+  } = {}) => {
+    const query = new URLSearchParams();
+    if (params.session_id) query.append('session_id', params.session_id.toString());
+    if (params.facility_id) query.append('facility_id', params.facility_id.toString());
+    if (params.warehouse_id) query.append('warehouse_id', params.warehouse_id.toString());
+    if (params.location_id) query.append('location_id', params.location_id.toString());
+    if (params.category_id) query.append('category_id', params.category_id.toString());
+    if (params.include_zero_stock !== undefined) query.append('include_zero_stock', String(params.include_zero_stock));
+    if (params.search && params.search.trim()) query.append('search', params.search.trim());
+
+    const { data } = await api.get(`/inventory-valuation/physical-count-sheet?${query.toString()}`);
+    return data;
   }
 };

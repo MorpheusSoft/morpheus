@@ -10,6 +10,7 @@ public class SyncState
     public DateTime LastMovementSync { get; set; } = new DateTime(2000, 1, 1);
     public DateTime LastSalesSync { get; set; } = new DateTime(2000, 1, 1);
     public DateTime LastSupplierProductSync { get; set; } = new DateTime(2000, 1, 1);
+    public DateTime LastPurchaseOrderSync { get; set; } = new DateTime(2000, 1, 1);
     public bool IsSyncPaused { get; set; } = false;
 }
 
@@ -103,6 +104,7 @@ public static class SyncStateManager
                 if (state.LastMovementSync > currentState.LastMovementSync) currentState.LastMovementSync = state.LastMovementSync;
                 if (state.LastSalesSync > currentState.LastSalesSync) currentState.LastSalesSync = state.LastSalesSync;
                 if (state.LastSupplierProductSync > currentState.LastSupplierProductSync) currentState.LastSupplierProductSync = state.LastSupplierProductSync;
+                if (state.LastPurchaseOrderSync > currentState.LastPurchaseOrderSync) currentState.LastPurchaseOrderSync = state.LastPurchaseOrderSync;
                 if (state.IsSyncPaused != currentState.IsSyncPaused) currentState.IsSyncPaused = state.IsSyncPaused;
                 
                 var json = JsonSerializer.Serialize(currentState, new JsonSerializerOptions { WriteIndented = true });

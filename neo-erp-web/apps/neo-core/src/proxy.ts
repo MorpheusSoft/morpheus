@@ -46,6 +46,29 @@ export function proxy(request: NextRequest) {
     }
   }
 
+  const isLogout = request.nextUrl.searchParams.get('logout') === '1'
+
+  if (isLoginPage && isLogout) {
+    const res = NextResponse.next()
+    if (domainConfig.cookieDomain) {
+      res.cookies.set('access_token', '', {
+        maxAge: 0,
+        expires: new Date(0),
+        domain: domainConfig.cookieDomain,
+        path: '/',
+        secure: domainConfig.protocol === 'https',
+        sameSite: 'lax',
+      })
+    } else {
+      res.cookies.set('access_token', '', {
+        maxAge: 0,
+        expires: new Date(0),
+        path: '/',
+      })
+    }
+    return res
+  }
+
   // Redirigir al usuario no logueado a la vista de login preservando la ruta solicitada
   if (!token && !isPublicPage) {
     const proto = request.headers.get('x-forwarded-proto') || domainConfig.protocol

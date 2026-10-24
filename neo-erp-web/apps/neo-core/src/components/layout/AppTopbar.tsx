@@ -1,14 +1,14 @@
 'use client';
 import { AppSwitcher } from './AppSwitcher';
-import { useRouter } from 'next/navigation';
 import { logoutAction } from '@/app/actions/auth';
 import { useSidebar } from '@/context/SidebarContext';
+import { clearAuthCookies } from '@/lib/domain';
 
 export function AppTopbar() {
-  const router = useRouter();
   const { toggleSidebar } = useSidebar();
 
   const handleLogout = async () => {
+    clearAuthCookies();
     await logoutAction();
   };
 
