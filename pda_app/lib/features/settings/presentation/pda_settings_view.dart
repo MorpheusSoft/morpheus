@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/database/pda_db_helper.dart';
+import '../../../core/services/barcode_scanner_listener.dart';
 import '../../../core/services/pda_config_service.dart';
 import '../../../core/services/pda_sync_service.dart';
 
@@ -32,6 +33,7 @@ class _PdaSettingsViewState extends State<PdaSettingsView> {
   @override
   void initState() {
     super.initState();
+    BarcodeScannerListener.allowManualKeyboard();
     final config = PdaConfigService.instance;
     _serverUrlController.text = config.serverUrl;
     _deviceIdController.text = config.deviceId;
@@ -56,6 +58,7 @@ class _PdaSettingsViewState extends State<PdaSettingsView> {
 
   @override
   void dispose() {
+    BarcodeScannerListener.enableScannerFocus();
     _serverUrlController.dispose();
     _deviceIdController.dispose();
     _operatorBadgeController.dispose();

@@ -20,8 +20,11 @@ class PdaDatabaseHelper {
 
     final db = await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _createDB,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        await _createTables(db);
+      },
     );
 
     await _createTables(db);
@@ -66,11 +69,23 @@ class PdaDatabaseHelper {
       )
     ''');
 
+    // 3.5 Categorías jerárquicas
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS cached_categories (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        parent_id INTEGER,
+        path TEXT
+      )
+    ''');
+
     // 4. Catálogo maestro de productos
     await db.execute('''
       CREATE TABLE IF NOT EXISTS cached_products (
         variant_id INTEGER PRIMARY KEY,
         product_id INTEGER,
+        category_id INTEGER,
+        category_name TEXT,
         sku TEXT NOT NULL,
         name TEXT NOT NULL,
         uom_base TEXT NOT NULL DEFAULT 'UND',
@@ -80,6 +95,14 @@ class PdaDatabaseHelper {
         updated_at TEXT
       )
     ''');
+
+    // Migraciones seguras en caliente para instalaciones existentes
+    try {
+      await db.execute('ALTER TABLE cached_products ADD COLUMN category_id INTEGER');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE cached_products ADD COLUMN category_name TEXT');
+    } catch (_) {}
 
     await db.execute('''
       CREATE INDEX IF NOT EXISTS idx_cached_products_sku ON cached_products(sku);
@@ -93,10 +116,35 @@ class PdaDatabaseHelper {
         facility_id INTEGER,
         warehouse_id INTEGER,
         scope_type TEXT,
+        scope_value TEXT,
+        category_id INTEGER,
+        category_name TEXT,
+        category_full_path TEXT,
+        valid_category_ids_json TEXT,
+        valid_variant_ids_json TEXT,
         state TEXT,
         date_start TEXT
       )
     ''');
+
+    try {
+      await db.execute('ALTER TABLE cached_inventory_sessions ADD COLUMN scope_value TEXT');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE cached_inventory_sessions ADD COLUMN category_id INTEGER');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE cached_inventory_sessions ADD COLUMN category_name TEXT');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE cached_inventory_sessions ADD COLUMN category_full_path TEXT');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE cached_inventory_sessions ADD COLUMN valid_category_ids_json TEXT');
+    } catch (_) {}
+    try {
+      await db.execute('ALTER TABLE cached_inventory_sessions ADD COLUMN valid_variant_ids_json TEXT');
+    } catch (_) {}
 
     // 6. Bandeja de salida (Outbox) de Conteos Físicos
     await db.execute('''
@@ -176,6 +224,7 @@ class PdaDatabaseHelper {
   // ===========================================================================
   Future<void> saveCatalogToCache({
     List<dynamic>? facilities,
+    List<dynamic>? categories,
     required List<dynamic> warehouses,
     required List<dynamic> locations,
     required List<dynamic> products,
@@ -194,6 +243,20 @@ class PdaDatabaseHelper {
           });
         }
         await facBatch.commit(noResult: true);
+      }
+
+      if (categories != null && categories.isNotEmpty) {
+        final catBatch = txn.batch();
+        catBatch.delete('cached_categories');
+        for (final c in categories) {
+          catBatch.insert('cached_categories', {
+            'id': c['id'],
+            'name': c['name'] ?? '',
+            'parent_id': c['parent_id'],
+            'path': c['path'] ?? '',
+          });
+        }
+        await catBatch.commit(noResult: true);
       }
 
       final whBatch = txn.batch();
@@ -230,6 +293,8 @@ class PdaDatabaseHelper {
         prodBatch.insert('cached_products', {
           'variant_id': p['variant_id'],
           'product_id': p['product_id'],
+          'category_id': p['category_id'],
+          'category_name': p['category_name'],
           'sku': p['sku'],
           'name': p['name'],
           'uom_base': p['uom_base'] ?? 'UND',
@@ -241,6 +306,96 @@ class PdaDatabaseHelper {
       }
       await prodBatch.commit(noResult: true);
     });
+  }
+
+  Future<bool> needsCategoryCatalogRefresh() async {
+    try {
+      final db = await database;
+      final catCnt = Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM cached_categories'),
+          ) ??
+          0;
+      if (catCnt == 0) return true;
+
+      final prodTotal = Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM cached_products'),
+          ) ??
+          0;
+      if (prodTotal == 0) return true;
+
+      final prodWithCat = Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM cached_products WHERE category_id IS NOT NULL'),
+          ) ??
+          0;
+      return prodWithCat == 0;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<void> updateCachedProductCategory(int variantId, int? categoryId, String? categoryName) async {
+    if (categoryId == null) return;
+    try {
+      final db = await database;
+      await db.update(
+        'cached_products',
+        {
+          'category_id': categoryId,
+          if (categoryName != null) 'category_name': categoryName,
+        },
+        where: 'variant_id = ?',
+        whereArgs: [variantId],
+      );
+    } catch (_) {}
+  }
+
+  /// Resuelve jerárquicamente todas las categorías descendientes (Departamento -> Grupo -> Subgrupo)
+  Future<Set<int>> getRelatedCategoryIds(int rootCatId) async {
+    final result = <int>{rootCatId};
+    try {
+      final db = await database;
+      final allCats = await db.query('cached_categories');
+      if (allCats.isEmpty) return result;
+
+      String? rootPath;
+      for (final c in allCats) {
+        if (c['id'] == rootCatId) {
+          final p = (c['path'] ?? '').toString().trim();
+          if (p.isNotEmpty) rootPath = p;
+          break;
+        }
+      }
+
+      if (rootPath != null && rootPath.isNotEmpty) {
+        final prefix = '$rootPath/';
+        for (final c in allCats) {
+          final id = c['id'] as int?;
+          final p = (c['path'] ?? '').toString().trim();
+          if (id != null && (p == rootPath || p.startsWith(prefix))) {
+            result.add(id);
+          }
+        }
+      }
+
+      // Recorrido recursivo hacia abajo por parent_id
+      final toVisit = <int>[rootCatId];
+      final visited = <int>{};
+      while (toVisit.isNotEmpty) {
+        final curr = toVisit.removeAt(0);
+        visited.add(curr);
+        for (final c in allCats) {
+          final id = c['id'] as int?;
+          final parentId = c['parent_id'] as int?;
+          if (id != null && parentId == curr) {
+            result.add(id);
+            if (!visited.contains(id) && !toVisit.contains(id)) {
+              toVisit.add(id);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+    return result;
   }
 
   // ===========================================================================
@@ -258,6 +413,12 @@ class PdaDatabaseHelper {
           'facility_id': s['facility_id'],
           'warehouse_id': s['warehouse_id'],
           'scope_type': s['scope_type'],
+          'scope_value': s['scope_value']?.toString(),
+          'category_id': s['category_id'],
+          'category_name': s['category_name'],
+          'category_full_path': s['category_full_path'],
+          'valid_category_ids_json': jsonEncode(s['valid_category_ids'] ?? []),
+          'valid_variant_ids_json': jsonEncode(s['valid_variant_ids'] ?? []),
           'state': s['state'],
           'date_start': s['date_start'],
         });
@@ -269,15 +430,37 @@ class PdaDatabaseHelper {
   Future<List<Map<String, dynamic>>> getCachedSessions({int? facilityId}) async {
     try {
       final db = await database;
-      if (facilityId != null) {
-        return await db.query(
-          'cached_inventory_sessions',
-          where: 'facility_id = ?',
-          whereArgs: [facilityId],
-          orderBy: 'id DESC',
-        );
-      }
-      return await db.query('cached_inventory_sessions', orderBy: 'id DESC');
+      final rows = facilityId != null
+          ? await db.query(
+              'cached_inventory_sessions',
+              where: 'facility_id = ?',
+              whereArgs: [facilityId],
+              orderBy: 'id DESC',
+            )
+          : await db.query('cached_inventory_sessions', orderBy: 'id DESC');
+
+      return rows.map((r) {
+        final map = Map<String, dynamic>.from(r);
+        List<int> validCats = [];
+        List<int> validVars = [];
+        try {
+          if (r['valid_category_ids_json'] != null) {
+            validCats = (jsonDecode(r['valid_category_ids_json'] as String) as List)
+                .map((e) => (e as num).toInt())
+                .toList();
+          }
+        } catch (_) {}
+        try {
+          if (r['valid_variant_ids_json'] != null) {
+            validVars = (jsonDecode(r['valid_variant_ids_json'] as String) as List)
+                .map((e) => (e as num).toInt())
+                .toList();
+          }
+        } catch (_) {}
+        map['valid_category_ids'] = validCats;
+        map['valid_variant_ids'] = validVars;
+        return map;
+      }).toList();
     } catch (_) {
       return [];
     }
@@ -439,5 +622,41 @@ class PdaDatabaseHelper {
       where: 'client_uuid = ?',
       whereArgs: [clientUuid],
     );
+  }
+
+  /// Elimina de la lista local de la sesión cualquier producto que no pertenezca a las categorías válidas
+  Future<void> purgeInvalidOutboxCountsForSession(int sessionId, Set<int> validCategoryIds) async {
+    if (validCategoryIds.isEmpty) return;
+    try {
+      final db = await database;
+      final counts = await db.query(
+        'inventory_counts_outbox',
+        where: 'session_id = ?',
+        whereArgs: [sessionId],
+      );
+      for (final c in counts) {
+        final vid = c['variant_id'] as int?;
+        final uuid = c['client_uuid'] as String?;
+        if (vid != null && uuid != null) {
+          final prodRows = await db.query(
+            'cached_products',
+            columns: ['category_id'],
+            where: 'variant_id = ?',
+            whereArgs: [vid],
+            limit: 1,
+          );
+          if (prodRows.isNotEmpty) {
+            final prodCatId = prodRows.first['category_id'] as int?;
+            if (prodCatId != null && !validCategoryIds.contains(prodCatId)) {
+              await db.delete(
+                'inventory_counts_outbox',
+                where: 'client_uuid = ?',
+                whereArgs: [uuid],
+              );
+            }
+          }
+        }
+      }
+    } catch (_) {}
   }
 }

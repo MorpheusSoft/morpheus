@@ -19,35 +19,23 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
   String? _errorMessage;
   bool _isSuccessFlash = false;
   final TextEditingController _manualInputController = TextEditingController();
-  final TextEditingController _barcodeInputController = TextEditingController();
-  final FocusNode _barcodeFocusNode = FocusNode();
+  bool _isDialogOpen = false;
 
-  Timer? _inputDebounceTimer;
   String _lastScannedCode = '';
   DateTime _lastScannedTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
   void initState() {
     super.initState();
-    _setupFocus();
+    _ensureScannerFocus();
   }
 
-  void _setupFocus() {
+  void _ensureScannerFocus() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _barcodeFocusNode.requestFocus();
+      if (mounted && !_isDialogOpen) {
+        FocusManager.instance.primaryFocus?.unfocus();
         SystemChannels.textInput.invokeMethod('TextInput.hide');
-      }
-    });
-
-    _barcodeFocusNode.addListener(() {
-      if (!_barcodeFocusNode.hasFocus && mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
-            _barcodeFocusNode.requestFocus();
-            SystemChannels.textInput.invokeMethod('TextInput.hide');
-          }
-        });
+        BarcodeScannerListener.enableScannerFocus();
       }
     });
   }
@@ -100,18 +88,14 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
         _errorMessage = 'Error al consultar producto: $e';
       });
     } finally {
-      _barcodeInputController.clear();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
-          _barcodeFocusNode.requestFocus();
-          SystemChannels.textInput.invokeMethod('TextInput.hide');
-        }
-      });
+      _ensureScannerFocus();
     }
   }
 
   void _showManualInputDialog() {
     _manualInputController.clear();
+    _isDialogOpen = true;
+    BarcodeScannerListener.allowManualKeyboard();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -148,21 +132,14 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
         ],
       ),
     ).then((_) {
-      if (mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _barcodeFocusNode.requestFocus();
-          SystemChannels.textInput.invokeMethod('TextInput.hide');
-        });
-      }
+      _isDialogOpen = false;
+      _ensureScannerFocus();
     });
   }
 
   @override
   void dispose() {
-    _inputDebounceTimer?.cancel();
     _manualInputController.dispose();
-    _barcodeInputController.dispose();
-    _barcodeFocusNode.dispose();
     super.dispose();
   }
 
@@ -238,7 +215,7 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
                 ),
               ),
 
-              // Barra activa de escaneo con láser e ingreso manual directo
+              // Barra activa de escaneo con láser (sin TextField de Flutter que robe el foco nativo ni abra el teclado)
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: const BoxDecoration(
@@ -248,70 +225,37 @@ class _PriceCheckerViewState extends State<PriceCheckerView> {
                 child: Row(
                   children: [
                     Expanded(
-                      child: TextField(
-                        controller: _barcodeInputController,
-                        focusNode: _barcodeFocusNode,
-                        autofocus: true,
-                        keyboardType: TextInputType.none, // BLOQUEA el teclado virtual de Android
-                        showCursor: false,
-                        enableInteractiveSelection: false,
-                        textInputAction: TextInputAction.none,
-                        style: const TextStyle(color: Colors.white, fontSize: 14),
-                        decoration: InputDecoration(
-                          filled: true,
-                          fillColor: const Color(0xFF1E2032),
-                          hintText: 'Láser activo... o toca para escribir',
-                          hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
-                          prefixIcon: const Icon(Icons.qr_code_scanner, color: Color(0xFF00D2FF), size: 20),
-                          suffixIcon: IconButton(
-                            icon: const Icon(Icons.keyboard, color: Color(0xFF00D2FF), size: 20),
-                            tooltip: 'Digitar manualmente',
-                            onPressed: _showManualInputDialog,
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                          border: OutlineInputBorder(
+                      child: InkWell(
+                        onTap: _ensureScannerFocus,
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E2032),
                             borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: Color(0xFF2E3048)),
+                            border: Border.all(color: const Color(0xFF00D2FF), width: 1.5),
                           ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: Color(0xFF2E3048)),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: Color(0xFF00D2FF), width: 1.5),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.qr_code_scanner, color: Color(0xFF00D2FF), size: 20),
+                              const SizedBox(width: 10),
+                              const Expanded(
+                                child: Text(
+                                  'Láser activo — dispara el lector',
+                                  style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500),
+                                ),
+                              ),
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: Colors.greenAccent,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        onTap: () {
-                          // Si el usuario toca con su dedo en la caja, abre el teclado virtual
-                          _showManualInputDialog();
-                        },
-                        onChanged: (val) {
-                          _inputDebounceTimer?.cancel();
-                          if (val.contains('\n') || val.contains('\r')) {
-                            final code = val.replaceAll('\n', '').replaceAll('\r', '').trim();
-                            if (code.isNotEmpty) {
-                              _barcodeInputController.clear();
-                              _handleScan(code);
-                            }
-                          } else if (val.trim().length >= 3) {
-                            _inputDebounceTimer = Timer(const Duration(milliseconds: 150), () {
-                              final code = _barcodeInputController.text.trim();
-                              if (code.isNotEmpty) {
-                                _barcodeInputController.clear();
-                                _handleScan(code);
-                              }
-                            });
-                          }
-                        },
-                        onSubmitted: (val) {
-                          _inputDebounceTimer?.cancel();
-                          final code = val.trim();
-                          if (code.isNotEmpty) {
-                            _barcodeInputController.clear();
-                            _handleScan(code);
-                          }
-                        },
                       ),
                     ),
                     const SizedBox(width: 8),

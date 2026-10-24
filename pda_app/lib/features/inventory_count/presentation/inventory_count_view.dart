@@ -23,43 +23,21 @@ class _InventoryCountViewState extends State<InventoryCountView> {
 
   List<Map<String, dynamic>> _countedItems = [];
   bool _isLoading = true;
-  bool _isContinuousMode = false; // Modo rápido (+1) por defecto APAGADO
+  bool _isContinuousMode = false; // Modo rápido (+1) o Detallado
   String? _bannerMessage;
   Color _bannerColor = const Color(0xFF1E2030);
 
   final TextEditingController _manualCodeController = TextEditingController();
-  final TextEditingController _barcodeInputController = TextEditingController();
-  final FocusNode _barcodeFocusNode = FocusNode();
 
-  Timer? _inputDebounceTimer;
   String _lastScannedBarcode = '';
   DateTime _lastScanTimestamp = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _isQuantityModalOpen = false;
 
   @override
   void initState() {
     super.initState();
-    _setupFocus();
+    BarcodeScannerListener.enableScannerFocus();
     _loadInitialData();
-  }
-
-  void _setupFocus() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _barcodeFocusNode.requestFocus();
-        SystemChannels.textInput.invokeMethod('TextInput.hide');
-      }
-    });
-
-    _barcodeFocusNode.addListener(() {
-      if (!_barcodeFocusNode.hasFocus && mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
-            _barcodeFocusNode.requestFocus();
-            SystemChannels.textInput.invokeMethod('TextInput.hide');
-          }
-        });
-      }
-    });
   }
 
   Future<void> _loadInitialData() async {
@@ -68,6 +46,11 @@ class _InventoryCountViewState extends State<InventoryCountView> {
     final sync = PdaSyncService.instance;
 
     _isContinuousMode = config.continuousScanMode;
+
+    // Si la base de datos local aún no tiene categorías jerárquicas o category_id en productos, sincronizar catálogo automáticamente
+    if (await PdaDatabaseHelper.instance.needsCategoryCatalogRefresh()) {
+      await sync.syncCatalog(specificFacilityId: config.facilityId);
+    }
 
     // Cargar únicamente sesiones planificadas y abiertas (IN_PROGRESS o DRAFT)
     final allSessions = await sync.fetchInventorySessions(facilityId: config.facilityId);
@@ -86,26 +69,61 @@ class _InventoryCountViewState extends State<InventoryCountView> {
 
     _availableSessions = openSessions;
     await _reloadLocalCounts();
-    setState(() => _isLoading = false);
+    if (mounted) {
+      setState(() => _isLoading = false);
+      BarcodeScannerListener.enableScannerFocus();
+    }
+  }
+
+  Future<Set<int>> _resolveValidCategoryIdsForSession(Map<String, dynamic> session) async {
+    final validCatIds = <int>{};
+    final rawList = session['valid_category_ids'] as List?;
+    if (rawList != null) {
+      for (final e in rawList) {
+        if (e is num) validCatIds.add(e.toInt());
+      }
+    }
+    final int? sessionCatId = (session['category_id'] as num?)?.toInt() ??
+        int.tryParse((session['scope_value'] ?? '').toString().trim());
+    if (sessionCatId != null) {
+      final hierarchicalIds = await PdaDatabaseHelper.instance.getRelatedCategoryIds(sessionCatId);
+      validCatIds.addAll(hierarchicalIds);
+    }
+    return validCatIds;
   }
 
   Future<void> _reloadLocalCounts() async {
+    if (_selectedSessionId != null) {
+      final session = _availableSessions.firstWhere(
+        (s) => s['id'] == _selectedSessionId,
+        orElse: () => <String, dynamic>{},
+      );
+      final validCatIds = await _resolveValidCategoryIdsForSession(session);
+      if (validCatIds.isNotEmpty) {
+        await PdaDatabaseHelper.instance.purgeInvalidOutboxCountsForSession(
+          _selectedSessionId!,
+          validCatIds,
+        );
+      }
+    }
     final counts = await PdaDatabaseHelper.instance.getLocalCountsForSession(_selectedSessionId);
-    setState(() {
-      _countedItems = counts;
-    });
+    if (mounted) {
+      setState(() {
+        _countedItems = counts;
+      });
+    }
     await PdaSyncService.instance.refreshPendingCount();
   }
 
   // ===========================================================================
-  // Manejo de Escaneo Físico con la PDA
+  // Manejo de Escaneo Físico con la PDA (Sin desplegar teclado virtual)
   // ===========================================================================
   Future<void> _handleCountScan(String barcode) async {
     final clean = barcode.trim();
     if (clean.isEmpty) return;
 
     final now = DateTime.now();
-    if (clean == _lastScannedBarcode && now.difference(_lastScanTimestamp).inMilliseconds < 400) {
+    if (clean == _lastScannedBarcode && now.difference(_lastScanTimestamp).inMilliseconds < 350) {
       return;
     }
     _lastScannedBarcode = clean;
@@ -117,21 +135,28 @@ class _InventoryCountViewState extends State<InventoryCountView> {
         _bannerMessage = '⚠️ No hay ninguna toma física abierta seleccionada.';
         _bannerColor = Colors.amber.shade900;
       });
+      BarcodeScannerListener.enableScannerFocus();
       return;
     }
 
     var product = await PdaDatabaseHelper.instance.findProductByBarcode(clean);
-    if (product == null) {
+    if (product == null || product['category_id'] == null) {
       final config = PdaConfigService.instance;
-      product = await PdaSyncService.instance.lookupProduct(clean, facilityId: config.facilityId);
+      final onlineProd = await PdaSyncService.instance.lookupProduct(clean, facilityId: config.facilityId);
+      if (onlineProd != null) {
+        product = onlineProd;
+      }
     }
 
     if (product == null) {
       HapticFeedback.vibrate();
-      setState(() {
-        _bannerMessage = '⚠️ Producto no encontrado con código: "$clean"';
-        _bannerColor = Colors.red.shade900;
-      });
+      if (mounted) {
+        setState(() {
+          _bannerMessage = '⚠️ Producto no encontrado con código: "$clean"';
+          _bannerColor = Colors.red.shade900;
+        });
+      }
+      BarcodeScannerListener.enableScannerFocus();
       return;
     }
 
@@ -143,38 +168,55 @@ class _InventoryCountViewState extends State<InventoryCountView> {
       orElse: () => <String, dynamic>{},
     );
 
-    // 1. Criterio de Categoría
-    final validCatIds = (session['valid_category_ids'] as List?)
-            ?.map((e) => (e as num).toInt())
-            .toList() ??
-        [];
-    final prodCatId = prod['category_id'] as int?;
+    // 1. Criterio Estricto de Categoría Jerárquica (Departamento > Grupo > Subgrupo)
+    final scopeType = (session['scope_type'] ?? '').toString().toUpperCase();
+    final int? sessionCatId = (session['category_id'] as num?)?.toInt() ??
+        int.tryParse((session['scope_value'] ?? '').toString().trim());
+    final validCatIds = await _resolveValidCategoryIdsForSession(session);
+    final int? prodCatId = (prod['category_id'] as num?)?.toInt();
 
-    if (session['scope_type'] == 'CATEGORY' || validCatIds.isNotEmpty) {
-      if (prodCatId != null && validCatIds.isNotEmpty && !validCatIds.contains(prodCatId)) {
+    final isCategoryScoped =
+        scopeType == 'CATEGORY' || scopeType == 'CYCLIC' || sessionCatId != null || validCatIds.isNotEmpty;
+
+    if (isCategoryScoped) {
+      if (prodCatId == null || validCatIds.isEmpty || !validCatIds.contains(prodCatId)) {
+        if (_isQuantityModalOpen && mounted) {
+          Navigator.of(context).pop();
+        }
         HapticFeedback.vibrate();
-        setState(() {
-          _bannerMessage = '⚠️ No permitido: "${prod['name']}" no pertenece a la categoría de esta toma física.';
-          _bannerColor = Colors.red.shade900;
-        });
+        final catTargetLabel = session['category_full_path'] ?? session['category_name'] ?? session['name'] ?? 'la categoría seleccionada';
+        if (mounted) {
+          setState(() {
+            _bannerMessage =
+                '⛔ No permitido: "${prod['name']}" no pertenece al grupo de categoría de esta toma ($catTargetLabel).';
+            _bannerColor = Colors.red.shade900;
+          });
+        }
+        BarcodeScannerListener.enableScannerFocus();
         return;
       }
-    }
+    } else {
+      // 2. Criterio de Variantes planificadas específicas (cuando no es por categoría)
+      final validVarIds = (session['valid_variant_ids'] as List?)
+              ?.map((e) => (e as num).toInt())
+              .toList() ??
+          [];
+      final int? prodVarId = (prod['variant_id'] as num?)?.toInt();
 
-    // 2. Criterio de Variantes planificadas específicas
-    final validVarIds = (session['valid_variant_ids'] as List?)
-            ?.map((e) => (e as num).toInt())
-            .toList() ??
-        [];
-    final prodVarId = prod['variant_id'] as int?;
-
-    if (validVarIds.isNotEmpty && prodVarId != null && !validVarIds.contains(prodVarId)) {
-      HapticFeedback.vibrate();
-      setState(() {
-        _bannerMessage = '⚠️ No permitido: "${prod['name']}" no está planificado en esta toma física.';
-        _bannerColor = Colors.red.shade900;
-      });
-      return;
+      if (validVarIds.isNotEmpty && (prodVarId == null || !validVarIds.contains(prodVarId))) {
+        if (_isQuantityModalOpen && mounted) {
+          Navigator.of(context).pop();
+        }
+        HapticFeedback.vibrate();
+        if (mounted) {
+          setState(() {
+            _bannerMessage = '⛔ No permitido: "${prod['name']}" no está planificado en esta toma física.';
+            _bannerColor = Colors.red.shade900;
+          });
+        }
+        BarcodeScannerListener.enableScannerFocus();
+        return;
+      }
     }
 
     if (_isContinuousMode) {
@@ -186,7 +228,10 @@ class _InventoryCountViewState extends State<InventoryCountView> {
         factor: 1.0,
       );
     } else {
-      // Modo detallado: abrir modal con campo numérico para digitar la cantidad
+      // Si ya había un modal de cantidad abierto y el usuario escaneó otro código, cerrarlo primero
+      if (_isQuantityModalOpen && mounted) {
+        Navigator.of(context).pop();
+      }
       _showQuantityModal(prod, clean);
     }
   }
@@ -229,135 +274,296 @@ class _InventoryCountViewState extends State<InventoryCountView> {
     SystemSound.play(SystemSoundType.click);
     HapticFeedback.mediumImpact();
 
-    setState(() {
-      _bannerMessage = '✅ +${totalAdd.toStringAsFixed(0)} ${product['uom_base'] ?? 'UND'} "${product['name']}" (Total: ${newTotal.toStringAsFixed(0)} ${product['uom_base'] ?? 'UND'})';
-      _bannerColor = Colors.green.shade800;
-    });
+    if (mounted) {
+      setState(() {
+        _bannerMessage =
+            '✅ +${totalAdd.toStringAsFixed(totalAdd % 1 == 0 ? 0 : 2)} ${product['uom_base'] ?? 'UND'} "${product['name']}" (Total: ${newTotal.toStringAsFixed(newTotal % 1 == 0 ? 0 : 2)} ${product['uom_base'] ?? 'UND'})';
+        _bannerColor = Colors.green.shade800;
+      });
+    }
 
-    _barcodeInputController.clear();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
-        _barcodeFocusNode.requestFocus();
-        SystemChannels.textInput.invokeMethod('TextInput.hide');
-      }
-    });
-
+    BarcodeScannerListener.enableScannerFocus();
     await _reloadLocalCounts();
     PdaSyncService.instance.checkConnectivityAndSync();
   }
 
+  // ===========================================================================
+  // Modal de Cantidad con Teclado Numérico Integrado (NUNCA abre el teclado Android)
+  // ===========================================================================
   void _showQuantityModal(Map<String, dynamic> product, String barcode) {
-    final TextEditingController qtyController = TextEditingController(text: '1');
+    String qtyText = '1';
+    bool replaceOnNextDigit = true;
+    _isQuantityModalOpen = true;
+    BarcodeScannerListener.enableScannerFocus();
 
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1E2032),
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                product['name'] ?? '',
-                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              Text(
-                'SKU: ${product['sku']} • Unidad: ${product['uom_base'] ?? 'UND'}',
-                style: const TextStyle(color: Color(0xFF00D2FF), fontSize: 12),
-              ),
-              const SizedBox(height: 16),
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            void appendDigit(String d) {
+              HapticFeedback.selectionClick();
+              setModalState(() {
+                if (replaceOnNextDigit) {
+                  qtyText = (d == '.') ? '0.' : d;
+                  replaceOnNextDigit = false;
+                } else {
+                  if (d == '.' && qtyText.contains('.')) return;
+                  if (qtyText == '0' && d != '.') {
+                    qtyText = d;
+                  } else if (qtyText.length < 9) {
+                    qtyText += d;
+                  }
+                }
+              });
+            }
 
-              // Campo de texto numérico para digitar la cantidad directamente
-              TextField(
-                controller: qtyController,
-                autofocus: true,
-                textAlign: TextAlign.center,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
-                decoration: InputDecoration(
-                  filled: true,
-                  fillColor: const Color(0xFF141523),
-                  labelText: 'Cantidad a contar',
-                  labelStyle: const TextStyle(color: Colors.white60, fontSize: 13),
-                  suffixText: product['uom_base'] ?? 'UND',
-                  suffixStyle: const TextStyle(color: Color(0xFF00D2FF), fontSize: 15, fontWeight: FontWeight.bold),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                  focusedBorder: OutlineInputBorder(
+            void backspace() {
+              HapticFeedback.selectionClick();
+              setModalState(() {
+                replaceOnNextDigit = false;
+                if (qtyText.length > 1) {
+                  qtyText = qtyText.substring(0, qtyText.length - 1);
+                } else {
+                  qtyText = '0';
+                  replaceOnNextDigit = true;
+                }
+              });
+            }
+
+            void addStep(int step) {
+              HapticFeedback.selectionClick();
+              setModalState(() {
+                final current = replaceOnNextDigit ? 0.0 : (double.tryParse(qtyText) ?? 0.0);
+                final next = current + step;
+                qtyText = next % 1 == 0 ? next.toInt().toString() : next.toStringAsFixed(2);
+                replaceOnNextDigit = false;
+              });
+            }
+
+            void confirm() {
+              final numVal = double.tryParse(qtyText.trim()) ?? 1.0;
+              if (numVal > 0) {
+                Navigator.pop(ctx);
+                _registerCount(product: product, barcode: barcode, quantity: numVal);
+              }
+            }
+
+            Widget buildNumKey(String label, {VoidCallback? onTap, Color? bgColor, Color? textColor}) {
+              return Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(4.0),
+                  child: Material(
+                    color: bgColor ?? const Color(0xFF282B42),
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF00D2FF), width: 2),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: onTap ?? () => appendDigit(label),
+                      child: Container(
+                        height: 48,
+                        alignment: Alignment.center,
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            color: textColor ?? Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-                onSubmitted: (val) {
-                  final numVal = double.tryParse(val.trim()) ?? 1.0;
-                  if (numVal > 0) {
-                    Navigator.pop(ctx);
-                    _registerCount(product: product, barcode: barcode, quantity: numVal);
-                  }
-                },
-              ),
-              const SizedBox(height: 12),
+              );
+            }
 
-              // Botones de incremento rápido (+1, +5, +10, +25)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [1, 5, 10, 25].map((step) {
-                  return OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF00D2FF),
-                      side: const BorderSide(color: Color(0xFF2E3048)),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              product['name'] ?? '',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'SKU: ${product['sku']} • Cód: $barcode',
+                              style: const TextStyle(color: Color(0xFF00D2FF), fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white54),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Visor digital de cantidad (sin TextField de Android para no abrir teclado)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF141523),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF00D2FF), width: 1.8),
                     ),
-                    onPressed: () {
-                      final current = double.tryParse(qtyController.text.trim()) ?? 0.0;
-                      qtyController.text = (current + step).toStringAsFixed(0);
-                    },
-                    child: Text('+$step', style: const TextStyle(fontWeight: FontWeight.bold)),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 18),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'CANTIDAD:',
+                          style: TextStyle(
+                            color: Colors.white60,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Row(
+                          children: [
+                            Text(
+                              qtyText,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 30,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              product['uom_base'] ?? 'UND',
+                              style: const TextStyle(
+                                color: Color(0xFF00D2FF),
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
 
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF00D2FF),
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-                onPressed: () {
-                  final numVal = double.tryParse(qtyController.text.trim()) ?? 1.0;
-                  if (numVal > 0) {
-                    Navigator.pop(ctx);
-                    _registerCount(product: product, barcode: barcode, quantity: numVal);
-                  }
-                },
-                child: const Text('Confirmar Conteo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                  // Botones de incremento rápido (+1, +5, +10, +25)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [1, 5, 10, 25].map((step) {
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 3),
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF00D2FF),
+                              side: const BorderSide(color: Color(0xFF2E3048)),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                            ),
+                            onPressed: () => addStep(step),
+                            child: Text('+$step', style: const TextStyle(fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 6),
+
+                  // Teclado Numérico Integrado
+                  Row(
+                    children: [
+                      buildNumKey('1'),
+                      buildNumKey('2'),
+                      buildNumKey('3'),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      buildNumKey('4'),
+                      buildNumKey('5'),
+                      buildNumKey('6'),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      buildNumKey('7'),
+                      buildNumKey('8'),
+                      buildNumKey('9'),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      buildNumKey(
+                        '.',
+                        onTap: () => appendDigit('.'),
+                        bgColor: const Color(0xFF1F2235),
+                      ),
+                      buildNumKey('0'),
+                      buildNumKey(
+                        '⌫',
+                        onTap: backspace,
+                        bgColor: const Color(0xFF3A202A),
+                        textColor: Colors.redAccent,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00D2FF),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    icon: const Icon(Icons.check_circle_outline, size: 20),
+                    onPressed: confirm,
+                    label: const Text(
+                      'Confirmar Conteo',
+                      style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         );
       },
-    ).then((_) {
+    ).whenComplete(() {
+      _isQuantityModalOpen = false;
       if (mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _barcodeFocusNode.requestFocus();
-          SystemChannels.textInput.invokeMethod('TextInput.hide');
-        });
+        BarcodeScannerListener.enableScannerFocus();
       }
     });
   }
 
-  void _showManualInputDialog() {
+  // ===========================================================================
+  // Diálogo de Ingreso Manual (Único lugar donde se habilita el teclado virtual)
+  // ===========================================================================
+  Future<void> _showManualInputDialog() async {
     _manualCodeController.clear();
-    showDialog(
+    await BarcodeScannerListener.allowManualKeyboard();
+    if (!mounted) return;
+
+    await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E1F2E),
@@ -373,41 +579,37 @@ class _InventoryCountViewState extends State<InventoryCountView> {
             border: OutlineInputBorder(),
           ),
           onSubmitted: (val) {
-            Navigator.pop(ctx);
-            _handleCountScan(val);
+            Navigator.pop(ctx, val);
           },
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () => Navigator.pop(ctx, null),
             child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00D2FF), foregroundColor: Colors.black),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00D2FF),
+              foregroundColor: Colors.black,
+            ),
             onPressed: () {
-              Navigator.pop(ctx);
-              _handleCountScan(_manualCodeController.text);
+              Navigator.pop(ctx, _manualCodeController.text);
             },
             child: const Text('Buscar', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
-    ).then((_) {
-      if (mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _barcodeFocusNode.requestFocus();
-          SystemChannels.textInput.invokeMethod('TextInput.hide');
-        });
+    ).then((result) async {
+      await BarcodeScannerListener.enableScannerFocus();
+      if (result != null && result.toString().trim().isNotEmpty) {
+        _handleCountScan(result.toString().trim());
       }
     });
   }
 
   @override
   void dispose() {
-    _inputDebounceTimer?.cancel();
     _manualCodeController.dispose();
-    _barcodeInputController.dispose();
-    _barcodeFocusNode.dispose();
     super.dispose();
   }
 
@@ -491,6 +693,7 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                               _selectedSessionName = _availableSessions.firstWhere((s) => s['id'] == val)['name'];
                             });
                             _reloadLocalCounts();
+                            BarcodeScannerListener.enableScannerFocus();
                           },
                         ),
                       ),
@@ -512,6 +715,7 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                           onChanged: (val) {
                             setState(() => _isContinuousMode = val);
                             config.setContinuousScanMode(val);
+                            BarcodeScannerListener.enableScannerFocus();
                           },
                         ),
                       ],
@@ -540,78 +744,51 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                   ),
                 ),
 
-              // Barra activa de escaneo con láser e ingreso directo
+              // Barra visual de estado del Escáner Láser (foco en EditText nativo sin teclado virtual)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 color: const Color(0xFF141523),
                 child: Row(
                   children: [
                     Expanded(
-                      child: TextField(
-                        controller: _barcodeInputController,
-                        focusNode: _barcodeFocusNode,
-                        autofocus: true,
-                        keyboardType: TextInputType.none, // BLOQUEA el teclado virtual de Android
-                        showCursor: false,
-                        enableInteractiveSelection: false,
-                        textInputAction: TextInputAction.none,
-                        style: const TextStyle(color: Colors.white, fontSize: 14),
-                        decoration: InputDecoration(
-                          filled: true,
-                          fillColor: const Color(0xFF1E2032),
-                          hintText: 'Láser activo... o toca para escribir',
-                          hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
-                          prefixIcon: const Icon(Icons.qr_code_scanner, color: Color(0xFF00D2FF), size: 18),
-                          suffixIcon: IconButton(
-                            icon: const Icon(Icons.keyboard, color: Color(0xFF00D2FF), size: 18),
-                            tooltip: 'Digitar manualmente',
-                            onPressed: _showManualInputDialog,
-                          ),
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                          border: OutlineInputBorder(
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => BarcodeScannerListener.enableScannerFocus(),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E2032),
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFF2E3048)),
+                            border: Border.all(color: const Color(0xFF00D2FF), width: 1.5),
                           ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFF2E3048)),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFF00D2FF), width: 1.5),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.qr_code_scanner, color: Color(0xFF00D2FF), size: 20),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _lastScannedBarcode.isEmpty
+                                      ? 'Láser activo (Sin teclado) — Dispare para escanear'
+                                      : 'Láser activo • Último: $_lastScannedBarcode',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: Colors.greenAccent,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        onTap: () {
-                          // Si el usuario toca con su dedo en la caja, abre el teclado virtual
-                          _showManualInputDialog();
-                        },
-                        onChanged: (val) {
-                          _inputDebounceTimer?.cancel();
-                          if (val.contains('\n') || val.contains('\r')) {
-                            final code = val.replaceAll('\n', '').replaceAll('\r', '').trim();
-                            if (code.isNotEmpty) {
-                              _barcodeInputController.clear();
-                              _handleCountScan(code);
-                            }
-                          } else if (val.trim().length >= 3) {
-                            _inputDebounceTimer = Timer(const Duration(milliseconds: 150), () {
-                              final code = _barcodeInputController.text.trim();
-                              if (code.isNotEmpty) {
-                                _barcodeInputController.clear();
-                                _handleCountScan(code);
-                              }
-                            });
-                          }
-                        },
-                        onSubmitted: (val) {
-                          _inputDebounceTimer?.cancel();
-                          final code = val.trim();
-                          if (code.isNotEmpty) {
-                            _barcodeInputController.clear();
-                            _handleCountScan(code);
-                          }
-                        },
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -704,6 +881,7 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                           : () async {
                               await sync.syncPendingCounts();
                               await _reloadLocalCounts();
+                              BarcodeScannerListener.enableScannerFocus();
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
@@ -801,10 +979,11 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                     await PdaDatabaseHelper.instance.deleteLocalCount(item['client_uuid']);
                     await _reloadLocalCounts();
                   }
+                  BarcodeScannerListener.enableScannerFocus();
                 },
               ),
               Text(
-                '${qty.toStringAsFixed(0)} $uom',
+                '${qty.toStringAsFixed(qty % 1 == 0 ? 0 : 2)} $uom',
                 style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
               ),
               IconButton(
@@ -812,6 +991,7 @@ class _InventoryCountViewState extends State<InventoryCountView> {
                 onPressed: () async {
                   await PdaDatabaseHelper.instance.updateLocalCountQuantity(item['client_uuid'], qty + 1);
                   await _reloadLocalCounts();
+                  BarcodeScannerListener.enableScannerFocus();
                 },
               ),
             ],

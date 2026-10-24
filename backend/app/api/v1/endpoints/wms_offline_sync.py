@@ -9,7 +9,7 @@ from app.api import deps
 from app.models.inventory import (
     Warehouse, Location, Product, ProductVariant, ProductBarcode,
     ProductPackaging, StockPicking, StockMove, StockPickingType, InventorySnapshot,
-    InventorySession, InventoryLine
+    InventorySession, InventoryLine, Category
 )
 from app.models.core import Facility, User
 
@@ -175,6 +175,19 @@ def get_sync_catalog(
         for l in locations
     ]
 
+    # 2.5 Categorías jerárquicas (Departamento > Grupo > Subgrupo)
+    categories = db.query(Category).order_by(Category.id).all()
+    cat_name_map = {c.id: c.name for c in categories}
+    categories_data = [
+        {
+            "id": c.id,
+            "name": c.name,
+            "parent_id": c.parent_id,
+            "path": c.path or ""
+        }
+        for c in categories
+    ]
+
     # 3. Productos y Variantes activas
     variants = db.query(ProductVariant).join(Product).options(
         selectinload(ProductVariant.product).selectinload(Product.packagings),
@@ -220,10 +233,12 @@ def get_sync_catalog(
                     "qty_per_unit": float(p.qty_per_unit)
                 })
 
+        prod_cat_id = prod.category_id if prod else None
         products_data.append({
             "variant_id": v.id,
             "product_id": v.product_id,
-            "category_id": prod.category_id if prod else None,
+            "category_id": prod_cat_id,
+            "category_name": cat_name_map.get(prod_cat_id) if prod_cat_id else None,
             "sku": v.sku,
             "name": prod.name if prod else v.sku,
             "uom_base": (prod.uom_base if prod else "UND") or "UND",
@@ -238,10 +253,12 @@ def get_sync_catalog(
         "total_facilities": len(facilities_data),
         "total_warehouses": len(warehouses_data),
         "total_locations": len(locations_data),
+        "total_categories": len(categories_data),
         "total_products": len(products_data),
         "facilities": facilities_data,
         "warehouses": warehouses_data,
         "locations": locations_data,
+        "categories": categories_data,
         "products": products_data
     }
 
@@ -504,10 +521,14 @@ def get_product_inquiry(
                 "is_transit": w.is_transit
             })
 
+    prod_cat_id = prod.category_id if prod else None
+    cat_obj = db.query(Category).filter(Category.id == prod_cat_id).first() if prod_cat_id else None
+
     return {
         "variant_id": variant.id,
         "product_id": variant.product_id,
-        "category_id": prod.category_id if prod else None,
+        "category_id": prod_cat_id,
+        "category_name": cat_obj.name if cat_obj else None,
         "sku": variant.sku,
         "name": prod.name if prod else variant.sku,
         "uom_base": (prod.uom_base if prod else "UND") or "UND",
@@ -529,9 +550,12 @@ def get_sync_inventory_sessions(
 ):
     """
     Obtiene las sesiones de inventario abiertas (IN_PROGRESS o DRAFT) para la sucursal.
-    Incluye categorías válidas y variantes planificadas para restringir conteo.
+    Incluye categorías válidas jerárquicas y variantes planificadas para restringir conteo.
     """
-    from app.api.v1.endpoints.inventory_session import get_all_related_category_ids
+    from app.api.v1.endpoints.inventory_session import (
+        get_all_related_category_ids,
+        get_category_breadcrumb_path
+    )
 
     query = db.query(InventorySession).filter(InventorySession.state.in_(["IN_PROGRESS", "DRAFT"]))
     if facility_id:
@@ -541,14 +565,29 @@ def get_sync_inventory_sessions(
     results = []
     for s in sessions:
         cat_id = None
+        cat_name = None
+        cat_full_path = None
         valid_cat_ids = []
         if s.scope_type in ('CATEGORY', 'CYCLIC') and s.scope_value:
             clean_val = str(s.scope_value).strip()
             if clean_val.isdigit():
                 cat_id = int(clean_val)
+                cat_obj = db.query(Category).filter(Category.id == cat_id).first()
+                if cat_obj:
+                    cat_name = cat_obj.name
+                    cat_full_path = get_category_breadcrumb_path(db, cat_id)
                 valid_cat_ids = get_all_related_category_ids(db, cat_id)
 
-        valid_variant_ids = [line.product_variant_id for line in s.lines if line.product_variant_id] if s.lines else []
+        if valid_cat_ids:
+            # Para sesiones por categoría jerárquica, obtener todas las variantes activas que pertenecen al árbol de categorías
+            cat_vids = db.query(ProductVariant.id).join(Product, ProductVariant.product_id == Product.id).filter(
+                Product.category_id.in_(valid_cat_ids),
+                ProductVariant.is_active.isnot(False),
+                Product.is_active.isnot(False)
+            ).all()
+            valid_variant_ids = [r[0] for r in cat_vids]
+        else:
+            valid_variant_ids = [line.product_variant_id for line in s.lines if line.product_variant_id] if s.lines else []
 
         results.append({
             "id": s.id,
@@ -558,6 +597,8 @@ def get_sync_inventory_sessions(
             "scope_type": s.scope_type,
             "scope_value": s.scope_value,
             "category_id": cat_id,
+            "category_name": cat_name,
+            "category_full_path": cat_full_path,
             "valid_category_ids": valid_cat_ids,
             "valid_variant_ids": valid_variant_ids,
             "state": s.state,
@@ -659,6 +700,27 @@ def sync_inventory_counts(
                     db.add(default_session)
                     db.flush()
             session = default_session
+
+        # D.5 Validar restricción de Categoría Jerárquica en la Sesión
+        if session.scope_type in ('CATEGORY', 'CYCLIC') and session.scope_value:
+            clean_scope_val = str(session.scope_value).strip()
+            if clean_scope_val.isdigit():
+                from app.api.v1.endpoints.inventory_session import (
+                    get_all_related_category_ids,
+                    get_category_breadcrumb_path
+                )
+                scope_cat_id = int(clean_scope_val)
+                valid_cat_ids = get_all_related_category_ids(db, scope_cat_id)
+                prod = variant.product
+                prod_cat_id = prod.category_id if prod else None
+                if not prod or prod_cat_id is None or prod_cat_id not in valid_cat_ids:
+                    cat_label = get_category_breadcrumb_path(db, scope_cat_id) or session.name
+                    results.append({
+                        "client_uuid": item.client_uuid,
+                        "status": "ERROR",
+                        "message": f"No permitido: '{prod.name if prod else variant.sku}' no pertenece al grupo de categoría '{cat_label}'."
+                    })
+                    continue
 
         # E. Actualizar o agregar línea de inventario
         line = db.query(InventoryLine).filter(

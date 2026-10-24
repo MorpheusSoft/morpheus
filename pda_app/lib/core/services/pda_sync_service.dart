@@ -77,12 +77,14 @@ class PdaSyncService extends ChangeNotifier {
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
         final facilities = data['facilities'] as List? ?? [];
+        final categories = data['categories'] as List? ?? [];
         final warehouses = data['warehouses'] as List? ?? [];
         final locations = data['locations'] as List? ?? [];
         final products = data['products'] as List? ?? [];
 
         await PdaDatabaseHelper.instance.saveCatalogToCache(
           facilities: facilities,
+          categories: categories,
           warehouses: warehouses,
           locations: locations,
           products: products,
@@ -149,6 +151,12 @@ class PdaSyncService extends ChangeNotifier {
         if (response.statusCode == 200) {
           final data = jsonDecode(utf8.decode(response.bodyBytes));
           data['is_online_data'] = true;
+          final vid = (data['variant_id'] as num?)?.toInt();
+          final cid = (data['category_id'] as num?)?.toInt();
+          final cname = data['category_name']?.toString();
+          if (vid != null && cid != null) {
+            await PdaDatabaseHelper.instance.updateCachedProductCategory(vid, cid, cname);
+          }
           return Map<String, dynamic>.from(data);
         }
       } catch (_) {}
@@ -167,6 +175,8 @@ class PdaSyncService extends ChangeNotifier {
       return {
         'variant_id': localRow['variant_id'],
         'product_id': localRow['product_id'],
+        'category_id': localRow['category_id'],
+        'category_name': localRow['category_name'],
         'sku': localRow['sku'],
         'name': localRow['name'],
         'uom_base': localRow['uom_base'] ?? 'UND',
