@@ -115,6 +115,12 @@ def populate_session_category_metadata(session: Any, db: Session):
         if loc:
             setattr(session, 'location_name', f"{loc.name} ({loc.code})" if loc.code else loc.name)
 
+    cancelled_by_id = getattr(session, 'cancelled_by', None)
+    if cancelled_by_id:
+        user = db.query(User).filter(User.id == cancelled_by_id).first()
+        if user:
+            setattr(session, 'cancelled_by_name', user.full_name or user.email)
+
 def populate_line_details(session: InventorySession, db: Session, is_supervisor: bool = False):
     """
     Populates product_name, sku, and uom_base on all lines for both operators and supervisors.
@@ -211,6 +217,12 @@ def read_inventory_sessions(
             .group_by(InventoryLine.session_id).all()
         line_counts = {c[0]: c[1] for c in counts}
 
+    canceller_ids = {s.cancelled_by for s in sessions if getattr(s, 'cancelled_by', None)}
+    canceller_map = {}
+    if canceller_ids:
+        c_users = db.query(User).filter(User.id.in_(canceller_ids)).all()
+        canceller_map = {u.id: (u.full_name or u.email) for u in c_users}
+
     results = []
     for s in sessions:
         cat_id = None
@@ -235,6 +247,10 @@ def read_inventory_sessions(
             state=s.state,
             date_start=s.date_start,
             date_end=s.date_end,
+            cancellation_reason=s.cancellation_reason,
+            cancelled_by=s.cancelled_by,
+            cancelled_by_name=canceller_map.get(s.cancelled_by),
+            cancelled_at=s.cancelled_at,
             total_lines=line_counts.get(s.id, 0),
             lines=[]
         ))
@@ -358,8 +374,8 @@ def record_line_count(
     session = db.query(InventorySession).filter(InventorySession.id == id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
-    if session.state == "DONE":
-        raise HTTPException(status_code=400, detail="La sesión ya fue validada y consolidada.")
+    if session.state in ("DONE", "CANCELLED"):
+        raise HTTPException(status_code=400, detail="No se pueden registrar conteos en una sesión finalizada o cancelada.")
 
     # Validar unidad de medida del producto
     variant = db.query(ProductVariant).filter(ProductVariant.id == line_in.product_variant_id).first()
@@ -452,8 +468,8 @@ def update_line_adjustment_reason(
     session = db.query(InventorySession).filter(InventorySession.id == id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
-    if session.state == "DONE":
-        raise HTTPException(status_code=400, detail="No se pueden modificar motivos de una sesión finalizada.")
+    if session.state in ("DONE", "CANCELLED"):
+        raise HTTPException(status_code=400, detail="No se pueden modificar motivos de una sesión finalizada o cancelada.")
 
     line = db.query(InventoryLine).filter(InventoryLine.id == line_id, InventoryLine.session_id == id).first()
     if not line:
@@ -506,8 +522,8 @@ def batch_assign_adjustment_reasons(
     session = db.query(InventorySession).filter(InventorySession.id == id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
-    if session.state == "DONE":
-        raise HTTPException(status_code=400, detail="No se pueden modificar motivos de una sesión finalizada.")
+    if session.state in ("DONE", "CANCELLED"):
+        raise HTTPException(status_code=400, detail="No se pueden modificar motivos de una sesión finalizada o cancelada.")
 
     if payload.reason_id_out is not None:
         reason_out = db.query(AdjustmentReason).filter(AdjustmentReason.id == payload.reason_id_out).first() if payload.reason_id_out > 0 else None
@@ -543,8 +559,8 @@ def refresh_session_lines(
     session = db.query(InventorySession).filter(InventorySession.id == id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
-    if session.state == "DONE":
-        raise HTTPException(status_code=400, detail="No se pueden refrescar líneas de una sesión finalizada.")
+    if session.state in ("DONE", "CANCELLED"):
+        raise HTTPException(status_code=400, detail="No se pueden refrescar líneas de una sesión finalizada o cancelada.")
 
     target_wh = None
     if session.warehouse_id:
@@ -647,6 +663,8 @@ def bulk_upload_lines(
     session = db.query(InventorySession).filter(InventorySession.id == id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if session.state in ("DONE", "CANCELLED"):
+        raise HTTPException(status_code=400, detail="No se pueden cargar líneas en una sesión finalizada o cancelada.")
         
     count_inserted = 0
     for item in bulk_in.lines:
@@ -749,6 +767,8 @@ def validate_session(
         
     if session.state == "DONE":
         raise HTTPException(status_code=400, detail="Ya se encuentra consolidada.")
+    if session.state == "CANCELLED":
+        raise HTTPException(status_code=400, detail="No se puede validar ni consolidar una sesión que ha sido cancelada.")
         
     target_wh = None
     if session.warehouse_id:
@@ -850,6 +870,47 @@ def validate_session(
     return {"status": "success", "message": "Toma Física validada y consolidada exitosamente."}
 
 
+@router.post("/{id}/cancel", response_model=schemas.InventorySession)
+def cancel_inventory_session(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    cancel_in: schemas.InventorySessionCancel,
+    current_user: Any = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Cancela una toma física de inventario sin eliminarla por motivos de auditoría.
+    Almacena el usuario que cancela, el motivo obligatorio y la fecha/hora.
+    """
+    session = db.query(InventorySession).filter(InventorySession.id == id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    if session.state == "DONE":
+        raise HTTPException(status_code=400, detail="No se puede cancelar una sesión que ya ha sido consolidada.")
+    if session.state == "CANCELLED":
+        raise HTTPException(status_code=400, detail="La sesión ya se encuentra cancelada.")
+
+    reason = (cancel_in.reason or "").strip()
+    if not reason or len(reason) < 5:
+        raise HTTPException(status_code=400, detail="Debe indicar un motivo de cancelación válido (mínimo 5 caracteres).")
+
+    session.state = "CANCELLED"
+    session.cancellation_reason = reason
+    session.cancelled_by = getattr(current_user, 'id', None)
+    session.cancelled_at = datetime.now()
+    session.date_end = datetime.now()
+
+    db.commit()
+    db.refresh(session)
+
+    populate_session_category_metadata(session, db)
+    is_supervisor = False
+    if current_user and hasattr(current_user, 'roles'):
+        is_supervisor = any(r.name.upper() in ('SUPERVISOR', 'ADMIN', 'GERENTE') for r in current_user.roles)
+    populate_line_details(session, db, is_supervisor=is_supervisor)
+    return session
+
+
 @router.post("/{id}/advance-phase", response_model=schemas.InventorySession)
 def advance_session_phase(
     *,
@@ -861,8 +922,8 @@ def advance_session_phase(
     session = db.query(InventorySession).filter(InventorySession.id == id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
-    if session.state == "DONE":
-        raise HTTPException(status_code=400, detail="Sesión ya se encuentra finalizada.")
+    if session.state in ("DONE", "CANCELLED"):
+        raise HTTPException(status_code=400, detail="No se puede avanzar de fase en una sesión finalizada o cancelada.")
 
     session.state = target_state
     db.commit()

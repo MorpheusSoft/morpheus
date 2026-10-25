@@ -297,7 +297,12 @@ class InventorySession(Base):
     created_by = Column(Integer, ForeignKey("core.users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
+    cancellation_reason = Column(Text, nullable=True)
+    cancelled_by = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    
     lines = relationship("InventoryLine", back_populates="session")
+    canceller = relationship("User", foreign_keys=[cancelled_by])
 
 class InventoryLine(Base):
     __tablename__ = "inventory_lines"

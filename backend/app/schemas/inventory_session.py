@@ -30,6 +30,9 @@ class InventorySessionBatchReasonUpdate(BaseModel):
     reason_id_out: Optional[int] = None # Para faltantes (difference < 0)
     reason_id_in: Optional[int] = None  # Para sobrantes (difference > 0)
 
+class InventorySessionCancel(BaseModel):
+    reason: str
+
 class InventoryLineBulkItem(BaseModel):
     sku: str
     location_code: str
@@ -72,6 +75,10 @@ class InventorySessionBase(BaseModel):
     valid_category_ids: Optional[List[int]] = None
     location_id: Optional[int] = None
     location_name: Optional[str] = None
+    cancellation_reason: Optional[str] = None
+    cancelled_by: Optional[int] = None
+    cancelled_by_name: Optional[str] = None
+    cancelled_at: Optional[datetime] = None
 
 class InventorySessionCreate(InventorySessionBase):
     pass

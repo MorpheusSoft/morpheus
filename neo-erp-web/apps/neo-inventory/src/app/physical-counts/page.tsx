@@ -51,6 +51,9 @@ export default function PhysicalCountsPage() {
   // Modals for Sessions
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showUploadDialog, setShowUploadDialog] = useState(false);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelling, setCancelling] = useState(false);
 
   // New Session fields
   const [newSessionName, setNewSessionName] = useState('');
@@ -843,8 +846,45 @@ export default function PhysicalCountsPage() {
     }
   };
 
+  const handleCancelSession = async () => {
+    if (!selectedSession) return;
+    const trimmedReason = cancelReason.trim();
+    if (!trimmedReason || trimmedReason.length < 5) {
+      alert("Por favor indique un motivo de cancelación detallado (mínimo 5 caracteres).");
+      return;
+    }
+
+    setCancelling(true);
+    try {
+      const updated = await PhysicalCountService.cancelSession(selectedSession.id, trimmedReason);
+      setShowCancelDialog(false);
+      setCancelReason('');
+      await loadSessions();
+      setSelectedSession(updated);
+    } catch (err: any) {
+      console.error("Error cancelando sesión", err);
+      alert(err.response?.data?.detail || "Error al cancelar la sesión de inventario.");
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const stateBodyTemplate = (rowData: any) => {
     const isDone = rowData.state === 'DONE';
+    const isCancelled = rowData.state === 'CANCELLED';
+
+    if (isCancelled) {
+      return (
+        <span
+          className="inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200/70"
+          title={rowData.cancellation_reason ? `Motivo: ${rowData.cancellation_reason}` : 'Toma física cancelada'}
+        >
+          <span className="w-1.5 h-1.5 rounded-full mr-1.5 bg-rose-500"></span>
+          Cancelada
+        </span>
+      );
+    }
+
     return (
       <span className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-bold ${isDone ? 'bg-emerald-50 text-emerald-600 border border-emerald-200/60' : 'bg-amber-50 text-amber-600 border border-amber-200/60'}`}>
         <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${isDone ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
@@ -1343,16 +1383,58 @@ export default function PhysicalCountsPage() {
                           setActiveTab('report');
                         }}
                       />
-                      {selectedSession.state !== 'DONE' && (
+                      {selectedSession.state !== 'DONE' && selectedSession.state !== 'CANCELLED' && (
                         <>
                           <Button label="Subir CSV" icon="pi pi-upload" severity="secondary" rounded size="small" onClick={() => setShowUploadDialog(true)} />
                           {isSupervisor && (
                             <Button label="Consolidar" icon="pi pi-check" severity="success" rounded size="small" onClick={handleValidateSession} />
                           )}
+                          <Button
+                            label="Cancelar Toma"
+                            icon="pi pi-times-circle"
+                            severity="danger"
+                            outlined
+                            rounded
+                            size="small"
+                            onClick={() => {
+                              setCancelReason('');
+                              setShowCancelDialog(true);
+                            }}
+                          />
                         </>
                       )}
                     </div>
                   </div>
+
+                  {selectedSession.state === 'CANCELLED' && (
+                    <div className="mb-5 bg-rose-50/90 border border-rose-200/90 rounded-2xl p-4 flex gap-3.5 items-start shadow-sm">
+                      <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center shrink-0 mt-0.5 border border-rose-200">
+                        <i className="pi pi-ban text-rose-600 text-lg"></i>
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <h4 className="text-rose-900 text-xs font-black uppercase tracking-wider m-0 flex items-center gap-1.5">
+                            <span>Toma Física Cancelada</span>
+                            <span className="text-[10px] font-bold text-rose-500 bg-rose-100/80 px-2 py-0.5 rounded-full">No consolidada</span>
+                          </h4>
+                          {selectedSession.cancelled_at && (
+                            <span className="text-rose-600 text-[11px] font-semibold">
+                              {new Date(selectedSession.cancelled_at).toLocaleString('es-VE')}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-rose-900 text-xs mt-1.5 font-medium leading-relaxed">
+                          <strong className="font-bold text-rose-950">Motivo:</strong> {selectedSession.cancellation_reason || 'Sin motivo especificado'}
+                        </p>
+                        {selectedSession.cancelled_by_name && (
+                          <p className="text-rose-700 text-[11px] mt-1 font-semibold flex items-center gap-1.5">
+                            <i className="pi pi-user text-[11px]"></i>
+                            <span>Cancelado por: <strong>{selectedSession.cancelled_by_name}</strong></span>
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {isSupervisor && selectedSession.lines?.some((l: any) => l.is_anomaly) && (
                     <div className="mb-5 bg-rose-50 border border-rose-200/80 rounded-2xl p-4 flex gap-3 items-start animate-pulse">
@@ -1374,7 +1456,7 @@ export default function PhysicalCountsPage() {
                       <div className="flex flex-col items-center justify-center p-8 text-slate-400">
                         <i className="pi pi-upload text-4xl mb-3 opacity-50"></i>
                         <p className="font-semibold text-sm">No hay líneas en esta sesión de conteo.</p>
-                        {selectedSession.state !== 'DONE' && (
+                        {selectedSession.state !== 'DONE' && selectedSession.state !== 'CANCELLED' && (
                           <Button label="Cargar Primeras Líneas" size="small" severity="info" text className="mt-2" onClick={() => setShowUploadDialog(true)} />
                         )}
                       </div>
@@ -1549,6 +1631,68 @@ export default function PhysicalCountsPage() {
           <div className="flex justify-end gap-2 mt-2">
             <Button label="Cancelar" severity="secondary" text onClick={() => setShowUploadDialog(false)} />
             <Button label="Procesar e Importar" className="!bg-blue-600 !border-blue-600" onClick={handleCsvImport} />
+          </div>
+        </div>
+      </Dialog>
+
+      {/* Dialog: Cancelar Toma de Inventario */}
+      <Dialog
+        header={
+          <div className="flex items-center gap-2 text-rose-600 font-extrabold text-base">
+            <i className="pi pi-exclamation-triangle text-lg"></i>
+            <span>Cancelar Toma Física de Inventario</span>
+          </div>
+        }
+        visible={showCancelDialog}
+        style={{ width: '480px' }}
+        onHide={() => !cancelling && setShowCancelDialog(false)}
+        className="backdrop-blur-sm"
+      >
+        <div className="flex flex-col gap-4 mt-2">
+          <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3 text-xs text-amber-900 flex gap-2.5 items-start">
+            <i className="pi pi-info-circle text-amber-600 mt-0.5 shrink-0 text-sm"></i>
+            <div className="leading-relaxed">
+              Por normativas de auditoría interna, este conteo <strong>no se eliminará</strong> de la base de datos. Quedará registrado en estado <strong>Cancelada</strong> con trazabilidad completa de usuario, fecha y justificación.
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold text-slate-700">
+              Motivo o Justificación de la Cancelación <span className="text-rose-500">*</span>
+            </label>
+            <InputTextarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              rows={4}
+              placeholder="Indique detalladamente el motivo (ej. Toma duplicada por error, conteo suspendido por cambio de turno, recálculo de almacén...)"
+              className="w-full !rounded-xl border-slate-200 focus:!border-rose-400 text-xs p-3"
+              autoResize
+              disabled={cancelling}
+            />
+            <div className="flex justify-between items-center text-[11px] text-slate-400">
+              <span>Mínimo 5 caracteres</span>
+              <span className={cancelReason.trim().length >= 5 ? 'text-emerald-600 font-semibold' : 'text-slate-400'}>
+                {cancelReason.length} caracteres
+              </span>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 mt-2">
+            <Button
+              label="Regresar"
+              severity="secondary"
+              text
+              onClick={() => setShowCancelDialog(false)}
+              disabled={cancelling}
+            />
+            <Button
+              label={cancelling ? "Cancelando..." : "Confirmar Cancelación"}
+              icon="pi pi-times-circle"
+              severity="danger"
+              onClick={handleCancelSession}
+              loading={cancelling}
+              disabled={!cancelReason.trim() || cancelReason.trim().length < 5 || cancelling}
+            />
           </div>
         </div>
       </Dialog>

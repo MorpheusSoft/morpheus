@@ -24,5 +24,10 @@ export const PhysicalCountService = {
   validateSession: async (id: number) => {
     const { data } = await api.post(`/inventory-session/${id}/validate`);
     return data;
+  },
+
+  cancelSession: async (id: number, reason: string) => {
+    const { data } = await api.post(`/inventory-session/${id}/cancel`, { reason });
+    return data;
   }
 };
