@@ -122,13 +122,16 @@ export default function PhysicalCountsPage() {
     import('@/lib/api').then(({ default: api }) => {
       api.get('/users/me')
         .then(res => {
-          if (res.data && res.data.active_role) {
-            const roleName = res.data.active_role.name.toUpperCase();
-            if (['SUPERVISOR', 'ADMIN', 'GERENTE'].includes(roleName)) {
+          if (res.data?.is_superuser) {
+            setIsSupervisor(true);
+          } else if (res.data) {
+            const keywords = ['SUPERVISOR', 'ADMIN', 'GERENTE', 'JEFE', 'DIRECTOR', 'AUDITOR', 'COORDINADOR'];
+            const activeRole = res.data.active_role?.name?.toUpperCase() || '';
+            const allRoles = (res.data.roles || []).map((r: any) => (r.name || '').toUpperCase());
+            const hasPrivilege = keywords.some(k => activeRole.includes(k) || allRoles.some((rn: string) => rn.includes(k)));
+            if (hasPrivilege) {
               setIsSupervisor(true);
             }
-          } else if (res.data?.is_superuser) {
-            setIsSupervisor(true);
           }
         })
         .catch(err => console.error("Error cargando rol de usuario: ", err));

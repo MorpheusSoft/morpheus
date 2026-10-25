@@ -121,14 +121,47 @@ def populate_session_category_metadata(session: Any, db: Session):
         if user:
             setattr(session, 'cancelled_by_name', user.full_name or user.email)
 
+def check_user_is_supervisor(current_user: Any, session: Optional[InventorySession] = None) -> bool:
+    """
+    Determina si el usuario tiene privilegios de supervisor / auditor para ver
+    existencias teóricas y desviaciones en tomas físicas de inventario.
+    
+    1. Si el usuario es superusuario (is_superuser=True), siempre es supervisor.
+    2. Si la sesión está en fase de revisión, auditoría o consolidación
+       (REVIEW, DONE, CONFIRMING, CANCELLED), el conteo ciego ya finalizó,
+       por lo que las existencias teóricas y diferencias DEBEN ser visibles
+       para poder conciliar y asignar motivos contables.
+    3. Si el usuario posee roles de administración, supervisión o gerencia
+       (ej. 'Administrador del Sistema', 'Supervisor WMS Digital', 'Gerente'),
+       también es supervisor en cualquier fase.
+    """
+    if not current_user:
+        return False
+        
+    if getattr(current_user, 'is_superuser', False):
+        return True
+
+    if session and getattr(session, 'state', None) in ('REVIEW', 'DONE', 'CONFIRMING', 'CANCELLED'):
+        return True
+
+    user_roles = getattr(current_user, 'roles', []) or []
+    for r in user_roles:
+        r_name = getattr(r, 'name', '').upper()
+        if any(keyword in r_name for keyword in ('SUPERVISOR', 'ADMIN', 'GERENTE', 'JEFE', 'DIRECTOR', 'AUDITOR', 'COORDINADOR')):
+            return True
+
+    return False
+
 def populate_line_details(session: InventorySession, db: Session, is_supervisor: bool = False):
     """
     Populates product_name, sku, and uom_base on all lines for both operators and supervisors.
-    For non-supervisors, masks theoretical quantities and anomalies for blind counting.
-    For supervisors, calculates discrepancies, anomalies, and anomaly reasons.
+    For non-supervisors in active counting (IN_PROGRESS/DRAFT), masks theoretical quantities for blind counting.
+    For supervisors, or when in REVIEW/DONE/CONFIRMING/CANCELLED phases, calculates and presents full discrepancies.
     """
     if not session or not session.lines:
         return
+
+    effective_supervisor = is_supervisor or (session and getattr(session, 'state', None) in ('REVIEW', 'DONE', 'CONFIRMING', 'CANCELLED'))
 
     v_ids = [line.product_variant_id for line in session.lines if line.product_variant_id]
     variant_map = {}
@@ -160,7 +193,7 @@ def populate_line_details(session: InventorySession, db: Session, is_supervisor:
             line.adjustment_reason_code = None
             line.adjustment_reason_name = None
 
-        if not is_supervisor:
+        if not effective_supervisor:
             line.theoretical_qty = None
             line.difference_qty = None
             line.is_anomaly = False
@@ -267,10 +300,7 @@ def get_inventory_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
         
-    is_supervisor = False
-    if hasattr(current_user, 'roles'):
-        is_supervisor = any(r.name.upper() in ('SUPERVISOR', 'ADMIN', 'GERENTE') for r in current_user.roles)
-        
+    is_supervisor = check_user_is_supervisor(current_user, session)
     populate_line_details(session, db, is_supervisor=is_supervisor)
     populate_session_category_metadata(session, db)
     return session
@@ -446,9 +476,7 @@ def record_line_count(
     db.commit()
     db.refresh(session)
     populate_session_category_metadata(session, db)
-    is_supervisor = False
-    if current_user and hasattr(current_user, 'roles'):
-        is_supervisor = any(r.name.upper() in ('SUPERVISOR', 'ADMIN', 'GERENTE') for r in current_user.roles)
+    is_supervisor = check_user_is_supervisor(current_user, session)
     populate_line_details(session, db, is_supervisor=is_supervisor)
     return session
 
@@ -646,9 +674,7 @@ def refresh_session_lines(
     db.commit()
     db.refresh(session)
     populate_session_category_metadata(session, db)
-    is_supervisor = False
-    if hasattr(current_user, 'roles'):
-        is_supervisor = any(r.name.upper() in ('SUPERVISOR', 'ADMIN', 'GERENTE') for r in current_user.roles)
+    is_supervisor = check_user_is_supervisor(current_user, session)
     populate_line_details(session, db, is_supervisor=is_supervisor)
     return session
 
@@ -904,9 +930,7 @@ def cancel_inventory_session(
     db.refresh(session)
 
     populate_session_category_metadata(session, db)
-    is_supervisor = False
-    if current_user and hasattr(current_user, 'roles'):
-        is_supervisor = any(r.name.upper() in ('SUPERVISOR', 'ADMIN', 'GERENTE') for r in current_user.roles)
+    is_supervisor = check_user_is_supervisor(current_user, session)
     populate_line_details(session, db, is_supervisor=is_supervisor)
     return session
 
@@ -929,9 +953,7 @@ def advance_session_phase(
     db.commit()
     db.refresh(session)
     populate_session_category_metadata(session, db)
-    is_supervisor = False
-    if current_user and hasattr(current_user, 'roles'):
-        is_supervisor = any(r.name.upper() in ('SUPERVISOR', 'ADMIN', 'GERENTE') for r in current_user.roles)
+    is_supervisor = check_user_is_supervisor(current_user, session)
     populate_line_details(session, db, is_supervisor=is_supervisor)
     return session
 
