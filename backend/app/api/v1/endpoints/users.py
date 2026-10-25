@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.models.core import User, Role, Facility
 from app.models.digital_workers import DigitalWorker, DigitalWorkerConversation
-from app.schemas.core import User as UserSchema, UserCreate, UserUpdate
-from app.core.security import get_password_hash
+from app.schemas.core import User as UserSchema, UserCreate, UserUpdate, ChangePasswordPayload
+from app.core.security import get_password_hash, verify_password
 
 router = APIRouter()
 
@@ -46,6 +46,7 @@ def create_user(
         full_name=user_in.full_name,
         is_active=user_in.is_active,
         is_superuser=user_in.is_superuser,
+        must_change_password=bool(user_in.must_change_password),
         telegram_username=clean_tg,
         phone_number=clean_phone,
         is_phone_verified=bool(clean_phone)
@@ -67,6 +68,55 @@ def create_user(
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Database error details: {str(e)}")
     return user
+
+
+@router.post("/change-password")
+def change_my_password(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+    payload: ChangePasswordPayload,
+) -> Any:
+    """
+    Cambia la contraseña del usuario actualmente autenticado.
+    Valida la contraseña actual, actualiza a la nueva contraseña y desmarca must_change_password.
+    """
+    if not verify_password(payload.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="La contraseña actual suministrada no es correcta."
+        )
+
+    clean_new_password = payload.new_password.strip()
+    if len(clean_new_password) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="La nueva contraseña debe tener al menos 6 caracteres."
+        )
+
+    if verify_password(clean_new_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="La nueva contraseña no puede ser idéntica a la contraseña actual."
+        )
+
+    current_user.hashed_password = get_password_hash(clean_new_password)
+    current_user.must_change_password = False
+
+    try:
+        db.add(current_user)
+        db.commit()
+        db.refresh(current_user)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al actualizar la contraseña: {str(e)}")
+
+    return {
+        "status": "success",
+        "message": "Contraseña actualizada exitosamente.",
+        "must_change_password": False
+    }
+
 
 @router.put("/{user_id}", response_model=UserSchema)
 def update_user(
@@ -93,6 +143,9 @@ def update_user(
         
     if user_in.password:
         user.hashed_password = get_password_hash(user_in.password)
+
+    if user_in.must_change_password is not None:
+        user.must_change_password = user_in.must_change_password
 
     fields_set = getattr(user_in, "model_fields_set", getattr(user_in, "__fields_set__", set()))
 

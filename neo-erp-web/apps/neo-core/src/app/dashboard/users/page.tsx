@@ -21,6 +21,7 @@ export default function UsersPage() {
   const [phoneNumber, setPhoneNumber] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [isSuperuser, setIsSuperuser] = useState(false);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [selectedRoles, setSelectedRoles] = useState<number[]>([]);
   const [selectedFacilities, setSelectedFacilities] = useState<number[]>([]);
 
@@ -57,6 +58,7 @@ export default function UsersPage() {
     setPhoneNumber("");
     setIsActive(true);
     setIsSuperuser(false);
+    setMustChangePassword(false);
     setSelectedRoles([]);
     setSelectedFacilities([]);
     setIsModalOpen(true);
@@ -71,6 +73,7 @@ export default function UsersPage() {
     setPhoneNumber(u.phone_number || "");
     setIsActive(u.is_active);
     setIsSuperuser(u.is_superuser);
+    setMustChangePassword(Boolean(u.must_change_password));
     setSelectedRoles(u.roles?.map((r:any) => r.id) || []);
     setSelectedFacilities(u.facilities?.map((f:any) => f.id) || []);
     setIsModalOpen(true);
@@ -120,6 +123,7 @@ export default function UsersPage() {
        full_name: fullName, 
        is_active: isActive,
        is_superuser: isSuperuser,
+       must_change_password: mustChangePassword,
        telegram_username: cleanTg || "",
        phone_number: cleanPhone || "",
        role_ids: selectedRoles,
@@ -232,11 +236,18 @@ export default function UsersPage() {
                        </div>
                     </td>
                     <td className="px-6 py-4">
-                       {u.is_active ? (
-                          <span className="text-emerald-500 font-bold flex items-center gap-1 text-xs"><i className="pi pi-check-circle"></i> Activo</span>
-                       ) : (
-                          <span className="text-rose-500 font-bold flex items-center gap-1 text-xs bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200 w-fit"><i className="pi pi-lock"></i> Bloqueado</span>
-                       )}
+                       <div className="flex flex-col gap-1">
+                          {u.is_active ? (
+                             <span className="text-emerald-500 font-bold flex items-center gap-1 text-xs"><i className="pi pi-check-circle"></i> Activo</span>
+                          ) : (
+                             <span className="text-rose-500 font-bold flex items-center gap-1 text-xs bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200 w-fit"><i className="pi pi-lock"></i> Bloqueado</span>
+                          )}
+                          {u.must_change_password && (
+                             <span className="text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg text-[10px] font-bold inline-flex items-center gap-1 w-fit" title="Debe cambiar contraseña al iniciar sesión">
+                                <i className="pi pi-key text-[10px]"></i> Clave Pendiente
+                             </span>
+                          )}
+                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
@@ -444,19 +455,27 @@ export default function UsersPage() {
                  </div>
 
                  {/* Switches */}
-                 <div className="flex gap-4">
-                    <label className="flex-1 flex items-center gap-3 bg-slate-50 p-4 rounded-xl border border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors">
+                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <label className="flex items-center gap-3 bg-slate-50 p-4 rounded-xl border border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors">
                        <input type="checkbox" className="sr-only peer" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
                        <div>
                           <p className="font-bold text-slate-700 text-sm">Cuenta Activa</p>
                        </div>
                     </label>
-                    <label className="flex-1 flex items-center gap-3 bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 cursor-pointer hover:bg-indigo-50 transition-colors title='Otorga permisos absolutos'">
+                    <label className="flex items-center gap-3 bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 cursor-pointer hover:bg-indigo-50 transition-colors" title="Otorga permisos absolutos">
                        <input type="checkbox" className="sr-only peer" checked={isSuperuser} onChange={(e) => setIsSuperuser(e.target.checked)} />
                        <div className="w-11 h-6 bg-indigo-100 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-indigo-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
                        <div>
                           <p className="font-bold text-indigo-900 text-sm flex items-center gap-1"><i className="pi pi-shield"></i> Root Admin</p>
+                       </div>
+                    </label>
+                    <label className="flex items-center gap-3 bg-amber-50/50 p-4 rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors" title="Obliga al usuario a cambiar su contraseña en su próximo inicio de sesión">
+                       <input type="checkbox" className="sr-only peer" checked={mustChangePassword} onChange={(e) => setMustChangePassword(e.target.checked)} />
+                       <div className="w-11 h-6 bg-amber-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-amber-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+                       <div>
+                          <p className="font-bold text-amber-950 text-sm flex items-center gap-1"><i className="pi pi-key"></i> Cambiar Clave</p>
+                          <p className="text-[10px] text-amber-800/80 font-medium">Al iniciar sesión</p>
                        </div>
                     </label>
                  </div>

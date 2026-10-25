@@ -116,6 +116,7 @@ class UserBase(BaseModel):
     full_name: Optional[str] = None
     is_active: Optional[bool] = True
     is_superuser: Optional[bool] = False
+    must_change_password: Optional[bool] = False
     phone_number: Optional[str] = None
     is_phone_verified: Optional[bool] = False
     telegram_chat_id: Optional[int] = None
@@ -131,10 +132,15 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     password: Optional[str] = None
     is_active: Optional[bool] = None
+    must_change_password: Optional[bool] = None
     phone_number: Optional[str] = None
     telegram_username: Optional[str] = None
     role_ids: Optional[List[int]] = None
     facility_ids: Optional[List[int]] = None
+
+class ChangePasswordPayload(BaseModel):
+    current_password: str = Field(..., min_length=1, description="Contraseña actual")
+    new_password: str = Field(..., min_length=6, description="Nueva contraseña (mínimo 6 caracteres)")
 
 class UserInDBBase(UserBase):
     id: int

@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { clearAuthCookies, getLoginUrl, resolveDomain } from '@/lib/domain';
 import { canAccessModule, canReadFeature } from '@/lib/rbac';
+import { ChangePasswordModal } from './ChangePasswordModal';
 
 const MODULE_KEY: string = 'neo_wms';
 const MODULE_LABEL = 'Neo WMS (Logística y Almacén)';
@@ -214,5 +215,20 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
     );
   }
 
-  return <>{children}</>;
+  const handlePasswordChanged = () => {
+    setCurrentUser((prev: any) => (prev ? { ...prev, must_change_password: false } : null));
+  };
+
+  return (
+    <>
+      {currentUser?.must_change_password && (
+        <ChangePasswordModal
+          isOpen={true}
+          isForced={true}
+          onSuccess={handlePasswordChanged}
+        />
+      )}
+      {children}
+    </>
+  );
 }

@@ -76,3 +76,25 @@ export async function generateUserPairingLink(userId: number) {
   }
   return res.json()
 }
+
+export async function changePasswordAction(payload: { current_password: string; new_password: string }) {
+  const [headers, apiUrl] = await Promise.all([getAuthHeaders(), getServerApiUrl()])
+  const res = await fetch(`${apiUrl}/users/change-password`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+     const error = await res.json().catch(() => ({ detail: "Error al cambiar la contraseña" }))
+     let errorMessage = "Error al cambiar la contraseña"
+     if (error.detail) {
+        if (Array.isArray(error.detail)) {
+            errorMessage = error.detail[0].msg
+        } else {
+            errorMessage = error.detail
+        }
+     }
+     throw new Error(errorMessage)
+  }
+  return res.json()
+}

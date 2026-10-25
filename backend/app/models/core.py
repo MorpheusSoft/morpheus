@@ -36,6 +36,7 @@ class User(Base):
     full_name = Column(String, index=True)
     is_active = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
+    must_change_password = Column(Boolean, default=False, nullable=False)
     user_type = Column(String(30), default='HUMAN')
     phone_number = Column(String(30))
     is_phone_verified = Column(Boolean, default=False)

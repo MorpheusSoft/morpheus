@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSidebar } from '@/context/SidebarContext';
 import { canReadFeature } from '@/lib/rbac';
+import { ChangePasswordModal } from '@/components/auth/ChangePasswordModal';
 
 interface NavItem {
   label: string;
@@ -20,6 +21,7 @@ export function AppSidebar() {
   const [userRole, setUserRole] = React.useState('Verificando...');
   const [userInitials, setUserInitials] = React.useState('--');
   const [currentUser, setCurrentUser] = React.useState<any>(null);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = React.useState(false);
 
   React.useEffect(() => {
     import('@/lib/api').then(({ default: api }) => {
@@ -168,12 +170,13 @@ export function AppSidebar() {
         isCollapsed ? 'lg:p-[10px] p-[16px]' : 'p-[16px]'
       }`}>
         <div 
-          className={`rounded-xl p-[8px] flex items-center bg-[#1e293b]/50 border border-[#1e293b] hover:bg-[#1e293b] transition-colors cursor-pointer ${
+          onClick={() => setIsChangePasswordOpen(true)}
+          className={`rounded-xl p-[8px] flex items-center bg-[#1e293b]/50 border border-[#1e293b] hover:bg-[#1e293b] hover:border-indigo-500/40 transition-all cursor-pointer group ${
             isCollapsed ? 'lg:justify-center lg:gap-0 gap-[12px]' : 'gap-[12px]'
           }`}
-          title={isCollapsed ? `${userName} (${userRole})` : undefined}
+          title={isCollapsed ? `${userName} (${userRole}) - Clic para cambiar clave` : 'Clic para cambiar contraseña'}
         >
-          <div className="w-[36px] h-[36px] rounded-full bg-indigo-900 border border-indigo-500/50 flex items-center justify-center text-indigo-200 font-bold text-[14px] shadow-inner shadow-indigo-500/20 shrink-0">
+          <div className="w-[36px] h-[36px] rounded-full bg-indigo-900 border border-indigo-500/50 flex items-center justify-center text-indigo-200 font-bold text-[14px] shadow-inner shadow-indigo-500/20 shrink-0 group-hover:scale-105 transition-transform">
             {userInitials}
           </div>
           <div className={`flex-1 min-w-0 ${isCollapsed ? 'lg:hidden' : ''}`}>
@@ -183,8 +186,16 @@ export function AppSidebar() {
               {userRole}
             </p>
           </div>
+          <div className={`text-slate-500 group-hover:text-indigo-400 transition-colors pr-1 ${isCollapsed ? 'lg:hidden' : ''}`}>
+            <i className="pi pi-key text-xs" title="Cambiar contraseña"></i>
+          </div>
         </div>
       </div>
+
+      <ChangePasswordModal 
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+      />
     </aside>
   );
 }
