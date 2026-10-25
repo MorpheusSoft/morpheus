@@ -24,6 +24,8 @@ export default function ConciliationPanel({ order, currencies, currencyId, onCon
             setLines(order.lines.map((l: any) => ({
                 id: l.id,
                 sku: l.sku,
+                barcode: l.barcode,
+                plu: l.plu,
                 name: l.product_name,
                 ordered_qty: Number(l.expected_base_qty),
                 received_qty: Number(l.received_base_qty),
@@ -140,12 +142,18 @@ export default function ConciliationPanel({ order, currencies, currencyId, onCon
                 </div>
 
                 <DataTable value={lines} dataKey="id" size="small" className="text-sm shadow-sm border border-slate-200 rounded-lg overflow-hidden" rowClassName={(r) => (r.billed_unit_cost > r.unit_cost ? 'bg-red-50/50' : '')}>
-                    <Column header="SKU / Producto" body={r => (
+                    <Column header="Cód. Barra / PLU / Producto" body={r => {
+                        const primaryCode = r.barcode || r.plu || r.sku;
+                        const showPluSub = r.plu && r.plu !== primaryCode;
+                        return (
                         <div>
-                           <span className="font-mono text-[9px] bg-slate-200 px-1 py-0.5 rounded text-slate-600 mb-1 block">{r.sku}</span>
+                           <div className="flex items-center gap-1.5 mb-1">
+                               <span className="font-mono text-[10px] font-bold bg-slate-200 px-1.5 py-0.5 rounded text-slate-800">{primaryCode}</span>
+                               {showPluSub && <span className="font-mono text-[10px] font-bold text-indigo-600">PLU: {r.plu}</span>}
+                           </div>
                            <span className="font-bold text-slate-800 block leading-tight">{r.name}</span>
                         </div>
-                    )} />
+                    )}} />
                     
                     <Column header="Tránsito Físico" body={r => (
                         <div className="flex flex-col items-end gap-1 px-1">

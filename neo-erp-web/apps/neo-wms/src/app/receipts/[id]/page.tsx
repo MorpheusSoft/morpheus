@@ -46,6 +46,7 @@ export default function ReceiptExecutionPage() {
   const [productSearch, setProductSearch] = useState<string>('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searchingProducts, setSearchingProducts] = useState(false);
+  const [lineFilter, setLineFilter] = useState<string>('');
 
   // Clara Invoice Upload & 3-Way Match Modal State
   const [invoiceModalVisible, setInvoiceModalVisible] = useState(false);
@@ -192,6 +193,8 @@ export default function ReceiptExecutionPage() {
           id: 0,
           variant_id: variant.variant_id || variant.value || variant.id,
           sku: variant.sku || 'N/A',
+          barcode: variant.barcode || null,
+          plu: variant.plu || null,
           product_name: variant.product_name || variant.name || 'Producto Inesperado',
           uom_base: variant.uom_base || 'UND',
           expected_base_qty: 0,
@@ -429,7 +432,7 @@ export default function ReceiptExecutionPage() {
 
       {/* MATRIZ DE RECEPCIÓN (CIEGA) */}
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden mb-6">
-        <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+        <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <h3 className="font-bold text-slate-700 tracking-tight flex items-center">
                 <i className="pi pi-list mr-2 text-blue-500"></i>Manifiesto de Conteo Físico
                 {selectedWarehouse?.requires_dock_staging && (
@@ -437,25 +440,58 @@ export default function ReceiptExecutionPage() {
                 )}
             </h3>
 
-            {!isReadOnly && (
-                <Button 
-                    label="Agregar Producto Inesperado" 
-                    icon="pi pi-plus-circle" 
-                    severity="info" 
-                    text 
-                    className="font-bold text-xs" 
-                    onClick={() => setUnplannedDialogVisible(true)} 
-                />
-            )}
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+                <span className="p-input-icon-left w-full sm:w-64">
+                    <i className="pi pi-barcode text-slate-400" />
+                    <InputText
+                        value={lineFilter}
+                        onChange={(e) => setLineFilter(e.target.value)}
+                        placeholder="Filtrar por Cód. Barra, PLU o Producto..."
+                        className="p-inputtext-sm w-full text-xs pl-8 rounded-lg border-slate-200"
+                    />
+                </span>
+                {!isReadOnly && (
+                    <Button 
+                        label="Agregar Producto Inesperado" 
+                        icon="pi pi-plus-circle" 
+                        severity="info" 
+                        text 
+                        className="font-bold text-xs" 
+                        onClick={() => setUnplannedDialogVisible(true)} 
+                    />
+                )}
+            </div>
         </div>
         
-        <DataTable dataKey="id" value={lines} emptyMessage="No hay productos para recibir." size="small" stripedRows rowHover className="text-sm">
-          <Column header="SKU" field="sku" body={r => (
-              <div className="flex flex-col gap-1">
-                  <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-600 font-bold border border-slate-200">{r.sku}</span>
-                  {r.is_unplanned && <Tag value="INESPERADO" severity="danger" className="text-[8px] uppercase font-black" />}
-              </div>
-          )} />
+        <DataTable
+          dataKey="id"
+          value={lines.filter(r => {
+            if (!lineFilter.trim()) return true;
+            const q = lineFilter.trim().toLowerCase();
+            return (
+              (r.barcode && String(r.barcode).toLowerCase().includes(q)) ||
+              (r.plu && String(r.plu).toLowerCase().includes(q)) ||
+              (r.sku && String(r.sku).toLowerCase().includes(q)) ||
+              (r.product_name && String(r.product_name).toLowerCase().includes(q))
+            );
+          })}
+          emptyMessage="No hay productos para recibir."
+          size="small"
+          stripedRows
+          rowHover
+          className="text-sm"
+        >
+          <Column header="Cód. Barra / PLU" field="barcode" style={{ width: '155px', minWidth: '140px' }} body={r => {
+              const primaryCode = r.barcode || r.plu || r.sku;
+              const showPluSub = r.plu && r.plu !== primaryCode;
+              return (
+                  <div className="flex flex-col gap-0.5">
+                      <span className="font-mono text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-800 font-bold border border-slate-200 w-fit">{primaryCode}</span>
+                      {showPluSub && <span className="font-mono text-[10px] font-bold text-blue-600 pl-0.5">PLU: {r.plu}</span>}
+                      {r.is_unplanned && <Tag value="INESPERADO" severity="danger" className="text-[8px] uppercase font-black w-fit" />}
+                  </div>
+              );
+          }} />
           
           <Column header="Producto" field="product_name" body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
           
@@ -468,14 +504,15 @@ export default function ReceiptExecutionPage() {
           }} align="right" />
           
           {/* CAMPOS INTERACTIVOS WMS */}
-          <Column header="Físico Recibido" body={(r, options) => {
+          <Column header="Físico Recibido" body={(r) => {
+             const origIdx = lines.indexOf(r);
              const isWeight = isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
              return (
                  <div className="flex justify-end">
                      <InputNumber 
                         value={r.received_qty === '' ? null : r.received_qty} 
-                        onValueChange={(e) => handleQtyChange(options.rowIndex, e.value === null ? '' : e.value)}
+                        onValueChange={(e) => handleQtyChange(origIdx, e.value === null ? '' : e.value)}
                         minFractionDigits={dec}
                         maxFractionDigits={dec}
                         step={isWeight ? 0.001 : 1}
@@ -499,26 +536,30 @@ export default function ReceiptExecutionPage() {
               return <Tag value={`FALTANTE (${diff})`} severity="danger" className="font-extrabold text-[9px]" />;
           }} align="center" />
 
-          <Column header="Trazabilidad (Lote)" body={(r, options) => (
+          <Column header="Trazabilidad (Lote)" body={(r) => {
+             const origIdx = lines.indexOf(r);
+             return (
              <InputText 
                  value={r.lot_number} 
-                 onChange={(e) => handleTextChange(options.rowIndex, 'lot_number', e.target.value)} 
+                 onChange={(e) => handleTextChange(origIdx, 'lot_number', e.target.value)} 
                  placeholder="Ej: L-204" 
                  disabled={isReadOnly}
                  className="w-28 text-xs font-bold text-center uppercase disabled:bg-slate-100 disabled:border-slate-300" 
              />
-          )} align="center" />
+          );}} align="center" />
 
-          <Column header="Vencimiento (FEFO)" body={(r, options) => (
+          <Column header="Vencimiento (FEFO)" body={(r) => {
+             const origIdx = lines.indexOf(r);
+             return (
              <Calendar 
                  value={r.expiration_date} 
-                 onChange={(e) => handleDateChange(options.rowIndex, e.value as Date)} 
+                 onChange={(e) => handleDateChange(origIdx, e.value as Date)} 
                  dateFormat="dd/mm/yy" 
                  placeholder="Opcional" 
                  disabled={isReadOnly}
                  className="w-32 p-inputtext-sm text-xs" 
              />
-          )} align="center" />
+          );}} align="center" />
 
           <Column header="Avería" body={r => (
              <Button 
@@ -575,17 +616,20 @@ export default function ReceiptExecutionPage() {
                                   </tr>
                               </thead>
                               <tbody>
-                                  {ticketData.items.map((it: any, idx: number) => (
+                                  {ticketData.items.map((it: any, idx: number) => {
+                                      const codeLabel = it.barcode || it.plu || it.sku;
+                                      const pluLabel = it.plu && it.plu !== codeLabel ? ` (PLU: ${it.plu})` : '';
+                                      return (
                                       <tr key={idx} className="border-b border-slate-200">
                                           <td className="py-1 max-w-[150px]">
-                                              <div className="font-bold text-[11px]">{it.sku}</div>
+                                              <div className="font-bold text-[11px]">{codeLabel}{pluLabel}</div>
                                               <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
                                           </td>
                                           <td className="py-1 text-center font-bold">{it.expected_qty}</td>
                                           <td className="py-1 text-center font-bold text-emerald-700">{it.received_qty}</td>
                                           <td className="py-1 text-right font-black text-red-600">{it.rejected_qty > 0 ? `-${it.rejected_qty}` : '0'}</td>
                                       </tr>
-                                  ))}
+                                  );})}
                               </tbody>
                           </table>
                           <div className="my-4 border-b border-dashed border-slate-400"></div>
@@ -617,16 +661,19 @@ export default function ReceiptExecutionPage() {
                                   </tr>
                               </thead>
                               <tbody>
-                                  {ticketData.items.map((it: any, idx: number) => (
+                                  {ticketData.items.map((it: any, idx: number) => {
+                                      const codeLabel = it.barcode || it.plu || it.sku;
+                                      const pluLabel = it.plu && it.plu !== codeLabel ? ` (PLU: ${it.plu})` : '';
+                                      return (
                                       <tr key={idx} className="border-b border-slate-200">
                                           <td className="py-1 max-w-[160px]">
-                                              <div className="font-bold text-[11px]">{it.sku}</div>
+                                              <div className="font-bold text-[11px]">{codeLabel}{pluLabel}</div>
                                               <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
                                           </td>
                                           <td className="py-1 text-center font-bold text-slate-800">{it.expected_qty}</td>
                                           <td className="py-1 text-right font-bold text-slate-400">[ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ]</td>
                                       </tr>
-                                  ))}
+                                  );})}
                               </tbody>
                           </table>
                           <div className="my-4 border-b border-dashed border-slate-400"></div>
@@ -647,12 +694,14 @@ export default function ReceiptExecutionPage() {
                               const isConfirmed = Boolean(ticketData.is_confirmed);
                               const items = Array.isArray(ticketData.items) ? ticketData.items : [];
                               const rowsHtml = items.map((it: any) => {
+                                  const codeLabel = it.barcode || it.plu || it.sku || '';
+                                  const pluLabel = it.plu && it.plu !== codeLabel ? ` (PLU: ${it.plu})` : '';
                                   if (isConfirmed) {
                                       const rej = Number(it.rejected_qty || 0);
                                       return `
                                           <tr>
                                               <td style="padding: 3px 0; border-bottom: 1px dotted #000; max-width: 42mm; word-wrap: break-word;">
-                                                  <div style="font-weight: 800; font-size: 11px;">${it.sku || ''}</div>
+                                                  <div style="font-weight: 800; font-size: 11px;">${codeLabel}${pluLabel}</div>
                                                   <div style="font-size: 10px;">${it.product_name || ''}</div>
                                               </td>
                                               <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 700;">${it.expected_qty ?? 0}</td>
@@ -664,7 +713,7 @@ export default function ReceiptExecutionPage() {
                                       return `
                                           <tr>
                                               <td style="padding: 3px 0; border-bottom: 1px dotted #000; max-width: 44mm; word-wrap: break-word;">
-                                                  <div style="font-weight: 800; font-size: 11px;">${it.sku || ''}</div>
+                                                  <div style="font-weight: 800; font-size: 11px;">${codeLabel}${pluLabel}</div>
                                                   <div style="font-size: 10px;">${it.product_name || ''}</div>
                                               </td>
                                               <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 700;">${it.expected_qty ?? 0}</td>
@@ -819,7 +868,10 @@ export default function ReceiptExecutionPage() {
               <div className="flex flex-col gap-4 py-2">
                   <div className="bg-slate-50 p-3 rounded border border-slate-200">
                       <p className="font-bold text-slate-800">{discrepancyLine.product_name}</p>
-                      <p className="text-xs text-slate-500">SKU: {discrepancyLine.sku}</p>
+                      <p className="text-xs text-slate-500 font-mono">
+                          Cód. Barra: {discrepancyLine.barcode || discrepancyLine.plu || discrepancyLine.sku}
+                          {discrepancyLine.plu && discrepancyLine.plu !== (discrepancyLine.barcode || discrepancyLine.plu || discrepancyLine.sku) ? ` | PLU: ${discrepancyLine.plu}` : ''}
+                      </p>
                   </div>
 
                   <div>

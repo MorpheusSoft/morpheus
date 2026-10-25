@@ -89,8 +89,8 @@ def resolve_line_code(
 ) -> str:
     sku_fallback = variant.sku if (variant and variant.sku) else f"VR-{line_variant_id}"
     
-    # If not in barcode mode or no variant exists, return the SKU
-    if (code_type or "barcode").strip().lower() != "barcode" or not variant:
+    mode = (code_type or "barcode").strip().lower()
+    if mode not in ("barcode", "plu") or not variant:
         return sku_fallback
         
     if db:
@@ -113,6 +113,9 @@ def resolve_line_code(
         b for b in barcodes
         if (b.code_type or "").strip().upper() == "STELLAR_CODE" and b.barcode and b.barcode.strip()
     ]
+
+    if mode == "plu" and stellar_bcs:
+        return stellar_bcs[0].barcode.strip()
     
     # 1. Pack barcode if the line is ordered by packaging (conversion_factor == pack.qty_per_unit)
     if pack and pack.qty_per_unit is not None:

@@ -827,6 +827,18 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         if picking and picking.facility_id:
             facility = db.query(Facility).filter(Facility.id == picking.facility_id).first()
 
+    variant_ids = list({l.variant_id for l in order.lines if l.variant_id})
+    barcodes_map: dict[int, list[ProductBarcode]] = {}
+    if variant_ids:
+        all_bcs = (
+            db.query(ProductBarcode)
+            .filter(ProductBarcode.product_variant_id.in_(variant_ids))
+            .order_by(ProductBarcode.id.asc())
+            .all()
+        )
+        for bc in all_bcs:
+            barcodes_map.setdefault(bc.product_variant_id, []).append(bc)
+
     is_confirmed = (order.status in ('received', 'partial'))
     items = []
     has_discrepancies = False
@@ -834,7 +846,37 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         variant = db.query(ProductVariant).filter(ProductVariant.id == l.variant_id).first()
         product_name = variant.product.name if (variant and variant.product) else f"SKU: {l.variant_id}"
         sku = variant.sku if variant else "N/A"
-        barcode = variant.barcode if variant else "N/A"
+
+        var_bcs = barcodes_map.get(l.variant_id, [])
+        standard_bcs = [
+            b for b in var_bcs
+            if (b.code_type or "").strip().upper() != "STELLAR_CODE" and b.barcode and b.barcode.strip()
+        ]
+        stellar_bcs = [
+            b for b in var_bcs
+            if (b.code_type or "").strip().upper() == "STELLAR_CODE" and b.barcode and b.barcode.strip()
+        ]
+        plu = stellar_bcs[0].barcode.strip() if stellar_bcs else None
+        barcode = None
+        for b in standard_bcs:
+            if b.conversion_factor is not None:
+                try:
+                    if abs(float(b.conversion_factor) - 1.0) < 1e-4:
+                        barcode = b.barcode.strip()
+                        break
+                except (ValueError, TypeError):
+                    pass
+        if not barcode and standard_bcs:
+            barcode = standard_bcs[0].barcode.strip()
+        if not barcode and variant and variant.barcode and variant.barcode.strip():
+            vb = variant.barcode.strip()
+            if not vb.upper().startswith("PRD-"):
+                barcode = vb
+        if not barcode and plu:
+            barcode = plu
+        if not barcode:
+            barcode = sku
+
         exp_q = float(l.expected_base_qty or 0)
         rec_q = float(l.received_base_qty or 0) if is_confirmed else 0.0
         rej_q = max(0.0, exp_q - rec_q) if is_confirmed else 0.0
@@ -846,6 +888,7 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
             "variant_id": l.variant_id,
             "sku": sku,
             "barcode": barcode,
+            "plu": plu,
             "product_name": product_name,
             "expected_qty": exp_q,
             "received_qty": rec_q,

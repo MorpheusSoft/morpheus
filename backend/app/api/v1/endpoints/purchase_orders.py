@@ -104,7 +104,7 @@ def read_purchase_order_details(
     db: Session = Depends(deps.get_db),
     id: int,
 ) -> Any:
-    from app.models.inventory import ProductVariant, Product, ProductPackaging, InventorySnapshot
+    from app.models.inventory import ProductVariant, Product, ProductPackaging, InventorySnapshot, ProductBarcode
     from app.models.core import Supplier, Currency, Facility, Buyer, User
     
     order = db.query(PurchaseOrder).filter(PurchaseOrder.id == id).first()
@@ -123,12 +123,68 @@ def read_purchase_order_details(
             buyer_user = db.query(User).filter(User.id == buyer.user_id).first()
             if buyer_user:
                 buyer_name = buyer_user.full_name
+
+    variant_ids = list({line.variant_id for line in order.lines if line.variant_id})
+    barcodes_map: dict[int, list[ProductBarcode]] = {}
+    if variant_ids:
+        all_bcs = (
+            db.query(ProductBarcode)
+            .filter(ProductBarcode.product_variant_id.in_(variant_ids))
+            .order_by(ProductBarcode.id.asc())
+            .all()
+        )
+        for bc in all_bcs:
+            barcodes_map.setdefault(bc.product_variant_id, []).append(bc)
                 
     lines_rich = []
     for line in order.lines:
         variant = db.query(ProductVariant).filter(ProductVariant.id == line.variant_id).first()
         prod = db.query(Product).filter(Product.id == variant.product_id).first() if variant else None
         pack = db.query(ProductPackaging).filter(ProductPackaging.id == line.pack_id).first() if line.pack_id else None
+
+        var_bcs = barcodes_map.get(line.variant_id, [])
+        standard_bcs = [
+            b for b in var_bcs
+            if (b.code_type or "").strip().upper() != "STELLAR_CODE" and b.barcode and b.barcode.strip()
+        ]
+        stellar_bcs = [
+            b for b in var_bcs
+            if (b.code_type or "").strip().upper() == "STELLAR_CODE" and b.barcode and b.barcode.strip()
+        ]
+
+        resolved_plu = stellar_bcs[0].barcode.strip() if stellar_bcs else None
+        resolved_barcode = None
+
+        if pack and pack.qty_per_unit is not None:
+            try:
+                target_pack_factor = float(pack.qty_per_unit)
+                for b in standard_bcs:
+                    if b.conversion_factor is not None and abs(float(b.conversion_factor) - target_pack_factor) < 1e-4:
+                        resolved_barcode = b.barcode.strip()
+                        break
+            except (ValueError, TypeError):
+                pass
+
+        if not resolved_barcode:
+            for b in standard_bcs:
+                if b.conversion_factor is not None:
+                    try:
+                        if abs(float(b.conversion_factor) - 1.0) < 1e-4:
+                            resolved_barcode = b.barcode.strip()
+                            break
+                    except (ValueError, TypeError):
+                        pass
+
+        if not resolved_barcode and standard_bcs:
+            resolved_barcode = standard_bcs[0].barcode.strip()
+
+        if not resolved_barcode and variant and variant.barcode and variant.barcode.strip():
+            vb = variant.barcode.strip()
+            if not vb.upper().startswith("PRD-"):
+                resolved_barcode = vb
+
+        if not resolved_barcode and resolved_plu:
+            resolved_barcode = resolved_plu
         
         snap = db.query(InventorySnapshot).filter(
             InventorySnapshot.variant_id == line.variant_id,
@@ -204,6 +260,8 @@ def read_purchase_order_details(
             "variant_id": line.variant_id,
             "pack_id": line.pack_id,
             "sku": variant.sku if variant else "N/A",
+            "barcode": resolved_barcode,
+            "plu": resolved_plu,
             "product_name": prod.name if prod else "N/A",
             "uom_base": prod.uom_base if prod else "UND",
             "pack_name": pack.name if pack else "Und. Base",

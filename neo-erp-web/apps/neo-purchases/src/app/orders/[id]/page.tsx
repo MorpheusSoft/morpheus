@@ -95,6 +95,7 @@ export default function OrderDetailsPage() {
 
   const [selectedPackId, setSelectedPackId] = useState<number | null>(null);
   const [showBreakdownModal, setShowBreakdownModal] = useState(false);
+  const [lineFilter, setLineFilter] = useState("");
 
   const handleDownloadBreakdown = async (formatType: 'xlsx' | 'xml') => {
     try {
@@ -928,7 +929,16 @@ export default function OrderDetailsPage() {
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden mb-6">
         <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <h3 className="font-bold text-slate-700 tracking-tight"><i className="pi pi-shopping-cart mr-2 text-indigo-500"></i>Desglose de Renglones</h3>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+                <span className="p-input-icon-left w-full sm:w-64">
+                    <i className="pi pi-barcode text-slate-400" />
+                    <InputText
+                        value={lineFilter}
+                        onChange={(e) => setLineFilter(e.target.value)}
+                        placeholder="Filtrar por Cód. Barra, PLU o Producto..."
+                        className="p-inputtext-sm w-full text-xs pl-8 rounded-lg border-slate-200"
+                    />
+                </span>
                 {isDraft && <Button icon="pi pi-gift" label="Añadir Regalía (Bonif.)" severity="warning" outlined size="small" onClick={openRegaliaModal} />}
                 {isDraft && <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 shadow-sm"><i className="pi pi-pencil text-[10px] mr-2"></i>Edición Abierta</span>}
             </div>
@@ -1002,7 +1012,16 @@ export default function OrderDetailsPage() {
         <div className="overflow-x-auto w-full">
           <DataTable 
             dataKey="id" 
-            value={lines} 
+            value={lines.filter(r => {
+              if (!lineFilter.trim()) return true;
+              const q = lineFilter.trim().toLowerCase();
+              return (
+                (r.barcode && String(r.barcode).toLowerCase().includes(q)) ||
+                (r.plu && String(r.plu).toLowerCase().includes(q)) ||
+                (r.sku && String(r.sku).toLowerCase().includes(q)) ||
+                (r.product_name && String(r.product_name).toLowerCase().includes(q))
+              );
+            })} 
             emptyMessage="Esta orden está vacía como el desierto." 
             size="small" 
             stripedRows 
@@ -1010,7 +1029,22 @@ export default function OrderDetailsPage() {
             responsiveLayout="scroll"
             className="text-sm min-w-[850px]"
           >
-            <Column header="SKU" field="sku" style={{ width: '90px', minWidth: '80px' }} body={r => <span className="font-mono text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{r.sku}</span>} />
+            <Column header="Cód. Barra / PLU" field="barcode" style={{ width: '155px', minWidth: '140px' }} body={r => {
+              const primaryCode = r.barcode || r.plu || r.sku;
+              const showPluSub = r.plu && r.plu !== primaryCode;
+              return (
+                <div className="flex flex-col gap-0.5">
+                  <span className="font-mono text-xs font-bold bg-slate-100 px-2 py-0.5 rounded text-slate-800 border border-slate-200 w-fit">
+                    {primaryCode}
+                  </span>
+                  {showPluSub && (
+                    <span className="font-mono text-[10px] font-bold text-indigo-600 pl-0.5">
+                      PLU: {r.plu}
+                    </span>
+                  )}
+                </div>
+              );
+            }} />
             
             <Column header="Nomenclatura" field="product_name" style={{ minWidth: '180px' }} body={r => (
              <div className="flex items-center justify-between gap-2">
@@ -1041,7 +1075,8 @@ export default function OrderDetailsPage() {
              </div>
           )} />
           
-           <Column header="Unidad de Compra" style={{ minWidth: '160px' }} body={(r, options) => {
+           <Column header="Unidad de Compra" style={{ minWidth: '160px' }} body={(r) => {
+              const origIdx = lines.indexOf(r);
               if (!isDraft) {
                   return (
                       <div className="flex justify-end items-center gap-2">
@@ -1059,7 +1094,7 @@ export default function OrderDetailsPage() {
                              options={r.available_packagings}
                              optionLabel="label"
                              optionValue="id"
-                             onChange={(e) => handlePresentationChange(options.rowIndex, e.value)}
+                             onChange={(e) => handlePresentationChange(origIdx, e.value)}
                              className="p-inputtext-sm text-xs font-bold border-indigo-200 bg-indigo-50/40 text-indigo-800 rounded-lg shadow-sm"
                           />
                       ) : (
@@ -1074,7 +1109,7 @@ export default function OrderDetailsPage() {
                              text 
                              severity="secondary" 
                              size="small" 
-                             onClick={() => handleOpenEditPack(r, options.rowIndex)} 
+                             onClick={() => handleOpenEditPack(r, origIdx)} 
                              tooltip="Editar unidades por empaque" 
                              className="p-button-sm !p-1 text-slate-400 hover:text-slate-600"
                           />
@@ -1083,7 +1118,8 @@ export default function OrderDetailsPage() {
               );
            }} align="right" />
           
-          <Column header="Cant. a Facturar" style={{ minWidth: '120px' }} body={(r, options) => {
+          <Column header="Cant. a Facturar" style={{ minWidth: '120px' }} body={(r) => {
+             const origIdx = lines.indexOf(r);
              const isPack = (r.qty_per_pack || 1) > 1;
              const isWeight = !isPack && isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
@@ -1100,7 +1136,7 @@ export default function OrderDetailsPage() {
                         onBlur={(e) => {
                            const raw = parseFloat(e.target.value.replace(',', '.'));
                            const clean = sanitizeQuantity(raw, r.uom_base, isPack);
-                           handleQtyChange(options.rowIndex, clean);
+                           handleQtyChange(origIdx, clean);
                         }}
                         className="w-24 text-right text-lg font-black p-2 rounded-lg border-2 border-indigo-200 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 bg-indigo-50/50 transition-all text-indigo-700 shadow-inner" 
                      />
@@ -1116,7 +1152,8 @@ export default function OrderDetailsPage() {
              return <div className="flex justify-end pr-2"><span className="font-semibold text-slate-400">{val.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} {uomLabel}</span></div>;
           }} align="right" />
           
-           <Column header="Costo x Bulto" style={{ minWidth: '130px' }} body={(r, options) => {
+           <Column header="Costo x Bulto" style={{ minWidth: '130px' }} body={(r) => {
+               const origIdx = lines.indexOf(r);
                const sym = currencies.find(c => c.id === currencyId)?.symbol || '$';
                const dec = currencies.find(c => c.id === currencyId)?.decimal_places ?? 2;
                const isPack = r.qty_per_pack > 1;
@@ -1137,7 +1174,7 @@ export default function OrderDetailsPage() {
                           type="number" 
                           value={packCostVal} 
                           step="0.01"
-                          onChange={(e) => handlePackCostChange(options.rowIndex, parseFloat(e.target.value))}
+                          onChange={(e) => handlePackCostChange(origIdx, parseFloat(e.target.value))}
                           className="w-24 text-right font-bold p-1.5 text-sm rounded-lg border-2 border-sky-200 outline-none focus:border-sky-500 bg-sky-50/50 text-sky-900 shadow-inner" 
                           placeholder="0.00"
                        />
@@ -1145,7 +1182,8 @@ export default function OrderDetailsPage() {
                );
            }} align="right" />
            
-           <Column header="Costo x Unidad" style={{ minWidth: '130px' }} body={(r, options) => {
+           <Column header="Costo x Unidad" style={{ minWidth: '130px' }} body={(r) => {
+               const origIdx = lines.indexOf(r);
                const sym = currencies.find(c => c.id === currencyId)?.symbol || '$';
                const uCost = Number(r.unit_cost) || 0;
                
@@ -1164,7 +1202,7 @@ export default function OrderDetailsPage() {
                           type="number" 
                           value={Number(uCost.toFixed(4))} 
                           step="0.0001"
-                          onChange={(e) => handleUnitCostChange(options.rowIndex, parseFloat(e.target.value))}
+                          onChange={(e) => handleUnitCostChange(origIdx, parseFloat(e.target.value))}
                           className="w-24 text-right font-bold p-1.5 text-sm rounded-lg border-2 border-slate-200 outline-none focus:border-emerald-500 bg-slate-50 text-slate-700 shadow-inner" 
                           placeholder="0.00"
                        />
@@ -1172,12 +1210,13 @@ export default function OrderDetailsPage() {
                );
            }} align="right" />
           
-          <Column header="% Dscto (Renglón)" style={{ minWidth: '110px' }} body={(r, options) => {
+          <Column header="% Dscto (Renglón)" style={{ minWidth: '110px' }} body={(r) => {
+              const origIdx = lines.indexOf(r);
               if (parseFloat(r.unit_cost) === 0) return null;
               if (!isDraft) return <div className="flex justify-end pr-2"><span className="font-bold text-amber-600">{r.line_discount_str ? `-${r.line_discount_str}%` : ''}</span></div>;
               return (
                   <div className="flex justify-end pr-2">
-                       <InputText value={r.line_discount_str || ''} onChange={(e) => handleLineDiscountChange(options.rowIndex, e.target.value)} placeholder="Ej: 10+5" className="w-20 text-right p-1 text-xs font-bold border-amber-300 text-amber-700" />
+                       <InputText value={r.line_discount_str || ''} onChange={(e) => handleLineDiscountChange(origIdx, e.target.value)} placeholder="Ej: 10+5" className="w-20 text-right p-1 text-xs font-bold border-amber-300 text-amber-700" />
                   </div>
               );
           }} align="right" />
@@ -1185,19 +1224,21 @@ export default function OrderDetailsPage() {
           <Column header="Subtotal" style={{ minWidth: '110px' }} body={r => <span className="font-black text-emerald-700 text-base">{currencies.find(c => c.id === currencyId)?.symbol || '$'}{parseFloat(r.subtotal).toLocaleString('en-US', {minimumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2, maximumFractionDigits: currencies.find(c => c.id === currencyId)?.decimal_places ?? 2})}</span>} align="right" />
           
           {isDraft && (
-              <Column header="Acciones" body={(r, options) => (
+              <Column header="Acciones" body={(r) => {
+                  const origIdx = lines.indexOf(r);
+                  return (
                   <div className="flex justify-center">
                       <Button 
                           icon="pi pi-trash" 
                           rounded 
                           severity="danger" 
                           text 
-                          onClick={() => handlePromptDelete(r, options.rowIndex)} 
+                          onClick={() => handlePromptDelete(r, origIdx)} 
                           tooltip="Eliminar renglón" 
                           className="p-button-sm !p-1 text-red-500 hover:text-red-700"
                       />
                   </div>
-              )} align="center" style={{ width: '5rem' }} />
+              );}} align="center" style={{ width: '5rem' }} />
           )}
           
           </DataTable>
@@ -1688,17 +1729,23 @@ export default function OrderDetailsPage() {
                   Selecciona el tipo de identificación que deseas imprimir en la tabla de insumos del PDF corporativo:
               </p>
               
-              <div className="grid grid-cols-2 gap-3 mt-2">
+              <div className="grid grid-cols-3 gap-3 mt-2">
                    <Button 
                        label="Código de Barras" 
                        icon="pi pi-barcode" 
-                       className="p-button-outlined border-2 font-bold flex flex-col gap-2 p-4 items-center justify-center"
+                       className="p-button-outlined border-2 font-bold flex flex-col gap-2 p-4 items-center justify-center text-xs"
                        onClick={() => handleDownloadPdf("barcode")} 
+                   />
+                   <Button 
+                       label="PLU / Cód. Corto" 
+                       icon="pi pi-hashtag" 
+                       className="p-button-outlined border-2 font-bold flex flex-col gap-2 p-4 items-center justify-center text-xs"
+                       onClick={() => handleDownloadPdf("plu")} 
                    />
                    <Button 
                        label="SKU Interno" 
                        icon="pi pi-tag" 
-                       className="p-button-outlined border-2 font-bold flex flex-col gap-2 p-4 items-center justify-center"
+                       className="p-button-outlined border-2 font-bold flex flex-col gap-2 p-4 items-center justify-center text-xs"
                        onClick={() => handleDownloadPdf("sku")} 
                    />
               </div>
