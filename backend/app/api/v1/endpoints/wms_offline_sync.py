@@ -602,6 +602,7 @@ def get_sync_inventory_sessions(
             "valid_category_ids": valid_cat_ids,
             "valid_variant_ids": valid_variant_ids,
             "state": s.state,
+            "is_blind_count": getattr(s, 'is_blind_count', True) is not False,
             "date_start": s.date_start.isoformat() if s.date_start else None
         })
 

@@ -242,3 +242,25 @@ class ScheduledReport(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    __table_args__ = {"schema": "core"}
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("core.users.id", ondelete="SET NULL"), nullable=True)
+    user_name = Column(String(150), nullable=True)
+    user_email = Column(String(150), nullable=True)
+    action = Column(String(50), nullable=False)
+    module = Column(String(50), nullable=False)
+    entity_name = Column(String(50), nullable=False)
+    entity_id = Column(String(100), nullable=True)
+    facility_id = Column(Integer, ForeignKey("core.facilities.id", ondelete="SET NULL"), nullable=True)
+    details = Column(JSONB, default=dict)
+    ip_address = Column(String(45), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", foreign_keys=[user_id])
+    facility = relationship("Facility", foreign_keys=[facility_id])
+
+
+

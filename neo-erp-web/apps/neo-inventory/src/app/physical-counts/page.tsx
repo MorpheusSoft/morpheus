@@ -63,6 +63,7 @@ export default function PhysicalCountsPage() {
   const [selectedCategory, setSelectedCategory] = useState<any>(null);
   const [scopeType, setScopeType] = useState('GENERAL');
   const [scopeValue, setScopeValue] = useState('');
+  const [isBlindCount, setIsBlindCount] = useState<boolean>(true);
 
   // CSV Import field
   const [csvContent, setCsvContent] = useState('');
@@ -766,7 +767,8 @@ export default function PhysicalCountsPage() {
         facility_id: selectedFacility,
         warehouse_id: selectedWarehouse || undefined,
         scope_type: scopeType,
-        scope_value: resolvedScopeValue || undefined
+        scope_value: resolvedScopeValue || undefined,
+        is_blind_count: isBlindCount
       });
       setShowCreateDialog(false);
       setNewSessionName('');
@@ -775,6 +777,7 @@ export default function PhysicalCountsPage() {
       setSelectedCategory(null);
       setScopeType('GENERAL');
       setScopeValue('');
+      setIsBlindCount(true);
       await loadSessions();
       selectSession(session);
     } catch (err) {
@@ -1350,7 +1353,12 @@ export default function PhysicalCountsPage() {
                 className="premium-datatable cursor-pointer"
               >
                 <Column field="name" header="SESIÓN" className="font-semibold text-slate-800 text-[13px]"></Column>
-                <Column header="ESTADO" body={stateBodyTemplate} style={{ width: '30%' }}></Column>
+                <Column header="MODALIDAD" body={(r) => (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.is_blind_count === false ? 'text-emerald-700 bg-emerald-50 border border-emerald-200' : 'text-slate-600 bg-slate-100 border border-slate-200'}`}>
+                    {r.is_blind_count === false ? '📋 Guiado' : '👁️ Ciego'}
+                  </span>
+                )} style={{ width: '25%' }}></Column>
+                <Column header="ESTADO" body={stateBodyTemplate} style={{ width: '25%' }}></Column>
               </DataTable>
             </div>
           </div>
@@ -1367,6 +1375,15 @@ export default function PhysicalCountsPage() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <h2 className="text-xl font-black text-slate-900 m-0">{selectedSession.name}</h2>
                         {getScopeBadge(selectedSession)}
+                        {selectedSession.is_blind_count === false ? (
+                          <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-100 flex items-center gap-1">
+                            <span>📋</span> Conteo Guiado
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 flex items-center gap-1">
+                            <span>👁️</span> Conteo Ciego
+                          </span>
+                        )}
                         {stateBodyTemplate(selectedSession)}
                       </div>
                       <p className="text-slate-500 text-xs mt-1 font-medium">
@@ -1593,6 +1610,49 @@ export default function PhysicalCountsPage() {
               <InputText value={scopeValue} onChange={(e) => setScopeValue(e.target.value)} placeholder="Ej. PASILLO-A" className="w-full !rounded-xl border-slate-200" />
             </div>
           )}
+
+          <div className="flex flex-col gap-1.5 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
+            <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+              Modalidad de Conteo
+            </label>
+            <div className="grid grid-cols-2 gap-2 mt-1">
+              <button
+                type="button"
+                onClick={() => setIsBlindCount(true)}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col gap-1 ${
+                  isBlindCount ? 'bg-blue-50/70 border-blue-500 shadow-sm' : 'bg-white border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-xs text-slate-900 flex items-center gap-1.5">
+                    <span>👁️</span> Conteo Ciego
+                  </span>
+                  {isBlindCount && <i className="pi pi-check text-blue-600 text-xs font-bold"></i>}
+                </div>
+                <p className="text-[10px] text-slate-500 leading-tight m-0">
+                  Oculta existencias en PDA y planillas. Máxima imparcialidad.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsBlindCount(false)}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col gap-1 ${
+                  !isBlindCount ? 'bg-emerald-50/70 border-emerald-500 shadow-sm' : 'bg-white border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-xs text-slate-900 flex items-center gap-1.5">
+                    <span>📋</span> Conteo Guiado
+                  </span>
+                  {!isBlindCount && <i className="pi pi-check text-emerald-600 text-xs font-bold"></i>}
+                </div>
+                <p className="text-[10px] text-slate-500 leading-tight m-0">
+                  Muestra existencia esperada en PDA y planillas para agilizar.
+                </p>
+              </button>
+            </div>
+          </div>
 
           <div className="flex justify-end gap-2 mt-4">
             <Button label="Cancelar" severity="secondary" text onClick={() => setShowCreateDialog(false)} />

@@ -161,7 +161,9 @@ def populate_line_details(session: InventorySession, db: Session, is_supervisor:
     if not session or not session.lines:
         return
 
-    effective_supervisor = is_supervisor or (session and getattr(session, 'state', None) in ('REVIEW', 'DONE', 'CONFIRMING', 'CANCELLED'))
+    is_guided = getattr(session, 'is_blind_count', True) is False
+    in_review_or_done = getattr(session, 'state', None) in ('REVIEW', 'DONE', 'CONFIRMING', 'CANCELLED')
+    effective_supervisor = is_supervisor or is_guided or in_review_or_done
 
     v_ids = [line.product_variant_id for line in session.lines if line.product_variant_id]
     variant_map = {}
@@ -284,6 +286,7 @@ def read_inventory_sessions(
             cancelled_by=s.cancelled_by,
             cancelled_by_name=canceller_map.get(s.cancelled_by),
             cancelled_at=s.cancelled_at,
+            is_blind_count=getattr(s, 'is_blind_count', True) is not False,
             total_lines=line_counts.get(s.id, 0),
             lines=[]
         ))
@@ -321,6 +324,7 @@ def create_inventory_session(
         warehouse_id=session_in.warehouse_id,
         scope_type=session_in.scope_type or "GENERAL",
         scope_value=scope_val,
+        is_blind_count=session_in.is_blind_count if session_in.is_blind_count is not None else True,
         state="IN_PROGRESS"
     )
     db.add(db_obj)

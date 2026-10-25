@@ -11,7 +11,7 @@ export const PhysicalCountService = {
     return data;
   },
   
-  createSession: async (payload: { name: string; facility_id?: number; warehouse_id?: number; scope_type: string; scope_value?: string }) => {
+  createSession: async (payload: { name: string; facility_id?: number; warehouse_id?: number; scope_type: string; scope_value?: string; is_blind_count?: boolean }) => {
     const { data } = await api.post('/inventory-session/', payload);
     return data;
   },

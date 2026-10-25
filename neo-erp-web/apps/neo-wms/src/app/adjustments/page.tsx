@@ -63,6 +63,7 @@ export default function WmsAdjustmentsPage() {
   const [sessionScopeValue, setSessionScopeValue] = useState<string>('');
   const [sessionCategoryId, setSessionCategoryId] = useState<number | null>(null);
   const [sessionLocationId, setSessionLocationId] = useState<number | null>(null);
+  const [sessionIsBlindCount, setSessionIsBlindCount] = useState<boolean>(true);
   const [categories, setCategories] = useState<any[]>([]);
   const [categoriesTree, setCategoriesTree] = useState<any[]>([]);
   const [creatingSession, setCreatingSession] = useState(false);
@@ -1086,7 +1087,8 @@ export default function WmsAdjustmentsPage() {
         scope_type: sessionScopeType || 'GENERAL',
         scope_value: sessionCategoryId ? String(sessionCategoryId) : (sessionScopeValue || null),
         category_id: sessionCategoryId || null,
-        location_id: sessionLocationId || null
+        location_id: sessionLocationId || null,
+        is_blind_count: sessionIsBlindCount
       });
       toast.current?.show({ severity: 'success', summary: 'Toma Física Creada', detail: 'Sesión de recuento e inventario teórico generados con éxito.' });
       setNewSessionDialogVisible(false);
@@ -1094,6 +1096,7 @@ export default function WmsAdjustmentsPage() {
       setSessionScopeValue('');
       setSessionCategoryId(null);
       setSessionLocationId(null);
+      setSessionIsBlindCount(true);
       fetchSessions();
     } catch (e: any) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al crear sesión.' });
@@ -1573,18 +1576,25 @@ export default function WmsAdjustmentsPage() {
                   </span>
                 </div>
               )} sortable />
-              <Column field="state" header="ESTADO" body={s => (
-                <Tag
-                  severity={s.state === 'DONE' ? 'success' : s.state === 'REVIEW' ? 'info' : 'warning'}
-                  value={
-                    s.state === 'DONE'
-                      ? 'FASE 3: CONCILIADO'
-                      : s.state === 'REVIEW'
-                      ? 'FASE 2: ANÁLISIS & COTEJO'
-                      : 'FASE 1: CONTEO CIEGO'
-                  }
-                  className="font-bold text-[9px] px-2 py-1"
-                />
+              <Column field="state" header="ESTADO / MODALIDAD" body={s => (
+                <div className="flex flex-col items-center gap-1">
+                  <Tag
+                    severity={s.state === 'DONE' ? 'success' : s.state === 'REVIEW' ? 'info' : 'warning'}
+                    value={
+                      s.state === 'DONE'
+                        ? 'FASE 3: CONCILIADO'
+                        : s.state === 'REVIEW'
+                        ? 'FASE 2: ANÁLISIS & COTEJO'
+                        : s.is_blind_count === false
+                        ? 'FASE 1: CONTEO GUIADO'
+                        : 'FASE 1: CONTEO CIEGO'
+                    }
+                    className="font-bold text-[9px] px-2 py-1"
+                  />
+                  <span className={`text-[10px] font-semibold ${s.is_blind_count === false ? 'text-emerald-700' : 'text-slate-500'}`}>
+                    {s.is_blind_count === false ? '📋 Stock Visible' : '👁️ Stock Oculto'}
+                  </span>
+                </div>
               )} align="center" sortable />
               <Column header="RENGLONES" body={s => <span className="font-semibold text-slate-700">{s.total_lines !== undefined ? s.total_lines : (s.lines?.length || 0)} ítems</span>} align="right" />
               <Column header="ACCIONES / CONTROL" body={s => (
@@ -2220,6 +2230,53 @@ export default function WmsAdjustmentsPage() {
             </div>
           )}
 
+          <div className="flex flex-col gap-1.5 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+            <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+              Modalidad de Conteo en Piso
+            </label>
+            <div className="grid grid-cols-2 gap-2 mt-1">
+              <button
+                type="button"
+                onClick={() => setSessionIsBlindCount(true)}
+                className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col gap-1 ${
+                  sessionIsBlindCount
+                    ? 'bg-blue-50/80 border-blue-500 shadow-sm'
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-xs text-slate-900 flex items-center gap-1.5">
+                    <span>👁️</span> Conteo Ciego
+                  </span>
+                  {sessionIsBlindCount && <i className="pi pi-check text-blue-600 text-xs font-bold"></i>}
+                </div>
+                <p className="text-[10px] text-slate-500 leading-tight m-0">
+                  Oculta existencias en PDA y planillas. Máxima imparcialidad.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSessionIsBlindCount(false)}
+                className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col gap-1 ${
+                  !sessionIsBlindCount
+                    ? 'bg-emerald-50/80 border-emerald-500 shadow-sm'
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-xs text-slate-900 flex items-center gap-1.5">
+                    <span>📋</span> Conteo Guiado
+                  </span>
+                  {!sessionIsBlindCount && <i className="pi pi-check text-emerald-600 text-xs font-bold"></i>}
+                </div>
+                <p className="text-[10px] text-slate-500 leading-tight m-0">
+                  Muestra existencias esperadas en PDA y planillas para agilizar.
+                </p>
+              </button>
+            </div>
+          </div>
+
           <div className="flex justify-end gap-3 mt-4 pt-3 border-t border-slate-200">
             <Button label="Cancelar" outlined severity="secondary" className="font-bold text-xs" onClick={() => setNewSessionDialogVisible(false)} />
             <Button label="Crear Sesión (Snapshot Teórico)" icon="pi pi-check" loading={creatingSession} className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md" onClick={createSession} />
@@ -2321,10 +2378,19 @@ export default function WmsAdjustmentsPage() {
                         ? 'FASE 3: CONCILIADO & CERRADO'
                         : selectedSession.state === 'REVIEW'
                         ? 'FASE 2: ANÁLISIS & COTEJO (IA)'
+                        : selectedSession.is_blind_count === false
+                        ? 'FASE 1: CONTEO GUIADO (Captura)'
                         : 'FASE 1: CONTEO CIEGO (Captura)'
                     }
                     className="font-bold text-[9px] px-2 py-1 mt-0.5"
                   />
+                </div>
+                <div className="h-8 w-[1px] bg-slate-200"></div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">MODALIDAD</span>
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-md inline-block mt-0.5 ${selectedSession.is_blind_count === false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'}`}>
+                    {selectedSession.is_blind_count === false ? '📋 Conteo Guiado' : '👁️ Conteo Ciego'}
+                  </span>
                 </div>
               </div>
 

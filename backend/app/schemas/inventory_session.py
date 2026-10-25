@@ -79,6 +79,7 @@ class InventorySessionBase(BaseModel):
     cancelled_by: Optional[int] = None
     cancelled_by_name: Optional[str] = None
     cancelled_at: Optional[datetime] = None
+    is_blind_count: Optional[bool] = True
 
 class InventorySessionCreate(InventorySessionBase):
     pass

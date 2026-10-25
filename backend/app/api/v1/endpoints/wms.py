@@ -414,6 +414,8 @@ def create_direct_receipt(
 def receive_purchase_order(
     order_id: int, 
     payload: ReceiptPayload, 
+    request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -548,7 +550,8 @@ def receive_purchase_order(
         facility_id=target_facility_id,
         status='DONE',
         date_done=date_done_val,
-        created_by_id=user_id_val
+        created_by_id=user_id_val,
+        received_by_id=user_id_val
     )
     db.add(picking)
     db.flush()
@@ -715,6 +718,36 @@ def receive_purchase_order(
         order.status = 'received'
 
     db.commit()
+
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    background_tasks.add_task(
+        log_audit_event_async,
+        user_id=user_id_val,
+        user_name=getattr(current_user, 'full_name', None),
+        user_email=getattr(current_user, 'email', None),
+        action="RECEIVE_PURCHASE_ORDER",
+        module="WMS",
+        entity_name="StockPicking",
+        entity_id=picking.id,
+        facility_id=target_facility_id,
+        details={
+            "order_id": order.id,
+            "order_reference": order.reference,
+            "picking_name": picking.name,
+            "invoice_number": payload.invoice_number,
+            "warehouse_id": warehouse.id,
+            "warehouse_name": warehouse.name,
+            "lines_count": len(payload.lines),
+            "total_received": total_received,
+            "order_status": order.status,
+            "rejection_notes": rejection_notes
+        },
+        ip_address=client_ip
+    )
+
     return {
         "message": "Recepción Física completada",
         "picking_id": picking.id,
@@ -727,6 +760,8 @@ def receive_purchase_order(
 def report_receipt_discrepancy(
     order_id: int, 
     payload: DiscrepancyPayload, 
+    request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -762,6 +797,28 @@ def report_receipt_discrepancy(
 
     # Si es rechazo en puerta (Devolver al chofer), NO ingresa a inventario SCRAP
     if payload.reject_at_dock:
+        client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+        if client_ip and "," in client_ip:
+            client_ip = client_ip.split(",")[0].strip()
+
+        background_tasks.add_task(
+            log_audit_event_async,
+            user_id=getattr(current_user, 'id', None),
+            user_name=getattr(current_user, 'full_name', None),
+            user_email=getattr(current_user, 'email', None),
+            action="REJECT_AT_DOCK",
+            module="WMS",
+            entity_name="PurchaseOrder",
+            entity_id=order.id,
+            facility_id=order.dest_facility_id,
+            details={
+                "order_reference": order.reference,
+                "variant_id": payload.variant_id,
+                "quantity": payload.damaged_qty,
+                "reason": payload.reason
+            },
+            ip_address=client_ip
+        )
         return {
             "message": f"Rechazo en puerta registrado: {payload.damaged_qty:g} {uom_base} devueltas al chofer.",
             "status": "rejected_at_dock",
@@ -812,6 +869,33 @@ def report_receipt_discrepancy(
     )
     db.add(move)
     db.commit()
+
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    background_tasks.add_task(
+        log_audit_event_async,
+        user_id=user_id_val,
+        user_name=getattr(current_user, 'full_name', None),
+        user_email=getattr(current_user, 'email', None),
+        action="REPORT_DISCREPANCY_SCRAP",
+        module="WMS",
+        entity_name="StockMove",
+        entity_id=move.id,
+        facility_id=order.dest_facility_id,
+        details={
+            "order_id": order.id,
+            "order_reference": order.reference,
+            "variant_id": payload.variant_id,
+            "damaged_qty": payload.damaged_qty,
+            "lot_number": payload.lot_number,
+            "reason": payload.reason,
+            "scrap_location": scrap_loc.name
+        },
+        ip_address=client_ip
+    )
+
     return {"message": "Avería reportada exitosamente", "move_id": move.id, "location": scrap_loc.name}
 
 @router.get("/receipts/{order_id}/ticket-80mm")
@@ -1356,6 +1440,8 @@ def get_variant_packagings(
 @router.post("/putaway")
 def execute_putaway(
     payload: PutawayPayload, 
+    request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -1495,6 +1581,35 @@ def execute_putaway(
     )
     db.add(move)
     db.commit()
+
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    background_tasks.add_task(
+        log_audit_event_async,
+        user_id=user_id_val,
+        user_name=getattr(current_user, 'full_name', None),
+        user_email=getattr(current_user, 'email', None),
+        action="REALLOCATE_STOCK",
+        module="WMS",
+        entity_name="StockMove",
+        entity_id=move.id,
+        facility_id=source_wh.facility_id,
+        details={
+            "variant_id": payload.variant_id,
+            "source_warehouse_id": source_wh.id,
+            "source_warehouse_name": source_wh.name,
+            "dest_warehouse_id": dest_wh.id,
+            "dest_warehouse_name": dest_wh.name,
+            "source_location_id": src_loc.id,
+            "dest_location_id": dest_loc.id,
+            "quantity": total_base_qty,
+            "uom": clean_uom,
+            "picking_id": picking.id
+        },
+        ip_address=client_ip
+    )
 
     return {
         "message": "Reubicación de mercancía realizada con éxito", 
@@ -2264,6 +2379,44 @@ def reject_inventory_adjustment(
     db.commit()
 
     return {"message": f"Ajuste {adj.number} RECHAZADO por la supervisión.", "status": "REJECTED"}
+
+
+@router.get("/audit-logs")
+def get_wms_audit_logs(
+    module: Optional[str] = "WMS",
+    action: Optional[str] = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Consulta el historial de auditoría de transacciones WMS (recepciones, mermas, reubicaciones, etc.).
+    """
+    query = db.query(AuditLog)
+    if module:
+        query = query.filter(AuditLog.module == module)
+    if action:
+        query = query.filter(AuditLog.action == action)
+    
+    logs = query.order_by(AuditLog.created_at.desc()).limit(limit).all()
+    return [
+        {
+            "id": l.id,
+            "created_at": l.created_at.isoformat() if l.created_at else None,
+            "user_id": l.user_id,
+            "user_name": l.user_name,
+            "user_email": l.user_email,
+            "action": l.action,
+            "module": l.module,
+            "entity_name": l.entity_name,
+            "entity_id": l.entity_id,
+            "facility_id": l.facility_id,
+            "details": l.details,
+            "ip_address": l.ip_address
+        }
+        for l in logs
+    ]
+
 
 
 

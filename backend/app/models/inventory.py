@@ -300,6 +300,7 @@ class InventorySession(Base):
     cancellation_reason = Column(Text, nullable=True)
     cancelled_by = Column(Integer, ForeignKey("core.users.id"), nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    is_blind_count = Column(Boolean, default=True, server_default='true')
     
     lines = relationship("InventoryLine", back_populates="session")
     canceller = relationship("User", foreign_keys=[cancelled_by])
