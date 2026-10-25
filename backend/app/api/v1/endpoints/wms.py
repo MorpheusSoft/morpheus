@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from pydantic import BaseModel
@@ -11,7 +11,8 @@ from app.models.inventory import (
     Location, Warehouse, ProductVariant, Product, ProductFacilityPrice, ProductBarcode,
     AdjustmentReason, InventoryAdjustment, InventoryAdjustmentLine, ProductPackaging
 )
-from app.models.core import Facility, Supplier, User, Currency
+from app.models.core import Facility, Supplier, User, Currency, AuditLog
+from app.services.audit_service import log_audit_event_async
 from app.schemas.adjustment import (
     AdjustmentReasonCreate, AdjustmentReasonResponse,
     InventoryAdjustmentCreate, InventoryAdjustmentResponse
