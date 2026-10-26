@@ -51,7 +51,8 @@ api.interceptors.response.use(
         localStorage.removeItem('token');
         clearAuthCookies();
         const currentUrl = window.location.href;
-        const loginUrl = getLoginUrl(currentUrl);
+        const baseLoginUrl = getLoginUrl(currentUrl);
+        const loginUrl = `${baseLoginUrl}${baseLoginUrl.includes('?') ? '&' : '?'}expired=1`;
         window.location.href = loginUrl;
       }
     }

@@ -98,6 +98,10 @@ export async function loginAction(prevState: any, formData: FormData) {
     const cookieStore = await cookies()
     const isHttps = domainConfig.protocol === "https"
 
+    // Limpiar posibles cookies host-only antiguas para evitar colisiones entre subdominios
+    cookieStore.set("access_token", "", { maxAge: 0, expires: new Date(0), path: "/" })
+    cookieStore.set("neo_last_activity", "", { maxAge: 0, expires: new Date(0), path: "/" })
+
     cookieStore.set("access_token", data.access_token, {
       httpOnly: false,
       secure: isHttps,
@@ -131,6 +135,25 @@ export async function logoutAction() {
   const cookieStore = await cookies()
   const isHttps = domainConfig.protocol === "https"
 
+  // Limpiar siempre cookies host-only
+  cookieStore.set("access_token", "", {
+    httpOnly: false,
+    secure: isHttps,
+    sameSite: "lax",
+    maxAge: 0,
+    expires: new Date(0),
+    path: "/"
+  })
+  cookieStore.set("neo_last_activity", "", {
+    httpOnly: false,
+    secure: isHttps,
+    sameSite: "lax",
+    maxAge: 0,
+    expires: new Date(0),
+    path: "/"
+  })
+
+  // Y limpiar cookies de dominio compartido (.grupocatania.com / .qa.morpheussoft.net)
   if (domainConfig.cookieDomain) {
     cookieStore.set("access_token", "", {
       httpOnly: false,
@@ -148,23 +171,6 @@ export async function logoutAction() {
       maxAge: 0,
       expires: new Date(0),
       domain: domainConfig.cookieDomain,
-      path: "/"
-    })
-  } else {
-    cookieStore.set("access_token", "", {
-      httpOnly: false,
-      secure: isHttps,
-      sameSite: "lax",
-      maxAge: 0,
-      expires: new Date(0),
-      path: "/"
-    })
-    cookieStore.set("neo_last_activity", "", {
-      httpOnly: false,
-      secure: isHttps,
-      sameSite: "lax",
-      maxAge: 0,
-      expires: new Date(0),
       path: "/"
     })
   }

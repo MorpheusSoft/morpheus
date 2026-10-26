@@ -9,7 +9,7 @@ function LoginFormComponent() {
   const [state, action, isPending] = useActionState(loginAction, null)
   const searchParams = useSearchParams()
   const callbackUrl = searchParams.get("callbackUrl") || "/dashboard"
-  const isLogout = searchParams.get("logout") === "1"
+  const isLogout = searchParams.get("logout") === "1" || searchParams.get("expired") === "1"
 
   useEffect(() => {
     if (isLogout) {
