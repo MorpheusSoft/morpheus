@@ -2162,6 +2162,7 @@ export default function WmsAdjustmentsPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
                 <div className="md:col-span-6 relative">
+                  <i className={`pi ${adjFastSearching ? 'pi-spin pi-spinner text-indigo-600' : 'pi-barcode text-slate-400'} absolute left-3 top-1/2 -translate-y-1/2 text-xs pointer-events-none z-10`}></i>
                   <InputText
                     ref={adjFastCodeInputRef}
                     value={adjFastCodeInput}
@@ -2176,9 +2177,9 @@ export default function WmsAdjustmentsPage() {
                       }
                     }}
                     placeholder="Código Neo (PRD-...), PLU (003377), Barra o Nombre + Enter..."
-                    className="text-xs p-inputtext-sm w-full font-mono pl-8 bg-white"
+                    className="text-xs p-inputtext-sm w-full font-mono !pl-9 bg-white"
+                    style={{ paddingLeft: '2.25rem' }}
                   />
-                  <i className={`pi ${adjFastSearching ? 'pi-spin pi-spinner text-indigo-600' : 'pi-barcode text-slate-400'} absolute left-2.5 top-1/2 -translate-y-1/2 text-xs`}></i>
                 </div>
 
                 <div className="md:col-span-3">
@@ -3148,6 +3149,7 @@ export default function WmsAdjustmentsPage() {
                     <span>Escanear Código / Barra:</span>
                   </div>
                   <div className="relative flex-1 w-full">
+                    <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none z-10"></i>
                     <InputText
                       ref={countingBarcodeInputRef}
                       value={countingBarcodeInput}
@@ -3163,9 +3165,9 @@ export default function WmsAdjustmentsPage() {
                           ? `Escanee código de barra de ${selectedSession.category_name || 'la categoría'}...`
                           : "Escanee con pistola o ingrese cualquier código (PRD-..., PLU, EAN, DUN) y presione Enter..."
                       }
-                      className="text-xs p-inputtext-sm w-full font-mono pl-8"
+                      className="text-xs p-inputtext-sm w-full font-mono !pl-9"
+                      style={{ paddingLeft: '2.25rem' }}
                     />
-                    <i className="pi pi-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
                   </div>
                   <Button
                     label="Buscar"

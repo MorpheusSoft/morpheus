@@ -441,15 +441,16 @@ export default function ReceiptExecutionPage() {
             </h3>
 
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
-                <span className="p-input-icon-left w-full sm:w-64">
-                    <i className="pi pi-barcode text-slate-400" />
+                <div className="relative w-full sm:w-64">
+                    <i className="pi pi-barcode text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 text-xs pointer-events-none z-10" />
                     <InputText
                         value={lineFilter}
                         onChange={(e) => setLineFilter(e.target.value)}
                         placeholder="Filtrar por Cód. Barra, PLU o Producto..."
-                        className="p-inputtext-sm w-full text-xs pl-8 rounded-lg border-slate-200"
+                        className="p-inputtext-sm w-full text-xs !pl-9 rounded-lg border-slate-200"
+                        style={{ paddingLeft: '2.25rem' }}
                     />
-                </span>
+                </div>
                 {!isReadOnly && (
                     <Button 
                         label="Agregar Producto Inesperado" 

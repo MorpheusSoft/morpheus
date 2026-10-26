@@ -842,12 +842,13 @@ export default function WmsLocationsPage() {
           {/* Barra de Filtro en Vivo */}
           <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
             <div className="relative flex-1">
-              <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+              <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none z-10"></i>
               <InputText
                 value={stockSearchQuery}
                 onChange={(e) => setStockSearchQuery(e.target.value)}
                 placeholder="Buscar por SKU, código de barras, nombre de producto, lote o ubicación..."
-                className="w-full pl-8 text-xs font-medium"
+                className="w-full !pl-9 text-xs font-medium"
+                style={{ paddingLeft: '2.25rem' }}
               />
             </div>
             <Button
