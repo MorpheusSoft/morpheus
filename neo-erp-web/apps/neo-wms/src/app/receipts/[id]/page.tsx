@@ -23,6 +23,7 @@ export default function ReceiptExecutionPage() {
   
   const [order, setOrder] = useState<any>(null);
   const [lines, setLines] = useState<any[]>([]);
+  const linesRef = useRef<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const toast = useRef<Toast>(null);
@@ -104,14 +105,16 @@ export default function ReceiptExecutionPage() {
       if (res.data.invoice_number) setInvoiceNumber(res.data.invoice_number);
       if (res.data.invoice_date) setReceiptDate(new Date(res.data.invoice_date + 'T00:00:00'));
       
+      const alreadyReceived = ['received', 'conciliated'].includes(res.data.status);
       const initialLines = res.data.lines.map((l: any) => ({
           ...l,
-          received_qty: l.expected_base_qty,
+          received_qty: alreadyReceived ? Number(l.received_base_qty ?? 0) : Number(l.expected_base_qty ?? 0),
           damaged_qty: 0,
           lot_number: '',
           expiration_date: null,
           is_unplanned: false
       }));
+      linesRef.current = initialLines;
       setLines(initialLines);
 
       // Cargar almacenes de la sucursal de destino
@@ -147,10 +150,29 @@ export default function ReceiptExecutionPage() {
           const row = updated[rowIndex];
           if (!row) return prev;
           let parsed: any = '';
-          if (val !== '' && val !== null && val !== undefined && !isNaN(parseFloat(val))) {
+          if (val === 0 || val === '0') {
+              parsed = 0;
+          } else if (val !== '' && val !== null && val !== undefined && !isNaN(parseFloat(String(val)))) {
               parsed = sanitizeQuantity(val, row.uom_base);
           }
           updated[rowIndex] = { ...row, received_qty: parsed };
+          linesRef.current = updated;
+          return updated;
+      });
+  };
+
+  const handleSetAllZero = () => {
+      setLines(prev => {
+          const updated = prev.map(l => ({ ...l, received_qty: 0 }));
+          linesRef.current = updated;
+          return updated;
+      });
+  };
+
+  const handleRestoreExpected = () => {
+      setLines(prev => {
+          const updated = prev.map(l => ({ ...l, received_qty: Number(l.expected_base_qty ?? 0) }));
+          linesRef.current = updated;
           return updated;
       });
   };
@@ -158,7 +180,9 @@ export default function ReceiptExecutionPage() {
   const handleTextChange = (rowIndex: number, field: string, val: string) => {
       setLines(prev => {
           const updated = [...prev];
+          if (!updated[rowIndex]) return prev;
           updated[rowIndex] = { ...updated[rowIndex], [field]: val };
+          linesRef.current = updated;
           return updated;
       });
   };
@@ -166,7 +190,9 @@ export default function ReceiptExecutionPage() {
   const handleDateChange = (rowIndex: number, val: Date | null) => {
       setLines(prev => {
           const updated = [...prev];
+          if (!updated[rowIndex]) return prev;
           updated[rowIndex] = { ...updated[rowIndex], expiration_date: val };
+          linesRef.current = updated;
           return updated;
       });
   };
@@ -204,7 +230,11 @@ export default function ReceiptExecutionPage() {
           expiration_date: null,
           is_unplanned: true
       };
-      setLines(prev => [...prev, newLine]);
+      setLines(prev => {
+          const updated = [...prev, newLine];
+          linesRef.current = updated;
+          return updated;
+      });
       setUnplannedDialogVisible(false);
       toast.current?.show({ severity: 'info', summary: 'Producto Inesperado Agregado', detail: `${newLine.product_name} añadido al manifiesto.` });
   };
@@ -242,17 +272,27 @@ export default function ReceiptExecutionPage() {
               reject_at_dock: true
           });
           
-          setLines(prev => prev.map(l => {
-              if (l.variant_id === discrepancyLine.variant_id) {
-                  return { 
-                      ...l, 
-                      damaged_qty: cleanDamagedQty,
-                      rejection_reason: discrepancyReason || 'Avería reportada en muelle',
-                      reject_at_dock: true
-                  };
-              }
-              return l;
-          }));
+          setLines(prev => {
+              const updated = prev.map(l => {
+                  if (l.variant_id === discrepancyLine.variant_id) {
+                      const exp = Number(l.expected_base_qty || 0);
+                      const curRec = Number(l.received_qty || 0);
+                      const newRec = (curRec + cleanDamagedQty > exp && exp > 0)
+                          ? sanitizeQuantity(Math.max(0, exp - cleanDamagedQty), l.uom_base)
+                          : curRec;
+                      return { 
+                          ...l, 
+                          received_qty: newRec,
+                          damaged_qty: cleanDamagedQty,
+                          rejection_reason: discrepancyReason || 'Avería reportada en muelle',
+                          reject_at_dock: true
+                      };
+                  }
+                  return l;
+              });
+              linesRef.current = updated;
+              return updated;
+          });
 
           setDiscrepancyDialogVisible(false);
           toast.current?.show({ severity: 'success', summary: 'Rechazo Registrado', detail: `${cleanDamagedQty} unds devueltas al chofer registradas en muelle.` });
@@ -269,11 +309,12 @@ export default function ReceiptExecutionPage() {
   const confirmReceipt = async () => {
       setSaving(true);
       try {
+          const currentLines = linesRef.current.length > 0 ? linesRef.current : lines;
           const payload = {
               warehouse_id: selectedWarehouseId,
               invoice_number: invoiceNumber,
               receipt_date: receiptDate ? format(receiptDate, 'yyyy-MM-dd') : null,
-              lines: lines.map(l => ({
+              lines: currentLines.map(l => ({
                   po_line_id: l.id > 0 ? l.id : null,
                   variant_id: l.variant_id,
                   received_qty: sanitizeQuantity(l.received_qty, l.uom_base),
@@ -308,7 +349,7 @@ export default function ReceiptExecutionPage() {
   if (!order) return <div className="p-8 text-red-500 font-black text-2xl">ODC no encontrada en el Muelle.</div>;
 
   const selectedWarehouse = warehouses.find(w => w.id === selectedWarehouseId);
-  const isReadOnly = order?.status === 'received';
+  const isReadOnly = order?.status === 'received' || order?.status === 'conciliated';
 
   return (
     <div className="p-4 sm:p-8 w-full max-w-[1400px] mx-auto fade-in">
@@ -452,14 +493,38 @@ export default function ReceiptExecutionPage() {
                     />
                 </div>
                 {!isReadOnly && (
-                    <Button 
-                        label="Agregar Producto Inesperado" 
-                        icon="pi pi-plus-circle" 
-                        severity="info" 
-                        text 
-                        className="font-bold text-xs" 
-                        onClick={() => setUnplannedDialogVisible(true)} 
-                    />
+                    <>
+                        <Button
+                            label="Todo en 0"
+                            icon="pi pi-eraser"
+                            severity="secondary"
+                            outlined
+                            size="small"
+                            className="font-bold text-xs py-1.5 px-2.5"
+                            tooltip="Poner todos los renglones en 0 para conteo ciego"
+                            tooltipOptions={{ position: 'top' }}
+                            onClick={handleSetAllZero}
+                        />
+                        <Button
+                            label="Cargar Esperado"
+                            icon="pi pi-refresh"
+                            severity="secondary"
+                            outlined
+                            size="small"
+                            className="font-bold text-xs py-1.5 px-2.5"
+                            tooltip="Restaurar las cantidades esperadas de la ODC"
+                            tooltipOptions={{ position: 'top' }}
+                            onClick={handleRestoreExpected}
+                        />
+                        <Button 
+                            label="Agregar Producto Inesperado" 
+                            icon="pi pi-plus-circle" 
+                            severity="info" 
+                            text 
+                            className="font-bold text-xs" 
+                            onClick={() => setUnplannedDialogVisible(true)} 
+                        />
+                    </>
                 )}
             </div>
         </div>
@@ -506,14 +571,16 @@ export default function ReceiptExecutionPage() {
           
           {/* CAMPOS INTERACTIVOS WMS */}
           <Column header="Físico Recibido" body={(r) => {
-             const origIdx = lines.indexOf(r);
+             const origIdx = lines.findIndex(item => item.id === r.id && item.variant_id === r.variant_id);
              const isWeight = isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
              return (
                  <div className="flex justify-end">
                      <InputNumber 
                         value={r.received_qty === '' ? null : r.received_qty} 
+                        onChange={(e) => handleQtyChange(origIdx, e.value === null ? '' : e.value)}
                         onValueChange={(e) => handleQtyChange(origIdx, e.value === null ? '' : e.value)}
+                        min={0}
                         minFractionDigits={dec}
                         maxFractionDigits={dec}
                         step={isWeight ? 0.001 : 1}
@@ -538,7 +605,7 @@ export default function ReceiptExecutionPage() {
           }} align="center" />
 
           <Column header="Trazabilidad (Lote)" body={(r) => {
-             const origIdx = lines.indexOf(r);
+             const origIdx = lines.findIndex(item => item.id === r.id && item.variant_id === r.variant_id);
              return (
              <InputText 
                  value={r.lot_number} 
@@ -550,7 +617,7 @@ export default function ReceiptExecutionPage() {
           );}} align="center" />
 
           <Column header="Vencimiento (FEFO)" body={(r) => {
-             const origIdx = lines.indexOf(r);
+             const origIdx = lines.findIndex(item => item.id === r.id && item.variant_id === r.variant_id);
              return (
              <Calendar 
                  value={r.expiration_date} 

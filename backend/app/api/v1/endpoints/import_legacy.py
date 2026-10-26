@@ -1482,10 +1482,17 @@ def import_purchase_orders_legacy(
     # 5. Pre-cargar órdenes existentes por reference para garantizar IDEMPOTENCIA
     references = [f"ODC-{odc.c_DOCUMENTO.strip()}" for odc in orders_in if odc.c_DOCUMENTO]
     existing_orders = {}
+    received_picking_names = set()
     if references:
         po_rows = session.query(PurchaseOrder).filter(PurchaseOrder.reference.in_(references)).all()
         for po in po_rows:
             existing_orders[po.reference] = po
+        picking_names = [f"IN-{r}" for r in references]
+        pick_rows = session.query(StockPicking.name).filter(
+            StockPicking.name.in_(picking_names),
+            StockPicking.status == 'DONE'
+        ).all()
+        received_picking_names = {r[0] for r in pick_rows if r[0]}
 
     created_count = 0
     updated_count = 0
@@ -1561,8 +1568,12 @@ def import_purchase_orders_legacy(
         existing_po = existing_orders.get(ref)
 
         if existing_po:
-            # Si en Neo ya está marcada como 'received' por el almacén, no sobreescribir
-            if existing_po.status == 'received':
+            # Si en Neo ya fue recibida (total o parcialmente), conciliada o tiene recepción WMS activa, no sobreescribir
+            if (
+                existing_po.status in ('received', 'conciliated', 'partial')
+                or f"IN-{ref}" in received_picking_names
+                or bool(existing_po.invoice_number)
+            ):
                 skipped_count += 1
                 continue
 

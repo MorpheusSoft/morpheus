@@ -425,8 +425,8 @@ def receive_purchase_order(
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
         
-    if order.status in ['draft', 'pending_approval', 'received']:
-        raise HTTPException(status_code=400, detail="La orden no está en un estado válido para recepción.")
+    if order.status in ['draft', 'pending_approval', 'received', 'conciliated']:
+        raise HTTPException(status_code=400, detail="La orden ya fue recibida o no está en un estado válido para recepción.")
 
     # 2. Determinar Almacén de Destino
     warehouse = None
@@ -613,7 +613,7 @@ def receive_purchase_order(
         validate_quantity_uom(qty_damaged, uom_base, f"El producto [{sku_label}]")
 
         # Si se rechazó en muelle, solo la cantidad en buen estado ingresa a inventario
-        po_line.received_base_qty = float(po_line.received_base_qty or 0) + qty_good
+        po_line.received_base_qty = qty_good
         total_expected += float(po_line.expected_base_qty or 0)
         total_received += float(po_line.received_base_qty or 0)
 
@@ -710,13 +710,8 @@ def receive_purchase_order(
         joined_rejections = "[Rechazo en Muelle]: " + " | ".join(rejection_notes)
         order.notes = f"{existing_notes}\n{joined_rejections}".strip()
 
-    # Cierre Logístico de la ODC
-    if total_received >= total_expected and total_expected > 0:
-        order.status = 'received'
-    elif order.allow_partial_deliveries:
-        order.status = 'partial'
-    else:
-        order.status = 'received'
+    # Cierre Logístico de la ODC (queda marcada como recibida para pasar a conciliación 3-Way Match con sus faltantes/sobrantes)
+    order.status = 'received'
 
     db.commit()
 
@@ -924,7 +919,7 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         for bc in all_bcs:
             barcodes_map.setdefault(bc.product_variant_id, []).append(bc)
 
-    is_confirmed = (order.status in ('received', 'partial'))
+    is_confirmed = (order.status in ('received', 'partial', 'conciliated'))
     items = []
     has_discrepancies = False
     for l in order.lines:
