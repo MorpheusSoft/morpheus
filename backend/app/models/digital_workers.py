@@ -76,6 +76,25 @@ class DigitalWorkerActionLog(Base):
 
     worker = relationship("DigitalWorker", back_populates="actions")
 
+    def __init__(self, **kwargs):
+        if "description" in kwargs and "summary" not in kwargs:
+            kwargs["summary"] = kwargs.pop("description")
+        else:
+            kwargs.pop("description", None)
+        if "entity_type" in kwargs and "target_entity_type" not in kwargs:
+            kwargs["target_entity_type"] = kwargs.pop("entity_type")
+        else:
+            kwargs.pop("entity_type", None)
+        if "entity_id" in kwargs and "target_entity_id" not in kwargs:
+            kwargs["target_entity_id"] = kwargs.pop("entity_id")
+        else:
+            kwargs.pop("entity_id", None)
+        if "execution_status" in kwargs and "status" not in kwargs:
+            kwargs["status"] = kwargs.pop("execution_status")
+        else:
+            kwargs.pop("execution_status", None)
+        super().__init__(**kwargs)
+
 class DigitalWorkerConversation(Base):
     __tablename__ = "digital_worker_conversations"
     __table_args__ = {"schema": "core"}

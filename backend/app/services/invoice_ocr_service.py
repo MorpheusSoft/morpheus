@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import urllib.request
+import urllib.error
 import logging
 from decimal import Decimal
 from typing import Dict, Any, List, Optional
@@ -10,7 +11,7 @@ from datetime import datetime, date
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.purchasing import PurchaseOrder, PurchaseOrderLine, SupplierProduct
-from app.models.inventory import ProductVariant, Product
+from app.models.inventory import ProductVariant, Product, ProductBarcode
 from app.models.core import Supplier
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,14 @@ def call_gemini_multimodal(
             data = json.loads(resp.read().decode("utf-8"))
             text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             return text
+    except urllib.error.HTTPError as e:
+        err_body = ""
+        try:
+            err_body = e.read().decode("utf-8", errors="ignore")[:300]
+        except Exception:
+            pass
+        logger.error(f"Error HTTP {e.code} en llamada multimodal a Gemini: {err_body}")
+        return None
     except Exception as e:
         logger.error(f"Error en llamada multimodal a Gemini: {e}")
         return None
@@ -84,15 +93,40 @@ class InvoiceOCRService:
         Extrae datos fiscales y renglones de la factura, inyectando las líneas esperadas
         de la Orden de Compra para lograr un emparejamiento semántico exacto.
         """
-        # Preparar contexto de la ODC
+        # Preparar contexto de la ODC enriquecido con Código de Barra y PLU
+        variant_ids = [line.variant_id for line in po.lines if line.variant_id]
+        barcodes_by_variant: Dict[int, str] = {}
+        plu_by_variant: Dict[int, str] = {}
+        if variant_ids:
+            pb_rows = db.query(ProductBarcode).filter(
+                ProductBarcode.variant_id.in_(variant_ids)
+            ).order_by(ProductBarcode.is_primary.desc(), ProductBarcode.id.asc()).all()
+            for pb in pb_rows:
+                code_val = (pb.barcode or "").strip()
+                if not code_val:
+                    continue
+                if pb.barcode_type == "STELLAR_CODE":
+                    if pb.variant_id not in plu_by_variant:
+                        plu_by_variant[pb.variant_id] = code_val
+                else:
+                    if pb.variant_id not in barcodes_by_variant:
+                        barcodes_by_variant[pb.variant_id] = code_val
+
         po_lines_context = []
         for line in po.lines:
             variant = db.query(ProductVariant).filter(ProductVariant.id == line.variant_id).first()
             product = db.query(Product).filter(Product.id == variant.product_id).first() if variant else None
+            primary_barcode = (
+                barcodes_by_variant.get(line.variant_id)
+                or (variant.barcode if variant and variant.barcode else None)
+                or plu_by_variant.get(line.variant_id)
+            )
+            plu_code = plu_by_variant.get(line.variant_id)
             po_lines_context.append({
                 "variant_id": line.variant_id,
                 "sku": variant.sku if variant else "N/A",
-                "barcode": variant.barcode if variant else None,
+                "barcode": primary_barcode,
+                "plu": plu_code,
                 "name": product.name if product else "N/A",
                 "ordered_qty": float(line.expected_base_qty or 0),
                 "received_qty": float(line.received_base_qty or 0),

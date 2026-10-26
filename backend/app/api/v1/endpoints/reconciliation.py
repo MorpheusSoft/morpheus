@@ -800,20 +800,26 @@ async def upload_invoice_and_match(
     match_result["all_documents"] = existing_docs
 
     # Registrar en logs de Trabajador Digital (Clara)
-    clara = db.query(DigitalWorker).filter(DigitalWorker.agent_code == "CLARA_COMPRAS").first()
-    if clara:
-        order.reconciled_by_worker_id = clara.id
-        action_log = DigitalWorkerActionLog(
-            worker_id=clara.id,
-            action_type="3WAY_MATCH_OCR",
-            description=f"Clara procesó factura para {order.reference}. Estado: {match_result['reconciliation_status']}",
-            entity_type="PURCHASE_ORDER",
-            entity_id=str(order.id),
-            execution_status="SUCCESS",
-            details=match_result
-        )
-        db.add(action_log)
-        db.commit()
+    try:
+        clara = db.query(DigitalWorker).filter(DigitalWorker.agent_code == "CLARA_COMPRAS").first()
+        if clara:
+            order.reconciled_by_worker_id = clara.id
+            action_log = DigitalWorkerActionLog(
+                worker_id=clara.id,
+                facility_id=order.dest_facility_id,
+                action_type="3WAY_MATCH_OCR",
+                target_entity_type="PURCHASE_ORDER",
+                target_entity_id=str(order.id),
+                severity="INFO" if match_result.get("reconciliation_status") == "MATCH_EXACT" else "WARNING",
+                summary=f"Clara procesó factura para {order.reference}. Estado: {match_result['reconciliation_status']}",
+                status="COMPLETED",
+                details=match_result
+            )
+            db.add(action_log)
+            db.commit()
+    except Exception as log_err:
+        db.rollback()
+        print(f"Warning: No se pudo registrar DigitalWorkerActionLog para {order.reference}: {log_err}")
 
     return match_result
 
