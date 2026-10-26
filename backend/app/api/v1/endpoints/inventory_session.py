@@ -485,6 +485,109 @@ def record_line_count(
     return session
 
 
+@router.post("/{id}/count-line", response_model=schemas.InventoryLine)
+def record_single_line_count_fast(
+    *,
+    db: Session = Depends(deps.get_db),
+    id: int,
+    line_in: schemas.InventoryLineCreate,
+    current_user: Optional[Any] = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Ultra-fast single-line count recording (<15ms).
+    Avoids reloading and re-serializing all 10,000+ session lines on every keystroke.
+    """
+    session = db.query(InventorySession).filter(InventorySession.id == id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    if session.state in ("DONE", "CANCELLED"):
+        raise HTTPException(status_code=400, detail="No se pueden registrar conteos en una sesión finalizada o cancelada.")
+
+    variant = db.query(ProductVariant).filter(ProductVariant.id == line_in.product_variant_id).first()
+    prod = variant.product if (variant and hasattr(variant, 'product')) else None
+    uom = (prod.uom_base if prod else None) or (variant.uom_base if variant else None) or "UND"
+    validate_quantity_uom(line_in.counted_qty, uom, item_label=prod.name if prod else f"Variante #{line_in.product_variant_id}")
+
+    if session.scope_type in ('CATEGORY', 'CYCLIC') and session.scope_value:
+        clean_val = str(session.scope_value).strip()
+        if clean_val.isdigit():
+            scope_cat_id = int(clean_val)
+            valid_cat_ids = get_all_related_category_ids(db, scope_cat_id)
+            if prod and prod.category_id not in valid_cat_ids:
+                cat_obj = db.query(Category).filter(Category.id == scope_cat_id).first()
+                cat_label = get_category_breadcrumb_path(db, scope_cat_id) or (cat_obj.name if cat_obj else f"#{scope_cat_id}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El producto '{prod.name}' no pertenece a la categoría '{cat_label}' configurada para esta toma física cíclica."
+                )
+
+    target_wh = None
+    if session.warehouse_id:
+        target_wh = db.query(Warehouse).filter(Warehouse.id == session.warehouse_id).first()
+    elif session.facility_id:
+        target_wh = db.query(Warehouse).filter(Warehouse.facility_id == session.facility_id).first()
+    default_loc = db.query(Location).filter(Location.warehouse_id == target_wh.id).first() if target_wh else None
+
+    line_loc_id = None
+    if line_in.location_id and target_wh:
+        valid_loc = db.query(Location).filter(Location.id == line_in.location_id, Location.warehouse_id == target_wh.id).first()
+        if valid_loc:
+            line_loc_id = valid_loc.id
+    if not line_loc_id and default_loc:
+        line_loc_id = default_loc.id
+
+    target_line = db.query(InventoryLine).filter(
+        InventoryLine.session_id == id,
+        InventoryLine.product_variant_id == line_in.product_variant_id
+    ).first()
+
+    if target_line:
+        target_line.counted_qty = line_in.counted_qty
+        if line_loc_id:
+            target_line.location_id = line_loc_id
+        if line_in.notes:
+            target_line.notes = line_in.notes
+    else:
+        snap = db.query(InventorySnapshot).filter(
+            InventorySnapshot.variant_id == line_in.product_variant_id,
+            InventorySnapshot.facility_id == session.facility_id
+        ).first()
+        theo = float(snap.stock_qty) if snap else 0.0
+
+        target_line = InventoryLine(
+            session_id=session.id,
+            product_variant_id=line_in.product_variant_id,
+            location_id=line_loc_id,
+            theoretical_qty=theo,
+            counted_qty=line_in.counted_qty,
+            notes=line_in.notes
+        )
+        db.add(target_line)
+
+    db.commit()
+    db.refresh(target_line)
+
+    target_line.uom_base = uom
+    target_line.sku = variant.sku if variant else f"ID {target_line.product_variant_id}"
+    target_line.product_name = prod.name if prod else f"Producto #{target_line.product_variant_id}"
+
+    is_supervisor = check_user_is_supervisor(current_user, session)
+    is_guided = getattr(session, 'is_blind_count', True) is False
+    in_review_or_done = getattr(session, 'state', None) in ('REVIEW', 'DONE', 'CONFIRMING', 'CANCELLED')
+    if not (is_supervisor or is_guided or in_review_or_done):
+        target_line.theoretical_qty = None
+        target_line.difference_qty = None
+        target_line.is_anomaly = False
+        target_line.anomaly_reason = None
+    else:
+        diff = float(target_line.counted_qty or 0) - float(target_line.theoretical_qty or 0)
+        target_line.difference_qty = diff
+        target_line.is_anomaly = False
+        target_line.anomaly_reason = None
+
+    return target_line
+
+
 @router.patch("/{id}/lines/{line_id}/reason", response_model=schemas.InventoryLine)
 def update_line_adjustment_reason(
     *,

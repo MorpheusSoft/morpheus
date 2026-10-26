@@ -254,9 +254,8 @@ def read_products_selector(
         sku_code = r.sku or f"PRD-{r.variant_id}"
         prod_name = r.product_name or "Producto Sin Nombre"
         barcodes_str = " ".join(all_bc)
-        codes_preview = ", ".join(all_bc[:3])
         search_key = f"{sku_code} {r.variant_id} {r.product_id} {prod_name} {r.brand or ''} {barcodes_str} {clean_q}".lower()
-        display_label = f"[{sku_code}] {prod_name} (Cód: {codes_preview})" if all_bc else f"[{sku_code}] {prod_name}"
+        display_label = f"[{sku_code}] {prod_name}"
         cost_val = float(r.replacement_cost or r.average_cost or r.standard_cost or r.last_cost or 0.0)
         prod_packs = pack_map.get(r.product_id, [])
 

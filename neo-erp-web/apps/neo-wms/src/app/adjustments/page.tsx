@@ -42,6 +42,17 @@ export default function WmsAdjustmentsPage() {
   const [adjLines, setAdjLines] = useState<any[]>([]);
   const [savingAdj, setSavingAdj] = useState(false);
 
+  // FAST TRANSCRIPTION & BULK PASTE STATE (DIRECT ADJUSTMENTS)
+  const [adjFastCodeInput, setAdjFastCodeInput] = useState('');
+  const [adjFastSelectedProd, setAdjFastSelectedProd] = useState<any | null>(null);
+  const [adjFastQty, setAdjFastQty] = useState<number>(1);
+  const [adjFastSearching, setAdjFastSearching] = useState(false);
+  const adjFastCodeInputRef = useRef<HTMLInputElement>(null);
+  const adjFastQtyInputRef = useRef<any>(null);
+  const [bulkPasteDialogVisible, setBulkPasteDialogVisible] = useState(false);
+  const [bulkPasteText, setBulkPasteText] = useState('');
+  const [processingBulkPaste, setProcessingBulkPaste] = useState(false);
+
   // VIEW/APPROVE ADJUSTMENT DIALOG STATE
   const [viewAdjDialogVisible, setViewAdjDialogVisible] = useState(false);
   const [selectedAdj, setSelectedAdj] = useState<any | null>(null);
@@ -75,6 +86,7 @@ export default function WmsAdjustmentsPage() {
   const [loadingSessionProducts, setLoadingSessionProducts] = useState(false);
   const [countingProdId, setCountingProdId] = useState<number | null>(null);
   const [countingBarcodeInput, setCountingBarcodeInput] = useState('');
+  const countingBarcodeInputRef = useRef<HTMLInputElement>(null);
   const countingQtyInputRef = useRef<any>(null);
   const [countingQty, setCountingQty] = useState<number>(0);
   const [countingSheetNo, setCountingSheetNo] = useState('');
@@ -536,42 +548,57 @@ export default function WmsAdjustmentsPage() {
     );
   };
 
+  const productValueTemplate = (option: any, props: any) => {
+    if (!option) {
+      return <span className="text-slate-400 text-xs truncate block">{props?.placeholder || "Buscar por Código Neo, PLU, Barra o Nombre..."}</span>;
+    }
+    return (
+      <div className="flex items-center gap-2 min-w-0 max-w-full overflow-hidden">
+        <span className="font-mono font-extrabold text-[11px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-200 shrink-0">
+          {option.sku}
+        </span>
+        <span className="font-bold text-slate-800 text-xs truncate min-w-0" title={option.name}>
+          {option.name}
+        </span>
+      </div>
+    );
+  };
+
   const productOptionTemplate = (option: any) => {
     if (!option) return null;
     return (
-      <div className="flex flex-col py-1 text-xs gap-0.5 max-w-full overflow-hidden">
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-bold text-slate-800 truncate">{option.name}</span>
-          <span className="text-[10px] font-mono bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200 shrink-0">
+      <div className="flex flex-col py-1 text-xs gap-0.5 max-w-full min-w-0 overflow-hidden">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[10px] font-mono font-extrabold bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-200 shrink-0">
             {option.sku}
           </span>
+          <span className="font-bold text-slate-800 truncate min-w-0 flex-1" title={option.name}>
+            {option.name}
+          </span>
+          <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded shrink-0">
+            {option.uom_base}
+          </span>
         </div>
-        <div className="flex items-center gap-2 text-[11px] text-slate-500">
+        <div className="flex items-center gap-2 text-[10px] text-slate-500 min-w-0">
           {option.primary_barcode ? (
-            <span className="flex items-center text-indigo-700 font-mono text-[10px] bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 shrink-0">
-              <i className="pi pi-barcode mr-1 text-[11px]"></i>
+            <span className="flex items-center text-slate-600 font-mono bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200 shrink-0">
+              <i className="pi pi-barcode mr-1 text-[10px]"></i>
               {option.primary_barcode}
             </span>
           ) : (
             <span className="text-[10px] text-slate-400 italic">Sin barra</span>
           )}
           {option.barcodes && option.barcodes.length > 1 && (
-            <span className="text-[9px] text-slate-400 truncate">
-              +{option.barcodes.length - 1} más ({option.barcodes.slice(1, 3).join(', ')})
+            <span className="text-[10px] text-slate-400 font-mono truncate min-w-0">
+              Alt: {option.barcodes.slice(1, 3).join(', ')}
             </span>
           )}
-          <span className="ml-auto text-[10px] font-semibold text-slate-600 bg-slate-100 px-1 rounded shrink-0">
-            {option.uom_base}
-          </span>
         </div>
       </div>
     );
   };
 
-  const handleBarcodeScanOrLookup = (codeToSearch: string) => {
-    const clean = codeToSearch.trim().toLowerCase();
-    if (!clean) return;
-
+  const buildCodeCandidates = (clean: string) => {
     const candidates = [clean];
     if (/^\d+$/.test(clean)) {
       if (clean.length === 12) {
@@ -582,6 +609,7 @@ export default function WmsAdjustmentsPage() {
       const unpadded = clean.replace(/^0+/, '');
       if (unpadded && !candidates.includes(unpadded)) {
         candidates.push(unpadded);
+        candidates.push(`prd-${unpadded}`);
       }
       for (const len of [6, 13, 12, 14, 8]) {
         const padded = (unpadded || clean).padStart(len, '0');
@@ -590,6 +618,14 @@ export default function WmsAdjustmentsPage() {
         }
       }
     }
+    return candidates;
+  };
+
+  const handleBarcodeScanOrLookup = async (codeToSearch: string) => {
+    const clean = codeToSearch.trim().toLowerCase();
+    if (!clean) return;
+
+    const candidates = buildCodeCandidates(clean);
 
     const matchesProduct = (p: any) => {
       const pSku = (p.sku || '').toLowerCase();
@@ -600,26 +636,56 @@ export default function WmsAdjustmentsPage() {
              (clean.length >= 3 && pName.includes(clean));
     };
 
-    // 1. Buscar primero en los productos del alcance actual (sesión cíclica o catálogo general)
-    const foundInScope = availableCountingProducts.find(matchesProduct);
-
-    if (foundInScope) {
-      setCountingProdId(foundInScope.value);
+    const selectFoundForCounting = (prod: any) => {
+      setCountingProdId(prod.value);
       setCountingBarcodeInput('');
-      toast.current?.show({ severity: 'success', summary: 'Producto Identificado', detail: `${foundInScope.name} (${foundInScope.sku})`, life: 2500 });
+      toast.current?.show({ severity: 'success', summary: 'Producto Identificado', detail: `[${prod.sku}] ${prod.name}`, life: 2000 });
       setTimeout(() => {
         if (countingQtyInputRef.current) {
           const inputEl = countingQtyInputRef.current.getInput ? countingQtyInputRef.current.getInput() : countingQtyInputRef.current;
-          if (inputEl && inputEl.focus) inputEl.focus();
+          if (inputEl && inputEl.focus) {
+            inputEl.focus();
+            if (inputEl.select) inputEl.select();
+          }
         }
-      }, 100);
+      }, 60);
+    };
+
+    // 1. Buscar primero en memoria
+    const foundInScope = availableCountingProducts.find(matchesProduct);
+    if (foundInScope) {
+      selectFoundForCounting(foundInScope);
       return;
     }
 
-    // 2. Si es conteo cíclico y no se halló en el alcance, verificar si existe en otra categoría del catálogo global
+    // 2. Si no está en los primeros 1,000 en memoria, consultar rápido al backend (/products/selector?q=...)
+    try {
+      const catParam = isSessionCategoryScoped && selectedSession?.scope_value ? `&category_id=${selectedSession.scope_value}` : '';
+      const res = await api.get(`/products/selector?q=${encodeURIComponent(codeToSearch.trim())}&limit=25${catParam}`);
+      const remoteList = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.items || []);
+      if (remoteList.length > 0) {
+        if (isSessionCategoryScoped) {
+          setSessionScopedProducts(prev => {
+            const existingIds = new Set(prev.map((x: any) => x.value));
+            return [...prev, ...remoteList.filter((x: any) => !existingIds.has(x.value))];
+          });
+        } else {
+          setProducts(prev => {
+            const existingIds = new Set(prev.map((x: any) => x.value));
+            return [...prev, ...remoteList.filter((x: any) => !existingIds.has(x.value))];
+          });
+        }
+        const exactMatch = remoteList.find(matchesProduct) || remoteList[0];
+        selectFoundForCounting(exactMatch);
+        return;
+      }
+    } catch (err) {
+      console.error('Error buscando producto en servidor:', err);
+    }
+
+    // 3. Si es conteo cíclico y no se halló en el alcance, verificar si existe en otra categoría del catálogo global
     if (isSessionCategoryScoped) {
       const foundInGlobal = products.find(matchesProduct);
-
       if (foundInGlobal) {
         toast.current?.show({
           severity: 'warn',
@@ -631,7 +697,7 @@ export default function WmsAdjustmentsPage() {
       }
     }
 
-    // 3. No encontrado en ningún catálogo
+    // 4. No encontrado en ningún catálogo
     toast.current?.show({ severity: 'warn', summary: 'Código no Encontrado', detail: `No se halló ningún producto con código o barra: "${codeToSearch}"`, life: 3500 });
   };
 
@@ -767,9 +833,7 @@ export default function WmsAdjustmentsPage() {
         const primaryBarcode = allBarcodes.length > 0 ? allBarcodes[0] : '';
         const barcodes_str = allBarcodes.join(' ');
         const search_key = `${skuCode} ${prodName} ${barcodes_str}`.toLowerCase();
-        const displayLabel = primaryBarcode 
-          ? `[${skuCode}] ${prodName} (Barra: ${primaryBarcode})`
-          : `[${skuCode}] ${prodName}`;
+  const displayLabel = `[${skuCode}] ${prodName}`;
 
         return {
           id: variantId,
@@ -915,6 +979,263 @@ export default function WmsAdjustmentsPage() {
         uom_base: 'UND'
       }
     ]);
+  };
+
+  // TRANSCRIPCIÓN RÁPIDA EN AJUSTE DIRECTO (CÓDIGO -> ENTER -> CANTIDAD -> ENTER)
+  const focusAdjFastQty = () => {
+    setTimeout(() => {
+      if (adjFastQtyInputRef.current) {
+        const inputEl = adjFastQtyInputRef.current.getInput ? adjFastQtyInputRef.current.getInput() : adjFastQtyInputRef.current;
+        if (inputEl && inputEl.focus) {
+          inputEl.focus();
+          if (inputEl.select) inputEl.select();
+        }
+      }
+    }, 50);
+  };
+
+  const handleAdjFastLookup = async (rawCode: string) => {
+    const clean = (rawCode || '').trim().toLowerCase();
+    if (!clean) return;
+
+    const candidates = buildCodeCandidates(clean);
+    const matchesProduct = (p: any) => {
+      const pSku = (p.sku || '').toLowerCase();
+      const pPrimary = (p.primary_barcode || '').toLowerCase();
+      const pBarcodes = (p.barcodes || []).map((b: string) => b.toLowerCase());
+      const pName = (p.name || '').toLowerCase();
+      return candidates.some(c => c === pSku || c === pPrimary || pBarcodes.includes(c)) ||
+             (clean.length >= 3 && pName.includes(clean));
+    };
+
+    const exactMatches = (p: any) => {
+      const pSku = (p.sku || '').toLowerCase();
+      const pPrimary = (p.primary_barcode || '').toLowerCase();
+      const pBarcodes = (p.barcodes || []).map((b: string) => b.toLowerCase());
+      return candidates.some(c => c === pSku || c === pPrimary || pBarcodes.includes(c));
+    };
+
+    // 1. Buscar coincidencia exacta en memoria
+    const localExact = products.find(exactMatches);
+    if (localExact) {
+      setAdjFastSelectedProd(localExact);
+      setAdjFastQty(1);
+      focusAdjFastQty();
+      return;
+    }
+
+    // 2. Consultar en el servidor (/products/selector?q=...) para cubrir los 10,854+ SKUs
+    setAdjFastSearching(true);
+    try {
+      const res = await api.get(`/products/selector?q=${encodeURIComponent(rawCode.trim())}&limit=25`);
+      const remoteList = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.items || []);
+      if (remoteList.length > 0) {
+        setProducts(prev => {
+          const existingIds = new Set(prev.map((x: any) => x.value));
+          return [...prev, ...remoteList.filter((x: any) => !existingIds.has(x.value))];
+        });
+        const bestMatch = remoteList.find(exactMatches) || remoteList.find(matchesProduct) || remoteList[0];
+        setAdjFastSelectedProd(bestMatch);
+        setAdjFastQty(1);
+        focusAdjFastQty();
+        return;
+      }
+    } catch (err) {
+      console.error('Error en búsqueda rápida de ajuste:', err);
+    } finally {
+      setAdjFastSearching(false);
+    }
+
+    const localPartial = products.find(matchesProduct);
+    if (localPartial) {
+      setAdjFastSelectedProd(localPartial);
+      setAdjFastQty(1);
+      focusAdjFastQty();
+      return;
+    }
+
+    toast.current?.show({
+      severity: 'warn',
+      summary: 'Producto No Encontrado',
+      detail: `No se halló ningún producto para "${rawCode}".`,
+      life: 2500
+    });
+  };
+
+  const handleAdjFastAdd = () => {
+    if (!adjFastSelectedProd) {
+      if (adjFastCodeInput.trim()) {
+        handleAdjFastLookup(adjFastCodeInput);
+      }
+      return;
+    }
+    const uom = adjFastSelectedProd.uom_base || 'UND';
+    const qtyToAdd = sanitizeQuantity(adjFastQty || 1, uom);
+    if (qtyToAdd <= 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Cantidad Inválida', detail: 'Ingrese una cantidad mayor a 0.', life: 2000 });
+      return;
+    }
+    const unitCost = parseFloat(adjFastSelectedProd.cost || 0);
+
+    setAdjLines(prev => {
+      // Si hay una única fila vacía inicial, reemplazarla
+      const nonEmpty = prev.filter(l => l.product_variant_id !== null);
+      const existingIdx = nonEmpty.findIndex(l => l.product_variant_id === adjFastSelectedProd.value);
+      if (existingIdx >= 0) {
+        const copy = [...nonEmpty];
+        const newQty = sanitizeQuantity(parseFloat(copy[existingIdx].quantity || 0) + qtyToAdd, uom);
+        const c = parseFloat(copy[existingIdx].unit_cost || unitCost || 0);
+        copy[existingIdx] = {
+          ...copy[existingIdx],
+          quantity: newQty,
+          unit_cost: c,
+          total_value: roundVal(newQty * c)
+        };
+        return copy;
+      }
+      return [
+        ...nonEmpty,
+        {
+          product_variant_id: adjFastSelectedProd.value,
+          batch_id: null,
+          quantity: qtyToAdd,
+          unit_cost: unitCost,
+          total_value: roundVal(qtyToAdd * unitCost),
+          uom_base: uom
+        }
+      ];
+    });
+
+    setAdjFastSelectedProd(null);
+    setAdjFastCodeInput('');
+    setAdjFastQty(1);
+    setTimeout(() => {
+      if (adjFastCodeInputRef.current) {
+        adjFastCodeInputRef.current.focus();
+      }
+    }, 40);
+  };
+
+  const handleBulkPasteProcess = async () => {
+    const rawLines = (bulkPasteText || '')
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .filter(Boolean);
+    if (rawLines.length === 0) {
+      toast.current?.show({ severity: 'warn', summary: 'Texto Vacío', detail: 'Pegue al menos una línea con Código y Cantidad.' });
+      return;
+    }
+
+    setProcessingBulkPaste(true);
+    let addedCount = 0;
+    const notFoundCodes: string[] = [];
+    const newProductsDiscovered: any[] = [];
+    const resolvedEntries: { prod: any; qty: number }[] = [];
+
+    for (const rawLine of rawLines) {
+      // Soportar tabulador (Excel), punto y coma, coma o espacio al final
+      let parts = rawLine.split(/\t|;/);
+      if (parts.length < 2) {
+        const match = rawLine.match(/^(\S+)\s+([\d.,]+)$/);
+        if (match) {
+          parts = [match[1], match[2]];
+        } else {
+          parts = rawLine.split(',');
+        }
+      }
+      const codeToken = (parts[0] || '').trim();
+      const qtyToken = parts.length > 1 ? (parts[1] || '1').trim().replace(',', '.') : '1';
+      const parsedQty = parseFloat(qtyToken);
+      const qtyVal = !isNaN(parsedQty) && parsedQty > 0 ? parsedQty : 1;
+      if (!codeToken) continue;
+
+      const candidates = buildCodeCandidates(codeToken.toLowerCase());
+      const exactMatches = (p: any) => {
+        const pSku = (p.sku || '').toLowerCase();
+        const pPrimary = (p.primary_barcode || '').toLowerCase();
+        const pBarcodes = (p.barcodes || []).map((b: string) => b.toLowerCase());
+        return candidates.some(c => c === pSku || c === pPrimary || pBarcodes.includes(c));
+      };
+
+      let prod = products.find(exactMatches) || newProductsDiscovered.find(exactMatches);
+      if (!prod) {
+        try {
+          const res = await api.get(`/products/selector?q=${encodeURIComponent(codeToken)}&limit=10`);
+          const list = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.items || []);
+          if (list.length > 0) {
+            newProductsDiscovered.push(...list);
+            prod = list.find(exactMatches) || list[0];
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      if (prod) {
+        resolvedEntries.push({ prod, qty: qtyVal });
+        addedCount++;
+      } else {
+        notFoundCodes.push(codeToken);
+      }
+    }
+
+    if (newProductsDiscovered.length > 0) {
+      setProducts(prev => {
+        const existingIds = new Set(prev.map((x: any) => x.value));
+        const uniqueNew = newProductsDiscovered.filter((x: any, idx: number, arr: any[]) =>
+          !existingIds.has(x.value) && arr.findIndex(y => y.value === x.value) === idx
+        );
+        return [...prev, ...uniqueNew];
+      });
+    }
+
+    if (resolvedEntries.length > 0) {
+      setAdjLines(prev => {
+        const copy = [...prev.filter(l => l.product_variant_id !== null)];
+        for (const item of resolvedEntries) {
+          const uom = item.prod.uom_base || 'UND';
+          const cleanQty = sanitizeQuantity(item.qty, uom);
+          const cost = parseFloat(item.prod.cost || 0);
+          const idx = copy.findIndex(l => l.product_variant_id === item.prod.value);
+          if (idx >= 0) {
+            const sumQty = sanitizeQuantity(parseFloat(copy[idx].quantity || 0) + cleanQty, uom);
+            const c = parseFloat(copy[idx].unit_cost || cost || 0);
+            copy[idx] = { ...copy[idx], quantity: sumQty, unit_cost: c, total_value: roundVal(sumQty * c) };
+          } else {
+            copy.push({
+              product_variant_id: item.prod.value,
+              batch_id: null,
+              quantity: cleanQty,
+              unit_cost: cost,
+              total_value: roundVal(cleanQty * cost),
+              uom_base: uom
+            });
+          }
+        }
+        return copy;
+      });
+    }
+
+    setProcessingBulkPaste(false);
+    if (addedCount > 0) {
+      setBulkPasteDialogVisible(false);
+      setBulkPasteText('');
+      toast.current?.show({
+        severity: notFoundCodes.length > 0 ? 'warn' : 'success',
+        summary: `${addedCount} Producto(s) Cargados`,
+        detail: notFoundCodes.length > 0
+          ? `No se encontraron ${notFoundCodes.length}: ${notFoundCodes.slice(0, 5).join(', ')}`
+          : 'Todos los renglones fueron agregados correctamente.',
+        life: 4500
+      });
+    } else {
+      toast.current?.show({
+        severity: 'error',
+        summary: 'Sin Coincidencias',
+        detail: `No se pudo identificar ninguno de los códigos indicados (${notFoundCodes.slice(0, 5).join(', ')}).`,
+        life: 4500
+      });
+    }
   };
 
   const updateLine = (index: number, field: string, val: any) => {
@@ -1186,7 +1507,7 @@ export default function WmsAdjustmentsPage() {
     setLoadingAiAudit(false);
   };
 
-  // RECORD BLIND COUNT FOR A LINE
+  // RECORD BLIND COUNT FOR A LINE (ULTRA-FAST SINGLE LINE UPDATE)
   const handleRecordCount = async () => {
     if (!selectedSession || !countingProdId) {
       toast.current?.show({ severity: 'warn', summary: 'Selección Requerida', detail: 'Seleccione un producto para registrar el conteo.' });
@@ -1197,17 +1518,39 @@ export default function WmsAdjustmentsPage() {
       const prod = availableCountingProducts.find(p => p.value === countingProdId) || products.find(p => p.value === countingProdId);
       const sanitizedQty = sanitizeQuantity(countingQty, prod?.uom_base);
 
-      const res = await api.post(`/inventory-session/${selectedSession.id}/count`, {
+      const res = await api.post(`/inventory-session/${selectedSession.id}/count-line`, {
         product_variant_id: countingProdId,
         counted_qty: sanitizedQty,
         notes: countingNotes
       });
-      setSelectedSession(res.data);
-      toast.current?.show({ severity: 'success', summary: 'Conteo Registrado', detail: 'Conteo ciego actualizado correctamente.' });
+      const updatedLine = res.data;
+
+      setSelectedSession((prev: any) => {
+        if (!prev) return prev;
+        const lines = Array.isArray(prev.lines) ? [...prev.lines] : [];
+        const existingIdx = lines.findIndex((l: any) => l.product_variant_id === updatedLine.product_variant_id || l.id === updatedLine.id);
+        if (existingIdx >= 0) {
+          lines[existingIdx] = { ...lines[existingIdx], ...updatedLine };
+        } else {
+          lines.unshift(updatedLine);
+        }
+        return { ...prev, lines };
+      });
+
+      toast.current?.show({
+        severity: 'success',
+        summary: 'Conteo Guardado',
+        detail: `[${prod?.sku || updatedLine.sku}] Cantidad: ${sanitizedQty}`,
+        life: 1800
+      });
       setCountingProdId(null);
       setCountingQty(0);
       setCountingNotes('');
-      fetchSessions();
+      setTimeout(() => {
+        if (countingBarcodeInputRef.current) {
+          countingBarcodeInputRef.current.focus();
+        }
+      }, 40);
     } catch (e: any) {
       toast.current?.show({ severity: 'error', summary: 'Error', detail: e.response?.data?.detail || 'Fallo al registrar conteo.' });
     }
@@ -1778,28 +2121,143 @@ export default function WmsAdjustmentsPage() {
 
           {/* Items Table */}
           <div className="space-y-3">
-            <div className="flex justify-between items-center">
+            <div className="flex flex-wrap justify-between items-center gap-2">
               <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Detalle de Productos a Ajustar</h3>
-              <Button
-                type="button"
-                label="Añadir Producto"
-                icon="pi pi-plus"
-                size="small"
-                severity="info"
-                className="font-bold text-xs"
-                onClick={addLine}
-              />
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  label="Pegar Lote (Excel)"
+                  icon="pi pi-clipboard"
+                  size="small"
+                  outlined
+                  severity="secondary"
+                  className="font-bold text-xs"
+                  onClick={() => setBulkPasteDialogVisible(true)}
+                  tooltip="Pegar múltiples códigos y cantidades directamente desde Excel"
+                  tooltipOptions={{ position: 'top' }}
+                />
+                <Button
+                  type="button"
+                  label="Añadir Fila Manual"
+                  icon="pi pi-plus"
+                  size="small"
+                  severity="info"
+                  className="font-bold text-xs"
+                  onClick={addLine}
+                />
+              </div>
+            </div>
+
+            {/* BARRA DE TRANSCRIPCIÓN RÁPIDA (TECLADO / ESCÁNER SIN USAR MOUSE) */}
+            <div className="bg-indigo-50/70 border border-indigo-200/80 rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-extrabold text-indigo-900 uppercase tracking-wide flex items-center gap-1.5">
+                  <i className="pi pi-bolt text-amber-500"></i>
+                  Transcripción Rápida (Escáner / Teclado):
+                </span>
+                <span className="text-indigo-700 font-medium hidden sm:inline">
+                  1️⃣ Escriba Código / Barra y pulse <b>Enter</b> ➔ 2️⃣ Ingrese Cantidad y pulse <b>Enter</b>
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
+                <div className="md:col-span-6 relative">
+                  <InputText
+                    ref={adjFastCodeInputRef}
+                    value={adjFastCodeInput}
+                    onChange={e => {
+                      setAdjFastCodeInput(e.target.value);
+                      if (adjFastSelectedProd) setAdjFastSelectedProd(null);
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAdjFastLookup(adjFastCodeInput);
+                      }
+                    }}
+                    placeholder="Código Neo (PRD-...), PLU (003377), Barra o Nombre + Enter..."
+                    className="text-xs p-inputtext-sm w-full font-mono pl-8 bg-white"
+                  />
+                  <i className={`pi ${adjFastSearching ? 'pi-spin pi-spinner text-indigo-600' : 'pi-barcode text-slate-400'} absolute left-2.5 top-1/2 -translate-y-1/2 text-xs`}></i>
+                </div>
+
+                <div className="md:col-span-3">
+                  <div className="flex items-center gap-1.5">
+                    <InputNumber
+                      ref={adjFastQtyInputRef}
+                      value={adjFastQty}
+                      onValueChange={e => setAdjFastQty(e.value || 1)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAdjFastAdd();
+                        }
+                      }}
+                      min={adjFastSelectedProd && isWeightUom(adjFastSelectedProd.uom_base) ? 0.001 : 1}
+                      minFractionDigits={getUomDecimals(adjFastSelectedProd?.uom_base)}
+                      maxFractionDigits={getUomDecimals(adjFastSelectedProd?.uom_base)}
+                      step={adjFastSelectedProd && isWeightUom(adjFastSelectedProd.uom_base) ? 0.001 : 1}
+                      placeholder="Cant."
+                      className="w-full"
+                      inputClassName="p-inputtext-sm text-xs font-bold w-full text-right bg-white"
+                    />
+                    <span className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 px-2 py-1.5 rounded shrink-0">
+                      {adjFastSelectedProd?.uom_base || 'UND'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="md:col-span-3 flex gap-1.5">
+                  <Button
+                    type="button"
+                    label={adjFastSelectedProd ? "Agregar (Enter)" : "Buscar (Enter)"}
+                    icon={adjFastSelectedProd ? "pi pi-check" : "pi pi-search"}
+                    size="small"
+                    severity={adjFastSelectedProd ? "success" : "info"}
+                    loading={adjFastSearching}
+                    className="font-bold text-xs w-full"
+                    onClick={() => {
+                      if (adjFastSelectedProd) {
+                        handleAdjFastAdd();
+                      } else {
+                        handleAdjFastLookup(adjFastCodeInput);
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+
+              {adjFastSelectedProd && (
+                <div className="flex items-center justify-between bg-white border border-emerald-200 rounded-lg px-3 py-1.5 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono font-extrabold text-[11px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-200 shrink-0">
+                      {adjFastSelectedProd.sku}
+                    </span>
+                    <span className="font-bold text-slate-800 truncate">
+                      {adjFastSelectedProd.name}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0 ml-2">
+                    <span className="text-[11px] font-mono text-slate-600">
+                      Costo: <b>${Number(adjFastSelectedProd.cost || 0).toFixed(2)}</b> / {adjFastSelectedProd.uom_base || 'UND'}
+                    </span>
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                      Presione Enter en Cantidad para agregar ↵
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="border border-slate-200 rounded-xl overflow-hidden">
-              <table className="w-full text-xs text-left text-slate-700">
+              <table className="w-full table-fixed text-xs text-left text-slate-700">
                 <thead className="bg-slate-100 uppercase text-[10px] font-bold text-slate-600 border-b border-slate-200">
                   <tr>
-                    <th className="p-3">PRODUCTO / SKU</th>
-                    <th className="p-3 w-32">CANTIDAD</th>
-                    <th className="p-3 w-36">COSTO UNITARIO ($)</th>
-                    <th className="p-3 w-36 text-right">SUBTOTAL ($)</th>
-                    <th className="p-3 w-12"></th>
+                    <th className="p-3 w-[44%]">PRODUCTO / CÓDIGO NEO</th>
+                    <th className="p-3 w-[16%] text-center">CANTIDAD</th>
+                    <th className="p-3 w-[18%] text-right">COSTO UNITARIO ($)</th>
+                    <th className="p-3 w-[15%] text-right">SUBTOTAL ($)</th>
+                    <th className="p-3 w-[7%] text-center"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -1808,57 +2266,74 @@ export default function WmsAdjustmentsPage() {
                       <td colSpan={5} className="p-8 text-center text-slate-400 bg-slate-50/50">
                         <i className="pi pi-box text-3xl mb-2 text-slate-300 block"></i>
                         <p className="font-semibold text-xs text-slate-600">No hay productos agregados a esta solicitud.</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">Haz clic en <b className="text-indigo-600">+ Añadir Producto</b> arriba para seleccionar los artículos a ajustar.</p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">Usa la <b className="text-indigo-600">Barra de Transcripción Rápida</b> arriba o haz clic en <b className="text-indigo-600">+ Añadir Fila Manual</b>.</p>
                       </td>
                     </tr>
                   ) : (
                     adjLines.map((line, idx) => (
                       <tr key={idx} className="hover:bg-slate-50">
-                        <td className="p-2">
+                        <td className="p-2 min-w-0 overflow-hidden align-middle">
                           <Dropdown
                             value={line.product_variant_id}
                             options={products}
                             optionLabel="label"
                             optionValue="value"
                             onChange={e => updateLine(idx, 'product_variant_id', e.value)}
-                            placeholder="Buscar por Código de Barra, SKU o Nombre..."
-                            className="w-full text-xs"
+                            placeholder="Buscar por Código Neo, PLU, Barra o Nombre..."
+                            className="w-full max-w-full min-w-0 text-xs"
+                            panelStyle={{ maxWidth: '540px' }}
+                            virtualScrollerOptions={{ itemSize: 48 }}
                             filter
                             filterBy="label,search_key,sku,name,product_name,barcodes_str"
                             filterMatchMode="contains"
                             onFilter={e => handleProductFilter(e.filter)}
+                            valueTemplate={productValueTemplate}
                             itemTemplate={productOptionTemplate}
                             showClear
                           />
                         </td>
-                        <td className="p-2">
-                          <InputNumber
-                            value={line.quantity}
-                            onValueChange={e => updateLine(idx, 'quantity', e.value || 0)}
-                            min={isWeightUom(line.uom_base) ? 0.001 : 1}
-                            minFractionDigits={getUomDecimals(line.uom_base)}
-                            maxFractionDigits={getUomDecimals(line.uom_base)}
-                            step={isWeightUom(line.uom_base) ? 0.001 : 1}
-                            inputClassName="p-inputtext-sm text-xs font-bold w-full"
-                          />
-                          <span className="text-[10px] text-slate-400 block text-right mt-0.5">
-                            {line.uom_base || 'UND'}
-                          </span>
+                        <td className="p-2 align-middle">
+                          <div className="flex items-center gap-1">
+                            <InputNumber
+                              value={line.quantity}
+                              onValueChange={e => updateLine(idx, 'quantity', e.value || 0)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  if (adjFastCodeInputRef.current) {
+                                    adjFastCodeInputRef.current.focus();
+                                  } else {
+                                    addLine();
+                                  }
+                                }
+                              }}
+                              min={isWeightUom(line.uom_base) ? 0.001 : 1}
+                              minFractionDigits={getUomDecimals(line.uom_base)}
+                              maxFractionDigits={getUomDecimals(line.uom_base)}
+                              step={isWeightUom(line.uom_base) ? 0.001 : 1}
+                              className="w-full"
+                              inputClassName="p-inputtext-sm text-xs font-bold w-full text-right"
+                            />
+                            <span className="text-[10px] font-bold text-slate-400 shrink-0 w-7 text-right">
+                              {line.uom_base || 'UND'}
+                            </span>
+                          </div>
                         </td>
-                        <td className="p-2">
+                        <td className="p-2 align-middle">
                           <InputNumber
                             value={line.unit_cost}
                             onValueChange={e => updateLine(idx, 'unit_cost', e.value || 0)}
                             mode="currency"
                             currency="USD"
                             locale="en-US"
-                            inputClassName="p-inputtext-sm text-xs font-bold w-full"
+                            className="w-full"
+                            inputClassName="p-inputtext-sm text-xs font-bold w-full text-right"
                           />
                         </td>
-                        <td className="p-2 text-right font-mono font-bold text-slate-900">
+                        <td className="p-2 text-right font-mono font-bold text-slate-900 align-middle truncate">
                           ${(line.total_value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
-                        <td className="p-2 text-center">
+                        <td className="p-2 text-center align-middle">
                           <Button
                             icon="pi pi-trash"
                             rounded
@@ -1901,6 +2376,57 @@ export default function WmsAdjustmentsPage() {
               loading={savingAdj}
               className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white"
               onClick={saveDirectAdjustment}
+            />
+          </div>
+        </div>
+      </Dialog>
+
+      {/* DIÁLOGO: PEGADO MASIVO DE PRODUCTOS DESDE EXCEL / TEXTO */}
+      <Dialog
+        header="📋 Pegar Lote de Productos (Excel / Códigos)"
+        visible={bulkPasteDialogVisible}
+        onHide={() => setBulkPasteDialogVisible(false)}
+        style={{ width: '580px' }}
+        className="rounded-2xl"
+      >
+        <div className="flex flex-col gap-4 py-2 text-xs">
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-indigo-900 space-y-1">
+            <p className="font-bold">¿Cómo pegar rápido desde Excel o Bloc de Notas?</p>
+            <p className="text-[11px] text-indigo-800">
+              Copia dos columnas desde Excel (<b>Columna 1: Código Neo / PLU / Código de Barra</b> y <b>Columna 2: Cantidad</b>) y pégalas abajo. Un producto por línea:
+            </p>
+            <pre className="bg-white/80 border border-indigo-200 rounded p-2 font-mono text-[10px] text-slate-700 mt-1">
+{`PRD-3343\t12
+003377\t5
+7891080148743\t24`}
+            </pre>
+          </div>
+
+          <textarea
+            value={bulkPasteText}
+            onChange={e => setBulkPasteText(e.target.value)}
+            rows={8}
+            placeholder={"Pegue aquí sus líneas (Código y Cantidad)...\nEjemplo:\nPRD-3343  10\n003377    5"}
+            className="w-full p-3 border border-slate-300 rounded-xl font-mono text-xs focus:outline-none focus:border-indigo-500"
+          />
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+            <Button
+              type="button"
+              label="Cancelar"
+              outlined
+              severity="secondary"
+              className="font-bold text-xs"
+              onClick={() => setBulkPasteDialogVisible(false)}
+            />
+            <Button
+              type="button"
+              label="Procesar y Cargar Productos"
+              icon="pi pi-check-circle"
+              severity="success"
+              loading={processingBulkPaste}
+              className="font-bold text-xs"
+              onClick={handleBulkPasteProcess}
             />
           </div>
         </div>
@@ -2623,6 +3149,7 @@ export default function WmsAdjustmentsPage() {
                   </div>
                   <div className="relative flex-1 w-full">
                     <InputText
+                      ref={countingBarcodeInputRef}
                       value={countingBarcodeInput}
                       onChange={e => setCountingBarcodeInput(e.target.value)}
                       onKeyDown={e => {
@@ -2634,7 +3161,7 @@ export default function WmsAdjustmentsPage() {
                       placeholder={
                         isSessionCategoryScoped
                           ? `Escanee código de barra de ${selectedSession.category_name || 'la categoría'}...`
-                          : "Escanee con pistola o ingrese cualquier código (EAN, DUN, Stellar, SKU) y presione Enter..."
+                          : "Escanee con pistola o ingrese cualquier código (PRD-..., PLU, EAN, DUN) y presione Enter..."
                       }
                       className="text-xs p-inputtext-sm w-full font-mono pl-8"
                     />
@@ -2651,9 +3178,9 @@ export default function WmsAdjustmentsPage() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-                  <div className="md:col-span-2 flex flex-col gap-1">
+                  <div className="md:col-span-2 flex flex-col gap-1 min-w-0">
                     <label className="text-[11px] font-bold text-slate-700">
-                      Producto / SKU *
+                      Producto / Código Neo *
                       {isSessionCategoryScoped && (
                         <span className="text-amber-700 font-semibold text-[10px] ml-2">
                           (Solo {selectedSession.category_name || 'categoría'})
@@ -2665,21 +3192,37 @@ export default function WmsAdjustmentsPage() {
                       options={availableCountingProducts}
                       optionLabel="label"
                       optionValue="value"
-                      onChange={e => setCountingProdId(e.value)}
+                      onChange={e => {
+                        setCountingProdId(e.value);
+                        setTimeout(() => {
+                          if (countingQtyInputRef.current) {
+                            const inputEl = countingQtyInputRef.current.getInput ? countingQtyInputRef.current.getInput() : countingQtyInputRef.current;
+                            if (inputEl && inputEl.focus) {
+                              inputEl.focus();
+                              if (inputEl.select) inputEl.select();
+                            }
+                          }
+                        }, 60);
+                      }}
                       placeholder={
                         loadingSessionProducts
                           ? "Cargando catálogo de la categoría..."
                           : isSessionCategoryScoped
                           ? `Buscar en ${selectedSession.category_name || 'categoría'} (${availableCountingProducts.length} productos)...`
-                          : "Buscar por Código de Barra, SKU o Nombre..."
+                          : "Buscar por Código Neo, PLU, Barra o Nombre..."
                       }
                       disabled={loadingSessionProducts}
                       filter
                       filterBy="label,search_key,sku,name,barcodes_str"
                       filterMatchMode="contains"
+                      onFilter={e => {
+                        if (!isSessionCategoryScoped) handleProductFilter(e.filter);
+                      }}
+                      virtualScrollerOptions={{ itemSize: 48 }}
+                      valueTemplate={productValueTemplate}
                       itemTemplate={productOptionTemplate}
                       showClear
-                      className="text-xs w-full"
+                      className="text-xs w-full max-w-full min-w-0"
                     />
                   </div>
 
@@ -2693,6 +3236,12 @@ export default function WmsAdjustmentsPage() {
                       onValueChange={e => {
                         const prod = availableCountingProducts.find(p => p.value === countingProdId);
                         setCountingQty(sanitizeQuantity(e.value || 0, prod?.uom_base));
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleRecordCount();
+                        }
                       }}
                       min={0}
                       minFractionDigits={getUomDecimals(availableCountingProducts.find(p => p.value === countingProdId)?.uom_base)}
@@ -2708,13 +3257,19 @@ export default function WmsAdjustmentsPage() {
                     <InputText
                       value={countingSheetNo}
                       onChange={e => setCountingSheetNo(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleRecordCount();
+                        }
+                      }}
                       placeholder="Ej. PL-014"
                       className="text-xs p-inputtext-sm font-mono"
                     />
                   </div>
 
                   <Button
-                    label="Guardar Conteo"
+                    label="Guardar Conteo (Enter)"
                     icon="pi pi-save"
                     loading={savingCount}
                     className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md h-[38px]"
