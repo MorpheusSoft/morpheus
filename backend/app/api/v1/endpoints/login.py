@@ -37,3 +37,18 @@ def login_access_token(
         ),
         "token_type": "bearer",
     }
+
+@router.post("/login/refresh-token", response_model=Token)
+def refresh_access_token(
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Renueva el token JWT para mantener la sesión deslizante mientras el usuario esté activo.
+    """
+    access_token_expires = timedelta(minutes=security.ACCESS_TOKEN_EXPIRE_MINUTES)
+    return {
+        "access_token": security.create_access_token(
+            current_user.id, expires_delta=access_token_expires
+        ),
+        "token_type": "bearer",
+    }

@@ -2,7 +2,14 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname } from 'next/navigation';
-import { clearAuthCookies, getLoginUrl, resolveDomain } from '@/lib/domain';
+import {
+  clearAuthCookies,
+  getLoginUrl,
+  resolveDomain,
+  setAuthTokenCookie,
+  recordSharedActivity,
+  getSharedLastActivity,
+} from '@/lib/domain';
 import { canAccessModule, canReadFeature } from '@/lib/rbac';
 import { ChangePasswordModal } from './ChangePasswordModal';
 
@@ -37,15 +44,23 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
   const [isExpired, setIsExpired] = useState(false);
   const [isForbidden, setIsForbidden] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const redirectingRef = useRef(false);
+  const [warningSecondsLeft, setWarningSecondsLeft] = useState<number | null>(null);
 
-  const isPublic = 
-    pathname.startsWith('/login') || 
+  const redirectingRef = useRef(false);
+  const lastActivityRef = useRef<number>(Date.now());
+  const lastSharedWriteRef = useRef<number>(0);
+  const lastTokenRefreshRef = useRef<number>(Date.now());
+  const refreshingTokenRef = useRef<boolean>(false);
+  const warningActiveRef = useRef<boolean>(false);
+
+  const isPublic =
+    pathname.startsWith('/login') ||
     pathname.includes('/public/');
 
   const redirectToLogin = useCallback(() => {
     if (redirectingRef.current || isPublic) return;
     redirectingRef.current = true;
+    setWarningSecondsLeft(null);
     setIsExpired(true);
 
     if (typeof window !== 'undefined') {
@@ -61,6 +76,33 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
     }
   }, [isPublic]);
 
+  const refreshSlidingToken = useCallback(async () => {
+    if (refreshingTokenRef.current || isPublic) return;
+    refreshingTokenRef.current = true;
+    try {
+      const { default: api } = await import('@/lib/api');
+      const res = await api.post('/login/refresh-token');
+      if (res?.data?.access_token) {
+        setAuthTokenCookie(res.data.access_token);
+        lastTokenRefreshRef.current = Date.now();
+      }
+    } catch {
+      // Ignorar fallos transitorios de red; el próximo ciclo reintentará
+    } finally {
+      refreshingTokenRef.current = false;
+    }
+  }, [isPublic]);
+
+  const handleKeepSessionAlive = useCallback(() => {
+    const now = Date.now();
+    lastActivityRef.current = now;
+    lastSharedWriteRef.current = now;
+    warningActiveRef.current = false;
+    setWarningSecondsLeft(null);
+    recordSharedActivity(now);
+    refreshSlidingToken();
+  }, [refreshSlidingToken]);
+
   useEffect(() => {
     if (isPublic) {
       setIsForbidden(false);
@@ -68,12 +110,17 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
     }
 
     import('@/lib/api').then(({ default: api }) => {
-      api.get('/users/me')
-        .then(res => {
+      api
+        .get('/users/me')
+        .then((res) => {
           const user = res.data;
           setCurrentUser(user);
           if (user) {
-            const allowed = canAccessModule(user, MODULE_KEY) || (MODULE_KEY === 'neo_pricing' && pathname.startsWith('/kiosco') && canReadFeature(user, 'neo_pricing', 'pricing_kiosk'));
+            const allowed =
+              canAccessModule(user, MODULE_KEY) ||
+              (MODULE_KEY === 'neo_pricing' &&
+                pathname.startsWith('/kiosco') &&
+                canReadFeature(user, 'neo_pricing', 'pricing_kiosk'));
             setIsForbidden(!allowed);
           }
         })
@@ -84,9 +131,44 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
   useEffect(() => {
     if (isPublic) return;
 
-    let timeoutTimer: NodeJS.Timeout | null = null;
-    let lastActivityTime = Date.now();
     const maxInactivityMs = inactivityTimeoutMinutes * 60 * 1000;
+    const warningWindowMs = 60 * 1000; // Aviso 60 segundos antes de cerrar
+
+    const initialNow = Date.now();
+    const sharedTs = getSharedLastActivity();
+    if (sharedTs > 0 && initialNow - sharedTs < maxInactivityMs) {
+      lastActivityRef.current = sharedTs;
+    } else {
+      lastActivityRef.current = initialNow;
+      recordSharedActivity(initialNow);
+      lastSharedWriteRef.current = initialNow;
+    }
+
+    const registerActivity = (isExplicitAction: boolean) => {
+      if (warningActiveRef.current && !isExplicitAction) {
+        return;
+      }
+      const now = Date.now();
+      lastActivityRef.current = now;
+      if (warningActiveRef.current) {
+        warningActiveRef.current = false;
+        setWarningSecondsLeft(null);
+      }
+      if (now - lastSharedWriteRef.current >= 10000) {
+        lastSharedWriteRef.current = now;
+        recordSharedActivity(now);
+      }
+    };
+
+    const onPassiveMove = () => registerActivity(false);
+    const onExplicitInteraction = () => registerActivity(true);
+
+    window.addEventListener('mousemove', onPassiveMove, { passive: true });
+    window.addEventListener('scroll', onPassiveMove, { passive: true });
+    window.addEventListener('mousedown', onExplicitInteraction, { passive: true });
+    window.addEventListener('keydown', onExplicitInteraction, { passive: true });
+    window.addEventListener('touchstart', onExplicitInteraction, { passive: true });
+    window.addEventListener('click', onExplicitInteraction, { passive: true });
 
     const checkSession = () => {
       if (typeof window === 'undefined') return;
@@ -104,51 +186,56 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
         return;
       }
 
+      const now = Date.now();
+      const latestShared = getSharedLastActivity();
+      if (latestShared > lastActivityRef.current) {
+        lastActivityRef.current = latestShared;
+      }
+
+      const inactiveMs = now - lastActivityRef.current;
+      const remainingInactivityMs = maxInactivityMs - inactiveMs;
+
+      // 1. Si superó los 30 minutos de inactividad real -> Cerrar sesión y redirigir
+      if (inactivityTimeoutMinutes > 0 && remainingInactivityMs <= 0) {
+        redirectToLogin();
+        return;
+      }
+
+      // 2. Mostrar u ocultar aviso de 60 segundos antes de cierre por inactividad
+      if (inactivityTimeoutMinutes > 0 && remainingInactivityMs <= warningWindowMs) {
+        warningActiveRef.current = true;
+        setWarningSecondsLeft(Math.max(1, Math.ceil(remainingInactivityMs / 1000)));
+      } else if (warningActiveRef.current) {
+        warningActiveRef.current = false;
+        setWarningSecondsLeft(null);
+      }
+
+      // 3. Validar token JWT y renovarlo de forma deslizante si el usuario sigue activo
       const payload = parseJwt(token);
       if (!payload || !payload.exp) {
         redirectToLogin();
         return;
       }
 
-      const now = Date.now();
       const expiresAtMs = payload.exp * 1000;
-      const remainingMs = expiresAtMs - now;
+      const remainingTokenMs = expiresAtMs - now;
 
-      if (remainingMs <= 0) {
+      if (remainingTokenMs <= 0) {
         redirectToLogin();
         return;
       }
 
-      if (inactivityTimeoutMinutes > 0 && now - lastActivityTime >= maxInactivityMs) {
-        redirectToLogin();
-        return;
+      const timeSinceLastRefresh = now - lastTokenRefreshRef.current;
+      if (
+        inactiveMs < maxInactivityMs - warningWindowMs &&
+        (timeSinceLastRefresh >= 10 * 60 * 1000 || remainingTokenMs < 60 * 60 * 1000)
+      ) {
+        refreshSlidingToken();
       }
-
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      const remainingInactivity = maxInactivityMs - (now - lastActivityTime);
-      const nextDelay = Math.min(
-        remainingMs,
-        remainingInactivity > 0 ? remainingInactivity : remainingMs
-      );
-      
-      const safeDelay = Math.max(100, Math.min(nextDelay, 2147483647));
-      timeoutTimer = setTimeout(() => {
-        checkSession();
-      }, safeDelay);
     };
-
-    const onUserActivity = () => {
-      lastActivityTime = Date.now();
-    };
-
-    const activityEvents = ['mousedown', 'keydown', 'scroll', 'touchstart'];
-    activityEvents.forEach((event) => {
-      window.addEventListener(event, onUserActivity, { passive: true });
-    });
 
     checkSession();
-
-    const heartbeatInterval = setInterval(checkSession, 10000);
+    const intervalId = setInterval(checkSession, 1000);
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -159,15 +246,17 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
     window.addEventListener('focus', checkSession);
 
     return () => {
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      clearInterval(heartbeatInterval);
-      activityEvents.forEach((event) => {
-        window.removeEventListener(event, onUserActivity);
-      });
+      clearInterval(intervalId);
+      window.removeEventListener('mousemove', onPassiveMove);
+      window.removeEventListener('scroll', onPassiveMove);
+      window.removeEventListener('mousedown', onExplicitInteraction);
+      window.removeEventListener('keydown', onExplicitInteraction);
+      window.removeEventListener('touchstart', onExplicitInteraction);
+      window.removeEventListener('click', onExplicitInteraction);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', checkSession);
     };
-  }, [isPublic, redirectToLogin, inactivityTimeoutMinutes]);
+  }, [isPublic, redirectToLogin, refreshSlidingToken, inactivityTimeoutMinutes]);
 
   if (isExpired) {
     return (
@@ -177,9 +266,9 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
           </svg>
         </div>
-        <h2 className="text-xl font-bold mb-2">Sesión Finalizada</h2>
+        <h2 className="text-xl font-bold mb-2">Sesión Finalizada por Inactividad</h2>
         <p className="text-slate-400 text-sm mb-6 text-center max-w-sm">
-          El tiempo de conexión ha expirado por seguridad. Redirigiendo al inicio de sesión de Neo ERP...
+          Se alcanzó el tiempo máximo de inactividad (30 min). Redirigiendo al inicio de sesión de Neo ERP...
         </p>
         <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
       </div>
@@ -221,6 +310,47 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
 
   return (
     <>
+      {warningSecondsLeft !== null && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="inactivity-modal-title"
+          className="fixed inset-0 z-[99998] bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4 font-sans"
+        >
+          <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-6 shadow-2xl text-center">
+            <div className="w-14 h-14 rounded-2xl bg-amber-100 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto mb-4">
+              <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <h3 id="inactivity-modal-title" className="text-lg font-extrabold text-slate-900 mb-1">
+              ¿Sigues trabajando en Neo ERP?
+            </h3>
+            <p className="text-slate-600 text-sm mb-4">
+              No hemos detectado actividad reciente. Por seguridad, tu sesión se cerrará automáticamente en:
+            </p>
+            <div className="inline-flex items-center justify-center px-5 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 font-mono text-2xl font-black mb-6">
+              {warningSecondsLeft}s
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button
+                type="button"
+                onClick={redirectToLogin}
+                className="px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold text-sm transition-all cursor-pointer"
+              >
+                Cerrar sesión ahora
+              </button>
+              <button
+                type="button"
+                onClick={handleKeepSessionAlive}
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-lg shadow-indigo-600/20 transition-all cursor-pointer"
+              >
+                Mantener sesión activa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {currentUser?.must_change_password && (
         <ChangePasswordModal
           isOpen={true}

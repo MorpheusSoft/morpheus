@@ -5,7 +5,7 @@ import bcrypt
 
 ALGORITHM = "HS256"
 SECRET_KEY = "YOUR_SUPER_SECRET_KEY_CHANGE_IN_PROD" # TODO: Move to env
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 720 # 12 hours; inactivity is enforced at 30 mins with sliding renewal
 
 def create_access_token(subject: Union[str, Any], expires_delta: timedelta = None) -> str:
     if expires_delta:

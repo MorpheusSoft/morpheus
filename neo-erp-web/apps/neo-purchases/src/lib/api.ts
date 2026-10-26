@@ -37,8 +37,17 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-      if (typeof window !== 'undefined') {
+    if (error.response) {
+      const status = error.response.status;
+      const detail = error.response.data?.detail;
+      const isAuthFailure =
+        status === 401 ||
+        (status === 403 &&
+          (detail === 'Could not validate credentials' ||
+            detail === 'Not authenticated' ||
+            detail === 'Inactive user'));
+
+      if (isAuthFailure && typeof window !== 'undefined') {
         localStorage.removeItem('token');
         clearAuthCookies();
         const currentUrl = window.location.href;

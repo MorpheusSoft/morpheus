@@ -104,7 +104,16 @@ export async function loginAction(prevState: any, formData: FormData) {
       sameSite: "lax",
       path: "/",
       domain: domainConfig.cookieDomain,
-      maxAge: 60 * 30, // 30 mins
+      maxAge: 60 * 60 * 12, // 12 hours (inactivity enforced at 30 mins by SessionGuard)
+    })
+
+    cookieStore.set("neo_last_activity", String(Date.now()), {
+      httpOnly: false,
+      secure: isHttps,
+      sameSite: "lax",
+      path: "/",
+      domain: domainConfig.cookieDomain,
+      maxAge: 60 * 60 * 12,
     })
 
   } catch (err: any) {
@@ -132,8 +141,25 @@ export async function logoutAction() {
       domain: domainConfig.cookieDomain,
       path: "/"
     })
+    cookieStore.set("neo_last_activity", "", {
+      httpOnly: false,
+      secure: isHttps,
+      sameSite: "lax",
+      maxAge: 0,
+      expires: new Date(0),
+      domain: domainConfig.cookieDomain,
+      path: "/"
+    })
   } else {
     cookieStore.set("access_token", "", {
+      httpOnly: false,
+      secure: isHttps,
+      sameSite: "lax",
+      maxAge: 0,
+      expires: new Date(0),
+      path: "/"
+    })
+    cookieStore.set("neo_last_activity", "", {
       httpOnly: false,
       secure: isHttps,
       sameSite: "lax",

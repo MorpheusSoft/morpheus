@@ -41,10 +41,8 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <SessionGuard>
-      <SidebarProvider>
-        <DashboardLayoutContent>{children}</DashboardLayoutContent>
-      </SidebarProvider>
-    </SessionGuard>
+    <SidebarProvider>
+      <DashboardLayoutContent>{children}</DashboardLayoutContent>
+    </SidebarProvider>
   );
 }

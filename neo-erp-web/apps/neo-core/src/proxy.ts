@@ -59,8 +59,21 @@ export function proxy(request: NextRequest) {
         secure: domainConfig.protocol === 'https',
         sameSite: 'lax',
       })
+      res.cookies.set('neo_last_activity', '', {
+        maxAge: 0,
+        expires: new Date(0),
+        domain: domainConfig.cookieDomain,
+        path: '/',
+        secure: domainConfig.protocol === 'https',
+        sameSite: 'lax',
+      })
     } else {
       res.cookies.set('access_token', '', {
+        maxAge: 0,
+        expires: new Date(0),
+        path: '/',
+      })
+      res.cookies.set('neo_last_activity', '', {
         maxAge: 0,
         expires: new Date(0),
         path: '/',

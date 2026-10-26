@@ -299,16 +299,73 @@ export function clearAuthCookies(currentHost?: string): void {
     const domPart = d ? ` domain=${d};` : '';
     document.cookie = `access_token=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;${domPart}`;
     document.cookie = `access_token=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;${domPart} Secure; SameSite=Lax;`;
+    document.cookie = `neo_last_activity=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;${domPart}`;
+    document.cookie = `neo_last_activity=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;${domPart} Secure; SameSite=Lax;`;
   }
   try {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('token');
       localStorage.removeItem('access_token');
       localStorage.removeItem('morpheus_auth_token');
+      localStorage.removeItem('neo_last_activity');
     }
   } catch {
     // ignore storage errors
   }
+}
+
+export function setAuthTokenCookie(token: string, currentHost?: string): void {
+  if (typeof document === 'undefined' || !token) return;
+  const config = resolveDomain(currentHost);
+  const domPart = config.cookieDomain ? ` domain=${config.cookieDomain};` : '';
+  const secPart = config.protocol === 'https' ? ' Secure;' : '';
+  const maxAge = 60 * 60 * 12; // 12 hours
+  document.cookie = `access_token=${token}; Max-Age=${maxAge}; path=/;${domPart}${secPart} SameSite=Lax;`;
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('token', token);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function recordSharedActivity(timestamp: number = Date.now(), currentHost?: string): void {
+  if (typeof document === 'undefined') return;
+  const config = resolveDomain(currentHost);
+  const domPart = config.cookieDomain ? ` domain=${config.cookieDomain};` : '';
+  const secPart = config.protocol === 'https' ? ' Secure;' : '';
+  const maxAge = 60 * 60 * 12;
+  document.cookie = `neo_last_activity=${timestamp}; Max-Age=${maxAge}; path=/;${domPart}${secPart} SameSite=Lax;`;
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('neo_last_activity', String(timestamp));
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getSharedLastActivity(): number {
+  if (typeof document === 'undefined') return 0;
+  let ts = 0;
+  const match = document.cookie.match(/(?:^|;\s*)neo_last_activity=([^;]*)/);
+  if (match && match[1]) {
+    const parsed = parseInt(match[1], 10);
+    if (!isNaN(parsed) && parsed > ts) ts = parsed;
+  }
+  try {
+    if (typeof window !== 'undefined') {
+      const lsVal = localStorage.getItem('neo_last_activity');
+      if (lsVal) {
+        const parsed = parseInt(lsVal, 10);
+        if (!isNaN(parsed) && parsed > ts) ts = parsed;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return ts;
 }
 
 export function getInternalApiUrl(host?: string): string {
