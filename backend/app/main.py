@@ -502,6 +502,23 @@ def init_bot_log_db():
                 LEFT OUTER JOIN mfg.bom_headers bh ON bh.id = po.bom_id
                 WHERE po.state = 'COMPLETED';
             """))
+            conn.execute(text("""
+                ALTER TABLE inv.inventory_sessions ADD COLUMN IF NOT EXISTS is_blind_count BOOLEAN DEFAULT TRUE;
+                CREATE TABLE IF NOT EXISTS core.audit_logs (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES core.users(id) ON DELETE SET NULL,
+                    user_name VARCHAR(150),
+                    user_email VARCHAR(150),
+                    action VARCHAR(50) NOT NULL,
+                    module VARCHAR(50) NOT NULL,
+                    entity_name VARCHAR(50) NOT NULL,
+                    entity_id VARCHAR(100),
+                    facility_id INTEGER REFERENCES core.facilities(id) ON DELETE SET NULL,
+                    details JSONB DEFAULT '{}'::jsonb,
+                    ip_address VARCHAR(45),
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """))
             conn.commit()
         seed_demo_mfg_data()
         print("[DATABASE] Tables for MRP bot logs, Direct Adjustments, and Neo Producción (mfg) verified/created successfully.")
