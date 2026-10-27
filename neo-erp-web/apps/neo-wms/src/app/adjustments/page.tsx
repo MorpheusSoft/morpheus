@@ -46,9 +46,17 @@ export default function WmsAdjustmentsPage() {
   const [adjFastCodeInput, setAdjFastCodeInput] = useState('');
   const [adjFastSelectedProd, setAdjFastSelectedProd] = useState<any | null>(null);
   const [adjFastQty, setAdjFastQty] = useState<number>(1);
+  const adjFastQtyRef = useRef<number>(1);
   const [adjFastSearching, setAdjFastSearching] = useState(false);
   const adjFastCodeInputRef = useRef<HTMLInputElement>(null);
   const adjFastQtyInputRef = useRef<any>(null);
+  const [f2SearchDialogVisible, setF2SearchDialogVisible] = useState(false);
+  const [f2SearchQuery, setF2SearchQuery] = useState('');
+  const [f2SearchResults, setF2SearchResults] = useState<any[]>([]);
+  const [f2SelectedIndex, setF2SelectedIndex] = useState<number>(0);
+  const [f2Loading, setF2Loading] = useState(false);
+  const f2InputRef = useRef<HTMLInputElement>(null);
+  const f2SearchTimeoutRef = useRef<any>(null);
   const [bulkPasteDialogVisible, setBulkPasteDialogVisible] = useState(false);
   const [bulkPasteText, setBulkPasteText] = useState('');
   const [processingBulkPaste, setProcessingBulkPaste] = useState(false);
@@ -994,9 +1002,66 @@ export default function WmsAdjustmentsPage() {
     }, 50);
   };
 
+  const selectProductForFastEntry = (prod: any) => {
+    if (!prod) return;
+    setAdjFastSelectedProd(prod);
+    setAdjFastCodeInput(`${prod.sku} — ${prod.name}`);
+    setAdjFastQty(1);
+    adjFastQtyRef.current = 1;
+    focusAdjFastQty();
+  };
+
+  const runF2Search = async (queryText: string) => {
+    const q = (queryText || '').trim();
+    if (!q) {
+      const initial = products.slice(0, 30);
+      setF2SearchResults(initial);
+      setF2SelectedIndex(0);
+      return;
+    }
+    setF2Loading(true);
+    try {
+      const res = await api.get(`/products/selector?q=${encodeURIComponent(q)}&limit=40`);
+      const remoteList = Array.isArray(res.data) ? res.data : (res.data?.data || res.data?.items || []);
+      if (remoteList.length > 0) {
+        setProducts(prev => {
+          const existingIds = new Set(prev.map((x: any) => x.value));
+          return [...prev, ...remoteList.filter((x: any) => !existingIds.has(x.value))];
+        });
+        setF2SearchResults(remoteList);
+        setF2SelectedIndex(0);
+        return;
+      }
+    } catch (e) {
+      console.error('Error en búsqueda F2:', e);
+    } finally {
+      setF2Loading(false);
+    }
+    const low = q.toLowerCase();
+    const localFiltered = products.filter((p: any) => (p.search_key || `${p.sku} ${p.name}`).toLowerCase().includes(low)).slice(0, 40);
+    setF2SearchResults(localFiltered);
+    setF2SelectedIndex(0);
+  };
+
+  const openF2SearchModal = (initialQuery: string = '') => {
+    const cleanQ = (initialQuery || '').trim();
+    setF2SearchQuery(cleanQ);
+    setF2SearchDialogVisible(true);
+    runF2Search(cleanQ);
+    setTimeout(() => {
+      if (f2InputRef.current) {
+        f2InputRef.current.focus();
+        f2InputRef.current.select();
+      }
+    }, 60);
+  };
+
   const handleAdjFastLookup = async (rawCode: string) => {
     const clean = (rawCode || '').trim().toLowerCase();
-    if (!clean) return;
+    if (!clean) {
+      openF2SearchModal('');
+      return;
+    }
 
     const candidates = buildCodeCandidates(clean);
     const matchesProduct = (p: any) => {
@@ -1018,9 +1083,7 @@ export default function WmsAdjustmentsPage() {
     // 1. Buscar coincidencia exacta en memoria
     const localExact = products.find(exactMatches);
     if (localExact) {
-      setAdjFastSelectedProd(localExact);
-      setAdjFastQty(1);
-      focusAdjFastQty();
+      selectProductForFastEntry(localExact);
       return;
     }
 
@@ -1034,10 +1097,19 @@ export default function WmsAdjustmentsPage() {
           const existingIds = new Set(prev.map((x: any) => x.value));
           return [...prev, ...remoteList.filter((x: any) => !existingIds.has(x.value))];
         });
-        const bestMatch = remoteList.find(exactMatches) || remoteList.find(matchesProduct) || remoteList[0];
-        setAdjFastSelectedProd(bestMatch);
-        setAdjFastQty(1);
-        focusAdjFastQty();
+        const exactHit = remoteList.find(exactMatches);
+        if (exactHit || remoteList.length === 1) {
+          selectProductForFastEntry(exactHit || remoteList[0]);
+          return;
+        }
+        // Si escribió texto parcial y hay varios resultados, abrir el selector F2 con los resultados listos para elegir con flechas + Enter
+        setF2SearchQuery(rawCode.trim());
+        setF2SearchResults(remoteList);
+        setF2SelectedIndex(0);
+        setF2SearchDialogVisible(true);
+        setTimeout(() => {
+          if (f2InputRef.current) f2InputRef.current.focus();
+        }, 60);
         return;
       }
     } catch (err) {
@@ -1048,9 +1120,7 @@ export default function WmsAdjustmentsPage() {
 
     const localPartial = products.find(matchesProduct);
     if (localPartial) {
-      setAdjFastSelectedProd(localPartial);
-      setAdjFastQty(1);
-      focusAdjFastQty();
+      selectProductForFastEntry(localPartial);
       return;
     }
 
@@ -1062,7 +1132,7 @@ export default function WmsAdjustmentsPage() {
     });
   };
 
-  const handleAdjFastAdd = () => {
+  const handleAdjFastAdd = (rawDomValue?: string) => {
     if (!adjFastSelectedProd) {
       if (adjFastCodeInput.trim()) {
         handleAdjFastLookup(adjFastCodeInput);
@@ -1070,7 +1140,21 @@ export default function WmsAdjustmentsPage() {
       return;
     }
     const uom = adjFastSelectedProd.uom_base || 'UND';
-    const qtyToAdd = sanitizeQuantity(adjFastQty || 1, uom);
+
+    // Leer el valor real directamente del input DOM por si el usuario presionó Enter sin hacer blur en PrimeReact InputNumber
+    let resolvedRawQty: number = adjFastQtyRef.current || adjFastQty || 1;
+    const domStr = rawDomValue !== undefined
+      ? rawDomValue
+      : (adjFastQtyInputRef.current?.getInput ? adjFastQtyInputRef.current.getInput()?.value : undefined);
+    if (domStr !== undefined && domStr !== null && String(domStr).trim() !== '') {
+      const cleaned = String(domStr).replace(/,/g, '').trim();
+      const parsedDom = parseFloat(cleaned);
+      if (!isNaN(parsedDom) && parsedDom > 0) {
+        resolvedRawQty = parsedDom;
+      }
+    }
+
+    const qtyToAdd = sanitizeQuantity(resolvedRawQty, uom);
     if (qtyToAdd <= 0) {
       toast.current?.show({ severity: 'warn', summary: 'Cantidad Inválida', detail: 'Ingrese una cantidad mayor a 0.', life: 2000 });
       return;
@@ -1109,6 +1193,7 @@ export default function WmsAdjustmentsPage() {
     setAdjFastSelectedProd(null);
     setAdjFastCodeInput('');
     setAdjFastQty(1);
+    adjFastQtyRef.current = 1;
     setTimeout(() => {
       if (adjFastCodeInputRef.current) {
         adjFastCodeInputRef.current.focus();
@@ -1508,7 +1593,7 @@ export default function WmsAdjustmentsPage() {
   };
 
   // RECORD BLIND COUNT FOR A LINE (ULTRA-FAST SINGLE LINE UPDATE)
-  const handleRecordCount = async () => {
+  const handleRecordCount = async (overrideQtyRaw?: number | string) => {
     if (!selectedSession || !countingProdId) {
       toast.current?.show({ severity: 'warn', summary: 'Selección Requerida', detail: 'Seleccione un producto para registrar el conteo.' });
       return;
@@ -1516,7 +1601,16 @@ export default function WmsAdjustmentsPage() {
     setSavingCount(true);
     try {
       const prod = availableCountingProducts.find(p => p.value === countingProdId) || products.find(p => p.value === countingProdId);
-      const sanitizedQty = sanitizeQuantity(countingQty, prod?.uom_base);
+      let rawQty = countingQty;
+      if (overrideQtyRaw !== undefined && overrideQtyRaw !== null && overrideQtyRaw !== '') {
+        const parsed = typeof overrideQtyRaw === 'number'
+          ? overrideQtyRaw
+          : parseFloat(String(overrideQtyRaw).replace(/,/g, ''));
+        if (!isNaN(parsed)) {
+          rawQty = parsed;
+        }
+      }
+      const sanitizedQty = sanitizeQuantity(rawQty, prod?.uom_base);
 
       const res = await api.post(`/inventory-session/${selectedSession.id}/count-line`, {
         product_variant_id: countingProdId,
@@ -2156,29 +2250,46 @@ export default function WmsAdjustmentsPage() {
                   Transcripción Rápida (Escáner / Teclado):
                 </span>
                 <span className="text-indigo-700 font-medium hidden sm:inline">
-                  1️⃣ Escriba Código / Barra y pulse <b>Enter</b> ➔ 2️⃣ Ingrese Cantidad y pulse <b>Enter</b>
+                  1️⃣ Código + <b>Enter</b> (o <b>F2</b> para buscar) ➔ 2️⃣ Cantidad + <b>Enter</b> para agregar
                 </span>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
-                <div className="md:col-span-6 relative">
-                  <i className={`pi ${adjFastSearching ? 'pi-spin pi-spinner text-indigo-600' : 'pi-barcode text-slate-400'} absolute left-3 top-1/2 -translate-y-1/2 text-xs pointer-events-none z-10`}></i>
-                  <InputText
-                    ref={adjFastCodeInputRef}
-                    value={adjFastCodeInput}
-                    onChange={e => {
-                      setAdjFastCodeInput(e.target.value);
-                      if (adjFastSelectedProd) setAdjFastSelectedProd(null);
-                    }}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleAdjFastLookup(adjFastCodeInput);
-                      }
-                    }}
-                    placeholder="Código Neo (PRD-...), PLU (003377), Barra o Nombre + Enter..."
-                    className="text-xs p-inputtext-sm w-full font-mono !pl-9 bg-white"
-                    style={{ paddingLeft: '2.25rem' }}
+                <div className="md:col-span-6 flex items-center gap-1.5">
+                  <div className="relative flex-1 min-w-0">
+                    <i className={`pi ${adjFastSearching ? 'pi-spin pi-spinner text-indigo-600' : 'pi-barcode text-slate-400'} absolute left-3 top-1/2 -translate-y-1/2 text-xs pointer-events-none z-10`}></i>
+                    <InputText
+                      ref={adjFastCodeInputRef}
+                      value={adjFastCodeInput}
+                      onChange={e => {
+                        setAdjFastCodeInput(e.target.value);
+                        if (adjFastSelectedProd) setAdjFastSelectedProd(null);
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'F2') {
+                          e.preventDefault();
+                          openF2SearchModal(adjFastCodeInput);
+                        } else if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAdjFastLookup(adjFastCodeInput);
+                        }
+                      }}
+                      placeholder="Código Neo (PRD-...), PLU, Barra + Enter (o F2 Catálogo)..."
+                      className="text-xs p-inputtext-sm w-full font-mono !pl-9 bg-white"
+                      style={{ paddingLeft: '2.25rem' }}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    label="F2"
+                    icon="pi pi-search"
+                    size="small"
+                    outlined
+                    severity="secondary"
+                    className="font-mono font-bold text-[11px] shrink-0 bg-white px-2.5"
+                    tooltip="Buscador Rápido por Teclado (Tecla F2)"
+                    tooltipOptions={{ position: 'top' }}
+                    onClick={() => openF2SearchModal(adjFastCodeInput)}
                   />
                 </div>
 
@@ -2187,11 +2298,24 @@ export default function WmsAdjustmentsPage() {
                     <InputNumber
                       ref={adjFastQtyInputRef}
                       value={adjFastQty}
-                      onValueChange={e => setAdjFastQty(e.value || 1)}
+                      onChange={e => {
+                        const val = e.value !== null && e.value !== undefined ? Number(e.value) : 1;
+                        setAdjFastQty(val);
+                        adjFastQtyRef.current = val;
+                      }}
+                      onValueChange={e => {
+                        const val = e.value !== null && e.value !== undefined ? Number(e.value) : 1;
+                        setAdjFastQty(val);
+                        adjFastQtyRef.current = val;
+                      }}
                       onKeyDown={e => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          handleAdjFastAdd();
+                          const liveInputVal = (e.target as HTMLInputElement)?.value;
+                          handleAdjFastAdd(liveInputVal);
+                        } else if (e.key === 'F2') {
+                          e.preventDefault();
+                          openF2SearchModal(adjFastCodeInput);
                         }
                       }}
                       min={adjFastSelectedProd && isWeightUom(adjFastSelectedProd.uom_base) ? 0.001 : 1}
@@ -2219,7 +2343,10 @@ export default function WmsAdjustmentsPage() {
                     className="font-bold text-xs w-full"
                     onClick={() => {
                       if (adjFastSelectedProd) {
-                        handleAdjFastAdd();
+                        const inputEl = adjFastQtyInputRef.current?.getInput
+                          ? adjFastQtyInputRef.current.getInput()
+                          : null;
+                        handleAdjFastAdd(inputEl?.value);
                       } else {
                         handleAdjFastLookup(adjFastCodeInput);
                       }
@@ -2429,6 +2556,131 @@ export default function WmsAdjustmentsPage() {
               className="font-bold text-xs"
               onClick={handleBulkPasteProcess}
             />
+          </div>
+        </div>
+      </Dialog>
+
+      {/* DIÁLOGO: BUSCADOR RÁPIDO DE CATÁLOGO POR TECLADO (TECLA F2) */}
+      <Dialog
+        header="🔍 Buscador Rápido de Productos por Teclado (F2)"
+        visible={f2SearchDialogVisible}
+        onHide={() => {
+          setF2SearchDialogVisible(false);
+          setTimeout(() => {
+            if (adjFastCodeInputRef.current) {
+              adjFastCodeInputRef.current.focus();
+            }
+          }, 50);
+        }}
+        style={{ width: '680px' }}
+        className="rounded-2xl"
+      >
+        <div className="flex flex-col gap-3 py-1 text-xs">
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2 flex items-center justify-between text-[11px] text-indigo-800">
+            <span>
+              Use las flechas <b>↑</b> / <b>↓</b> para desplazarse y presione <b>Enter</b> para seleccionar e ir directo a <b>Cantidad</b>.
+            </span>
+            <span className="font-mono font-bold bg-white px-2 py-0.5 rounded border border-indigo-200 text-indigo-700 shrink-0">
+              ESC para cerrar
+            </span>
+          </div>
+
+          <div className="relative">
+            <i className={`pi ${f2Loading ? 'pi-spin pi-spinner text-indigo-600' : 'pi-search text-slate-400'} absolute left-3 top-1/2 -translate-y-1/2 text-xs pointer-events-none z-10`}></i>
+            <InputText
+              ref={f2InputRef}
+              value={f2SearchQuery}
+              onChange={e => {
+                const val = e.target.value;
+                setF2SearchQuery(val);
+                if (f2SearchTimeoutRef.current) clearTimeout(f2SearchTimeoutRef.current);
+                f2SearchTimeoutRef.current = setTimeout(() => {
+                  runF2Search(val);
+                }, 180);
+              }}
+              onKeyDown={e => {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setF2SelectedIndex(prev =>
+                    f2SearchResults.length > 0 ? Math.min(prev + 1, f2SearchResults.length - 1) : 0
+                  );
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setF2SelectedIndex(prev => Math.max(prev - 1, 0));
+                } else if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const chosen = f2SearchResults[f2SelectedIndex];
+                  if (chosen) {
+                    setF2SearchDialogVisible(false);
+                    selectProductForFastEntry(chosen);
+                  }
+                }
+              }}
+              placeholder="Escriba nombre del producto, código Neo (PRD-...), PLU o código de barra..."
+              className="text-xs p-inputtext-sm w-full font-mono !pl-9"
+              style={{ paddingLeft: '2.25rem' }}
+            />
+          </div>
+
+          <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[340px] overflow-y-auto divide-y divide-slate-100">
+            {f2SearchResults.length === 0 ? (
+              <div className="p-8 text-center text-slate-400">
+                {f2Loading ? 'Buscando en el catálogo maestro...' : 'No se encontraron productos coincidentes.'}
+              </div>
+            ) : (
+              f2SearchResults.map((item, idx) => {
+                const isSelected = idx === f2SelectedIndex;
+                return (
+                  <div
+                    key={item.value}
+                    onClick={() => {
+                      setF2SearchDialogVisible(false);
+                      selectProductForFastEntry(item);
+                    }}
+                    onMouseEnter={() => setF2SelectedIndex(idx)}
+                    className={`flex items-center justify-between px-3 py-2.5 cursor-pointer transition-colors ${
+                      isSelected ? 'bg-indigo-600 text-white' : 'hover:bg-slate-50 text-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <span
+                        className={`font-mono font-extrabold text-[11px] px-2 py-0.5 rounded border shrink-0 ${
+                          isSelected
+                            ? 'bg-white text-indigo-700 border-white'
+                            : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                        }`}
+                      >
+                        {item.sku}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className={`font-bold text-xs truncate ${isSelected ? 'text-white' : 'text-slate-800'}`}>
+                          {item.name}
+                        </div>
+                        {item.barcodes_str && (
+                          <div className={`text-[10px] font-mono truncate ${isSelected ? 'text-indigo-100' : 'text-slate-400'}`}>
+                            Barras/PLU: {item.barcodes_str}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 ml-3">
+                      <span
+                        className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded ${
+                          isSelected ? 'bg-indigo-700 text-white' : 'bg-slate-100 text-slate-700'
+                        }`}
+                      >
+                        ${Number(item.cost || 0).toFixed(2)} / {item.uom_base || 'UND'}
+                      </span>
+                      {isSelected && (
+                        <span className="text-[10px] font-bold bg-emerald-400 text-slate-950 px-1.5 py-0.5 rounded">
+                          Enter ↵
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       </Dialog>
@@ -3235,6 +3487,10 @@ export default function WmsAdjustmentsPage() {
                     <InputNumber
                       ref={countingQtyInputRef}
                       value={countingQty}
+                      onChange={e => {
+                        const prod = availableCountingProducts.find(p => p.value === countingProdId);
+                        setCountingQty(sanitizeQuantity(e.value || 0, prod?.uom_base));
+                      }}
                       onValueChange={e => {
                         const prod = availableCountingProducts.find(p => p.value === countingProdId);
                         setCountingQty(sanitizeQuantity(e.value || 0, prod?.uom_base));
@@ -3242,7 +3498,8 @@ export default function WmsAdjustmentsPage() {
                       onKeyDown={e => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          handleRecordCount();
+                          const liveInputVal = (e.target as HTMLInputElement)?.value;
+                          handleRecordCount(liveInputVal);
                         }
                       }}
                       min={0}
@@ -3275,7 +3532,7 @@ export default function WmsAdjustmentsPage() {
                     icon="pi pi-save"
                     loading={savingCount}
                     className="font-bold text-xs bg-indigo-600 border-indigo-600 text-white shadow-md h-[38px]"
-                    onClick={handleRecordCount}
+                    onClick={() => handleRecordCount()}
                   />
                 </div>
               </div>
