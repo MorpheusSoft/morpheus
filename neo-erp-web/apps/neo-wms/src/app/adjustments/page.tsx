@@ -991,19 +991,32 @@ export default function WmsAdjustmentsPage() {
 
   // TRANSCRIPCIÓN RÁPIDA EN AJUSTE DIRECTO (CÓDIGO -> ENTER -> CANTIDAD -> ENTER)
   const focusAdjFastQty = () => {
-    setTimeout(() => {
-      if (adjFastQtyInputRef.current) {
-        const inputEl = adjFastQtyInputRef.current.getInput ? adjFastQtyInputRef.current.getInput() : adjFastQtyInputRef.current;
-        if (inputEl && inputEl.focus) {
+    const doFocus = () => {
+      const byId = typeof document !== 'undefined'
+        ? (document.getElementById('adj-fast-qty-input') as HTMLInputElement | null)
+        : null;
+      const byRef = adjFastQtyInputRef.current?.getInput
+        ? adjFastQtyInputRef.current.getInput()
+        : adjFastQtyInputRef.current;
+      const inputEl = byId || byRef;
+      if (inputEl && typeof inputEl.focus === 'function') {
+        if (document.activeElement !== inputEl) {
           inputEl.focus();
-          if (inputEl.select) inputEl.select();
+          if (typeof inputEl.select === 'function') {
+            inputEl.select();
+          }
         }
       }
-    }, 50);
+    };
+    setTimeout(doFocus, 15);
+    setTimeout(doFocus, 70);
+    setTimeout(doFocus, 160);
+    setTimeout(doFocus, 280);
   };
 
   const selectProductForFastEntry = (prod: any) => {
     if (!prod) return;
+    setF2SearchDialogVisible(false);
     setAdjFastSelectedProd(prod);
     setAdjFastCodeInput(`${prod.sku} — ${prod.name}`);
     setAdjFastQty(1);
@@ -2255,41 +2268,27 @@ export default function WmsAdjustmentsPage() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
-                <div className="md:col-span-6 flex items-center gap-1.5">
-                  <div className="relative flex-1 min-w-0">
-                    <i className={`pi ${adjFastSearching ? 'pi-spin pi-spinner text-indigo-600' : 'pi-barcode text-slate-400'} absolute left-3 top-1/2 -translate-y-1/2 text-xs pointer-events-none z-10`}></i>
-                    <InputText
-                      ref={adjFastCodeInputRef}
-                      value={adjFastCodeInput}
-                      onChange={e => {
-                        setAdjFastCodeInput(e.target.value);
-                        if (adjFastSelectedProd) setAdjFastSelectedProd(null);
-                      }}
-                      onKeyDown={e => {
-                        if (e.key === 'F2') {
-                          e.preventDefault();
-                          openF2SearchModal(adjFastCodeInput);
-                        } else if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleAdjFastLookup(adjFastCodeInput);
-                        }
-                      }}
-                      placeholder="Código Neo (PRD-...), PLU, Barra + Enter (o F2 Catálogo)..."
-                      className="text-xs p-inputtext-sm w-full font-mono !pl-9 bg-white"
-                      style={{ paddingLeft: '2.25rem' }}
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    label="F2"
-                    icon="pi pi-search"
-                    size="small"
-                    outlined
-                    severity="secondary"
-                    className="font-mono font-bold text-[11px] shrink-0 bg-white px-2.5"
-                    tooltip="Buscador Rápido por Teclado (Tecla F2)"
-                    tooltipOptions={{ position: 'top' }}
-                    onClick={() => openF2SearchModal(adjFastCodeInput)}
+                <div className="md:col-span-6 relative">
+                  <i className={`pi ${adjFastSearching ? 'pi-spin pi-spinner text-indigo-600' : 'pi-barcode text-slate-400'} absolute left-3 top-1/2 -translate-y-1/2 text-xs pointer-events-none z-10`}></i>
+                  <InputText
+                    ref={adjFastCodeInputRef}
+                    value={adjFastCodeInput}
+                    onChange={e => {
+                      setAdjFastCodeInput(e.target.value);
+                      if (adjFastSelectedProd) setAdjFastSelectedProd(null);
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'F2') {
+                        e.preventDefault();
+                        openF2SearchModal(adjFastCodeInput);
+                      } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAdjFastLookup(adjFastCodeInput);
+                      }
+                    }}
+                    placeholder="Código Neo (PRD-...), PLU, Barra + Enter (o F2 Catálogo)..."
+                    className="text-xs p-inputtext-sm w-full font-mono !pl-9 bg-white"
+                    style={{ paddingLeft: '2.25rem' }}
                   />
                 </div>
 
@@ -2297,6 +2296,7 @@ export default function WmsAdjustmentsPage() {
                   <div className="flex items-center gap-1.5">
                     <InputNumber
                       ref={adjFastQtyInputRef}
+                      inputId="adj-fast-qty-input"
                       value={adjFastQty}
                       onChange={e => {
                         const val = e.value !== null && e.value !== undefined ? Number(e.value) : 1;
@@ -2564,6 +2564,7 @@ export default function WmsAdjustmentsPage() {
       <Dialog
         header="🔍 Buscador Rápido de Productos por Teclado (F2)"
         visible={f2SearchDialogVisible}
+        transitionOptions={{ timeout: 0 }}
         onHide={() => {
           setF2SearchDialogVisible(false);
           setTimeout(() => {
@@ -2609,9 +2610,9 @@ export default function WmsAdjustmentsPage() {
                   setF2SelectedIndex(prev => Math.max(prev - 1, 0));
                 } else if (e.key === 'Enter') {
                   e.preventDefault();
+                  e.stopPropagation();
                   const chosen = f2SearchResults[f2SelectedIndex];
                   if (chosen) {
-                    setF2SearchDialogVisible(false);
                     selectProductForFastEntry(chosen);
                   }
                 }
