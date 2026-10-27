@@ -504,6 +504,15 @@ def init_bot_log_db():
             """))
             conn.execute(text("""
                 ALTER TABLE inv.inventory_sessions ADD COLUMN IF NOT EXISTS is_blind_count BOOLEAN DEFAULT TRUE;
+                ALTER TABLE pur.purchase_orders ADD COLUMN IF NOT EXISTS reversal_status VARCHAR(30) DEFAULT 'NONE';
+                ALTER TABLE pur.purchase_orders ADD COLUMN IF NOT EXISTS reversal_reason VARCHAR(120);
+                ALTER TABLE pur.purchase_orders ADD COLUMN IF NOT EXISTS reversal_notes TEXT;
+                ALTER TABLE pur.purchase_orders ADD COLUMN IF NOT EXISTS reversal_requested_by_id INTEGER REFERENCES core.users(id) ON DELETE SET NULL;
+                ALTER TABLE pur.purchase_orders ADD COLUMN IF NOT EXISTS reversal_requested_at TIMESTAMPTZ;
+                ALTER TABLE pur.purchase_orders ADD COLUMN IF NOT EXISTS reversal_approved_by_id INTEGER REFERENCES core.users(id) ON DELETE SET NULL;
+                ALTER TABLE pur.purchase_orders ADD COLUMN IF NOT EXISTS reversal_approved_at TIMESTAMPTZ;
+                ALTER TABLE pur.purchase_orders ADD COLUMN IF NOT EXISTS reversal_rejection_reason TEXT;
+                ALTER TABLE pur.purchase_orders ADD COLUMN IF NOT EXISTS reversal_count INTEGER DEFAULT 0;
                 CREATE TABLE IF NOT EXISTS core.audit_logs (
                     id BIGSERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES core.users(id) ON DELETE SET NULL,

@@ -8,6 +8,7 @@ import { Toast } from 'primereact/toast';
 import { Tag } from 'primereact/tag';
 import { TabView, TabPanel } from 'primereact/tabview';
 import { Dropdown } from 'primereact/dropdown';
+import { Dialog } from 'primereact/dialog';
 import api from '@/lib/api';
 import { format } from 'date-fns';
 import { useRouter } from 'next/navigation';
@@ -103,8 +104,28 @@ export default function WmsReceiptsPage() {
   }, [baseFilteredOrders]);
 
   const completedOrders = React.useMemo(() => {
-    return baseFilteredOrders.filter((o: any) => o.status === 'received');
+    return baseFilteredOrders.filter((o: any) => ['received', 'conciliated'].includes(o.status));
   }, [baseFilteredOrders]);
+
+  const pendingReversalOrders = React.useMemo(() => {
+    return completedOrders.filter((o: any) => o.reversal_status === 'PENDING_APPROVAL');
+  }, [completedOrders]);
+
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [loadingAudit, setLoadingAudit] = useState<boolean>(false);
+  const [selectedAuditLog, setSelectedAuditLog] = useState<any>(null);
+
+  const fetchAuditLogs = async () => {
+    setLoadingAudit(true);
+    try {
+      const res = await api.get('/wms/audit-logs?module=WMS&limit=100');
+      setAuditLogs(res.data || []);
+    } catch (e) {
+      console.error('Error cargando bitácora de auditoría:', e);
+    } finally {
+      setLoadingAudit(false);
+    }
+  };
 
   const fetchOrders = async (silent: boolean = false) => {
     if (!silent && !globalWmsOrdersCache) setLoading(true);
@@ -181,6 +202,7 @@ export default function WmsReceiptsPage() {
 
   useEffect(() => {
     fetchCurrentUser();
+    fetchAuditLogs();
   }, []);
 
   return (
@@ -270,16 +292,51 @@ export default function WmsReceiptsPage() {
           </div>
       )}
 
+      {/* ALERTA DE SOLICITUDES DE REVERSO PENDIENTES DE APROBACIÓN */}
+      {pendingReversalOrders.length > 0 && (
+        <div className="mb-5 p-4 bg-amber-50 border-2 border-amber-400 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+              <i className="pi pi-undo text-lg"></i>
+            </div>
+            <div>
+              <h4 className="font-black text-amber-950 text-sm uppercase">
+                {pendingReversalOrders.length} Solicitud(es) de Reverso de Recepción Pendiente(s) de Aprobación
+              </h4>
+              <p className="text-xs text-amber-800">
+                Órdenes: {pendingReversalOrders.map((o: any) => o.reference).join(', ')} — Requieren revisión de Supervisión / Administración.
+              </p>
+            </div>
+          </div>
+          <Button
+            label="Ver en Histórico Completadas"
+            icon="pi pi-arrow-right"
+            severity="warning"
+            size="small"
+            onClick={() => handleTabChange(1)}
+            className="font-bold text-xs shrink-0"
+          />
+        </div>
+      )}
+
       {/* BANDEJA CON PESTAÑAS */}
       <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden p-2">
-        <TabView activeIndex={activeIndex} onTabChange={(e) => handleTabChange(e.index)}>
+        <TabView activeIndex={activeIndex} onTabChange={(e) => {
+          handleTabChange(e.index);
+          if (e.index === 2) fetchAuditLogs();
+        }}>
           
           {/* PESTAÑA: POR RECIBIR */}
           <TabPanel header={`Por Recibir en Muelle (${pendingOrders.length})`} leftIcon="pi pi-inbox mr-2">
             <DataTable value={pendingOrders} loading={loading} emptyMessage="Muelle despejado. No hay camiones pendientes para la sucursal seleccionada." size="small" stripedRows rowHover className="text-sm border-t border-slate-100 mt-2">
               <Column header="NÚMERO DE ODC" field="reference" body={r => (
-                  <span className="font-black tracking-widest text-slate-700 bg-slate-100 px-3 py-1.5 rounded text-xs border border-slate-200">{r.reference}</span>
-              )} style={{ width: '12rem' }} />
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-black tracking-widest text-slate-700 bg-slate-100 px-3 py-1.5 rounded text-xs border border-slate-200">{r.reference}</span>
+                    {Number(r.reversal_count || 0) > 0 && (
+                      <Tag value={`REV #${r.reversal_count}`} severity="warning" className="font-black text-[9px]" />
+                    )}
+                  </div>
+              )} style={{ width: '14rem' }} />
               
               <Column header="FECHA DE EMISIÓN" field="created_at" body={r => (
                  <span className="text-slate-500 font-bold bg-slate-50 px-2 py-1 rounded text-xs">
@@ -302,7 +359,12 @@ export default function WmsReceiptsPage() {
               )} />
               
               <Column header="ESTADO LOGÍSTICO" body={r => (
-                 <Tag severity={getStatusSeverity(r.status)} value={getStatusName(r.status)} className="font-extrabold tracking-wide uppercase text-[9px] px-2 py-1 shadow-sm border border-black/5" />
+                 <div className="flex flex-col items-center gap-1">
+                   <Tag severity={getStatusSeverity(r.status)} value={getStatusName(r.status)} className="font-extrabold tracking-wide uppercase text-[9px] px-2 py-1 shadow-sm border border-black/5" />
+                   {Number(r.reversal_count || 0) > 0 && (
+                     <span className="text-[10px] font-bold text-indigo-600">Reabierta tras Reverso</span>
+                   )}
+                 </div>
               )} align="center" />
               
               <Column header="ACCIÓN" body={r => (
@@ -317,8 +379,13 @@ export default function WmsReceiptsPage() {
           <TabPanel header={`Histórico Completadas (${completedOrders.length})`} leftIcon="pi pi-history mr-2">
             <DataTable value={completedOrders} loading={loading} emptyMessage="No hay historial de recepciones completadas para la sucursal seleccionada." size="small" stripedRows rowHover className="text-sm border-t border-slate-100 mt-2">
               <Column header="NÚMERO DE ODC" field="reference" body={r => (
-                  <span className="font-black tracking-widest text-slate-700 bg-slate-100 px-3 py-1.5 rounded text-xs border border-slate-200">{r.reference}</span>
-              )} style={{ width: '12rem' }} />
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-black tracking-widest text-slate-700 bg-slate-100 px-3 py-1.5 rounded text-xs border border-slate-200">{r.reference}</span>
+                    {Number(r.reversal_count || 0) > 0 && (
+                      <Tag value={`REV #${r.reversal_count}`} severity="info" className="font-black text-[9px]" />
+                    )}
+                  </div>
+              )} style={{ width: '14rem' }} />
               
               <Column header="FECHA CIERRE" field="updated_at" body={r => (
                  <span className="text-slate-500 font-bold bg-slate-50 px-2 py-1 rounded text-xs">
@@ -340,19 +407,189 @@ export default function WmsReceiptsPage() {
                   </span>
               )} />
               
-              <Column header="ESTADO" body={r => (
-                 <Tag severity="success" value="COMPLETADO (INGRESADO)" className="font-extrabold tracking-wide uppercase text-[9px] px-2 py-1 shadow-sm border border-emerald-500/20" />
-              )} align="center" />
+              <Column header="ESTADO / CONCILIACIÓN" body={r => {
+                 const isConciliated = r.status === 'conciliated' || Boolean(r.conciliated_at) || ['MATCH_EXACT', 'MATCH_WITH_DEBIT_NOTE'].includes(r.reconciliation_status);
+                 if (r.reversal_status === 'PENDING_APPROVAL') {
+                   return <Tag severity="warning" value="⚠️ REVERSO PENDIENTE APROBACIÓN" className="font-extrabold tracking-wide uppercase text-[9px] px-2 py-1 shadow-sm" />;
+                 }
+                 if (isConciliated) {
+                   return <Tag severity="info" value="🔒 CONCILIADA (3-WAY MATCH)" className="font-extrabold tracking-wide uppercase text-[9px] px-2 py-1 shadow-sm" />;
+                 }
+                 return <Tag severity="success" value="COMPLETADO (NO CONCILIADA)" className="font-extrabold tracking-wide uppercase text-[9px] px-2 py-1 shadow-sm border border-emerald-500/20" />;
+              }} align="center" />
               
-              <Column header="CONSULTA Y ACTA" body={r => (
+              <Column header="CONSULTA / REVERSO" body={r => (
                  <div className="flex justify-end gap-2 pr-4">
-                     <Button onClick={() => router.push('/receipts/' + r.id)} label="Ver Acta 🖨️" icon="pi pi-file" rounded severity="secondary" outlined size="small" className="font-bold px-3 border-slate-300 text-slate-700 hover:bg-slate-100" />
+                     <Button
+                       onClick={() => router.push('/receipts/' + r.id)}
+                       label={r.reversal_status === 'PENDING_APPROVAL' ? 'Aprobar / Ver Reverso' : 'Ver Acta / Reversar'}
+                       icon={r.reversal_status === 'PENDING_APPROVAL' ? 'pi pi-exclamation-circle' : 'pi pi-file'}
+                       rounded
+                       severity={r.reversal_status === 'PENDING_APPROVAL' ? 'warning' : 'secondary'}
+                       outlined={r.reversal_status !== 'PENDING_APPROVAL'}
+                       size="small"
+                       className="font-bold px-3"
+                     />
                  </div>
-              )} align="right" style={{ width: '12rem' }} />
+              )} align="right" style={{ width: '14rem' }} />
+            </DataTable>
+          </TabPanel>
+
+          {/* PESTAÑA: BITÁCORA DE AUDITORÍA Y REVERSOS */}
+          <TabPanel header={`Bitácora de Auditoría y Reversos (${auditLogs.length})`} leftIcon="pi pi-shield mr-2">
+            <DataTable
+              value={auditLogs}
+              loading={loadingAudit}
+              emptyMessage="No hay registros de auditoría en este momento."
+              size="small"
+              stripedRows
+              rowHover
+              paginator
+              rows={20}
+              className="text-sm border-t border-slate-100 mt-2"
+            >
+              <Column
+                header="FECHA / HORA"
+                body={(l: any) => (
+                  <span className="font-mono text-xs text-slate-600 font-bold">
+                    {l.created_at ? format(new Date(l.created_at), 'dd/MM/yyyy HH:mm:ss') : 'N/A'}
+                  </span>
+                )}
+                style={{ width: '11rem' }}
+              />
+              <Column
+                header="EVENTO"
+                body={(l: any) => {
+                  if (l.action === 'APPROVE_RECEIPT_REVERSAL') return <Tag value="REVERSO APROBADO" severity="info" className="font-black text-[9px]" />;
+                  if (l.action === 'REQUEST_RECEIPT_REVERSAL') return <Tag value="SOLICITUD REVERSO" severity="warning" className="font-black text-[9px]" />;
+                  if (l.action === 'REJECT_RECEIPT_REVERSAL') return <Tag value="REVERSO RECHAZADO" severity="danger" className="font-black text-[9px]" />;
+                  if (l.action === 'RECEIVE_PURCHASE_ORDER') return <Tag value="RECEPCIÓN ODC" severity="success" className="font-black text-[9px]" />;
+                  return <Tag value={l.action} severity="secondary" className="font-black text-[9px]" />;
+                }}
+                style={{ width: '11rem' }}
+              />
+              <Column
+                header="ORDEN / ENTIDAD"
+                body={(l: any) => (
+                  <span className="font-black text-slate-800 text-xs">
+                    {l.details?.order_reference || `${l.entity_name} #${l.entity_id}`}
+                  </span>
+                )}
+                style={{ width: '10rem' }}
+              />
+              <Column
+                header="USUARIO EJECUTOR"
+                body={(l: any) => (
+                  <div className="flex flex-col">
+                    <span className="font-bold text-slate-800 text-xs">{l.user_name || 'Sistema'}</span>
+                    <span className="text-[10px] text-slate-400">{l.user_email || ''}</span>
+                  </div>
+                )}
+              />
+              <Column
+                header="MOTIVO / TRAZABILIDAD"
+                body={(l: any) => {
+                  const d = l.details || {};
+                  if (d.reversal_reason) {
+                    return (
+                      <div className="text-xs text-slate-700">
+                        <span className="font-bold">{d.reversal_reason}:</span> {d.reversal_notes || ''}
+                        {d.requested_by_name && l.action === 'APPROVE_RECEIPT_REVERSAL' && (
+                          <div className="text-[10px] text-slate-500">Solicitado por: {d.requested_by_name}</div>
+                        )}
+                      </div>
+                    );
+                  }
+                  if (d.rejection_reason) {
+                    return <span className="text-xs text-rose-700 font-semibold">Rechazo: {d.rejection_reason}</span>;
+                  }
+                  if (l.action === 'RECEIVE_PURCHASE_ORDER') {
+                    return (
+                      <span className="text-xs text-slate-600">
+                        Guía/Fact: {d.invoice_number || 'S/N'} | Recibido: {d.total_received ?? 0} unds
+                      </span>
+                    );
+                  }
+                  return <span className="text-xs text-slate-500">{JSON.stringify(d).slice(0, 80)}</span>;
+                }}
+              />
+              <Column
+                header="DETALLE"
+                body={(l: any) => (
+                  <div className="flex justify-end gap-2">
+                    {Array.isArray(l.details?.lines_before_reversal) && (
+                      <Button
+                        label="Ver Foto"
+                        icon="pi pi-eye"
+                        size="small"
+                        outlined
+                        severity="secondary"
+                        onClick={() => setSelectedAuditLog(l)}
+                        className="text-xs font-bold"
+                      />
+                    )}
+                    {l.details?.order_id && (
+                      <Button
+                        icon="pi pi-external-link"
+                        size="small"
+                        text
+                        tooltip="Ir a la ODC"
+                        onClick={() => router.push('/receipts/' + l.details.order_id)}
+                      />
+                    )}
+                  </div>
+                )}
+                align="right"
+                style={{ width: '9rem' }}
+              />
             </DataTable>
           </TabPanel>
         </TabView>
       </div>
+
+      {/* MODAL DETALLE FORENSE DE AUDITORÍA */}
+      <Dialog
+        header={`Auditoría Forense — ${selectedAuditLog?.details?.order_reference || ''}`}
+        visible={Boolean(selectedAuditLog)}
+        onHide={() => setSelectedAuditLog(null)}
+        style={{ width: '680px' }}
+      >
+        {selectedAuditLog && (
+          <div className="flex flex-col gap-3 text-xs">
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+              <p><strong>Acción:</strong> {selectedAuditLog.action}</p>
+              <p><strong>Fecha/Hora:</strong> {selectedAuditLog.created_at ? format(new Date(selectedAuditLog.created_at), 'dd/MM/yyyy HH:mm:ss') : ''}</p>
+              <p><strong>Solicitado por:</strong> {selectedAuditLog.details?.requested_by_name || selectedAuditLog.user_name}</p>
+              {selectedAuditLog.details?.approved_by_name && (
+                <p><strong>Aprobado por:</strong> {selectedAuditLog.details.approved_by_name}</p>
+              )}
+              <p><strong>Causal:</strong> {selectedAuditLog.details?.reversal_reason} — {selectedAuditLog.details?.reversal_notes}</p>
+            </div>
+            <div className="max-h-[340px] overflow-y-auto border border-slate-200 rounded-xl">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-slate-100 text-slate-600 uppercase text-[10px]">
+                  <tr>
+                    <th className="p-2.5">SKU</th>
+                    <th className="p-2.5">Producto</th>
+                    <th className="p-2.5 text-right">Esperado</th>
+                    <th className="p-2.5 text-right">Recibido (Anulado)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(selectedAuditLog.details?.lines_before_reversal || []).map((ln: any, i: number) => (
+                    <tr key={i}>
+                      <td className="p-2.5 font-mono font-bold text-slate-700">{ln.sku}</td>
+                      <td className="p-2.5 font-semibold text-slate-800">{ln.product_name}</td>
+                      <td className="p-2.5 text-right text-slate-500">{ln.expected_base_qty}</td>
+                      <td className="p-2.5 text-right font-black text-rose-600">{ln.received_base_qty}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </Dialog>
     </div>
   );
 }

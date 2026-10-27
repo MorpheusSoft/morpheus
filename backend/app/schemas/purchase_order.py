@@ -90,6 +90,21 @@ class PurchaseOrderResponse(PurchaseOrderBase):
     seen_by_supplier_at: Optional[datetime] = None
     accepted_by_supplier_at: Optional[datetime] = None
     supplier_ip_accepted: Optional[str] = None
+
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[date] = None
+    conciliated_at: Optional[datetime] = None
+    reconciliation_status: Optional[str] = "PENDING"
+
+    reversal_status: Optional[str] = "NONE"
+    reversal_reason: Optional[str] = None
+    reversal_notes: Optional[str] = None
+    reversal_requested_by_id: Optional[int] = None
+    reversal_requested_at: Optional[datetime] = None
+    reversal_approved_by_id: Optional[int] = None
+    reversal_approved_at: Optional[datetime] = None
+    reversal_rejection_reason: Optional[str] = None
+    reversal_count: Optional[int] = 0
     
     class Config:
         from_attributes = True

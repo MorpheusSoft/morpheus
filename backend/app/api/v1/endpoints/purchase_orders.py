@@ -329,6 +329,17 @@ def read_purchase_order_details(
         "debit_note_number": order.debit_note_number,
         "debit_note_amount": order.debit_note_amount,
         "reconciliation_notes": order.reconciliation_notes,
+        "reversal_status": getattr(order, "reversal_status", "NONE") or "NONE",
+        "reversal_reason": getattr(order, "reversal_reason", None),
+        "reversal_notes": getattr(order, "reversal_notes", None),
+        "reversal_requested_by_id": getattr(order, "reversal_requested_by_id", None),
+        "reversal_requested_by_name": order.reversal_requested_by.full_name if getattr(order, "reversal_requested_by", None) else None,
+        "reversal_requested_at": getattr(order, "reversal_requested_at", None),
+        "reversal_approved_by_id": getattr(order, "reversal_approved_by_id", None),
+        "reversal_approved_by_name": order.reversal_approved_by.full_name if getattr(order, "reversal_approved_by", None) else None,
+        "reversal_approved_at": getattr(order, "reversal_approved_at", None),
+        "reversal_rejection_reason": getattr(order, "reversal_rejection_reason", None),
+        "reversal_count": int(getattr(order, "reversal_count", 0) or 0),
         "lines": lines_rich
     }
 

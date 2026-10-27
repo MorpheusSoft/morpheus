@@ -544,6 +544,11 @@ def receive_purchase_order(
     # 5. Crear el Documento de Picking WMS
     user_id_val = getattr(current_user, 'id', None)
 
+    existing_picking = db.query(StockPicking).filter(StockPicking.name == f"IN-{order.reference}").first()
+    if existing_picking:
+        existing_picking.name = f"IN-{order.reference}-REV-{existing_picking.id}"
+        db.flush()
+
     picking = StockPicking(
         picking_type_id=picking_type.id,
         name=f"IN-{order.reference}",
@@ -712,6 +717,7 @@ def receive_purchase_order(
 
     # Cierre Logístico de la ODC (queda marcada como recibida para pasar a conciliación 3-Way Match con sus faltantes/sobrantes)
     order.status = 'received'
+    order.reversal_status = 'NONE'
 
     db.commit()
 
@@ -2377,22 +2383,410 @@ def reject_inventory_adjustment(
     return {"message": f"Ajuste {adj.number} RECHAZADO por la supervisión.", "status": "REJECTED"}
 
 
-@router.get("/audit-logs")
-def get_wms_audit_logs(
-    module: Optional[str] = "WMS",
-    action: Optional[str] = None,
-    limit: int = 50,
+class ReceiptReversalRequestPayload(BaseModel):
+    reason: str
+    notes: str
+
+class ReceiptReversalApprovePayload(BaseModel):
+    reason: Optional[str] = None
+    notes: Optional[str] = None
+    approval_notes: Optional[str] = None
+
+class ReceiptReversalRejectPayload(BaseModel):
+    rejection_reason: str
+
+
+def _can_approve_receipt_reversal(current_user: User) -> bool:
+    if getattr(current_user, "is_superuser", False):
+        return True
+    for r in (getattr(current_user, "roles", None) or []):
+        role_name_upper = (r.name or "").strip().upper()
+        if role_name_upper in ["ADMIN", "SUPERVISOR", "GERENTE", "MANAGER", "ADMINISTRADOR", "JEFE DE ALMACEN", "JEFE DE LOGISTICA"]:
+            return True
+        perms = r.permissions or {}
+        for mod_key in ("neo_wms", "neo_logistics", "wms", "logistics"):
+            mod_perms = perms.get(mod_key) or {}
+            if isinstance(mod_perms, dict):
+                rec_perms = mod_perms.get("receipts") or {}
+                if isinstance(rec_perms, dict) and (rec_perms.get("approve") or rec_perms.get("admin")):
+                    return True
+    return False
+
+
+def _validate_order_reversible(order: PurchaseOrder):
+    if order.status == "conciliated" or order.conciliated_at is not None or (order.reconciliation_status or "PENDING") in ("MATCH_EXACT", "MATCH_WITH_DEBIT_NOTE"):
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede reversar esta recepción porque la Orden de Compra ya fue conciliada en Compras (3-Way Match)."
+        )
+    if order.status != "received":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Solo se pueden reversar órdenes en estado Recibida ('received'). Estado actual: '{order.status}'."
+        )
+
+
+def _build_lines_snapshot(db: Session, order: PurchaseOrder) -> list[dict]:
+    snap_lines = []
+    for l in order.lines:
+        rec_qty = float(l.received_base_qty or 0)
+        exp_qty = float(l.expected_base_qty or 0)
+        variant = db.query(ProductVariant).filter(ProductVariant.id == l.variant_id).first()
+        prod_name = variant.product.name if (variant and variant.product) else f"ID {l.variant_id}"
+        sku = variant.sku if variant else f"ID-{l.variant_id}"
+        snap_lines.append({
+            "line_id": l.id,
+            "variant_id": l.variant_id,
+            "sku": sku,
+            "product_name": prod_name,
+            "expected_base_qty": exp_qty,
+            "received_base_qty": rec_qty,
+            "unit_cost": float(l.unit_cost or 0)
+        })
+    return snap_lines
+
+
+@router.post("/receipts/{order_id}/request-reversal")
+def request_receipt_reversal(
+    order_id: int,
+    payload: ReceiptReversalRequestPayload,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
     """
-    Consulta el historial de auditoría de transacciones WMS (recepciones, mermas, reubicaciones, etc.).
+    Paso 1: El analista de almacén solicita el reverso de una recepción de ODC no conciliada.
+    Registra el estado PENDING_APPROVAL y genera evento en core.audit_logs.
+    """
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden de Compra no encontrada.")
+
+    _validate_order_reversible(order)
+
+    if getattr(order, "reversal_status", "NONE") == "PENDING_APPROVAL":
+        raise HTTPException(status_code=400, detail="Esta recepción ya tiene una solicitud de reverso pendiente de aprobación.")
+
+    reason_clean = (payload.reason or "").strip()
+    notes_clean = (payload.notes or "").strip()
+    if not reason_clean or not notes_clean:
+        raise HTTPException(status_code=400, detail="Debe indicar la causal y la justificación detallada del reverso.")
+
+    lines_snapshot = _build_lines_snapshot(db, order)
+
+    order.reversal_status = "PENDING_APPROVAL"
+    order.reversal_reason = reason_clean
+    order.reversal_notes = notes_clean
+    order.reversal_requested_by_id = current_user.id
+    order.reversal_requested_at = datetime.now()
+    order.reversal_rejection_reason = None
+
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    supplier = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
+
+    audit_entry = AuditLog(
+        user_id=current_user.id,
+        user_name=current_user.full_name,
+        user_email=current_user.email,
+        action="REQUEST_RECEIPT_REVERSAL",
+        module="WMS",
+        entity_name="PurchaseOrder",
+        entity_id=str(order.id),
+        facility_id=order.dest_facility_id,
+        details={
+            "order_id": order.id,
+            "order_reference": order.reference,
+            "supplier_name": supplier.name if supplier else "N/A",
+            "invoice_number": order.invoice_number,
+            "reversal_reason": reason_clean,
+            "reversal_notes": notes_clean,
+            "requested_by_id": current_user.id,
+            "requested_by_name": current_user.full_name,
+            "lines_before_reversal": lines_snapshot
+        },
+        ip_address=client_ip
+    )
+    db.add(audit_entry)
+    db.commit()
+
+    return {
+        "status": "PENDING_APPROVAL",
+        "message": f"Solicitud de reverso para {order.reference} enviada a Supervisión / Gerencia para su aprobación."
+    }
+
+
+@router.post("/receipts/{order_id}/approve-reversal")
+def approve_receipt_reversal(
+    order_id: int,
+    payload: ReceiptReversalApprovePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Paso 2: Aprobación por Supervisor / Admin.
+    Ejecuta la Opción B en una sola transacción:
+      - Anula los movimientos de Kardex (inv.stock_moves -> state='CANCELLED', quantity_done=0)
+      - Descuenta el stock ingresado de inv.inventory_snapshots
+      - Cancela y renombra el picking (IN-ODC-... -> IN-ODC-...-REV-{id})
+      - Reinicia received_base_qty = 0 en pur.purchase_order_lines
+      - Regresa pur.purchase_orders.status = 'approved' para volver a recibir desde cero
+      - Guarda foto forense en core.audit_logs
+    """
+    if not _can_approve_receipt_reversal(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Acceso Denegado: Su perfil no posee privilegios de Supervisión / Administración para aprobar el reverso de recepciones."
+        )
+
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden de Compra no encontrada.")
+
+    _validate_order_reversible(order)
+
+    reason_clean = (payload.reason or order.reversal_reason or "CORRECCION_RECEPCION").strip()
+    notes_clean = (payload.notes or order.reversal_notes or payload.approval_notes or "Reverso autorizado por supervisión").strip()
+    approval_comment = (payload.approval_notes or "").strip()
+
+    if not order.reversal_requested_by_id:
+        order.reversal_requested_by_id = current_user.id
+        order.reversal_requested_at = datetime.now()
+        order.reversal_reason = reason_clean
+        order.reversal_notes = notes_clean
+
+    requested_user = db.query(User).filter(User.id == order.reversal_requested_by_id).first() if order.reversal_requested_by_id else current_user
+    supplier = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
+
+    lines_snapshot = _build_lines_snapshot(db, order)
+    prev_invoice = order.invoice_number
+    rev_num = int(getattr(order, "reversal_count", 0) or 0) + 1
+
+    # Buscar todos los pickings activos de recepción para esta ODC
+    pickings = db.query(StockPicking).filter(
+        (StockPicking.name == f"IN-{order.reference}") |
+        (StockPicking.origin_document == order.reference)
+    ).all()
+    picking_ids = [p.id for p in pickings]
+
+    # Buscar todos los StockMove DONE asociados a esta recepción
+    moves_query = db.query(StockMove).filter(StockMove.state == "DONE")
+    if picking_ids:
+        moves = moves_query.filter(
+            (StockMove.picking_id.in_(picking_ids)) |
+            (StockMove.reference.in_([order.reference, f"SCRAP-{order.reference}"])) |
+            (StockMove.reference.like(f"DISCREPANCY-{order.reference}%"))
+        ).all()
+    else:
+        moves = moves_query.filter(
+            (StockMove.reference.in_([order.reference, f"SCRAP-{order.reference}"])) |
+            (StockMove.reference.like(f"DISCREPANCY-{order.reference}%"))
+        ).all()
+
+    target_facility_id = order.dest_facility_id
+    if not target_facility_id and pickings:
+        target_facility_id = pickings[0].facility_id
+
+    cancelled_move_details = []
+    for move in moves:
+        prev_qty = float(move.quantity_done or 0)
+        dest_loc = db.query(Location).filter(Location.id == move.location_dest_id).first()
+        is_scrap_or_loss = bool(dest_loc and dest_loc.location_type == "LOSS")
+
+        # Si el movimiento ingresó a inventario disponible (no pérdida/merma), descontar del snapshot
+        if prev_qty > 0 and not is_scrap_or_loss and target_facility_id:
+            snap = db.query(InventorySnapshot).filter(
+                InventorySnapshot.variant_id == move.product_id,
+                InventorySnapshot.facility_id == target_facility_id
+            ).first()
+            if snap:
+                snap.stock_qty = max(0.0, float(snap.stock_qty or 0) - prev_qty)
+
+        cancelled_move_details.append({
+            "move_id": move.id,
+            "variant_id": move.product_id,
+            "previous_quantity_done": prev_qty,
+            "location_dest_id": move.location_dest_id,
+            "was_scrap": is_scrap_or_loss
+        })
+
+        prev_notes = (move.notes or "").strip()
+        audit_tag = f"[REVERSO #{rev_num} APROBADO por {current_user.full_name} ({datetime.now().strftime('%d/%m/%Y %H:%M')}): cant. previa {prev_qty:g} anulada - Causal: {reason_clean}]"
+        move.notes = f"{prev_notes} | {audit_tag}".strip(" |")
+        move.state = "CANCELLED"
+        move.quantity_done = 0
+
+    cancelled_picking_names = []
+    for p in pickings:
+        if p.status != "CANCELLED":
+            p.status = "CANCELLED"
+        if p.name == f"IN-{order.reference}":
+            p.name = f"IN-{order.reference}-REV-{p.id}"
+        p.notes = f"Recepción reversada #{rev_num} por {current_user.full_name} ({datetime.now().strftime('%d/%m/%Y %H:%M')}). Causal: {reason_clean}. {notes_clean}"
+        cancelled_picking_names.append(p.name)
+
+    # Reiniciar cantidades recibidas en las líneas de la ODC
+    for l in order.lines:
+        l.received_base_qty = 0
+
+    # Reabrir la ODC a estado 'approved' para que vuelva a estar disponible en Muelle
+    order.status = "approved"
+    order.reversal_status = "APPROVED"
+    order.reversal_reason = reason_clean
+    order.reversal_notes = notes_clean
+    order.reversal_approved_by_id = current_user.id
+    order.reversal_approved_at = datetime.now()
+    order.reversal_count = rev_num
+
+    trace_line = f"[Reverso #{rev_num} Aprobado por {current_user.full_name} el {datetime.now().strftime('%d/%m/%Y %H:%M')}]: {reason_clean} — {notes_clean}"
+    if approval_comment:
+        trace_line += f" (Nota Sup: {approval_comment})"
+    existing_order_notes = (order.notes or "").strip()
+    order.notes = f"{existing_order_notes}\n{trace_line}".strip()
+
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    audit_entry = AuditLog(
+        user_id=current_user.id,
+        user_name=current_user.full_name,
+        user_email=current_user.email,
+        action="APPROVE_RECEIPT_REVERSAL",
+        module="WMS",
+        entity_name="PurchaseOrder",
+        entity_id=str(order.id),
+        facility_id=target_facility_id,
+        details={
+            "order_id": order.id,
+            "order_reference": order.reference,
+            "supplier_name": supplier.name if supplier else "N/A",
+            "previous_invoice_number": prev_invoice,
+            "reversal_number": rev_num,
+            "reversal_reason": reason_clean,
+            "reversal_notes": notes_clean,
+            "approval_notes": approval_comment,
+            "requested_by_id": order.reversal_requested_by_id,
+            "requested_by_name": requested_user.full_name if requested_user else "N/A",
+            "requested_at": order.reversal_requested_at.isoformat() if order.reversal_requested_at else None,
+            "approved_by_id": current_user.id,
+            "approved_by_name": current_user.full_name,
+            "approved_at": order.reversal_approved_at.isoformat() if order.reversal_approved_at else None,
+            "cancelled_pickings": cancelled_picking_names,
+            "cancelled_moves": cancelled_move_details,
+            "lines_before_reversal": lines_snapshot
+        },
+        ip_address=client_ip
+    )
+    db.add(audit_entry)
+    db.commit()
+
+    return {
+        "status": "APPROVED",
+        "new_order_status": order.status,
+        "reversal_count": rev_num,
+        "cancelled_moves_count": len(cancelled_move_details),
+        "message": f"Recepción de {order.reference} reversada exitosamente. Los movimientos fueron anulados en Kardex y la ODC está nuevamente habilitada para recibir en muelle."
+    }
+
+
+@router.post("/receipts/{order_id}/reject-reversal")
+def reject_receipt_reversal(
+    order_id: int,
+    payload: ReceiptReversalRejectPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Rechazo de solicitud de reverso de recepción por parte de Supervisión / Gerencia.
+    La ODC permanece en estado 'received'.
+    """
+    if not _can_approve_receipt_reversal(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Acceso Denegado: Su perfil no posee privilegios de Supervisión / Administración para rechazar solicitudes de reverso."
+        )
+
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden de Compra no encontrada.")
+
+    rejection_clean = (payload.rejection_reason or "").strip()
+    if not rejection_clean:
+        raise HTTPException(status_code=400, detail="Debe especificar el motivo del rechazo de la solicitud.")
+
+    requested_user = db.query(User).filter(User.id == order.reversal_requested_by_id).first() if order.reversal_requested_by_id else None
+    supplier = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
+
+    order.reversal_status = "REJECTED"
+    order.reversal_rejection_reason = rejection_clean
+    order.reversal_approved_by_id = current_user.id
+    order.reversal_approved_at = datetime.now()
+
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    audit_entry = AuditLog(
+        user_id=current_user.id,
+        user_name=current_user.full_name,
+        user_email=current_user.email,
+        action="REJECT_RECEIPT_REVERSAL",
+        module="WMS",
+        entity_name="PurchaseOrder",
+        entity_id=str(order.id),
+        facility_id=order.dest_facility_id,
+        details={
+            "order_id": order.id,
+            "order_reference": order.reference,
+            "supplier_name": supplier.name if supplier else "N/A",
+            "reversal_reason": order.reversal_reason,
+            "reversal_notes": order.reversal_notes,
+            "requested_by_name": requested_user.full_name if requested_user else "N/A",
+            "rejected_by_name": current_user.full_name,
+            "rejection_reason": rejection_clean
+        },
+        ip_address=client_ip
+    )
+    db.add(audit_entry)
+    db.commit()
+
+    return {
+        "status": "REJECTED",
+        "message": f"Solicitud de reverso para {order.reference} rechazada por supervisión."
+    }
+
+
+@router.get("/audit-logs")
+def get_wms_audit_logs(
+    module: Optional[str] = "WMS",
+    action: Optional[str] = None,
+    order_id: Optional[int] = None,
+    entity_id: Optional[str] = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Consulta el historial de auditoría de transacciones WMS (recepciones, reversos, mermas, reubicaciones, etc.).
     """
     query = db.query(AuditLog)
     if module:
         query = query.filter(AuditLog.module == module)
     if action:
         query = query.filter(AuditLog.action == action)
+    if order_id is not None:
+        oid_str = str(order_id)
+        query = query.filter(
+            ((AuditLog.entity_name == "PurchaseOrder") & (AuditLog.entity_id == oid_str)) |
+            (AuditLog.details["order_id"].astext == oid_str)
+        )
+    elif entity_id is not None:
+        query = query.filter(AuditLog.entity_id == str(entity_id))
     
     logs = query.order_by(AuditLog.created_at.desc()).limit(limit).all()
     return [

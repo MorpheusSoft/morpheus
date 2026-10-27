@@ -57,10 +57,23 @@ class PurchaseOrder(Base):
     consolidation_mode = Column(String(30), default='DIRECT_STORE')  # DIRECT_STORE, CONSOLIDATED_CD
     target_cd_facility_id = Column(Integer, ForeignKey("core.facilities.id"), nullable=True)
     distribution_breakdown = Column(JSONB, default=list)
+
+    # Control de Reverso de Recepciones WMS y Auditoría
+    reversal_status = Column(String(30), default='NONE')  # NONE, PENDING_APPROVAL, APPROVED, REJECTED
+    reversal_reason = Column(String(120), nullable=True)
+    reversal_notes = Column(Text, nullable=True)
+    reversal_requested_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    reversal_requested_at = Column(DateTime(timezone=True), nullable=True)
+    reversal_approved_by_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    reversal_approved_at = Column(DateTime(timezone=True), nullable=True)
+    reversal_rejection_reason = Column(Text, nullable=True)
+    reversal_count = Column(Integer, default=0)
     
     supplier = relationship("Supplier")
     dest_facility = relationship("Facility", foreign_keys=[dest_facility_id])
     target_cd_facility = relationship("Facility", foreign_keys=[target_cd_facility_id])
+    reversal_requested_by = relationship("User", foreign_keys=[reversal_requested_by_id])
+    reversal_approved_by = relationship("User", foreign_keys=[reversal_approved_by_id])
     lines = relationship("PurchaseOrderLine", back_populates="order")
 
 class PurchaseOrderLine(Base):

@@ -56,6 +56,167 @@ export default function ReceiptExecutionPage() {
   const [ocrResult, setOcrResult] = useState<any>(null);
   const [confirmingReconciliation, setConfirmingReconciliation] = useState(false);
 
+  // Control de Reverso de Recepción y Auditoría
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [orderAuditLogs, setOrderAuditLogs] = useState<any[]>([]);
+  const [reversalModalVisible, setReversalModalVisible] = useState(false);
+  const [reversalReason, setReversalReason] = useState<string>('ERROR_DIGITACION');
+  const [reversalNotes, setReversalNotes] = useState<string>('');
+  const [submittingReversal, setSubmittingReversal] = useState(false);
+  const [rejectReversalModalVisible, setRejectReversalModalVisible] = useState(false);
+  const [rejectReversalReason, setRejectReversalReason] = useState<string>('');
+  const [auditSnapshotModalLog, setAuditSnapshotModalLog] = useState<any>(null);
+
+  const REVERSAL_REASON_OPTIONS = [
+    { label: 'Error de digitación de cantidades en conteo', value: 'ERROR_DIGITACION' },
+    { label: 'Omisión de renglón / producto dejado en 0 por error', value: 'OMISION_RENGLON' },
+    { label: 'Factura o Guía de Despacho equivocada', value: 'FACTURA_EQUIVOCADA' },
+    { label: 'Error en factor de empaque / unidad de medida', value: 'ERROR_EMPAQUE' },
+    { label: 'Diferencia detectada en revisión post-descarga', value: 'REVISION_POST_DESCARGA' },
+    { label: 'Otro motivo justificado', value: 'OTRO' },
+  ];
+
+  const canApproveReversal = React.useMemo(() => {
+    if (!currentUser) return false;
+    if (currentUser.is_superuser) return true;
+    for (const r of (currentUser.roles || [])) {
+      const roleName = String(r.name || '').trim().toUpperCase();
+      if (['ADMIN', 'SUPERVISOR', 'GERENTE', 'MANAGER', 'ADMINISTRADOR', 'JEFE DE ALMACEN', 'JEFE DE LOGISTICA'].includes(roleName)) {
+        return true;
+      }
+      const perms = r.permissions || {};
+      for (const mk of ['neo_wms', 'neo_logistics', 'wms', 'logistics']) {
+        const recPerms = perms?.[mk]?.receipts;
+        if (recPerms && (recPerms.approve || recPerms.admin)) return true;
+      }
+    }
+    return false;
+  }, [currentUser]);
+
+  const isOrderConciliated = React.useMemo(() => {
+    if (!order) return false;
+    return (
+      order.status === 'conciliated' ||
+      Boolean(order.conciliated_at) ||
+      ['MATCH_EXACT', 'MATCH_WITH_DEBIT_NOTE'].includes(order.reconciliation_status)
+    );
+  }, [order]);
+
+  const canReverseReceipt = React.useMemo(() => {
+    if (!order) return false;
+    return order.status === 'received' && !isOrderConciliated;
+  }, [order, isOrderConciliated]);
+
+  const fetchOrderAuditLogs = async () => {
+    if (!orderId) return;
+    try {
+      const res = await api.get(`/wms/audit-logs?order_id=${orderId}&limit=50`);
+      setOrderAuditLogs(res.data || []);
+    } catch (e) {
+      console.error('Error cargando bitácora de auditoría:', e);
+    }
+  };
+
+  const handleRequestReversal = async (directApprove: boolean = false) => {
+    if (!reversalReason || !reversalNotes.trim()) {
+      toast.current?.show({
+        severity: 'warn',
+        summary: 'Justificación requerida',
+        detail: 'Debe seleccionar una causal y describir detalladamente el motivo del reverso.',
+      });
+      return;
+    }
+    setSubmittingReversal(true);
+    try {
+      if (directApprove && canApproveReversal) {
+        const res = await api.post(`/wms/receipts/${orderId}/approve-reversal`, {
+          reason: reversalReason,
+          notes: reversalNotes.trim(),
+          approval_notes: 'Autorizado y ejecutado directamente por Supervisión/Administración.',
+        });
+        toast.current?.show({
+          severity: 'success',
+          summary: 'Recepción Reversada',
+          detail: res.data.message,
+          life: 6000,
+        });
+      } else {
+        const res = await api.post(`/wms/receipts/${orderId}/request-reversal`, {
+          reason: reversalReason,
+          notes: reversalNotes.trim(),
+        });
+        toast.current?.show({
+          severity: 'info',
+          summary: 'Solicitud Enviada',
+          detail: res.data.message,
+          life: 5000,
+        });
+      }
+      setReversalModalVisible(false);
+      setReversalNotes('');
+      await fetchOrder();
+      await fetchOrderAuditLogs();
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'No se pudo procesar la solicitud de reverso.';
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: msg, life: 6000 });
+    } finally {
+      setSubmittingReversal(false);
+    }
+  };
+
+  const handleApprovePendingReversal = async () => {
+    setSubmittingReversal(true);
+    try {
+      const res = await api.post(`/wms/receipts/${orderId}/approve-reversal`, {
+        approval_notes: 'Solicitud del analista verificada y aprobada por supervisión.',
+      });
+      toast.current?.show({
+        severity: 'success',
+        summary: 'Reverso Aprobado y Ejecutado',
+        detail: res.data.message,
+        life: 6000,
+      });
+      await fetchOrder();
+      await fetchOrderAuditLogs();
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'No se pudo aprobar el reverso.';
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: msg, life: 6000 });
+    } finally {
+      setSubmittingReversal(false);
+    }
+  };
+
+  const handleRejectPendingReversal = async () => {
+    if (!rejectReversalReason.trim()) {
+      toast.current?.show({
+        severity: 'warn',
+        summary: 'Motivo requerido',
+        detail: 'Indique el motivo por el cual se rechaza el reverso.',
+      });
+      return;
+    }
+    setSubmittingReversal(true);
+    try {
+      const res = await api.post(`/wms/receipts/${orderId}/reject-reversal`, {
+        rejection_reason: rejectReversalReason.trim(),
+      });
+      toast.current?.show({
+        severity: 'warn',
+        summary: 'Solicitud Rechazada',
+        detail: res.data.message,
+      });
+      setRejectReversalModalVisible(false);
+      setRejectReversalReason('');
+      await fetchOrder();
+      await fetchOrderAuditLogs();
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'No se pudo rechazar la solicitud.';
+      toast.current?.show({ severity: 'error', summary: 'Error', detail: msg });
+    } finally {
+      setSubmittingReversal(false);
+    }
+  };
+
   const handleUploadInvoiceToClara = async () => {
     if (!invoiceFile) {
       toast.current?.show({ severity: 'warn', summary: 'Archivo requerido', detail: 'Por favor selecciona la foto o PDF de la factura.' });
@@ -141,7 +302,11 @@ export default function ReceiptExecutionPage() {
   };
 
   useEffect(() => {
-    if (orderId) fetchOrder();
+    api.get('/users/me').then(res => setCurrentUser(res.data)).catch(() => {});
+    if (orderId) {
+      fetchOrder();
+      fetchOrderAuditLogs();
+    }
   }, [orderId]);
 
   const handleQtyChange = (rowIndex: number, val: any) => {
@@ -332,8 +497,9 @@ export default function ReceiptExecutionPage() {
               detail: `Mercancía ingresada a inventario. Abriendo Acta Definitiva...` 
           });
           
-          setOrder((prev: any) => ({ ...prev, status: 'received' }));
+          setOrder((prev: any) => ({ ...prev, status: 'received', reversal_status: 'NONE' }));
           setInvoiceModalVisible(true);
+          setTimeout(() => fetchOrderAuditLogs(), 600);
       } catch(e: any) {
           const detailMsg = typeof e.response?.data?.detail === 'string' 
               ? e.response.data.detail 
@@ -436,11 +602,11 @@ export default function ReceiptExecutionPage() {
 
       {/* BANNER DE RECEPCIÓN CERRADA Y CONFIRMADA */}
       {isReadOnly && (
-        <div className="bg-emerald-50 border-2 border-emerald-500 text-emerald-800 p-5 rounded-2xl mb-6 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-sm">
+        <div className="bg-emerald-50 border-2 border-emerald-500 text-emerald-800 p-5 rounded-2xl mb-6 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 shadow-sm">
           <div className="flex items-center gap-3">
             <i className="pi pi-check-circle text-3xl text-emerald-600"></i>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-black text-lg text-emerald-900">RECEPCIÓN REGISTRADA Y ASENTADA EN INVENTARIO</h3>
                 {order?.reconciliation_status === 'MATCH_EXACT' && (
                   <Tag value="✓ CONCILIADA 100%" severity="success" className="font-black text-[10px]" />
@@ -448,18 +614,46 @@ export default function ReceiptExecutionPage() {
                 {order?.reconciliation_status === 'MATCH_WITH_DEBIT_NOTE' && (
                   <Tag value={`⚠️ NOTA DÉBITO: $${Number(order.debit_note_amount || 0).toFixed(2)}`} severity="warning" className="font-black text-[10px]" />
                 )}
+                {Number(order?.reversal_count || 0) > 0 && (
+                  <Tag value={`🔄 REVERSADA ${order.reversal_count}x`} severity="info" className="font-black text-[10px]" />
+                )}
               </div>
-              <p className="text-xs text-emerald-700 font-medium">Esta orden fue recibida y cerrada. No se permiten modificaciones para preservar la validez legal del acta impresa.</p>
+              <p className="text-xs text-emerald-700 font-medium mt-0.5">
+                {isOrderConciliated
+                  ? 'Esta orden ya fue conciliada financieramente (3-Way Match). El reverso de recepción está bloqueado por seguridad contable.'
+                  : 'Esta orden fue recibida y cerrada. Si requiere corregir el conteo antes de conciliar, solicite un Reverso de Recepción.'}
+              </p>
             </div>
           </div>
-          <div className="flex flex-col sm:flex-row gap-2 shrink-0">
-            <Button 
-                label="Conciliar Factura con Clara 🤖" 
-                icon="pi pi-sparkles" 
-                severity="info" 
-                onClick={() => setInvoiceModalVisible(true)} 
-                className="font-black bg-blue-600 hover:bg-blue-700 text-white border-none px-4 py-3 shadow-md" 
-            />
+          <div className="flex flex-wrap gap-2 shrink-0">
+            {canReverseReceipt && order?.reversal_status !== 'PENDING_APPROVAL' && (
+              <Button
+                label={canApproveReversal ? 'Reversar Recepción 🔄' : 'Solicitar Reverso 🔄'}
+                icon="pi pi-undo"
+                severity="warning"
+                onClick={() => setReversalModalVisible(true)}
+                className="font-black bg-amber-600 hover:bg-amber-700 text-white border-none px-4 py-3 shadow-md"
+              />
+            )}
+            {isOrderConciliated && (
+              <Button
+                label="Reverso Bloqueado (Conciliada)"
+                icon="pi pi-lock"
+                severity="secondary"
+                disabled
+                tooltip="Solo se pueden reversar ODC que no estén conciliadas"
+                className="font-bold px-4 py-3 opacity-70"
+              />
+            )}
+            {order?.reversal_status !== 'PENDING_APPROVAL' && (
+              <Button 
+                  label="Conciliar Factura con Clara 🤖" 
+                  icon="pi pi-sparkles" 
+                  severity="info" 
+                  onClick={() => setInvoiceModalVisible(true)} 
+                  className="font-black bg-blue-600 hover:bg-blue-700 text-white border-none px-4 py-3 shadow-md" 
+              />
+            )}
             <Button 
                 label="Imprimir Acta Definitiva 🖨️" 
                 icon="pi pi-print" 
@@ -467,6 +661,88 @@ export default function ReceiptExecutionPage() {
                 onClick={openTicketDialog} 
                 className="font-bold bg-emerald-600 text-white border-none px-6 py-3 shadow-md hover:bg-emerald-700" 
             />
+          </div>
+        </div>
+      )}
+
+      {/* BANNER DE SOLICITUD DE REVERSO PENDIENTE DE APROBACIÓN */}
+      {isReadOnly && order?.reversal_status === 'PENDING_APPROVAL' && (
+        <div className="bg-amber-50 border-2 border-amber-500 text-amber-950 p-5 rounded-2xl mb-6 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 shadow-md">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 mt-0.5 shadow">
+              <i className="pi pi-exclamation-triangle text-xl"></i>
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-black text-base text-amber-900 uppercase tracking-wide">
+                  Solicitud de Reverso de Recepción Pendiente de Aprobación
+                </h3>
+                <Tag value={order.reversal_reason || 'CORRECCIÓN'} severity="warning" className="font-black text-[10px]" />
+              </div>
+              <p className="text-xs text-amber-900 mt-1">
+                <strong>Solicitado por:</strong> {order.reversal_requested_by_name || 'Analista de Almacén'}{' '}
+                {order.reversal_requested_at ? `el ${format(new Date(order.reversal_requested_at), 'dd/MM/yyyy HH:mm')}` : ''}
+              </p>
+              <p className="text-xs text-amber-800 mt-1 bg-white/80 px-3 py-1.5 rounded-lg border border-amber-300 font-medium">
+                <strong>Justificación:</strong> {order.reversal_notes || 'Sin detalle adicional'}
+              </p>
+            </div>
+          </div>
+
+          {canApproveReversal ? (
+            <div className="flex flex-wrap gap-2 shrink-0">
+              <Button
+                label="Rechazar Solicitud"
+                icon="pi pi-times"
+                severity="danger"
+                outlined
+                disabled={submittingReversal}
+                onClick={() => setRejectReversalModalVisible(true)}
+                className="font-bold px-4 py-2.5 bg-white"
+              />
+              <Button
+                label="Aprobar Reverso y Reabrir ODC"
+                icon="pi pi-check-circle"
+                severity="success"
+                loading={submittingReversal}
+                onClick={handleApprovePendingReversal}
+                className="font-black bg-indigo-600 hover:bg-indigo-700 text-white border-none px-5 py-2.5 shadow-md"
+              />
+            </div>
+          ) : (
+            <div className="px-4 py-2 rounded-xl bg-amber-200/70 border border-amber-400 text-amber-900 text-xs font-bold">
+              ⏳ En espera de autorización por un Supervisor o Administrador
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* BANNER INFORMATIVO SI UNA SOLICITUD PREVIA FUE RECHAZADA */}
+      {isReadOnly && order?.reversal_status === 'REJECTED' && order?.reversal_rejection_reason && (
+        <div className="bg-rose-50 border border-rose-300 text-rose-900 p-4 rounded-2xl mb-6 flex items-center justify-between gap-4 text-xs">
+          <div>
+            <span className="font-black uppercase">Última solicitud de reverso rechazada por supervisión: </span>
+            <span className="font-medium">{order.reversal_rejection_reason}</span>
+            {order.reversal_approved_by_name && (
+              <span className="text-rose-700 ml-2 font-bold">({order.reversal_approved_by_name})</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* BANNER INFORMATIVO EN RECEPCIÓN REABIERTA TRAS REVERSO */}
+      {!isReadOnly && Number(order?.reversal_count || 0) > 0 && (
+        <div className="bg-indigo-50 border-2 border-indigo-400 text-indigo-950 p-4 rounded-2xl mb-6 flex items-center justify-between gap-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <i className="pi pi-history text-2xl text-indigo-600"></i>
+            <div>
+              <h4 className="font-black text-sm text-indigo-900 uppercase">
+                ODC Reabierta por Reverso Aprobado (Reverso #{order.reversal_count})
+              </h4>
+              <p className="text-xs text-indigo-700">
+                La recepción anterior fue anulada en Kardex y respaldada en el Log de Auditoría. Ingrese nuevamente el conteo físico correcto y confirme la recepción.
+              </p>
+            </div>
           </div>
         </div>
       )}
@@ -1152,6 +1428,242 @@ export default function ReceiptExecutionPage() {
                   </div>
               )}
           </div>
+      </Dialog>
+
+      {/* BITÁCORA DE AUDITORÍA Y REVERSOS DE ESTA ODC */}
+      {orderAuditLogs.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mt-6">
+          <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+            <h3 className="font-black text-slate-800 text-sm flex items-center gap-2">
+              <i className="pi pi-shield text-indigo-600"></i>
+              Bitácora de Auditoría y Trazabilidad de Recepción ({orderAuditLogs.length} eventos)
+            </h3>
+            <span className="text-[11px] font-bold text-slate-500">Registro Inmutable Neo ERP</span>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {orderAuditLogs.map((log: any) => {
+              const det = log.details || {};
+              let badgeLabel = log.action;
+              let badgeSeverity: 'success' | 'info' | 'warning' | 'danger' = 'info';
+              if (log.action === 'RECEIVE_PURCHASE_ORDER') {
+                badgeLabel = 'RECEPCIÓN CONFIRMADA';
+                badgeSeverity = 'success';
+              } else if (log.action === 'REQUEST_RECEIPT_REVERSAL') {
+                badgeLabel = 'SOLICITUD DE REVERSO';
+                badgeSeverity = 'warning';
+              } else if (log.action === 'APPROVE_RECEIPT_REVERSAL') {
+                badgeLabel = `REVERSO APROBADO #${det.reversal_number || 1}`;
+                badgeSeverity = 'info';
+              } else if (log.action === 'REJECT_RECEIPT_REVERSAL') {
+                badgeLabel = 'REVERSO RECHAZADO';
+                badgeSeverity = 'danger';
+              } else if (log.action === 'REJECT_AT_DOCK' || log.action === 'REPORT_DISCREPANCY_SCRAP') {
+                badgeLabel = 'DISCREPANCIA / AVERÍA';
+                badgeSeverity = 'danger';
+              }
+
+              return (
+                <div key={log.id} className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 hover:bg-slate-50/70">
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Tag value={badgeLabel} severity={badgeSeverity} className="font-black text-[10px]" />
+                      <span className="text-xs font-bold text-slate-800">
+                        {log.user_name || log.user_email || 'Usuario'}
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        • {log.created_at ? format(new Date(log.created_at), 'dd/MM/yyyy HH:mm:ss') : ''}
+                      </span>
+                      {log.ip_address && (
+                        <span className="font-mono text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded">
+                          IP: {log.ip_address}
+                        </span>
+                      )}
+                    </div>
+                    {det.reversal_reason && (
+                      <p className="text-xs text-slate-700">
+                        <strong>Causal:</strong> {det.reversal_reason} — <strong>Detalle:</strong> {det.reversal_notes || 'N/A'}
+                      </p>
+                    )}
+                    {det.requested_by_name && log.action === 'APPROVE_RECEIPT_REVERSAL' && (
+                      <p className="text-[11px] text-slate-500">
+                        Solicitado por: <strong>{det.requested_by_name}</strong> | Aprobado por: <strong>{det.approved_by_name || log.user_name}</strong>
+                        {det.previous_invoice_number ? ` | Factura previa: ${det.previous_invoice_number}` : ''}
+                      </p>
+                    )}
+                    {det.rejection_reason && (
+                      <p className="text-xs text-rose-700">
+                        <strong>Motivo de rechazo:</strong> {det.rejection_reason}
+                      </p>
+                    )}
+                    {log.action === 'RECEIVE_PURCHASE_ORDER' && (
+                      <p className="text-xs text-slate-600">
+                        Documento: <strong>{det.picking_name}</strong> | Factura/Guía: <strong>{det.invoice_number || 'S/N'}</strong> | Total unidades recibidas: <strong>{det.total_received ?? 0}</strong>
+                      </p>
+                    )}
+                  </div>
+
+                  {Array.isArray(det.lines_before_reversal) && det.lines_before_reversal.length > 0 && (
+                    <Button
+                      label="Ver Foto Antes del Reverso"
+                      icon="pi pi-eye"
+                      size="small"
+                      outlined
+                      severity="secondary"
+                      onClick={() => setAuditSnapshotModalLog(log)}
+                      className="text-xs font-bold shrink-0"
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL SOLICITAR / EJECUTAR REVERSO DE RECEPCIÓN */}
+      <Dialog
+        header={
+          <div className="flex items-center gap-2">
+            <i className="pi pi-undo text-amber-600 text-xl"></i>
+            <span className="font-black text-slate-800 text-lg">
+              {canApproveReversal ? 'Reversar Recepción de Mercancía' : 'Solicitar Reverso de Recepción'}
+            </span>
+          </div>
+        }
+        visible={reversalModalVisible}
+        onHide={() => setReversalModalVisible(false)}
+        style={{ width: '540px' }}
+      >
+        <div className="flex flex-col gap-4 py-2 text-slate-700">
+          <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 leading-relaxed">
+            <p className="font-black mb-1">⚠️ Control de Auditoría Neo WMS (Solo ODC no conciliadas):</p>
+            Al aprobarse el reverso de <strong>{order?.reference}</strong>, los movimientos de ingreso en Kardex pasarán a estado <strong>ANULADO (CANCELLED)</strong>, se descontará el stock ingresado y la ODC volverá a estado <strong>Pendiente por Recibir</strong> para cargarla nuevamente. Todo el detalle quedará respaldado en el Log de Auditoría.
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Causal del Reverso (*):</label>
+            <Dropdown
+              value={reversalReason}
+              options={REVERSAL_REASON_OPTIONS}
+              onChange={(e) => setReversalReason(e.value)}
+              className="w-full text-xs font-bold"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Explicación / Justificación Detallada (*):
+            </label>
+            <InputText
+              value={reversalNotes}
+              onChange={(e) => setReversalNotes(e.target.value)}
+              placeholder="Ej: El analista colocó 0 en el renglón PRD-10578 por error y se requiere volver a contar..."
+              className="w-full text-xs"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 mt-3 pt-3 border-t border-slate-200">
+            <Button
+              label="Cancelar"
+              text
+              severity="secondary"
+              disabled={submittingReversal}
+              onClick={() => setReversalModalVisible(false)}
+            />
+            <Button
+              label="Enviar Solicitud a Supervisión"
+              icon="pi pi-send"
+              severity="warning"
+              loading={submittingReversal}
+              onClick={() => handleRequestReversal(false)}
+              className="font-bold text-xs"
+            />
+            {canApproveReversal && (
+              <Button
+                label="Aprobar y Ejecutar Reverso Ahora"
+                icon="pi pi-check-circle"
+                severity="help"
+                loading={submittingReversal}
+                onClick={() => handleRequestReversal(true)}
+                className="font-black text-xs bg-indigo-600 hover:bg-indigo-700 border-none"
+              />
+            )}
+          </div>
+        </div>
+      </Dialog>
+
+      {/* MODAL RECHAZAR SOLICITUD DE REVERSO */}
+      <Dialog
+        header="Rechazar Solicitud de Reverso"
+        visible={rejectReversalModalVisible}
+        onHide={() => setRejectReversalModalVisible(false)}
+        style={{ width: '440px' }}
+      >
+        <div className="flex flex-col gap-4 py-2">
+          <p className="text-xs text-slate-600">
+            Indique el motivo por el cual se rechaza la solicitud de reverso de <strong>{order?.reference}</strong>. La recepción se mantendrá válida.
+          </p>
+          <InputText
+            value={rejectReversalReason}
+            onChange={(e) => setRejectReversalReason(e.target.value)}
+            placeholder="Ej: El conteo físico fue verificado y es correcto"
+            className="w-full text-xs"
+          />
+          <div className="flex justify-end gap-2 mt-2">
+            <Button label="Cancelar" text severity="secondary" onClick={() => setRejectReversalModalVisible(false)} />
+            <Button
+              label="Confirmar Rechazo"
+              severity="danger"
+              loading={submittingReversal}
+              onClick={handleRejectPendingReversal}
+              className="font-bold text-xs"
+            />
+          </div>
+        </div>
+      </Dialog>
+
+      {/* MODAL FOTO FORENSE ANTES DEL REVERSO */}
+      <Dialog
+        header={`Respaldo de Auditoría — ${auditSnapshotModalLog?.details?.order_reference || order?.reference || ''}`}
+        visible={Boolean(auditSnapshotModalLog)}
+        onHide={() => setAuditSnapshotModalLog(null)}
+        style={{ width: '680px' }}
+      >
+        {auditSnapshotModalLog && (
+          <div className="flex flex-col gap-3 text-xs">
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+              <p><strong>Evento:</strong> {auditSnapshotModalLog.action}</p>
+              <p><strong>Fecha/Hora:</strong> {auditSnapshotModalLog.created_at ? format(new Date(auditSnapshotModalLog.created_at), 'dd/MM/yyyy HH:mm:ss') : ''}</p>
+              <p><strong>Solicitado por:</strong> {auditSnapshotModalLog.details?.requested_by_name || auditSnapshotModalLog.user_name}</p>
+              {auditSnapshotModalLog.details?.approved_by_name && (
+                <p><strong>Aprobado por:</strong> {auditSnapshotModalLog.details.approved_by_name}</p>
+              )}
+              <p><strong>Causal:</strong> {auditSnapshotModalLog.details?.reversal_reason} — {auditSnapshotModalLog.details?.reversal_notes}</p>
+            </div>
+            <div className="max-h-[340px] overflow-y-auto border border-slate-200 rounded-xl">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-slate-100 text-slate-600 uppercase text-[10px]">
+                  <tr>
+                    <th className="p-2.5">SKU</th>
+                    <th className="p-2.5">Producto</th>
+                    <th className="p-2.5 text-right">Esperado</th>
+                    <th className="p-2.5 text-right">Recibido (Anulado)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(auditSnapshotModalLog.details?.lines_before_reversal || []).map((ln: any, i: number) => (
+                    <tr key={i}>
+                      <td className="p-2.5 font-mono font-bold text-slate-700">{ln.sku}</td>
+                      <td className="p-2.5 font-semibold text-slate-800">{ln.product_name}</td>
+                      <td className="p-2.5 text-right text-slate-500">{ln.expected_base_qty}</td>
+                      <td className="p-2.5 text-right font-black text-rose-600">{ln.received_base_qty}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </Dialog>
     </div>
   );

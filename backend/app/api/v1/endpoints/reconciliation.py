@@ -340,6 +340,12 @@ def process_reconciliation(
             detail="Solo las órdenes en estado 'Recibido' (con mercancía ingresada en WMS) pueden ser conciliadas."
         )
 
+    if getattr(order, "reversal_status", "NONE") == "PENDING_APPROVAL":
+        raise HTTPException(
+            status_code=400,
+            detail="Esta orden tiene una solicitud de reverso de recepción pendiente de aprobación en Almacén (WMS). Debe aprobarse o rechazarse antes de conciliar."
+        )
+
     action = payload.action.upper()
     if action not in ["EXACT_MATCH", "APPROVE_WITH_DEBIT_NOTE", "REJECT"]:
         raise HTTPException(status_code=400, detail=f"Acción '{payload.action}' no válida. Opciones: EXACT_MATCH, APPROVE_WITH_DEBIT_NOTE, REJECT.")
@@ -514,6 +520,12 @@ def get_debit_note_document_data(
 
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
+
+    if getattr(order, "reversal_status", "NONE") == "PENDING_APPROVAL":
+        raise HTTPException(
+            status_code=400,
+            detail="Esta orden tiene una solicitud de reverso de recepción pendiente de aprobación en Almacén (WMS). Debe aprobarse o rechazarse antes de conciliar."
+        )
 
     if not order.debit_note_number or not order.debit_note_amount:
         raise HTTPException(status_code=400, detail="Esta orden no posee una Nota de Débito emitida.")
@@ -833,6 +845,12 @@ def get_order_ocr_status(
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
 
+    if getattr(order, "reversal_status", "NONE") == "PENDING_APPROVAL":
+        raise HTTPException(
+            status_code=400,
+            detail="Esta orden tiene una solicitud de reverso de recepción pendiente de aprobación en Almacén (WMS). Debe aprobarse o rechazarse antes de conciliar."
+        )
+
     return {
         "order_id": order.id,
         "order_reference": order.reference,
@@ -862,6 +880,12 @@ def confirm_order_reconciliation(
 
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada")
+
+    if getattr(order, "reversal_status", "NONE") == "PENDING_APPROVAL":
+        raise HTTPException(
+            status_code=400,
+            detail="Esta orden tiene una solicitud de reverso de recepción pendiente de aprobación en Almacén (WMS). Debe aprobarse o rechazarse antes de conciliar."
+        )
 
     has_nd = order.debit_note_amount and order.debit_note_amount > Decimal('0.50')
     order.reconciliation_status = "MATCH_WITH_DEBIT_NOTE" if has_nd else "MATCH_EXACT"
