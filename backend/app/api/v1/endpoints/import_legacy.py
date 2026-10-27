@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.api import deps
-from app.models.inventory import Product, ProductVariant, Category, ProductFacilityPrice, ProductBarcode, ProductPackaging
+from app.models.inventory import Product, ProductVariant, Category, ProductFacilityPrice, ProductBarcode, ProductPackaging, StockPicking
 from app.models.core import Currency, Tribute, Supplier, Facility
 from app.models.purchasing import SupplierProduct, PurchaseOrder, PurchaseOrderLine
 from app.models.store_agent_control import StoreAgentConfig
