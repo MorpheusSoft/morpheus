@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import api from '@/lib/api';
+import { clearAuthCookies, getLogoutUrl } from '@/lib/domain';
 
 interface ChangePasswordModalProps {
   isOpen: boolean;
@@ -38,8 +39,19 @@ export function ChangePasswordModal({
     setSuccessMsg(null);
   };
 
+  const handleCancelAndLogout = () => {
+    resetForm();
+    clearAuthCookies();
+    if (typeof window !== 'undefined') {
+      window.location.href = getLogoutUrl();
+    }
+  };
+
   const handleClose = () => {
-    if (isForced) return; // Forced mode cannot be dismissed
+    if (isForced) {
+      handleCancelAndLogout();
+      return;
+    }
     resetForm();
     if (onClose) onClose();
   };
@@ -84,9 +96,10 @@ export function ChangePasswordModal({
         if (onSuccess) onSuccess();
         if (!isForced && onClose) onClose();
       }, 1200);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error changing password:', err);
-      const detail = err.response?.data?.detail;
+      const errObj = err as { response?: { data?: { detail?: string | Array<{ msg?: string }> } } };
+      const detail = errObj?.response?.data?.detail;
       if (typeof detail === 'string') {
         setErrorMsg(detail);
       } else if (Array.isArray(detail)) {
@@ -106,7 +119,7 @@ export function ChangePasswordModal({
         className={`absolute inset-0 bg-slate-950/80 backdrop-blur-md transition-opacity ${
           isForced ? 'pointer-events-none' : 'cursor-pointer'
         }`}
-        onClick={handleClose}
+        onClick={!isForced ? handleClose : undefined}
       />
 
       {/* Modal Container */}
@@ -131,15 +144,15 @@ export function ChangePasswordModal({
             </div>
           </div>
 
-          {!isForced && (
-            <button
-              onClick={handleClose}
-              disabled={loading}
-              className="w-8 h-8 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition-colors flex items-center justify-center cursor-pointer"
-            >
-              <i className="pi pi-times text-sm"></i>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={handleClose}
+            disabled={loading}
+            title={isForced ? 'Cancelar y volver al inicio de sesión' : 'Cerrar'}
+            className="w-8 h-8 rounded-full text-slate-400 hover:text-white hover:bg-white/10 transition-colors flex items-center justify-center cursor-pointer"
+          >
+            <i className="pi pi-times text-sm"></i>
+          </button>
         </div>
 
         {/* Notice for Forced Mode */}
@@ -247,16 +260,15 @@ export function ChangePasswordModal({
 
           {/* Buttons */}
           <div className="pt-2 flex gap-3">
-            {!isForced && (
-              <button
-                type="button"
-                onClick={handleClose}
-                disabled={loading}
-                className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50 transition-colors cursor-pointer"
-              >
-                Cancelar
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleClose}
+              disabled={loading}
+              className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              {isForced && <i className="pi pi-sign-out text-xs"></i>}
+              <span>Cancelar</span>
+            </button>
             <button
               type="submit"
               disabled={loading || !!successMsg}
