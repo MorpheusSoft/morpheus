@@ -192,9 +192,16 @@ export default function WmsReceiptsPage() {
     if (currentUser.is_superuser) return true;
     if (currentUser.roles) {
       for (const r of currentUser.roles) {
+        if (r?.is_active === false) continue;
         const perms = r.permissions || {};
-        const dr = perms?.neo_logistics?.direct_receipts;
-        if (dr && (dr.write || dr.approve || dr.read)) return true;
+        const wmsPerms = perms?.neo_wms || perms?.neo_logistics || perms?.wms || {};
+        const dr = wmsPerms?.direct_receipts ?? perms?.neo_logistics?.direct_receipts;
+        if (dr !== undefined) {
+          if (dr.write || dr.approve || dr.read) return true;
+        } else {
+          const rec = wmsPerms?.receipts || perms?.neo_logistics?.receipts;
+          if (rec && (rec.write || rec.approve)) return true;
+        }
       }
     }
     return false;

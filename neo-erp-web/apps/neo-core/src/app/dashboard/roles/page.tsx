@@ -16,6 +16,7 @@ const initialPermissions: any = {
   },
   neo_wms: {
     receipts: { read: false, write: false, delete: false, approve: false },
+    direct_receipts: { read: false, write: false, delete: false, approve: false },
     locations: { read: false, write: false, delete: false, approve: false },
     transfers: { read: false, write: false, delete: false, approve: false },
     shipments: { read: false, write: false, delete: false, approve: false },
@@ -85,7 +86,8 @@ const featureNames: any = {
   jobs: "Tareas en Segundo Plano (Jobs)",
 
   // Neo WMS
-  receipts: "Recepciones de Mercancía (ODC y Directas)",
+  receipts: "Recepciones de Mercancía (Con ODC)",
+  direct_receipts: "Recepciones Directas (Sin ODC)",
   locations: "Mapa de Almacén y Ubicaciones",
   transfers: "Transferencias Internas",
   shipments: "Despachos y Salidas",
@@ -213,7 +215,10 @@ export default function RolesPage() {
         };
       }
     };
-    mergeFeat("neo_wms", "direct_receipts", "receipts");
+    // Si el rol tenía receipts habilitado pero aún no tenía direct_receipts explícito, heredar de receipts
+    if (normalized.neo_wms?.receipts && normalized.neo_wms?.direct_receipts === undefined) {
+      normalized.neo_wms.direct_receipts = { ...normalized.neo_wms.receipts };
+    }
     mergeFeat("neo_wms", "routes", "shipments");
     mergeFeat("neo_wms", "vehicles", "shipments");
     mergeFeat("neo_pricing", "pricing_metrics", "pricing_reports");
