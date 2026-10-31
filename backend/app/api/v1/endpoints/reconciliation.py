@@ -787,18 +787,6 @@ async def upload_invoice_and_match(
 
     file_url = f"/static/uploads/invoices/{filename}"
 
-    # Actualizar documentos adjuntos en la ODC
-    existing_docs = order.invoice_documents or []
-    if not isinstance(existing_docs, list):
-        existing_docs = []
-    existing_docs.append({
-        "filename": file.filename,
-        "url": file_url,
-        "uploaded_at": datetime.utcnow().isoformat(),
-        "uploaded_by": current_user.email or current_user.full_name
-    })
-    order.invoice_documents = existing_docs
-
     mime_type = "application/pdf" if ext == ".pdf" else f"image/{ext.replace('.', '')}"
     if mime_type == "image/jpg":
         mime_type = "image/jpeg"
@@ -806,10 +794,27 @@ async def upload_invoice_and_match(
     # Extracción OCR Multimodal
     extracted_data = InvoiceOCRService.extract_invoice_data(contents, mime_type, order, db)
 
-    # Procesar 3-Way Match
-    match_result = InvoiceOCRService.process_3way_match(order, extracted_data, db)
+    # Actualizar documentos adjuntos en la ODC (acumulando múltiples facturas si existen)
+    existing_docs = list(order.invoice_documents) if isinstance(order.invoice_documents, list) else []
+    existing_docs.append({
+        "filename": file.filename,
+        "url": file_url,
+        "uploaded_at": datetime.utcnow().isoformat(),
+        "uploaded_by": current_user.email or current_user.full_name,
+        "invoice_number": extracted_data.get("invoice_number"),
+        "invoice_date": extracted_data.get("invoice_date"),
+        "total_amount": extracted_data.get("total_amount"),
+        "extracted_data": extracted_data
+    })
+    order.invoice_documents = existing_docs
+
+    combined_extracted = InvoiceOCRService.combine_extracted_invoices(existing_docs, extracted_data)
+
+    # Procesar 3-Way Match con el consolidado de facturas asociadas a la ODC
+    match_result = InvoiceOCRService.process_3way_match(order, combined_extracted, db)
     match_result["invoice_file_url"] = file_url
     match_result["all_documents"] = existing_docs
+    match_result["invoices_count"] = len(existing_docs)
 
     # Registrar en logs de Trabajador Digital (Clara)
     try:

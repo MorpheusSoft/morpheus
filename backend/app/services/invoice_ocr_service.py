@@ -231,6 +231,71 @@ Responde ÚNICAMENTE un JSON con esta estructura exacta:
             raise ValueError(f"Respuesta de OCR inválida: {e}")
 
     @staticmethod
+    def combine_extracted_invoices(
+        docs: List[Dict[str, Any]],
+        latest_extracted: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Consolida múltiples facturas asociadas a una misma ODC (entregas/facturaciones parciales
+        para una misma Orden de Compra), sumando las cantidades y subtotales facturados por producto
+        y concatenando los números de factura.
+        """
+        valid_extractions = [
+            d.get("extracted_data")
+            for d in (docs or [])
+            if isinstance(d, dict) and isinstance(d.get("extracted_data"), dict)
+        ]
+        if not valid_extractions:
+            return latest_extracted
+        if len(valid_extractions) == 1:
+            return valid_extractions[0]
+
+        inv_numbers: List[str] = []
+        for ext in valid_extractions:
+            num = str(ext.get("invoice_number") or "").strip()
+            if num and num not in inv_numbers:
+                inv_numbers.append(num)
+
+        merged_by_variant: Dict[int, Dict[str, Any]] = {}
+        unplanned_merged: List[Dict[str, Any]] = []
+        total_amount = 0.0
+
+        for ext in valid_extractions:
+            total_amount += float(ext.get("total_amount") or 0.0)
+            for it in (ext.get("items") or []):
+                v_id = it.get("matched_variant_id")
+                q = float(it.get("invoiced_qty") or 0.0)
+                c = float(it.get("invoiced_unit_cost") or 0.0)
+                sub = float(it.get("invoiced_subtotal") if it.get("invoiced_subtotal") is not None else (q * c))
+                if v_id and not it.get("is_unplanned", False):
+                    if v_id in merged_by_variant:
+                        prev = merged_by_variant[v_id]
+                        new_q = float(prev["invoiced_qty"]) + q
+                        new_sub = float(prev["invoiced_subtotal"]) + sub
+                        new_c = (new_sub / new_q) if new_q > 0 else c
+                        prev["invoiced_qty"] = round(new_q, 4)
+                        prev["invoiced_subtotal"] = round(new_sub, 4)
+                        prev["invoiced_unit_cost"] = round(new_c, 6)
+                    else:
+                        merged_by_variant[v_id] = {
+                            **it,
+                            "invoiced_qty": round(q, 4),
+                            "invoiced_unit_cost": round(c, 6),
+                            "invoiced_subtotal": round(sub, 4),
+                        }
+                else:
+                    unplanned_merged.append(it)
+
+        return {
+            **latest_extracted,
+            "invoice_number": ", ".join(inv_numbers) if inv_numbers else latest_extracted.get("invoice_number"),
+            "invoice_date": latest_extracted.get("invoice_date"),
+            "total_amount": round(total_amount, 2),
+            "invoices_count": len(valid_extractions),
+            "items": list(merged_by_variant.values()) + unplanned_merged,
+        }
+
+    @staticmethod
     def process_3way_match(
         order: PurchaseOrder,
         extracted_data: Dict[str, Any],

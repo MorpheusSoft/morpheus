@@ -236,10 +236,14 @@ export default function ReceiptExecutionPage() {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       setOcrResult(res.data);
+      setInvoiceFile(null);
+      if (res.data?.invoice_number) {
+        setInvoiceNumber(res.data.invoice_number);
+      }
       toast.current?.show({ 
         severity: 'success', 
         summary: 'OCR Completado por Clara', 
-        detail: `Factura ${res.data.invoice_number || ''} procesada. Estado: ${res.data.reconciliation_status}` 
+        detail: `Factura(s) ${res.data.invoice_number || ''} procesada(s). Estado: ${res.data.reconciliation_status}` 
       });
       fetchOrder();
     } catch (err: any) {
@@ -315,15 +319,29 @@ export default function ReceiptExecutionPage() {
     }
   }, [orderId]);
 
+  const handleLiveQtyInput = (rowIndex: number, val: any) => {
+      const row = linesRef.current[rowIndex];
+      if (!row) return;
+      let parsed: any = 0;
+      if (val === 0 || val === '0' || val === '' || val === null || val === undefined) {
+          parsed = 0;
+      } else if (!isNaN(parseFloat(String(val)))) {
+          parsed = sanitizeQuantity(val, row.uom_base);
+      }
+      const next = [...linesRef.current];
+      next[rowIndex] = { ...row, received_qty: parsed };
+      linesRef.current = next;
+  };
+
   const handleQtyChange = (rowIndex: number, val: any) => {
       setLines(prev => {
           const updated = [...prev];
           const row = updated[rowIndex];
           if (!row) return prev;
-          let parsed: any = '';
-          if (val === 0 || val === '0') {
+          let parsed: any = 0;
+          if (val === 0 || val === '0' || val === '' || val === null || val === undefined) {
               parsed = 0;
-          } else if (val !== '' && val !== null && val !== undefined && !isNaN(parseFloat(String(val)))) {
+          } else if (!isNaN(parseFloat(String(val)))) {
               parsed = sanitizeQuantity(val, row.uom_base);
           }
           updated[rowIndex] = { ...row, received_qty: parsed };
@@ -387,7 +405,7 @@ export default function ReceiptExecutionPage() {
 
   const addUnplannedProduct = (variant: any) => {
       const newLine = {
-          id: 0,
+          id: -Date.now(),
           variant_id: variant.variant_id || variant.value || variant.id,
           sku: variant.sku || 'N/A',
           barcode: variant.barcode || null,
@@ -583,11 +601,11 @@ export default function ReceiptExecutionPage() {
         </div>
 
         <div className="flex flex-col gap-1">
-           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">2. N° Factura / Guía de Despacho</label>
+           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">2. N° Factura(s) / Guía(s) de Despacho</label>
            <InputText 
                value={invoiceNumber} 
                onChange={(e) => setInvoiceNumber(e.target.value)} 
-               placeholder="Ej: FACT-99012" 
+               placeholder="Ej: FACT-99012, FACT-99013 (separe varias con coma)" 
                disabled={isReadOnly}
                className="w-full text-xs font-bold border-slate-200"
            />
@@ -860,8 +878,8 @@ export default function ReceiptExecutionPage() {
                  <div className="flex justify-end">
                      <InputNumber 
                         value={r.received_qty === '' ? null : r.received_qty} 
-                        onChange={(e) => handleQtyChange(origIdx, e.value === null ? '' : e.value)}
-                        onValueChange={(e) => handleQtyChange(origIdx, e.value === null ? '' : e.value)}
+                        onChange={(e) => handleLiveQtyInput(origIdx, e.value)}
+                        onValueChange={(e) => handleQtyChange(origIdx, e.value)}
                         min={0}
                         minFractionDigits={dec}
                         maxFractionDigits={dec}
@@ -1344,13 +1362,40 @@ export default function ReceiptExecutionPage() {
       >
           <div className="flex flex-col gap-4 py-2 text-slate-700">
               <div className="p-3 bg-blue-50/60 border border-blue-200 rounded-xl text-xs text-blue-900 leading-relaxed">
-                  <p className="font-bold mb-1">📸 Ingesta de Factura / Guía de Despacho:</p>
-                  Sube la foto del documento o PDF entregado por el proveedor. Clara extraerá automáticamente los datos fiscales y cotejará línea a línea con la recepción en muelle para validar precios y cantidades.
+                  <p className="font-bold mb-1">📸 Ingesta de Factura(s) / Guía(s) de Despacho:</p>
+                  Sube la foto o PDF entregado por el proveedor. Si la ODC viene respaldada por <b>varias facturas</b>, súbelas una por una: Clara acumulará automáticamente las cantidades y montos de todas las facturas asociadas a esta ODC.
               </div>
+
+              {/* Lista de Facturas ya asociadas a esta ODC */}
+              {((ocrResult?.all_documents && ocrResult.all_documents.length > 0) || (order?.invoice_documents && order.invoice_documents.length > 0)) && (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-col gap-1.5">
+                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                          Facturas Asociadas a esta ODC ({(ocrResult?.all_documents || order?.invoice_documents || []).length})
+                      </span>
+                      <div className="flex flex-col gap-1 max-h-32 overflow-y-auto">
+                          {(ocrResult?.all_documents || order?.invoice_documents || []).map((doc: any, idx: number) => (
+                              <div key={idx} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs">
+                                  <div className="flex items-center gap-2">
+                                      <i className="pi pi-file-pdf text-blue-600 text-xs"></i>
+                                      <span className="font-bold text-slate-800">{doc.invoice_number || `Doc #${idx + 1}`}</span>
+                                      <span className="text-[11px] text-slate-400 truncate max-w-[180px]">({doc.filename})</span>
+                                  </div>
+                                  {doc.total_amount !== undefined && doc.total_amount !== null && (
+                                      <span className="font-mono font-bold text-blue-700">${Number(doc.total_amount).toFixed(2)}</span>
+                                  )}
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+              )}
 
               {/* Selector de Archivo */}
               <div className="flex flex-col gap-2">
-                  <label className="text-xs font-bold text-slate-600">Seleccionar Documento (Foto o PDF):</label>
+                  <label className="text-xs font-bold text-slate-600">
+                      {((ocrResult?.all_documents?.length || order?.invoice_documents?.length || 0) > 0)
+                          ? 'Agregar otra Factura a esta ODC (Foto o PDF):'
+                          : 'Seleccionar Documento (Foto o PDF):'}
+                  </label>
                   <input 
                       type="file" 
                       accept="image/*,application/pdf" 
@@ -1370,7 +1415,7 @@ export default function ReceiptExecutionPage() {
 
               {/* Botón de Análisis OCR */}
               <Button 
-                  label={ocrLoading ? "Clara está leyendo el documento y cotejando..." : "Analizar con Clara OCR ⚡"} 
+                  label={ocrLoading ? "Clara está leyendo el documento y cotejando..." : (((ocrResult?.all_documents?.length || order?.invoice_documents?.length || 0) > 0) ? "Sumar y Analizar Otra Factura con Clara ⚡" : "Analizar con Clara OCR ⚡")} 
                   icon={ocrLoading ? "pi pi-spin pi-spinner" : "pi pi-sparkles"} 
                   severity="info" 
                   disabled={!invoiceFile || ocrLoading} 
