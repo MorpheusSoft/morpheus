@@ -145,27 +145,29 @@ def get_advanced_kardex(
                 CASE 
                     WHEN sm.reference LIKE 'POS Sale%' THEN 'VENTA / DESPACHO POS'
                     WHEN sm.reference LIKE 'TOMA-FISICA%' THEN 'AJUSTE TOMA FÍSICA'
+                    WHEN sm.reference LIKE 'AJ-%' THEN 'AJUSTE DIRECTO'
                     WHEN pt.name IS NOT NULL THEN UPPER(pt.name)
                     WHEN l_src.usage = 'SUPPLIER' AND l_dest.usage = 'INTERNAL' THEN 'RECEPCIÓN'
                     WHEN l_dest.usage = 'CUSTOMER' OR l_dest.code = 'CUSTOMER' THEN 'VENTA'
-                    WHEN l_dest.usage = 'LOSS' OR l_dest.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN 'AJUSTE'
-                    WHEN l_src.usage = 'LOSS' OR l_src.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN 'AJUSTE'
+                    WHEN l_dest.usage = 'LOSS' OR l_dest.location_type = 'LOSS' OR l_dest.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN 'AJUSTE'
+                    WHEN l_src.usage = 'LOSS' OR l_src.location_type = 'LOSS' OR l_src.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN 'AJUSTE'
                     ELSE 'TRANSFERENCIA'
                 END as source_type,
                 sm.quantity_done as qty_done,
                 sm.unit_cost as unit_cost,
-                w_src.facility_id as src_facility_id,
-                w_dest.facility_id as dest_facility_id,
-                f_src.name as src_facility_name,
-                f_dest.name as dest_facility_name,
-                w_src.id as src_warehouse_id,
-                w_dest.id as dest_warehouse_id,
-                w_src.name as src_warehouse_name,
-                w_dest.name as dest_warehouse_name,
+                CASE WHEN l_src.usage = 'LOSS' OR l_src.location_type = 'LOSS' OR l_src.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN NULL ELSE w_src.facility_id END as src_facility_id,
+                CASE WHEN l_dest.usage = 'LOSS' OR l_dest.location_type = 'LOSS' OR l_dest.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN NULL ELSE w_dest.facility_id END as dest_facility_id,
+                CASE WHEN l_src.usage = 'LOSS' OR l_src.location_type = 'LOSS' OR l_src.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN NULL ELSE f_src.name END as src_facility_name,
+                CASE WHEN l_dest.usage = 'LOSS' OR l_dest.location_type = 'LOSS' OR l_dest.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN NULL ELSE f_dest.name END as dest_facility_name,
+                CASE WHEN l_src.usage = 'LOSS' OR l_src.location_type = 'LOSS' OR l_src.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN NULL ELSE w_src.id END as src_warehouse_id,
+                CASE WHEN l_dest.usage = 'LOSS' OR l_dest.location_type = 'LOSS' OR l_dest.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN NULL ELSE w_dest.id END as dest_warehouse_id,
+                CASE WHEN l_src.usage = 'LOSS' OR l_src.location_type = 'LOSS' OR l_src.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN NULL ELSE w_src.name END as src_warehouse_name,
+                CASE WHEN l_dest.usage = 'LOSS' OR l_dest.location_type = 'LOSS' OR l_dest.code IN ('INV_ADJ', 'VIRTUAL-LOSS') THEN NULL ELSE w_dest.name END as dest_warehouse_name,
                 l_src.name as src_location_name,
                 l_dest.name as dest_location_name,
                 COALESCE(w_src.name, 'N/A') || ' - ' || COALESCE(l_src.name, 'N/A') as src_name,
-                COALESCE(w_dest.name, 'N/A') || ' - ' || COALESCE(l_dest.name, 'N/A') as dest_name
+                COALESCE(w_dest.name, 'N/A') || ' - ' || COALESCE(l_dest.name, 'N/A') as dest_name,
+                sm.notes as notes
             FROM inv.stock_moves sm
             LEFT JOIN inv.stock_pickings p ON p.id = sm.picking_id
             LEFT JOIN inv.stock_picking_types pt ON pt.id = p.picking_type_id
@@ -197,7 +199,8 @@ def get_advanced_kardex(
                 CASE WHEN il.difference_qty < 0 THEN l.name ELSE NULL END as src_location_name,
                 CASE WHEN il.difference_qty > 0 THEN l.name ELSE NULL END as dest_location_name,
                 CASE WHEN il.difference_qty < 0 THEN COALESCE(w.name || ' - ' || l.name, f.name || ' - AJUSTE') ELSE 'N/A' END as src_name,
-                CASE WHEN il.difference_qty > 0 THEN COALESCE(w.name || ' - ' || l.name, f.name || ' - AJUSTE') ELSE 'N/A' END as dest_name
+                CASE WHEN il.difference_qty > 0 THEN COALESCE(w.name || ' - ' || l.name, f.name || ' - AJUSTE') ELSE 'N/A' END as dest_name,
+                NULL::text as notes
             FROM inv.inventory_lines il
             JOIN inv.inventory_sessions iss ON iss.id = il.session_id
             JOIN core.facilities f ON f.id = iss.facility_id
@@ -228,7 +231,8 @@ def get_advanced_kardex(
                 'MOSTRADOR' as src_location_name,
                 'CLIENTE' as dest_location_name,
                 f.name || ' - VENTAS' as src_name,
-                'CLIENTE FINAL' as dest_name
+                'CLIENTE FINAL' as dest_name,
+                NULL::text as notes
             FROM sales.document_lines dl
             JOIN sales.documents d ON d.id = dl.document_id
             JOIN core.facilities f ON f.id = d.facility_id
@@ -437,7 +441,14 @@ def get_advanced_kardex(
             elif src_wh_id and (not dest_wh_id or src_wh_id != dest_wh_id):
                 if src_wh_id in wh_moves_map:
                     flow_disp = f"Salida ({m.source_type})"
-                    if m.source_type in ('AJUSTE', 'AJUSTE TOMA FÍSICA') or (m.reference and 'TOMA-FISICA' in m.reference):
+                    if m.source_type == 'AJUSTE DIRECTO' or (m.reference and m.reference.startswith('AJ-')):
+                        reason_txt = ""
+                        if getattr(m, "notes", None) and "[" in m.notes and "]" in m.notes:
+                            r_inner = m.notes.split("[", 1)[1].rsplit("]", 1)[0].strip()
+                            if r_inner:
+                                reason_txt = f" ({r_inner})"
+                        flow_disp = f"Ajuste Directo - Descargo (-){reason_txt}"
+                    elif m.source_type in ('AJUSTE', 'AJUSTE TOMA FÍSICA') or (m.reference and 'TOMA-FISICA' in m.reference):
                         flow_disp = "Ajuste por Toma Física (Faltante)"
                     elif 'PRODUCCIÓN' in (m.source_type or '').upper() or (m.reference and 'MFG_CONSUME' in m.reference):
                         flow_disp = "Consumo de Producción (Piso de Planta)"
@@ -468,6 +479,13 @@ def get_advanced_kardex(
                     flow_disp = f"Entrada ({m.source_type})"
                     if m.source_type == 'INVENTARIO INICIAL':
                         flow_disp = "Inventario Inicial (Apertura)"
+                    elif m.source_type == 'AJUSTE DIRECTO' or (m.reference and m.reference.startswith('AJ-')):
+                        reason_txt = ""
+                        if getattr(m, "notes", None) and "[" in m.notes and "]" in m.notes:
+                            r_inner = m.notes.split("[", 1)[1].rsplit("]", 1)[0].strip()
+                            if r_inner:
+                                reason_txt = f" ({r_inner})"
+                        flow_disp = f"Ajuste Directo - Cargo (+){reason_txt}"
                     elif m.source_type in ('AJUSTE', 'AJUSTE TOMA FÍSICA') or (m.reference and 'TOMA-FISICA' in m.reference):
                         flow_disp = "Ajuste por Toma Física (Sobrante)"
                     elif 'PRODUCCIÓN' in (m.source_type or '').upper() or (m.reference and 'MFG_PRODUCE' in m.reference):

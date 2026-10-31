@@ -158,7 +158,11 @@ export default function KardexPage() {
     if (rowData.type === 'OUT') return <span className="bg-rose-100 text-rose-800 px-2 py-1 rounded text-xs font-bold">SALIDA</span>;
     if (rowData.type === 'TRANSFER') return <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-bold">TRANSF</span>;
     if (rowData.type === 'INITIAL') return <span className="bg-slate-200 text-slate-800 px-2 py-1 rounded text-xs font-bold">SALDO INI</span>;
-    return <span>{rowData.type}</span>;
+    if (rowData.type === 'AJUSTE DIRECTO') return <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded text-xs font-bold">AJUSTE DIRECTO</span>;
+    if (rowData.type === 'AJUSTE' || rowData.type === 'AJUSTE TOMA FÍSICA') return <span className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs font-bold">{rowData.type}</span>;
+    if (rowData.type === 'RECEPCIÓN') return <span className="bg-emerald-100 text-emerald-800 px-2 py-1 rounded text-xs font-bold">RECEPCIÓN</span>;
+    if (rowData.type === 'VENTA' || rowData.type === 'VENTA / DESPACHO POS') return <span className="bg-indigo-100 text-indigo-800 px-2 py-1 rounded text-xs font-bold">{rowData.type}</span>;
+    return <span className="font-semibold text-slate-700 text-xs">{rowData.type}</span>;
   };
 
   const formatQty = (value: number | undefined | null, isDecimal: boolean) => {
@@ -214,7 +218,7 @@ export default function KardexPage() {
         h.reference || "",
         h.type || "",
         h.flow_display || "",
-        h.dest_location || h.src_location || "",
+        h.flow_type === 'OUT' ? (h.src_location || h.dest_location || "") : (h.dest_location || h.src_location || ""),
         Number(h.qty_in || 0),
         Number(h.qty_out || 0),
         Number(h.balance || 0),
@@ -344,7 +348,7 @@ export default function KardexPage() {
         </div>
         {(rowData.dest_location || rowData.src_location) && (
           <span className="text-[11px] text-slate-400 pl-0.5">
-            Ubicación: {rowData.dest_location || rowData.src_location}
+            Ubicación: {rowData.flow_type === 'OUT' ? (rowData.src_location || rowData.dest_location) : (rowData.dest_location || rowData.src_location)}
           </span>
         )}
       </div>

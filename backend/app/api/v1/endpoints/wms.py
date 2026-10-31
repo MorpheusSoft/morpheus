@@ -1404,6 +1404,8 @@ def get_warehouse_stock(
     if target_location:
         sql_filter += " AND l.id = :location_id"
         params["location_id"] = target_location.id
+    else:
+        sql_filter += " AND COALESCE(l.location_type, '') != 'LOSS' AND COALESCE(l.usage, '') != 'LOSS'"
 
     query = text(f"""
         WITH move_lines AS (
@@ -2509,12 +2511,30 @@ def create_inventory_adjustment(
     if not payload.lines or len(payload.lines) == 0:
         raise HTTPException(status_code=400, detail="Debe incluir al menos un producto en la solicitud de ajuste.")
 
+    resolved_loc_id = payload.location_id
+    if resolved_loc_id:
+        valid_loc = db.query(Location).filter(
+            Location.id == resolved_loc_id,
+            Location.warehouse_id == payload.warehouse_id,
+            Location.location_type != 'LOSS'
+        ).first()
+        if not valid_loc:
+            resolved_loc_id = None
+    if not resolved_loc_id:
+        default_loc = db.query(Location).filter(
+            Location.warehouse_id == payload.warehouse_id,
+            Location.usage == 'INTERNAL',
+            Location.location_type != 'LOSS'
+        ).order_by(Location.id.asc()).first()
+        if default_loc:
+            resolved_loc_id = default_loc.id
+
     total_gen = 0.0
     adjustment = InventoryAdjustment(
         number=adj_number,
         facility_id=payload.facility_id,
         warehouse_id=payload.warehouse_id,
-        location_id=payload.location_id,
+        location_id=resolved_loc_id,
         reason_id=payload.reason_id,
         movement_type=payload.movement_type or 'OUT',
         total_amount=0,
@@ -2624,16 +2644,51 @@ def approve_inventory_adjustment(
     if adj.state == 'REJECTED':
         raise HTTPException(status_code=400, detail="No se puede aprobar un ajuste rechazado.")
 
-    # Determinar almacén de tránsito o ubicación virtual si aplica
-    virtual_loss_loc = db.query(Location).filter(
-        Location.warehouse_id == adj.warehouse_id,
-        Location.location_type == 'LOSS'
-    ).first()
-
+    # Ubicación virtual externa de ajustes (warehouse_id = None para que el Kardex registre Entrada o Salida real)
+    virtual_loss_loc = db.query(Location).filter(Location.code == 'INV_ADJ').first()
     if not virtual_loss_loc:
-        virtual_loss_loc = db.query(Location).filter(Location.warehouse_id == adj.warehouse_id).first()
+        virtual_loss_loc = Location(
+            name="Ubicación Virtual de Ajustes",
+            code="INV_ADJ",
+            usage="EXTERNAL",
+            location_type="LOSS",
+            warehouse_id=None
+        )
+        db.add(virtual_loss_loc)
+        db.flush()
 
-    target_loc_id = adj.location_id or virtual_loss_loc.id
+    # Determinar ubicación física de estante dentro del almacén del ajuste
+    target_loc = None
+    if adj.location_id:
+        target_loc = db.query(Location).filter(
+            Location.id == adj.location_id,
+            Location.warehouse_id == adj.warehouse_id,
+            Location.location_type != 'LOSS'
+        ).first()
+
+    if not target_loc:
+        target_loc = db.query(Location).filter(
+            Location.warehouse_id == adj.warehouse_id,
+            Location.usage == 'INTERNAL',
+            Location.location_type != 'LOSS'
+        ).order_by(Location.id.asc()).first()
+
+    if not target_loc:
+        wh = db.query(Warehouse).filter(Warehouse.id == adj.warehouse_id).first()
+        wh_code = wh.code if wh else f"WH-{adj.warehouse_id}"
+        target_loc = Location(
+            warehouse_id=adj.warehouse_id,
+            name="Ubicación General",
+            code=f"{wh_code}-STOCK",
+            location_type="SHELF",
+            usage="INTERNAL"
+        )
+        db.add(target_loc)
+        db.flush()
+
+    target_loc_id = target_loc.id
+    if adj.location_id != target_loc_id:
+        adj.location_id = target_loc_id
 
     for line in adj.lines:
         qty = float(line.quantity)
