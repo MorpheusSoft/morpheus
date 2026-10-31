@@ -345,12 +345,28 @@ export default function WmsReceiptsPage() {
                   </div>
               )} style={{ width: '14rem' }} />
               
-              <Column header="FECHA DE EMISIÓN" field="created_at" body={r => (
-                 <span className="text-slate-500 font-bold bg-slate-50 px-2 py-1 rounded text-xs">
-                    <i className="pi pi-calendar text-[10px] mr-1 text-slate-400"></i> 
-                    {format(new Date(r.created_at), 'dd/MM/yyyy')} <span className="text-slate-400 font-normal ml-1">{format(new Date(r.created_at), 'HH:mm')}</span>
-                 </span>
-              )} />
+              <Column header="EMISIÓN / VIGENCIA" field="created_at" body={r => {
+                 const todayStr = format(new Date(), 'yyyy-MM-dd');
+                 const isExpired = r.expiration_date && String(r.expiration_date).slice(0, 10) < todayStr;
+                 return (
+                     <div className="flex flex-col gap-1">
+                         <span className="text-slate-500 font-bold bg-slate-50 px-2 py-0.5 rounded text-xs w-fit">
+                            <i className="pi pi-calendar text-[10px] mr-1 text-slate-400"></i> 
+                            {format(new Date(r.created_at), 'dd/MM/yyyy')}
+                         </span>
+                         {r.expiration_date ? (
+                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded w-fit border ${isExpired ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                                 {isExpired ? '⛔ Venció: ' : '✓ Vigente hasta: '}
+                                 {format(new Date(String(r.expiration_date).slice(0, 10) + 'T00:00:00'), 'dd/MM/yyyy')}
+                             </span>
+                         ) : (
+                             <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded w-fit border border-emerald-200">
+                                 ✓ Vigente (Sin límite)
+                             </span>
+                         )}
+                     </div>
+                 );
+              }} />
 
               <Column header="PROVEEDOR ORIGEN" field="supplier.name" body={r => (
                   <span className="font-bold text-slate-800 flex items-center">
@@ -365,20 +381,40 @@ export default function WmsReceiptsPage() {
                   </span>
               )} />
               
-              <Column header="ESTADO LOGÍSTICO" body={r => (
-                 <div className="flex flex-col items-center gap-1">
-                   <Tag severity={getStatusSeverity(r.status)} value={getStatusName(r.status)} className="font-extrabold tracking-wide uppercase text-[9px] px-2 py-1 shadow-sm border border-black/5" />
-                   {Number(r.reversal_count || 0) > 0 && (
-                     <span className="text-[10px] font-bold text-indigo-600">Reabierta tras Reverso</span>
-                   )}
-                 </div>
-              )} align="center" />
+              <Column header="ESTADO LOGÍSTICO" body={r => {
+                 const todayStr = format(new Date(), 'yyyy-MM-dd');
+                 const isExpired = r.expiration_date && String(r.expiration_date).slice(0, 10) < todayStr;
+                 return (
+                     <div className="flex flex-col items-center gap-1">
+                       <Tag severity={getStatusSeverity(r.status)} value={getStatusName(r.status)} className="font-extrabold tracking-wide uppercase text-[9px] px-2 py-1 shadow-sm border border-black/5" />
+                       {isExpired && (
+                         <Tag severity="danger" value="⛔ ODC VENCIDA" className="font-black text-[9px] px-2 py-0.5" />
+                       )}
+                       {Number(r.reversal_count || 0) > 0 && (
+                         <span className="text-[10px] font-bold text-indigo-600">Reabierta tras Reverso</span>
+                       )}
+                     </div>
+                 );
+              }} align="center" />
               
-              <Column header="ACCIÓN" body={r => (
-                 <div className="flex justify-end gap-2 pr-4">
-                     <Button onClick={() => router.push('/receipts/' + r.id)} label="Recibir" icon="pi pi-box" rounded severity="info" size="small" className="shadow-md hover:shadow-lg transition-all font-bold px-4" />
-                 </div>
-              )} align="right" style={{ width: '10rem' }} />
+              <Column header="ACCIÓN" body={r => {
+                 const todayStr = format(new Date(), 'yyyy-MM-dd');
+                 const isExpired = r.expiration_date && String(r.expiration_date).slice(0, 10) < todayStr;
+                 return (
+                     <div className="flex justify-end gap-2 pr-4">
+                         <Button
+                             onClick={() => router.push('/receipts/' + r.id)}
+                             label={isExpired ? "Ver (Vencida)" : r.status === 'partial' ? "Recibir Saldo" : "Recibir"}
+                             icon={isExpired ? "pi pi-ban" : r.status === 'partial' ? "pi pi-clock" : "pi pi-box"}
+                             rounded
+                             severity={isExpired ? "danger" : r.status === 'partial' ? "warning" : "info"}
+                             outlined={Boolean(isExpired)}
+                             size="small"
+                             className="shadow-md hover:shadow-lg transition-all font-bold px-4"
+                         />
+                     </div>
+                 );
+              }} align="right" style={{ width: '11rem' }} />
             </DataTable>
           </TabPanel>
 

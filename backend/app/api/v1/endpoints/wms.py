@@ -55,6 +55,7 @@ class ReceiptPayload(BaseModel):
     warehouse_id: Optional[int] = None
     invoice_number: Optional[str] = None
     receipt_date: Optional[date] = None
+    is_partial: Optional[bool] = False
     lines: List[ReceiptLineInput]
 
 class DiscrepancyPayload(BaseModel):
@@ -84,6 +85,25 @@ class PutawayPayload(BaseModel):
     batch_id: Optional[int] = None
     packaging_id: Optional[int] = None
     factor: Optional[float] = 1.0
+
+class PutawayBatchItem(BaseModel):
+    variant_id: int
+    qty: float
+    packaging_id: Optional[int] = None
+    factor: Optional[float] = 1.0
+    source_location_id: Optional[Any] = None
+    dest_warehouse_id: Optional[int] = None
+    dest_location_id: Optional[Any] = None
+    batch_id: Optional[int] = None
+    notes: Optional[str] = None
+
+class PutawayBatchPayload(BaseModel):
+    source_warehouse_id: int
+    dest_warehouse_id: Optional[int] = None
+    source_location_id: Optional[Any] = None
+    dest_location_id: Optional[Any] = None
+    items: List[PutawayBatchItem]
+    notes: Optional[str] = None
 
 class DirectReceiptLineInput(BaseModel):
     variant_id: int
@@ -429,6 +449,22 @@ def receive_purchase_order(
     if order.status in ['draft', 'pending_approval', 'received', 'conciliated']:
         raise HTTPException(status_code=400, detail="La orden ya fue recibida o no está en un estado válido para recepción.")
 
+    # Validar Vigencia de la ODC (no permitir recepciones totales ni parciales si la orden está vencida)
+    if order.expiration_date and order.expiration_date < date.today():
+        raise HTTPException(
+            status_code=400,
+            detail=f"La Orden de Compra {order.reference} se encuentra VENCIDA desde el {order.expiration_date.strftime('%d/%m/%Y')}. Solo se permite recibir órdenes vigentes."
+        )
+
+    total_today_good = sum(float(l.received_qty or 0) for l in payload.lines)
+    if payload.is_partial and total_today_good <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Para registrar una entrega parcial debe ingresar al menos una cantidad recibida mayor a 0 en los productos que llegaron hoy."
+        )
+
+    was_already_partial = (order.status == 'partial')
+
     # 2. Determinar Almacén de Destino
     warehouse = None
     if payload.warehouse_id:
@@ -533,26 +569,46 @@ def receive_purchase_order(
         db.add(scrap_loc)
         db.flush()
 
-    # 4. Actualizar Número de Factura y Fecha de Recepción en la ODC
-    if payload.invoice_number:
-        order.invoice_number = payload.invoice_number
+    # 4. Actualizar Número(s) de Factura y Fecha de Recepción en la ODC (acumulando en entregas parciales)
+    if payload.invoice_number and payload.invoice_number.strip():
+        existing_invs = [x.strip() for x in (order.invoice_number or "").split(",") if x.strip()]
+        new_invs = [x.strip() for x in payload.invoice_number.split(",") if x.strip()]
+        for inv_str in new_invs:
+            if inv_str not in existing_invs:
+                existing_invs.append(inv_str)
+        order.invoice_number = ", ".join(existing_invs)
     if payload.receipt_date:
         order.invoice_date = payload.receipt_date
 
     receipt_dt = payload.receipt_date or date.today()
     date_done_val = datetime.combine(receipt_dt, datetime.now().time()) if isinstance(receipt_dt, date) else datetime.now()
 
-    # 5. Crear el Documento de Picking WMS
+    # 5. Crear el Documento de Picking WMS (Soportando múltiples entregas parciales en días distintos)
     user_id_val = getattr(current_user, 'id', None)
 
-    existing_picking = db.query(StockPicking).filter(StockPicking.name == f"IN-{order.reference}").first()
-    if existing_picking:
-        existing_picking.name = f"IN-{order.reference}-REV-{existing_picking.id}"
-        db.flush()
+    active_pickings_count = db.query(StockPicking).filter(
+        (StockPicking.origin_document == order.reference) |
+        (StockPicking.name == f"IN-{order.reference}") |
+        (StockPicking.name.like(f"IN-{order.reference}-P%")),
+        StockPicking.status == 'DONE'
+    ).count()
+
+    if not was_already_partial and active_pickings_count == 0:
+        existing_picking = db.query(StockPicking).filter(StockPicking.name == f"IN-{order.reference}").first()
+        if existing_picking:
+            existing_picking.name = f"IN-{order.reference}-REV-{existing_picking.id}"
+            db.flush()
+        picking_name = f"IN-{order.reference}"
+    else:
+        seq_num = active_pickings_count + 1
+        picking_name = f"IN-{order.reference}-P{seq_num}"
+        while db.query(StockPicking).filter(StockPicking.name == picking_name).first():
+            seq_num += 1
+            picking_name = f"IN-{order.reference}-P{seq_num}"
 
     picking = StockPicking(
         picking_type_id=picking_type.id,
-        name=f"IN-{order.reference}",
+        name=picking_name,
         origin_document=payload.invoice_number or order.reference,
         facility_id=target_facility_id,
         status='DONE',
@@ -618,8 +674,10 @@ def receive_purchase_order(
         validate_quantity_uom(qty_good, uom_base, f"El producto [{sku_label}]")
         validate_quantity_uom(qty_damaged, uom_base, f"El producto [{sku_label}]")
 
-        # Si se rechazó en muelle, solo la cantidad en buen estado ingresa a inventario
-        po_line.received_base_qty = qty_good
+        # Si se rechazó en muelle, solo la cantidad en buen estado ingresa a inventario.
+        # En recepciones parciales sucesivas, se acumula lo recibido previamente + lo recibido hoy.
+        prev_received = float(po_line.received_base_qty or 0) if was_already_partial else 0.0
+        po_line.received_base_qty = round(prev_received + qty_good, 4)
         total_expected += float(po_line.expected_base_qty or 0)
         total_received += float(po_line.received_base_qty or 0)
 
@@ -716,8 +774,26 @@ def receive_purchase_order(
         joined_rejections = "[Rechazo en Muelle]: " + " | ".join(rejection_notes)
         order.notes = f"{existing_notes}\n{joined_rejections}".strip()
 
-    # Cierre Logístico de la ODC (queda marcada como recibida para pasar a conciliación 3-Way Match con sus faltantes/sobrantes)
-    order.status = 'received'
+    # Verificar si aún queda saldo pendiente por recibir en la ODC
+    db.flush()
+    has_pending_balance = any(
+        round(float(l.expected_base_qty or 0) - float(l.received_base_qty or 0), 3) > 0
+        for l in order.lines
+    )
+
+    if payload.is_partial and has_pending_balance:
+        order.status = 'partial'
+        order.allow_partial_deliveries = True
+    else:
+        order.status = 'received'
+
+    if was_already_partial or order.status == 'partial':
+        entrega_num = active_pickings_count + 1
+        inv_lbl = (payload.invoice_number or "").strip() or "S/N"
+        estado_lbl = "PARCIAL - SALDO ABIERTO" if order.status == 'partial' else "ENTREGA FINAL - ODC CERRADA"
+        trace_partial = f"[Entrega #{entrega_num} ({receipt_dt.strftime('%d/%m/%Y')}) | Fact/Guía: {inv_lbl} | {estado_lbl}]: +{total_today_good:g} unds/kg ingresadas hoy (Acumulado ODC: {total_received:g}/{total_expected:g})."
+        order.notes = f"{(order.notes or '').strip()}\n{trace_partial}".strip()
+
     order.reversal_status = 'NONE'
 
     db.commit()
@@ -731,7 +807,7 @@ def receive_purchase_order(
         user_id=user_id_val,
         user_name=getattr(current_user, 'full_name', None),
         user_email=getattr(current_user, 'email', None),
-        action="RECEIVE_PURCHASE_ORDER",
+        action="PARTIAL_RECEIVE_PURCHASE_ORDER" if order.status == 'partial' else "RECEIVE_PURCHASE_ORDER",
         module="WMS",
         entity_name="StockPicking",
         entity_id=picking.id,
@@ -740,11 +816,13 @@ def receive_purchase_order(
             "order_id": order.id,
             "order_reference": order.reference,
             "picking_name": picking.name,
-            "invoice_number": payload.invoice_number,
+            "invoice_number": order.invoice_number,
             "warehouse_id": warehouse.id,
             "warehouse_name": warehouse.name,
             "lines_count": len(payload.lines),
+            "received_today": total_today_good,
             "total_received": total_received,
+            "is_partial": order.status == 'partial',
             "order_status": order.status,
             "rejection_notes": rejection_notes
         },
@@ -752,8 +830,9 @@ def receive_purchase_order(
     )
 
     return {
-        "message": "Recepción Física completada",
+        "message": "Entrega parcial registrada. La ODC permanece abierta por el saldo pendiente." if order.status == 'partial' else "Recepción Física completada y ODC cerrada.",
         "picking_id": picking.id,
+        "picking_name": picking.name,
         "warehouse_id": warehouse.id,
         "location_dest": dest_loc.name,
         "new_status": order.status
@@ -1481,6 +1560,17 @@ def get_variant_packagings(
         "packagings": packagings
     }
 
+def clean_loc_id(val):
+    if val is None:
+        return None
+    if isinstance(val, dict):
+        val = val.get("value")
+    try:
+        parsed = int(val)
+        return parsed if parsed > 0 else None
+    except (ValueError, TypeError):
+        return None
+
 @router.post("/putaway")
 def execute_putaway(
     payload: PutawayPayload, 
@@ -1540,17 +1630,6 @@ def execute_putaway(
     total_base_qty = round(payload.qty * multiplier, 4)
     if total_base_qty <= 0:
         raise HTTPException(status_code=400, detail="La cantidad neta en unidades debe ser mayor a 0.")
-
-    def clean_loc_id(val):
-        if val is None:
-            return None
-        if isinstance(val, dict):
-            val = val.get("value")
-        try:
-            parsed = int(val)
-            return parsed if parsed > 0 else None
-        except (ValueError, TypeError):
-            return None
 
     src_location_id = clean_loc_id(payload.source_location_id)
     dest_location_id = clean_loc_id(payload.dest_location_id)
@@ -1665,6 +1744,220 @@ def execute_putaway(
         "dest_location_id": dest_loc.id,
         "total_base_qty": total_base_qty,
         "uom": clean_uom
+    }
+
+@router.post("/putaway/batch")
+def execute_putaway_batch(
+    payload: PutawayBatchPayload,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Procesa una reubicación de mercancía por lote / multirrenglón en una sola transacción atómica.
+    Genera un único StockPicking agrupador y registra los StockMoves correspondientes.
+    Permite mezclar productos en unidades o bultos/empaques con factores de conversión exactos.
+    """
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Debe incluir al menos un producto en el lote a reubicar.")
+
+    src_wh = db.query(Warehouse).filter(Warehouse.id == payload.source_warehouse_id).first()
+    if not src_wh:
+        raise HTTPException(status_code=404, detail="Almacén de origen no encontrado.")
+
+    default_dest_wh_id = payload.dest_warehouse_id or payload.source_warehouse_id
+    default_dest_wh = db.query(Warehouse).filter(Warehouse.id == default_dest_wh_id).first()
+    if not default_dest_wh:
+        raise HTTPException(status_code=404, detail="Almacén de destino por defecto no encontrado.")
+
+    if src_wh.facility_id != default_dest_wh.facility_id:
+        raise HTTPException(
+            status_code=400,
+            detail="La reubicación directa sólo está permitida entre almacenes de la misma sucursal."
+        )
+
+    if not current_user.is_superuser:
+        user_fac_ids = [f.id for f in (current_user.facilities or [])]
+        if src_wh.facility_id and src_wh.facility_id not in user_fac_ids:
+            raise HTTPException(status_code=403, detail="No tiene permiso para operar en la sucursal de origen.")
+
+    # Ubicación por defecto origen
+    default_src_loc_id = clean_loc_id(payload.source_location_id)
+    default_src_loc = None
+    if default_src_loc_id:
+        default_src_loc = db.query(Location).filter(
+            Location.id == default_src_loc_id,
+            Location.warehouse_id == src_wh.id
+        ).first()
+    if not default_src_loc:
+        default_src_loc = get_or_create_default_wh_location(src_wh, db)
+
+    # Ubicación por defecto destino
+    default_dest_loc_id = clean_loc_id(payload.dest_location_id)
+    default_dest_loc = None
+    if default_dest_loc_id:
+        default_dest_loc = db.query(Location).filter(
+            Location.id == default_dest_loc_id,
+            Location.warehouse_id == default_dest_wh.id
+        ).first()
+    if not default_dest_loc:
+        default_dest_loc = get_or_create_default_wh_location(default_dest_wh, db)
+
+    picking_type = db.query(StockPickingType).filter(StockPickingType.code == 'INTERNAL').first()
+    if not picking_type:
+        picking_type = db.query(StockPickingType).filter(StockPickingType.name.ilike('%Transferencia Interna%')).first()
+    if not picking_type:
+        picking_type = db.query(StockPickingType).filter(StockPickingType.code.in_(['INT', 'TRANSFER'])).first()
+    if not picking_type:
+        picking_type = StockPickingType(name="Transferencia Interna", code="INTERNAL", sequence_prefix="INT")
+        db.add(picking_type)
+        db.flush()
+
+    user_id_val = getattr(current_user, 'id', None)
+    now_str = datetime.now().strftime('%Y%m%d%H%M%S')
+    picking_name = f"REUB-LOTE-{src_wh.code}-{now_str}"
+    is_inter_wh = (src_wh.id != default_dest_wh.id)
+    doc_ref = f"Reubicación en Lote ({len(payload.items)} SKUs) {src_wh.name} -> {default_dest_wh.name}" if is_inter_wh else f"Reubicación en Lote ({len(payload.items)} SKUs) {src_wh.name}"
+    if payload.notes:
+        doc_ref += f" | {payload.notes}"
+
+    picking = StockPicking(
+        picking_type_id=picking_type.id,
+        name=picking_name,
+        origin_document=doc_ref,
+        facility_id=src_wh.facility_id,
+        dest_facility_id=default_dest_wh.facility_id,
+        status='DONE',
+        date_done=func.now(),
+        created_by_id=user_id_val,
+        shipped_by_id=user_id_val,
+        received_by_id=user_id_val
+    )
+    db.add(picking)
+    db.flush()
+
+    moves_created = []
+    total_units_sum = 0.0
+
+    for idx, item in enumerate(payload.items):
+        if item.qty <= 0:
+            raise HTTPException(status_code=400, detail=f"Renglón #{idx + 1}: La cantidad a mover debe ser mayor a 0.")
+
+        variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
+        if not variant:
+            raise HTTPException(status_code=404, detail=f"Renglón #{idx + 1}: Variante de producto no encontrada.")
+
+        product = db.query(Product).filter(Product.id == variant.product_id).first()
+        clean_uom = normalize_uom(product.uom_base) if product else "UND"
+
+        # Resolver multiplicador de empaque / bulto
+        multiplier = 1.0
+        pkg_name = "UND"
+        if item.packaging_id and item.packaging_id > 0:
+            pkg = db.query(ProductPackaging).filter(ProductPackaging.id == item.packaging_id).first()
+            if pkg:
+                multiplier = float(pkg.qty_per_unit)
+                pkg_name = pkg.name
+        elif item.factor and item.factor > 0 and item.factor != 1.0:
+            multiplier = float(item.factor)
+            pkg_name = f"x{multiplier:g}"
+
+        total_base_qty = round(item.qty * multiplier, 4)
+        if total_base_qty <= 0:
+            raise HTTPException(status_code=400, detail=f"Renglón #{idx + 1}: La cantidad neta en unidades es 0.")
+
+        # Resolver almacén y ubicaciones específicas del renglón si fueron provistas
+        item_dest_wh = default_dest_wh
+        if item.dest_warehouse_id and item.dest_warehouse_id != default_dest_wh.id:
+            item_dest_wh = db.query(Warehouse).filter(Warehouse.id == item.dest_warehouse_id).first()
+            if not item_dest_wh or item_dest_wh.facility_id != default_dest_wh.facility_id:
+                raise HTTPException(status_code=400, detail=f"Renglón #{idx + 1}: Almacén destino no pertenece a la misma sucursal.")
+
+        # Ubicación origen del renglón
+        item_src_loc = default_src_loc
+        item_src_loc_id = clean_loc_id(item.source_location_id)
+        if item_src_loc_id and item_src_loc_id != default_src_loc.id:
+            loc = db.query(Location).filter(
+                Location.id == item_src_loc_id,
+                Location.warehouse_id == src_wh.id
+            ).first()
+            if loc:
+                item_src_loc = loc
+
+        # Ubicación destino del renglón
+        item_dest_loc = default_dest_loc
+        item_dest_loc_id = clean_loc_id(item.dest_location_id)
+        if item_dest_loc_id and (item_dest_loc_id != default_dest_loc.id or item_dest_wh.id != default_dest_wh.id):
+            loc = db.query(Location).filter(
+                Location.id == item_dest_loc_id,
+                Location.warehouse_id == item_dest_wh.id
+            ).first()
+            if loc:
+                item_dest_loc = loc
+
+        if item_src_loc.id == item_dest_loc.id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Renglón #{idx + 1} ({variant.sku}): La ubicación de origen y destino no pueden ser la misma en el mismo depósito."
+            )
+
+        pkg_info = f" ({item.qty:g} {pkg_name} x {multiplier:g} = {total_base_qty:g} {clean_uom})" if multiplier != 1.0 else f" ({total_base_qty:g} {clean_uom})"
+        move_ref = f"REUB-{src_wh.code}->{item_dest_wh.code}{pkg_info}"
+
+        move = StockMove(
+            picking_id=picking.id,
+            product_id=variant.id,
+            location_src_id=item_src_loc.id,
+            location_dest_id=item_dest_loc.id,
+            quantity_demand=total_base_qty,
+            quantity_done=total_base_qty,
+            state='DONE',
+            batch_id=item.batch_id,
+            reference=move_ref,
+            created_by_id=user_id_val
+        )
+        db.add(move)
+        moves_created.append(move)
+        total_units_sum += total_base_qty
+
+    db.commit()
+
+    # Auditoría asíncrona
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    background_tasks.add_task(
+        log_audit_event_async,
+        user_id=user_id_val,
+        user_name=getattr(current_user, 'full_name', None),
+        user_email=getattr(current_user, 'email', None),
+        action="REALLOCATE_STOCK_BATCH",
+        module="WMS",
+        entity_name="StockPicking",
+        entity_id=picking.id,
+        facility_id=src_wh.facility_id,
+        details={
+            "picking_id": picking.id,
+            "picking_name": picking.name,
+            "source_warehouse_id": src_wh.id,
+            "source_warehouse_name": src_wh.name,
+            "dest_warehouse_id": default_dest_wh.id,
+            "dest_warehouse_name": default_dest_wh.name,
+            "total_skus": len(moves_created),
+            "total_units": total_units_sum
+        },
+        ip_address=client_ip
+    )
+
+    return {
+        "message": "Reubicación por lote realizada con éxito",
+        "picking_id": picking.id,
+        "picking_name": picking.name,
+        "total_skus": len(moves_created),
+        "total_units": total_units_sum,
+        "moves": [{"move_id": m.id, "product_id": m.product_id, "qty": m.quantity_done} for m in moves_created]
     }
 
 
@@ -2461,10 +2754,10 @@ def _validate_order_reversible(order: PurchaseOrder):
             status_code=400,
             detail="No se puede reversar esta recepción porque la Orden de Compra ya fue conciliada en Compras (3-Way Match)."
         )
-    if order.status != "received":
+    if order.status not in ("received", "partial"):
         raise HTTPException(
             status_code=400,
-            detail=f"Solo se pueden reversar órdenes en estado Recibida ('received'). Estado actual: '{order.status}'."
+            detail=f"Solo se pueden reversar órdenes en estado Recibida ('received') o Parcial ('partial'). Estado actual: '{order.status}'."
         )
 
 
@@ -2607,9 +2900,10 @@ def approve_receipt_reversal(
     prev_invoice = order.invoice_number
     rev_num = int(getattr(order, "reversal_count", 0) or 0) + 1
 
-    # Buscar todos los pickings activos de recepción para esta ODC
+    # Buscar todos los pickings activos de recepción para esta ODC (incluyendo entregas parciales -P2, -P3, etc.)
     pickings = db.query(StockPicking).filter(
         (StockPicking.name == f"IN-{order.reference}") |
+        (StockPicking.name.like(f"IN-{order.reference}-P%")) |
         (StockPicking.origin_document == order.reference)
     ).all()
     picking_ids = [p.id for p in pickings]
@@ -2665,8 +2959,8 @@ def approve_receipt_reversal(
     for p in pickings:
         if p.status != "CANCELLED":
             p.status = "CANCELLED"
-        if p.name == f"IN-{order.reference}":
-            p.name = f"IN-{order.reference}-REV-{p.id}"
+        if p.name == f"IN-{order.reference}" or p.name.startswith(f"IN-{order.reference}-P"):
+            p.name = f"{p.name}-REV-{p.id}"
         p.notes = f"Recepción reversada #{rev_num} por {current_user.full_name} ({datetime.now().strftime('%d/%m/%Y %H:%M')}). Causal: {reason_clean}. {notes_clean}"
         cancelled_picking_names.append(p.name)
 

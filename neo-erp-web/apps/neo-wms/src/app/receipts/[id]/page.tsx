@@ -110,8 +110,14 @@ export default function ReceiptExecutionPage() {
 
   const canReverseReceipt = React.useMemo(() => {
     if (!order) return false;
-    return order.status === 'received' && !isOrderConciliated;
+    return ['received', 'partial'].includes(order.status) && !isOrderConciliated;
   }, [order, isOrderConciliated]);
+
+  const isOrderExpired = React.useMemo(() => {
+    if (!order?.expiration_date) return false;
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    return String(order.expiration_date).slice(0, 10) < todayStr;
+  }, [order]);
 
   const fetchOrderAuditLogs = async () => {
     if (!orderId) return;
@@ -273,18 +279,42 @@ export default function ReceiptExecutionPage() {
     try {
       const res = await api.get(`/purchase-orders/${orderId}/details`);
       setOrder(res.data);
-      if (res.data.invoice_number) setInvoiceNumber(res.data.invoice_number);
-      if (res.data.invoice_date) setReceiptDate(new Date(res.data.invoice_date + 'T00:00:00'));
-      
+      const isPartial = res.data.status === 'partial';
       const alreadyReceived = ['received', 'conciliated'].includes(res.data.status);
-      const initialLines = res.data.lines.map((l: any) => ({
-          ...l,
-          received_qty: alreadyReceived ? Number(l.received_base_qty ?? 0) : Number(l.expected_base_qty ?? 0),
-          damaged_qty: 0,
-          lot_number: '',
-          expiration_date: null,
-          is_unplanned: false
-      }));
+
+      if (alreadyReceived && res.data.invoice_number) {
+        setInvoiceNumber(res.data.invoice_number);
+      } else if (isPartial) {
+        // En entregas parciales siguientes, dejamos libre el campo para la nueva factura del día
+        setInvoiceNumber('');
+      } else if (res.data.invoice_number) {
+        setInvoiceNumber(res.data.invoice_number);
+      }
+      if (alreadyReceived && res.data.invoice_date) {
+        setReceiptDate(new Date(res.data.invoice_date + 'T00:00:00'));
+      } else {
+        setReceiptDate(new Date());
+      }
+      
+      const initialLines = res.data.lines.map((l: any) => {
+          const expQty = Number(l.expected_base_qty ?? 0);
+          const prevRecQty = isPartial ? Number(l.received_base_qty ?? 0) : 0;
+          const pendingQty = Math.max(0, sanitizeQuantity(expQty - prevRecQty, l.uom_base));
+          return {
+              ...l,
+              previously_received_qty: prevRecQty,
+              pending_base_qty: isPartial ? pendingQty : expQty,
+              received_qty: alreadyReceived
+                  ? Number(l.received_base_qty ?? 0)
+                  : isPartial
+                      ? pendingQty
+                      : expQty,
+              damaged_qty: 0,
+              lot_number: '',
+              expiration_date: null,
+              is_unplanned: false
+          };
+      });
       linesRef.current = initialLines;
       setLines(initialLines);
 
@@ -360,7 +390,12 @@ export default function ReceiptExecutionPage() {
 
   const handleRestoreExpected = () => {
       setLines(prev => {
-          const updated = prev.map(l => ({ ...l, received_qty: Number(l.expected_base_qty ?? 0) }));
+          const updated = prev.map(l => ({
+              ...l,
+              received_qty: order?.status === 'partial'
+                  ? Number(l.pending_base_qty ?? Math.max(0, Number(l.expected_base_qty ?? 0) - Number(l.previously_received_qty ?? 0)))
+                  : Number(l.expected_base_qty ?? 0)
+          }));
           linesRef.current = updated;
           return updated;
       });
@@ -495,14 +530,33 @@ export default function ReceiptExecutionPage() {
       }
   };
 
-  const confirmReceipt = async () => {
+  const confirmReceipt = async (isPartialDelivery: boolean = false) => {
+      if (isOrderExpired) {
+          toast.current?.show({
+              severity: 'error',
+              summary: 'ODC Vencida',
+              detail: 'No se permite registrar recepciones (ni parciales ni totales) sobre una Orden de Compra vencida.'
+          });
+          return;
+      }
+      const currentLines = linesRef.current.length > 0 ? linesRef.current : lines;
+      const totalToday = currentLines.reduce((acc, l) => acc + Number(l.received_qty || 0), 0);
+      if (isPartialDelivery && totalToday <= 0) {
+          toast.current?.show({
+              severity: 'warn',
+              summary: 'Cantidad requerida',
+              detail: 'Para guardar una entrega parcial debe ingresar una cantidad mayor a 0 en al menos un producto recibido hoy.'
+          });
+          return;
+      }
+
       setSaving(true);
       try {
-          const currentLines = linesRef.current.length > 0 ? linesRef.current : lines;
           const payload = {
               warehouse_id: selectedWarehouseId,
               invoice_number: invoiceNumber,
               receipt_date: receiptDate ? format(receiptDate, 'yyyy-MM-dd') : null,
+              is_partial: isPartialDelivery,
               lines: currentLines.map(l => ({
                   po_line_id: l.id > 0 ? l.id : null,
                   variant_id: l.variant_id,
@@ -515,15 +569,27 @@ export default function ReceiptExecutionPage() {
               }))
           };
           const res = await api.post(`/wms/receipts/${orderId}`, payload);
-          toast.current?.show({ 
-              severity: 'success', 
-              summary: 'Recepción Confirmada', 
-              detail: `Mercancía ingresada a inventario. Abriendo Acta Definitiva...` 
-          });
-          
-          setOrder((prev: any) => ({ ...prev, status: 'received', reversal_status: 'NONE' }));
-          setInvoiceModalVisible(true);
-          setTimeout(() => fetchOrderAuditLogs(), 600);
+          const resultingStatus = res.data?.new_status || (isPartialDelivery ? 'partial' : 'received');
+
+          if (resultingStatus === 'partial') {
+              toast.current?.show({ 
+                  severity: 'info', 
+                  summary: 'Entrega Parcial Registrada', 
+                  detail: `Las unidades de hoy ingresaron a inventario (${res.data?.picking_name || ''}). La ODC permanece abierta en muelle por el saldo pendiente.`,
+                  life: 6000
+              });
+              await fetchOrder();
+              setTimeout(() => fetchOrderAuditLogs(), 500);
+          } else {
+              toast.current?.show({ 
+                  severity: 'success', 
+                  summary: 'Recepción Confirmada y ODC Cerrada', 
+                  detail: `Mercancía ingresada a inventario. Abriendo Conciliación con Clara...` 
+              });
+              await fetchOrder();
+              setInvoiceModalVisible(true);
+              setTimeout(() => fetchOrderAuditLogs(), 600);
+          }
       } catch(e: any) {
           const detailMsg = typeof e.response?.data?.detail === 'string' 
               ? e.response.data.detail 
@@ -540,6 +606,15 @@ export default function ReceiptExecutionPage() {
 
   const selectedWarehouse = warehouses.find(w => w.id === selectedWarehouseId);
   const isReadOnly = order?.status === 'received' || order?.status === 'conciliated';
+  const isPartialOrder = order?.status === 'partial';
+  const isFormDisabled = isReadOnly || isOrderExpired;
+  const hasRemainingBalance = lines.some(l => {
+      const exp = Number(l.expected_base_qty || 0);
+      const prev = Number(l.previously_received_qty || 0);
+      const rec = Number(l.received_qty || 0);
+      const dam = Number(l.damaged_qty || 0);
+      return Number((exp - (prev + rec + dam)).toFixed(3)) > 0;
+  });
 
   return (
     <div className="p-4 sm:p-8 w-full max-w-[1400px] mx-auto fade-in">
@@ -555,15 +630,27 @@ export default function ReceiptExecutionPage() {
                     <i className="pi pi-box mr-3 text-blue-500"></i>Recepcionando: {order.reference}
                  </h1>
               </div>
-              <p className="text-slate-500 ml-12 text-sm mt-2 flex flex-col sm:flex-row gap-4">
+              <p className="text-slate-500 ml-12 text-sm mt-2 flex flex-col sm:flex-row sm:items-center gap-4">
                   <span><i className="pi pi-building mr-2 text-slate-400"></i> Proveedor: <span className="font-bold text-slate-700">{order.supplier.name}</span></span>
-                  <span><i className="pi pi-clock mr-2 text-slate-400"></i> Vencimiento ODC: <span className="font-bold text-slate-700">{order.expiration_date ? format(new Date(order.expiration_date + 'T00:00:00'), 'dd/MM/yyyy') : 'Sin Límite'}</span></span>
+                  <span className="flex items-center gap-2">
+                      <i className="pi pi-clock mr-1 text-slate-400"></i> Vencimiento ODC:{' '}
+                      <span className={`font-bold ${isOrderExpired ? 'text-red-600' : 'text-slate-700'}`}>
+                          {order.expiration_date ? format(new Date(order.expiration_date + 'T00:00:00'), 'dd/MM/yyyy') : 'Sin Límite'}
+                      </span>
+                      {!isReadOnly && (
+                          isOrderExpired ? (
+                              <Tag value="⛔ VENCIDA (NO VIGENTE)" severity="danger" className="font-black text-[10px] px-2 py-0.5" />
+                          ) : (
+                              <Tag value="✓ ORDEN VIGENTE" severity="success" className="font-black text-[10px] px-2 py-0.5" />
+                          )
+                      )}
+                  </span>
               </p>
           </div>
           
           {/* Opciones de Impresión y Conciliación */}
           <div className="flex flex-col sm:flex-row items-end gap-3">
-              {isReadOnly && (
+              {(isReadOnly || isPartialOrder) && (
                   <Button 
                       label="Conciliar con Clara 🤖" 
                       icon="pi pi-sparkles" 
@@ -579,12 +666,68 @@ export default function ReceiptExecutionPage() {
                   outlined 
                   disabled={isReadOnly}
                   onClick={openTicketDialog} 
-                  tooltip={isReadOnly ? "Recepción completada (Use 'Imprimir Acta Definitiva')" : "Imprimir Hoja de Conteo de Descarga"} 
+                  tooltip={isReadOnly ? "Recepción completada (Use 'Imprimir Acta Definitiva')" : "Imprimir Hoja de Conteo / Acta Parcial 80mm"} 
                   tooltipOptions={{ position: 'top' }}
                   className="font-bold border-slate-300 text-slate-700 hover:bg-slate-100 shadow-sm disabled:opacity-40 cursor-not-allowed"
               />
           </div>
       </div>
+
+      {/* BANNER DE ORDEN VENCIDA (BLOQUEO DE RECEPCIÓN) */}
+      {!isReadOnly && isOrderExpired && (
+        <div className="bg-red-50 border-2 border-red-500 text-red-900 p-5 rounded-2xl mb-6 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 mt-0.5 shadow">
+              <i className="pi pi-ban text-xl"></i>
+            </div>
+            <div>
+              <h3 className="font-black text-base text-red-900 uppercase tracking-wide">
+                ⛔ Orden de Compra Vencida — Recepción Bloqueada
+              </h3>
+              <p className="text-xs text-red-800 mt-1">
+                Esta ODC venció el <strong>{order.expiration_date ? format(new Date(order.expiration_date + 'T00:00:00'), 'dd/MM/yyyy') : ''}</strong>. Por política de control, solo se permite registrar recepciones (totales o entregas parciales) sobre órdenes vigentes. Solicite al departamento de Compras ampliar la vigencia o emitir una nueva ODC.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BANNER DE ENTREGA PARCIAL ACTIVA (BACKORDER EN CURSO) */}
+      {!isReadOnly && isPartialOrder && (
+        <div className="bg-amber-50 border-2 border-amber-400 text-amber-950 p-5 rounded-2xl mb-6 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 mt-0.5 shadow">
+              <i className="pi pi-truck text-xl"></i>
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-black text-base text-amber-900 uppercase tracking-wide">
+                  📦 ODC en Recepción Parcial (Saldo Pendiente Abierto)
+                </h3>
+                <Tag value="ENTREGA PARCIAL ACTIVA" severity="warning" className="font-black text-[10px]" />
+              </div>
+              <p className="text-xs text-amber-900 mt-1">
+                Esta ODC ya registra entregas previas asentadas en inventario. En la tabla inferior se muestra lo <strong>Ya Recibido</strong> y el <strong>Saldo Pendiente</strong> para que ingrese únicamente la mercancía que está llegando hoy.
+              </p>
+              {order.invoice_number && (
+                <p className="text-xs text-amber-900 mt-1 bg-white/80 px-3 py-1 rounded-lg border border-amber-300 w-fit font-bold">
+                  <i className="pi pi-file mr-1.5 text-amber-700"></i>
+                  Factura(s) / Guía(s) registradas en entregas previas: <span className="font-mono text-slate-900">{order.invoice_number}</span>
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <Button
+              label="Imprimir Acta Parcial 80mm 🖨️"
+              icon="pi pi-print"
+              severity="warning"
+              onClick={openTicketDialog}
+              className="font-bold bg-amber-600 hover:bg-amber-700 text-white border-none px-4 py-2.5 shadow-sm text-xs"
+            />
+          </div>
+        </div>
+      )}
 
       {/* CONTROL DE DATOS DE RECEPCIÓN (DEPÓSITO, FACTURA / GUÍA Y FECHA DE RECEPCIÓN) */}
       <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -595,18 +738,20 @@ export default function ReceiptExecutionPage() {
                options={warehouses.map(w => ({ label: w.name + (w.requires_dock_staging ? ' (CD - Bahía)' : ' (Directo)'), value: w.id }))} 
                onChange={(e) => setSelectedWarehouseId(e.value)} 
                placeholder="Seleccionar Depósito"
-               disabled={isReadOnly}
+               disabled={isFormDisabled}
                className="w-full text-xs font-bold border-slate-200"
            />
         </div>
 
         <div className="flex flex-col gap-1">
-           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">2. N° Factura(s) / Guía(s) de Despacho</label>
+           <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+               {isPartialOrder ? '2. N° Factura / Guía de la Entrega de Hoy' : '2. N° Factura(s) / Guía(s) de Despacho'}
+           </label>
            <InputText 
                value={invoiceNumber} 
                onChange={(e) => setInvoiceNumber(e.target.value)} 
-               placeholder="Ej: FACT-99012, FACT-99013 (separe varias con coma)" 
-               disabled={isReadOnly}
+               placeholder={isPartialOrder ? "Ingrese la factura de esta entrega (se sumará a las previas)" : "Ej: FACT-99012, FACT-99013 (separe varias con coma)"} 
+               disabled={isFormDisabled}
                className="w-full text-xs font-bold border-slate-200"
            />
         </div>
@@ -618,7 +763,7 @@ export default function ReceiptExecutionPage() {
                onChange={(e) => setReceiptDate(e.value as Date)} 
                dateFormat="dd/mm/yy" 
                placeholder="Seleccionar Fecha"
-               disabled={isReadOnly}
+               disabled={isFormDisabled}
                className="w-full p-inputtext-sm text-xs font-bold"
            />
         </div>
@@ -792,7 +937,7 @@ export default function ReceiptExecutionPage() {
                         style={{ paddingLeft: '2.25rem' }}
                     />
                 </div>
-                {!isReadOnly && (
+                {!isFormDisabled && (
                     <>
                         <Button
                             label="Todo en 0"
@@ -806,13 +951,13 @@ export default function ReceiptExecutionPage() {
                             onClick={handleSetAllZero}
                         />
                         <Button
-                            label="Cargar Esperado"
+                            label={isPartialOrder ? "Cargar Saldo Pendiente" : "Cargar Esperado"}
                             icon="pi pi-refresh"
                             severity="secondary"
                             outlined
                             size="small"
                             className="font-bold text-xs py-1.5 px-2.5"
-                            tooltip="Restaurar las cantidades esperadas de la ODC"
+                            tooltip={isPartialOrder ? "Restaurar el saldo pendiente por recibir de la ODC" : "Restaurar las cantidades esperadas de la ODC"}
                             tooltipOptions={{ position: 'top' }}
                             onClick={handleRestoreExpected}
                         />
@@ -861,16 +1006,33 @@ export default function ReceiptExecutionPage() {
           
           <Column header="Producto" field="product_name" body={r => <span className="font-bold text-slate-800">{r.product_name}</span>} />
           
-          <Column header="Esperado (Base)" body={r => {
+          <Column header={isPartialOrder ? "Pedido / Saldo Pendiente" : "Esperado (Base)"} body={r => {
              const isWeight = isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
              const val = Number(r.expected_base_qty) || 0;
+             const prevRec = Number(r.previously_received_qty) || 0;
+             const pendVal = Math.max(0, Number((val - prevRec).toFixed(dec)));
              const uomLabel = r.uom_base || 'UND';
+             if (isPartialOrder || prevRec > 0) {
+                 return (
+                     <div className="flex flex-col items-end gap-0.5">
+                         <span className="text-[10px] text-slate-500 font-semibold">
+                             Pedido ODC: {val.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} {uomLabel}
+                         </span>
+                         <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                             Ya Recibido: {prevRec.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} {uomLabel}
+                         </span>
+                         <span className="text-xs font-black text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-300">
+                             Pendiente: {pendVal.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} {uomLabel}
+                         </span>
+                     </div>
+                 );
+             }
              return <span className="font-semibold text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-200">{val.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: dec})} {uomLabel}</span>;
           }} align="right" />
           
           {/* CAMPOS INTERACTIVOS WMS */}
-          <Column header="Físico Recibido" body={(r) => {
+          <Column header={isPartialOrder ? "Recibido Hoy" : "Físico Recibido"} body={(r) => {
              const origIdx = lines.findIndex(item => item.id === r.id && item.variant_id === r.variant_id);
              const isWeight = isWeightUom(r.uom_base);
              const dec = isWeight ? 3 : 0;
@@ -884,7 +1046,7 @@ export default function ReceiptExecutionPage() {
                         minFractionDigits={dec}
                         maxFractionDigits={dec}
                         step={isWeight ? 0.001 : 1}
-                        disabled={isReadOnly}
+                        disabled={isFormDisabled}
                         inputClassName="w-24 text-right text-lg font-black p-2 rounded-lg border-2 border-blue-200 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 bg-blue-50/50 transition-all text-blue-700 shadow-inner disabled:bg-slate-100 disabled:border-slate-300 disabled:text-slate-700" 
                      />
                  </div>
@@ -895,15 +1057,17 @@ export default function ReceiptExecutionPage() {
           <Column header="Estado Conteo" body={r => {
               const isWeight = isWeightUom(r.uom_base);
               const exp = Number(r.expected_base_qty) || 0;
+              const prevRec = Number(r.previously_received_qty) || 0;
               const rec = Number(r.received_qty) || 0;
               const dam = Number(r.damaged_qty) || 0;
-              const diff = Number(((rec + dam) - exp).toFixed(isWeight ? 3 : 0));
+              const totalCumulative = prevRec + rec + dam;
+              const diff = Number((totalCumulative - exp).toFixed(isWeight ? 3 : 0));
               const diffFmt = formatReceiptQty(diff, r.uom_base);
 
               if (r.is_unplanned) return <Tag value="NO PLANIFICADO" severity="info" className="font-extrabold text-[9px]" />;
               if (diff === 0) return <Tag value="COMPLETO (OK)" severity="success" className="font-extrabold text-[9px]" />;
               if (diff > 0) return <Tag value={`SOBRANTE (+${diffFmt})`} severity="warning" className="font-extrabold text-[9px]" />;
-              return <Tag value={`FALTANTE (${diffFmt})`} severity="danger" className="font-extrabold text-[9px]" />;
+              return <Tag value={`FALTANTE / PEND. (${diffFmt})`} severity="danger" className="font-extrabold text-[9px]" />;
           }} align="center" />
 
           <Column header="Trazabilidad (Lote)" body={(r) => {
@@ -913,7 +1077,7 @@ export default function ReceiptExecutionPage() {
                  value={r.lot_number} 
                  onChange={(e) => handleTextChange(origIdx, 'lot_number', e.target.value)} 
                  placeholder="Ej: L-204" 
-                 disabled={isReadOnly}
+                 disabled={isFormDisabled}
                  className="w-28 text-xs font-bold text-center uppercase disabled:bg-slate-100 disabled:border-slate-300" 
              />
           );}} align="center" />
@@ -926,7 +1090,7 @@ export default function ReceiptExecutionPage() {
                  onChange={(e) => handleDateChange(origIdx, e.value as Date)} 
                  dateFormat="dd/mm/yy" 
                  placeholder="Opcional" 
-                 disabled={isReadOnly}
+                 disabled={isFormDisabled}
                  className="w-32 p-inputtext-sm text-xs" 
              />
           );}} align="center" />
@@ -936,7 +1100,7 @@ export default function ReceiptExecutionPage() {
                  icon="pi pi-exclamation-triangle" 
                  rounded 
                  text 
-                 disabled={isReadOnly}
+                 disabled={isFormDisabled}
                  severity={r.damaged_qty > 0 ? "danger" : "secondary"} 
                  tooltip={r.damaged_qty > 0 ? `${r.damaged_qty} unds dañadas` : "Reportar Avería"}
                  onClick={() => openDiscrepancyDialog(r)} 
@@ -945,13 +1109,53 @@ export default function ReceiptExecutionPage() {
         </DataTable>
       </div>
 
-      <div className="flex justify-end gap-4 p-6 bg-white rounded-2xl shadow-sm border border-slate-200 mt-6">
+      <div className="flex flex-col sm:flex-row justify-between items-center gap-4 p-6 bg-white rounded-2xl shadow-sm border border-slate-200 mt-6">
          {isReadOnly ? (
-             <div className="flex items-center gap-4">
+             <div className="flex items-center gap-4 ml-auto">
                  <Tag value="✓ RECEPCIÓN COMPLETADA Y CERRADA" severity="success" className="font-extrabold px-4 py-2 text-xs tracking-wider" />
              </div>
+         ) : isOrderExpired ? (
+             <div className="flex items-center gap-3 ml-auto">
+                 <Tag value="⛔ ODC VENCIDA — NO SE PERMITE REGISTRAR RECEPCIONES" severity="danger" className="font-extrabold px-4 py-2 text-xs tracking-wider" />
+             </div>
          ) : (
-             <Button label="Confirmar e Ingresar a Inventario" icon="pi pi-check-circle" severity="success" onClick={confirmReceipt} disabled={saving} className="font-bold px-8 shadow-lg hover:shadow-xl transition-all shadow-emerald-500/30 text-lg bg-emerald-600 border-none" />
+             <>
+                 <div className="text-xs text-slate-500 max-w-xl">
+                     {hasRemainingBalance ? (
+                         <span>
+                             <i className="pi pi-info-circle text-amber-600 mr-1.5"></i>
+                             <strong>¿Llegó solo una parte de la ODC hoy?</strong> Usa <strong>Guardar Entrega Parcial</strong> para ingresar a inventario lo recibido hoy y dejar la ODC abierta en muelle para cuando llegue el resto de la mercancía (mientras la ODC siga vigente).
+                         </span>
+                     ) : (
+                         <span>
+                             <i className="pi pi-check-circle text-emerald-600 mr-1.5"></i>
+                             Todas las cantidades esperadas de la ODC están completas. Presiona <strong>Confirmar y Cerrar ODC</strong> para finalizar.
+                         </span>
+                     )}
+                 </div>
+                 <div className="flex flex-wrap justify-end gap-3 shrink-0">
+                     {hasRemainingBalance && (
+                         <Button
+                             label="Guardar Entrega Parcial (Dejar Saldo Abierto)"
+                             icon="pi pi-clock"
+                             severity="warning"
+                             onClick={() => confirmReceipt(true)}
+                             disabled={saving || isOrderExpired}
+                             tooltip="Ingresa al inventario solo lo recibido hoy y mantiene la ODC abierta para recibir el resto en otra entrega"
+                             tooltipOptions={{ position: 'top' }}
+                             className="font-bold px-5 py-3 shadow-md bg-amber-600 hover:bg-amber-700 text-white border-none text-sm"
+                         />
+                     )}
+                     <Button
+                         label={isPartialOrder ? "Confirmar Entrega Final y Cerrar ODC" : "Confirmar y Cerrar ODC Definitivamente"}
+                         icon="pi pi-check-circle"
+                         severity="success"
+                         onClick={() => confirmReceipt(false)}
+                         disabled={saving || isOrderExpired}
+                         className="font-bold px-6 py-3 shadow-lg hover:shadow-xl transition-all shadow-emerald-500/30 text-base bg-emerald-600 border-none"
+                     />
+                 </div>
+             </>
          )}
       </div>
 
