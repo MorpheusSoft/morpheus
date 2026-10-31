@@ -99,18 +99,19 @@ class InvoiceOCRService:
         plu_by_variant: Dict[int, str] = {}
         if variant_ids:
             pb_rows = db.query(ProductBarcode).filter(
-                ProductBarcode.variant_id.in_(variant_ids)
-            ).order_by(ProductBarcode.is_primary.desc(), ProductBarcode.id.asc()).all()
+                ProductBarcode.product_variant_id.in_(variant_ids)
+            ).order_by(ProductBarcode.id.asc()).all()
             for pb in pb_rows:
                 code_val = (pb.barcode or "").strip()
                 if not code_val:
                     continue
-                if pb.barcode_type == "STELLAR_CODE":
-                    if pb.variant_id not in plu_by_variant:
-                        plu_by_variant[pb.variant_id] = code_val
+                v_id = pb.product_variant_id
+                if (pb.code_type or "").strip().upper() == "STELLAR_CODE":
+                    if v_id not in plu_by_variant:
+                        plu_by_variant[v_id] = code_val
                 else:
-                    if pb.variant_id not in barcodes_by_variant:
-                        barcodes_by_variant[pb.variant_id] = code_val
+                    if v_id not in barcodes_by_variant:
+                        barcodes_by_variant[v_id] = code_val
 
         po_lines_context = []
         for line in po.lines:
@@ -218,7 +219,12 @@ Responde ÚNICAMENTE un JSON con esta estructura exacta:
             }
 
         try:
-            parsed = json.loads(raw_json_str)
+            clean_json_str = raw_json_str.strip()
+            if clean_json_str.startswith("```"):
+                clean_json_str = clean_json_str.strip("`").strip()
+                if clean_json_str.lower().startswith("json"):
+                    clean_json_str = clean_json_str[4:].strip()
+            parsed = json.loads(clean_json_str)
             return parsed
         except Exception as e:
             logger.error(f"Error parseando JSON de Gemini OCR: {e}. Contenido: {raw_json_str[:200]}")
@@ -271,8 +277,10 @@ Responde ÚNICAMENTE un JSON con esta estructura exacta:
 
             matched_ext = extracted_by_variant.get(line.variant_id)
             if matched_ext:
-                q_billed = Decimal(str(matched_ext.get("invoiced_qty", q_rec)))
-                c_billed = Decimal(str(matched_ext.get("invoiced_unit_cost", c_ord)))
+                raw_q_billed = matched_ext.get("invoiced_qty")
+                raw_c_billed = matched_ext.get("invoiced_unit_cost")
+                q_billed = Decimal(str(raw_q_billed if raw_q_billed is not None else q_rec))
+                c_billed = Decimal(str(raw_c_billed if raw_c_billed is not None else c_ord))
             else:
                 # Si no apareció en la factura, se asume no facturado
                 q_billed = Decimal('0.00')
