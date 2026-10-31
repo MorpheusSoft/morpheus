@@ -324,6 +324,7 @@ def read_purchase_order_details(
         "distribution_breakdown": getattr(order, "distribution_breakdown", []) or [],
         "invoice_number": order.invoice_number,
         "invoice_date": order.invoice_date,
+        "invoice_documents": getattr(order, "invoice_documents", []) or [],
         "conciliated_at": order.conciliated_at,
         "reconciliation_status": order.reconciliation_status or ("MATCH_EXACT" if order.status == 'conciliated' else "PENDING"),
         "debit_note_number": order.debit_note_number,

@@ -794,9 +794,9 @@ async def upload_invoice_and_match(
     # Extracción OCR Multimodal
     extracted_data = InvoiceOCRService.extract_invoice_data(contents, mime_type, order, db)
 
-    # Actualizar documentos adjuntos en la ODC (acumulando múltiples facturas si existen)
-    existing_docs = list(order.invoice_documents) if isinstance(order.invoice_documents, list) else []
-    existing_docs.append({
+    # Actualizar documentos adjuntos en la ODC (acumulando distintas facturas, pero reemplazando si se vuelve a subir el mismo archivo)
+    raw_existing = list(order.invoice_documents) if isinstance(order.invoice_documents, list) else []
+    new_doc_entry = {
         "filename": file.filename,
         "url": file_url,
         "uploaded_at": datetime.utcnow().isoformat(),
@@ -805,7 +805,15 @@ async def upload_invoice_and_match(
         "invoice_date": extracted_data.get("invoice_date"),
         "total_amount": extracted_data.get("total_amount"),
         "extracted_data": extracted_data
-    })
+    }
+
+    # Evitar duplicar si el usuario vuelve a subir el mismo archivo (mismo nombre de archivo)
+    clean_filename = (file.filename or "").strip().lower()
+    existing_docs = [
+        d for d in raw_existing
+        if isinstance(d, dict) and (d.get("filename") or "").strip().lower() != clean_filename
+    ]
+    existing_docs.append(new_doc_entry)
     order.invoice_documents = existing_docs
 
     combined_extracted = InvoiceOCRService.combine_extracted_invoices(existing_docs, extracted_data)

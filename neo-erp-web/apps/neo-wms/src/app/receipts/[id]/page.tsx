@@ -13,8 +13,16 @@ import { Dropdown } from 'primereact/dropdown';
 import { Dialog } from 'primereact/dialog';
 import { Tag } from 'primereact/tag';
 import api from '@/lib/api';
+import { getPublicApiUrl } from '@/lib/domain';
 import { isWeightUom, sanitizeQuantity } from '@/lib/uom';
 import { format } from 'date-fns';
+
+const resolveInvoiceFileUrl = (rawUrl?: string): string => {
+  if (!rawUrl) return '#';
+  if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) return rawUrl;
+  const apiOrigin = getPublicApiUrl(typeof window !== 'undefined' ? window.location.host : '').replace(/\/api\/v1\/?$/, '');
+  return `${apiOrigin}${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`;
+};
 
 export default function ReceiptExecutionPage() {
   const params = useParams();
@@ -1582,11 +1590,23 @@ export default function ReceiptExecutionPage() {
                                   <div className="flex items-center gap-2">
                                       <i className="pi pi-file-pdf text-blue-600 text-xs"></i>
                                       <span className="font-bold text-slate-800">{doc.invoice_number || `Doc #${idx + 1}`}</span>
-                                      <span className="text-[11px] text-slate-400 truncate max-w-[180px]">({doc.filename})</span>
+                                      <span className="text-[11px] text-slate-400 truncate max-w-[160px]">({doc.filename})</span>
                                   </div>
-                                  {doc.total_amount !== undefined && doc.total_amount !== null && (
-                                      <span className="font-mono font-bold text-blue-700">${Number(doc.total_amount).toFixed(2)}</span>
-                                  )}
+                                  <div className="flex items-center gap-2">
+                                      {doc.total_amount !== undefined && doc.total_amount !== null && (
+                                          <span className="font-mono font-bold text-blue-700">${Number(doc.total_amount).toFixed(2)}</span>
+                                      )}
+                                      {doc.url && (
+                                          <a
+                                              href={resolveInvoiceFileUrl(doc.url)}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 font-bold text-[10px]"
+                                          >
+                                              <i className="pi pi-external-link text-[9px]"></i> Ver Original
+                                          </a>
+                                      )}
+                                  </div>
                               </div>
                           ))}
                       </div>

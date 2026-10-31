@@ -13,8 +13,16 @@ import { Tag } from 'primereact/tag';
 import { Dropdown } from 'primereact/dropdown';
 import { InputTextarea } from 'primereact/inputtextarea';
 import api from '@/lib/api';
+import { getPublicApiUrl } from '@/lib/domain';
 import { isWeightUom, sanitizeQuantity } from '@/lib/uom';
 import { format } from 'date-fns';
+
+const resolveInvoiceFileUrl = (rawUrl?: string): string => {
+  if (!rawUrl) return '#';
+  if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) return rawUrl;
+  const apiOrigin = getPublicApiUrl(typeof window !== 'undefined' ? window.location.host : '').replace(/\/api\/v1\/?$/, '');
+  return `${apiOrigin}${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`;
+};
 
 export default function ReconciliationPage() {
   const toast = useRef<Toast>(null);
@@ -990,22 +998,48 @@ export default function ReconciliationPage() {
           <div className="space-y-6 pt-2">
             {/* Banner de Documentos Adjuntos de Factura (Ingesta WMS / Clara) */}
             {selectedOrder?.invoice_documents && selectedOrder.invoice_documents.length > 0 && (
-              <div className="bg-indigo-50/70 border border-indigo-200 p-3 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="p-1.5 rounded-lg bg-indigo-600 text-white font-black text-[10px]">🤖 CLARA OCR</span>
-                  <span className="font-bold text-indigo-950">Documento Fiscal Adjunto en Recepción WMS:</span>
-                  <span className="text-indigo-700 font-mono font-medium">{selectedOrder.invoice_documents[selectedOrder.invoice_documents.length - 1].filename}</span>
+              <div className="bg-indigo-50/70 border border-indigo-200 p-3 rounded-xl flex flex-col gap-2 text-xs">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="p-1.5 rounded-lg bg-indigo-600 text-white font-black text-[10px]">🤖 CLARA OCR</span>
+                    <span className="font-bold text-indigo-950">
+                      {selectedOrder.invoice_documents.length > 1
+                        ? `Documentos Fiscales Adjuntos en Recepción WMS (${selectedOrder.invoice_documents.length}):`
+                        : 'Documento Fiscal Adjunto en Recepción WMS:'}
+                    </span>
+                    {selectedOrder.invoice_documents.length === 1 && (
+                      <span className="text-indigo-700 font-mono font-medium">{selectedOrder.invoice_documents[0].filename}</span>
+                    )}
+                  </div>
+                  {selectedOrder.invoice_documents.length === 1 && (
+                    <div className="flex items-center gap-2">
+                      <a 
+                        href={resolveInvoiceFileUrl(selectedOrder.invoice_documents[0].url)} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 bg-white border border-indigo-300 text-indigo-700 px-3 py-1.5 rounded-lg font-bold hover:bg-indigo-50 shadow-sm transition-all"
+                      >
+                        <i className="pi pi-external-link text-[10px]"></i> Ver Factura Original
+                      </a>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <a 
-                    href={selectedOrder.invoice_documents[selectedOrder.invoice_documents.length - 1].url} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 bg-white border border-indigo-300 text-indigo-700 px-3 py-1.5 rounded-lg font-bold hover:bg-indigo-50 shadow-sm transition-all"
-                  >
-                    <i className="pi pi-external-link text-[10px]"></i> Ver Factura Original
-                  </a>
-                </div>
+                {selectedOrder.invoice_documents.length > 1 && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {selectedOrder.invoice_documents.map((doc: any, idx: number) => (
+                      <a
+                        key={idx}
+                        href={resolveInvoiceFileUrl(doc.url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 bg-white border border-indigo-300 text-indigo-700 px-3 py-1.5 rounded-lg font-bold hover:bg-indigo-50 shadow-sm transition-all"
+                      >
+                        <i className="pi pi-external-link text-[10px]"></i>
+                        <span>Ver {doc.invoice_number || `Factura #${idx + 1}`} ({doc.filename})</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
