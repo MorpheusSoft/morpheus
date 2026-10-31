@@ -243,9 +243,11 @@ Responde ÚNICAMENTE un JSON con esta estructura exacta:
         valid_extractions = [
             d.get("extracted_data")
             for d in (docs or [])
-            if isinstance(d, dict) and isinstance(d.get("extracted_data"), dict)
+            if isinstance(d, dict)
+            and isinstance(d.get("extracted_data"), dict)
+            and not d.get("extracted_data", {}).get("is_simulated_fallback", False)
         ]
-        if not valid_extractions:
+        if not valid_extractions or latest_extracted.get("is_simulated_fallback", False):
             return latest_extracted
         if len(valid_extractions) == 1:
             return valid_extractions[0]

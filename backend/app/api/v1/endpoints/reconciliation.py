@@ -794,10 +794,16 @@ async def upload_invoice_and_match(
     # Extracción OCR Multimodal
     extracted_data = InvoiceOCRService.extract_invoice_data(contents, mime_type, order, db)
 
-    # Actualizar documentos adjuntos en la ODC (acumulando distintas facturas, pero reemplazando si se vuelve a subir el mismo archivo)
+    # Actualizar documentos adjuntos en la ODC (acumulando distintas facturas, pero reemplazando si es el mismo archivo, contenido o número fiscal)
+    import hashlib
+    file_hash = hashlib.sha256(contents).hexdigest()
     raw_existing = list(order.invoice_documents) if isinstance(order.invoice_documents, list) else []
+    new_inv_num = str(extracted_data.get("invoice_number") or "").strip().upper()
+    clean_filename = (file.filename or "").strip().lower()
+
     new_doc_entry = {
         "filename": file.filename,
+        "file_hash": file_hash,
         "url": file_url,
         "uploaded_at": datetime.utcnow().isoformat(),
         "uploaded_by": current_user.email or current_user.full_name,
@@ -807,12 +813,22 @@ async def upload_invoice_and_match(
         "extracted_data": extracted_data
     }
 
-    # Evitar duplicar si el usuario vuelve a subir el mismo archivo (mismo nombre de archivo)
-    clean_filename = (file.filename or "").strip().lower()
-    existing_docs = [
-        d for d in raw_existing
-        if isinstance(d, dict) and (d.get("filename") or "").strip().lower() != clean_filename
-    ]
+    # Evitar duplicar si el usuario vuelve a subir el mismo archivo (por hash SHA-256, por nombre o por el mismo N° de factura)
+    existing_docs = []
+    for d in raw_existing:
+        if not isinstance(d, dict):
+            continue
+        old_name = (d.get("filename") or "").strip().lower()
+        old_hash = d.get("file_hash")
+        old_inv = str(d.get("invoice_number") or "").strip().upper()
+        if old_name == clean_filename:
+            continue
+        if old_hash and old_hash == file_hash:
+            continue
+        if new_inv_num and old_inv and old_inv == new_inv_num:
+            continue
+        existing_docs.append(d)
+
     existing_docs.append(new_doc_entry)
     order.invoice_documents = existing_docs
 
