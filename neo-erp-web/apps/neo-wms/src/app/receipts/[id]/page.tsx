@@ -58,6 +58,12 @@ export default function ReceiptExecutionPage() {
 
   // Control de Reverso de Recepción y Auditoría
   const [currentUser, setCurrentUser] = useState<any>(null);
+
+  const formatReceiptQty = (val: number | string | null | undefined, uom?: string | null): string => {
+    const num = Number(val || 0);
+    if (isNaN(num)) return isWeightUom(uom) ? '0.000' : '0';
+    return isWeightUom(uom) ? num.toFixed(3) : String(Math.round(num));
+  };
   const [orderAuditLogs, setOrderAuditLogs] = useState<any[]>([]);
   const [reversalModalVisible, setReversalModalVisible] = useState(false);
   const [reversalReason, setReversalReason] = useState<string>('ERROR_DIGITACION');
@@ -869,15 +875,17 @@ export default function ReceiptExecutionPage() {
 
           {/* BALANCE Y DISCREPANCIA */}
           <Column header="Estado Conteo" body={r => {
+              const isWeight = isWeightUom(r.uom_base);
               const exp = Number(r.expected_base_qty) || 0;
               const rec = Number(r.received_qty) || 0;
               const dam = Number(r.damaged_qty) || 0;
-              const diff = (rec + dam) - exp;
+              const diff = Number(((rec + dam) - exp).toFixed(isWeight ? 3 : 0));
+              const diffFmt = formatReceiptQty(diff, r.uom_base);
 
               if (r.is_unplanned) return <Tag value="NO PLANIFICADO" severity="info" className="font-extrabold text-[9px]" />;
               if (diff === 0) return <Tag value="COMPLETO (OK)" severity="success" className="font-extrabold text-[9px]" />;
-              if (diff > 0) return <Tag value={`SOBRANTE (+${diff})`} severity="warning" className="font-extrabold text-[9px]" />;
-              return <Tag value={`FALTANTE (${diff})`} severity="danger" className="font-extrabold text-[9px]" />;
+              if (diff > 0) return <Tag value={`SOBRANTE (+${diffFmt})`} severity="warning" className="font-extrabold text-[9px]" />;
+              return <Tag value={`FALTANTE (${diffFmt})`} severity="danger" className="font-extrabold text-[9px]" />;
           }} align="center" />
 
           <Column header="Trazabilidad (Lote)" body={(r) => {
@@ -941,6 +949,9 @@ export default function ReceiptExecutionPage() {
                   <p><strong>FECHA:</strong> {ticketData.created_at}</p>
                   <p><strong>PROVEEDOR:</strong> {ticketData.supplier_name}</p>
                   <p><strong>SUCURSAL:</strong> {ticketData.facility_name}</p>
+                  {ticketData.is_confirmed && (
+                      <p><strong>REGISTRADO POR:</strong> {ticketData.received_by_name || currentUser?.full_name || currentUser?.email || 'Operador WMS'}</p>
+                  )}
 
                   {ticketData.is_confirmed ? (
                       <>
@@ -963,15 +974,19 @@ export default function ReceiptExecutionPage() {
                                   {ticketData.items.map((it: any, idx: number) => {
                                       const codeLabel = it.barcode || it.plu || it.sku;
                                       const pluLabel = it.plu && it.plu !== codeLabel ? ` (PLU: ${it.plu})` : '';
+                                      const rejNum = Number(it.rejected_qty || 0);
+                                      const pedFmt = formatReceiptQty(it.expected_qty, it.uom_base);
+                                      const recFmt = formatReceiptQty(it.received_qty, it.uom_base);
+                                      const rejFmt = rejNum > 0 ? `-${formatReceiptQty(rejNum, it.uom_base)}` : '0';
                                       return (
                                       <tr key={idx} className="border-b border-slate-200">
                                           <td className="py-1 max-w-[150px]">
                                               <div className="font-bold text-[11px]">{codeLabel}{pluLabel}</div>
                                               <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
                                           </td>
-                                          <td className="py-1 text-center font-bold">{it.expected_qty}</td>
-                                          <td className="py-1 text-center font-bold text-emerald-700">{it.received_qty}</td>
-                                          <td className="py-1 text-right font-black text-red-600">{it.rejected_qty > 0 ? `-${it.rejected_qty}` : '0'}</td>
+                                          <td className="py-1 text-center font-bold">{pedFmt}</td>
+                                          <td className="py-1 text-center font-bold text-emerald-700">{recFmt}</td>
+                                          <td className="py-1 text-right font-black text-red-600">{rejFmt}</td>
                                       </tr>
                                   );})}
                               </tbody>
@@ -987,6 +1002,9 @@ export default function ReceiptExecutionPage() {
                               <div>
                                   <p className="border-b border-slate-400 w-full mb-1"></p>
                                   <p className="font-bold text-center">Firma y Cédula Recibidor WMS / Muelle</p>
+                                  <p className="text-center text-[9px] text-slate-600 font-semibold mt-0.5">
+                                      ({ticketData.received_by_name || currentUser?.full_name || currentUser?.email || 'Operador WMS'})
+                                  </p>
                               </div>
                           </div>
                       </>
@@ -1014,7 +1032,7 @@ export default function ReceiptExecutionPage() {
                                               <div className="font-bold text-[11px]">{codeLabel}{pluLabel}</div>
                                               <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
                                           </td>
-                                          <td className="py-1 text-center font-bold text-slate-800">{it.expected_qty}</td>
+                                          <td className="py-1 text-center font-bold text-slate-800">{formatReceiptQty(it.expected_qty, it.uom_base)}</td>
                                           <td className="py-1 text-right font-bold text-slate-400">[ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ]</td>
                                       </tr>
                                   );})}
@@ -1036,21 +1054,25 @@ export default function ReceiptExecutionPage() {
                           size="small" 
                           onClick={() => {
                               const isConfirmed = Boolean(ticketData.is_confirmed);
+                              const registeredByName = ticketData.received_by_name || currentUser?.full_name || currentUser?.email || 'Operador WMS';
                               const items = Array.isArray(ticketData.items) ? ticketData.items : [];
                               const rowsHtml = items.map((it: any) => {
                                   const codeLabel = it.barcode || it.plu || it.sku || '';
                                   const pluLabel = it.plu && it.plu !== codeLabel ? ` (PLU: ${it.plu})` : '';
+                                  const pedFmt = formatReceiptQty(it.expected_qty, it.uom_base);
                                   if (isConfirmed) {
                                       const rej = Number(it.rejected_qty || 0);
+                                      const recFmt = formatReceiptQty(it.received_qty, it.uom_base);
+                                      const rejFmt = rej > 0 ? `-${formatReceiptQty(rej, it.uom_base)}` : '0';
                                       return `
                                           <tr>
                                               <td style="padding: 3px 0; border-bottom: 1px dotted #000; max-width: 42mm; word-wrap: break-word;">
                                                   <div style="font-weight: 800; font-size: 11px;">${codeLabel}${pluLabel}</div>
                                                   <div style="font-size: 10px;">${it.product_name || ''}</div>
                                               </td>
-                                              <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 700;">${it.expected_qty ?? 0}</td>
-                                              <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 800;">${it.received_qty ?? 0}</td>
-                                              <td style="padding: 3px 0; border-bottom: 1px dotted #000; text-align: right; font-weight: 800;">${rej > 0 ? `-${rej}` : '0'}</td>
+                                              <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 700;">${pedFmt}</td>
+                                              <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 800;">${recFmt}</td>
+                                              <td style="padding: 3px 0; border-bottom: 1px dotted #000; text-align: right; font-weight: 800;">${rejFmt}</td>
                                           </tr>
                                       `;
                                   } else {
@@ -1060,7 +1082,7 @@ export default function ReceiptExecutionPage() {
                                                   <div style="font-weight: 800; font-size: 11px;">${codeLabel}${pluLabel}</div>
                                                   <div style="font-size: 10px;">${it.product_name || ''}</div>
                                               </td>
-                                              <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 700;">${it.expected_qty ?? 0}</td>
+                                              <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 700;">${pedFmt}</td>
                                               <td style="padding: 3px 0; border-bottom: 1px dotted #000; text-align: right; font-weight: 700;">[ &nbsp; &nbsp; &nbsp; ]</td>
                                           </tr>
                                       `;
@@ -1141,6 +1163,7 @@ export default function ReceiptExecutionPage() {
     <div class="meta-row"><strong>FECHA:</strong> ${ticketData.created_at || ''}</div>
     <div class="meta-row"><strong>PROVEEDOR:</strong> ${ticketData.supplier_name || ''}</div>
     <div class="meta-row"><strong>SUCURSAL:</strong> ${ticketData.facility_name || ''}</div>
+    ${isConfirmed ? `<div class="meta-row"><strong>REGISTRADO POR:</strong> ${registeredByName}</div>` : ''}
     ${isConfirmed && ticketData.has_discrepancies ? '<div class="alert-box">CONTIENE DISCREPANCIAS / RECHAZOS EN MUELLE</div>' : ''}
     ${!isConfirmed ? '<div class="alert-box">CONTROL FÍSICO DE CONTEO EN MUELLE</div>' : ''}
     <div class="divider"></div>
@@ -1166,7 +1189,7 @@ export default function ReceiptExecutionPage() {
     <div class="divider"></div>
     ${isConfirmed ? `
       <div class="sig-block"><div class="sig-line"></div><div>Firma y Cédula Chofer / Transportista</div></div>
-      <div class="sig-block"><div class="sig-line"></div><div>Firma y Cédula Recibidor WMS / Muelle</div></div>
+      <div class="sig-block"><div class="sig-line"></div><div>Firma y Cédula Recibidor WMS / Muelle</div><div style="font-size: 9px; font-weight: 700; margin-top: 2px;">(${registeredByName})</div></div>
     ` : `
       <div class="sig-block"><div class="sig-line"></div><div>Firma Fiscal / Revisor Muelle</div></div>
     `}

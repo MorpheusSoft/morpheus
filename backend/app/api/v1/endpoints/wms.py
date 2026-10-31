@@ -239,7 +239,8 @@ def create_direct_receipt(
         facility_id=payload.facility_id,
         status='DONE',
         date_done=date_done_val,
-        created_by_id=user_id_val
+        created_by_id=user_id_val,
+        received_by_id=user_id_val
     )
     db.add(picking)
     db.flush()
@@ -907,11 +908,49 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Orden no encontrada")
 
     supplier = db.query(Supplier).filter(Supplier.id == order.supplier_id).first()
+    picking = (
+        db.query(StockPicking)
+        .filter(StockPicking.name.like(f"%{order.reference}%"))
+        .order_by(StockPicking.id.desc())
+        .first()
+    )
     facility = db.query(Facility).filter(Facility.id == order.dest_facility_id).first() if order.dest_facility_id else None
-    if not facility:
-        picking = db.query(StockPicking).filter(StockPicking.name.like(f"%{order.reference}%")).first()
-        if picking and picking.facility_id:
-            facility = db.query(Facility).filter(Facility.id == picking.facility_id).first()
+    if not facility and picking and picking.facility_id:
+        facility = db.query(Facility).filter(Facility.id == picking.facility_id).first()
+
+    # Resolver el usuario que registró/recibió la recepción
+    received_by_name = None
+    user_id_lookup = None
+    if picking:
+        user_id_lookup = picking.received_by_id or picking.created_by_id
+    if not user_id_lookup:
+        move_user = (
+            db.query(StockMove.created_by_id)
+            .filter(StockMove.reference == order.reference, StockMove.created_by_id.isnot(None))
+            .order_by(StockMove.id.desc())
+            .first()
+        )
+        if move_user and move_user[0]:
+            user_id_lookup = move_user[0]
+
+    if user_id_lookup:
+        u_obj = db.query(User).filter(User.id == user_id_lookup).first()
+        if u_obj:
+            received_by_name = (u_obj.full_name or "").strip() or u_obj.email
+
+    if not received_by_name:
+        audit_row = (
+            db.query(AuditLog)
+            .filter(
+                AuditLog.entity_name == "PurchaseOrder",
+                AuditLog.entity_id == order.id,
+                AuditLog.action.in_(["CONFIRM_RECEIPT", "DIRECT_RECEIPT_CREATED", "CREATE_DIRECT_RECEIPT"])
+            )
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        if audit_row:
+            received_by_name = (audit_row.user_name or "").strip() or audit_row.user_email
 
     variant_ids = list({l.variant_id for l in order.lines if l.variant_id})
     barcodes_map: dict[int, list[ProductBarcode]] = {}
@@ -932,6 +971,7 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         variant = db.query(ProductVariant).filter(ProductVariant.id == l.variant_id).first()
         product_name = variant.product.name if (variant and variant.product) else f"SKU: {l.variant_id}"
         sku = variant.sku if variant else "N/A"
+        uom_base = normalize_uom(variant.product.uom_base if (variant and variant.product) else "UND")
 
         var_bcs = barcodes_map.get(l.variant_id, [])
         standard_bcs = [
@@ -963,9 +1003,9 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         if not barcode:
             barcode = sku
 
-        exp_q = float(l.expected_base_qty or 0)
-        rec_q = float(l.received_base_qty or 0) if is_confirmed else 0.0
-        rej_q = max(0.0, exp_q - rec_q) if is_confirmed else 0.0
+        exp_q = round(float(l.expected_base_qty or 0), 3)
+        rec_q = round(float(l.received_base_qty or 0), 3) if is_confirmed else 0.0
+        rej_q = round(max(0.0, exp_q - rec_q), 3) if is_confirmed else 0.0
         if is_confirmed and rej_q > 0:
             has_discrepancies = True
             
@@ -976,6 +1016,7 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
             "barcode": barcode,
             "plu": plu,
             "product_name": product_name,
+            "uom_base": uom_base,
             "expected_qty": exp_q,
             "received_qty": rec_q,
             "rejected_qty": rej_q
@@ -986,6 +1027,7 @@ def get_receipt_ticket_80mm(order_id: int, db: Session = Depends(get_db)):
         "created_at": order.created_at.strftime("%d/%m/%Y %H:%M") if order.created_at else "",
         "supplier_name": supplier.name if supplier else "N/A",
         "facility_name": facility.name if facility else "N/A",
+        "received_by_name": received_by_name,
         "order_status": order.status,
         "is_confirmed": is_confirmed,
         "has_discrepancies": has_discrepancies,

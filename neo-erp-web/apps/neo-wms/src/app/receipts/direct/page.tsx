@@ -42,6 +42,13 @@ export default function DirectReceiptPage() {
   const [receiptVoucher, setReceiptVoucher] = useState<any | null>(null);
   const [ticketData, setTicketData] = useState<any | null>(null);
   const [ticketDialogVisible, setTicketDialogVisible] = useState<boolean>(false);
+  const [currentUser, setCurrentUser] = useState<any | null>(null);
+
+  const formatReceiptQty = (val: number | string | null | undefined, uom?: string | null): string => {
+    const num = Number(val || 0);
+    if (isNaN(num)) return isWeightUom(uom) ? '0.000' : '0';
+    return isWeightUom(uom) ? num.toFixed(3) : String(Math.round(num));
+  };
 
   // Modal: Agregar Producto
   const [addProductModalVisible, setAddProductModalVisible] = useState(false);
@@ -119,6 +126,14 @@ export default function DirectReceiptPage() {
   };
 
   const loadFormData = async () => {
+    // 0. Fetch Usuario Activo de Sesión
+    try {
+      const meRes = await api.get('/users/me');
+      setCurrentUser(meRes.data || null);
+    } catch (e) {
+      console.error("Error loading active user:", e);
+    }
+
     // 1. Fetch Currencies (Tasa BCV actual por defecto)
     try {
       const curRes = await api.get('/currencies/');
@@ -861,15 +876,18 @@ export default function DirectReceiptPage() {
 
           {/* ESTADO CONTEO */}
           <Column header="Estado Conteo" body={r => {
+              const isWeight = isWeightUom(r.uom_base);
               const exp = Number(r.expected_qty) || 0;
               const rec = Number(r.received_qty) || 0;
               const dam = Number(r.damaged_qty) || 0;
-              const diff = (rec + dam) - exp;
+              const diff = Number(((rec + dam) - exp).toFixed(isWeight ? 3 : 0));
+              const damFmt = formatReceiptQty(dam, r.uom_base);
+              const diffFmt = formatReceiptQty(diff, r.uom_base);
 
               if (diff === 0 && dam === 0) return <Tag value="COMPLETO (OK)" severity="success" className="font-extrabold text-[9px]" />;
-              if (dam > 0) return <Tag value={`CON DEVOLUCIÓN (${dam})`} severity="warning" className="font-extrabold text-[9px]" />;
-              if (diff > 0) return <Tag value={`SOBRANTE (+${diff})`} severity="info" className="font-extrabold text-[9px]" />;
-              return <Tag value={`FALTANTE (${diff})`} severity="danger" className="font-extrabold text-[9px]" />;
+              if (dam > 0) return <Tag value={`CON DEVOLUCIÓN (${damFmt})`} severity="warning" className="font-extrabold text-[9px]" />;
+              if (diff > 0) return <Tag value={`SOBRANTE (+${diffFmt})`} severity="info" className="font-extrabold text-[9px]" />;
+              return <Tag value={`FALTANTE (${diffFmt})`} severity="danger" className="font-extrabold text-[9px]" />;
           }} align="center" style={{ width: '9rem' }} />
 
           <Column header="Trazabilidad (Lote)" body={(r, options) => (
@@ -1510,6 +1528,7 @@ export default function DirectReceiptPage() {
                   <p><strong>FECHA:</strong> {ticketData.created_at}</p>
                   <p><strong>PROVEEDOR:</strong> {ticketData.supplier_name}</p>
                   <p><strong>SUCURSAL:</strong> {ticketData.facility_name}</p>
+                  <p><strong>REGISTRADO POR:</strong> {ticketData.received_by_name || currentUser?.full_name || currentUser?.email || 'Operador WMS'}</p>
 
                   {ticketData.is_confirmed ? (
                       <>
@@ -1529,17 +1548,22 @@ export default function DirectReceiptPage() {
                                   </tr>
                               </thead>
                               <tbody>
-                                  {ticketData.items.map((it: any, idx: number) => (
+                                  {ticketData.items.map((it: any, idx: number) => {
+                                      const rejNum = Number(it.rejected_qty || 0);
+                                      const pedFmt = formatReceiptQty(it.expected_qty, it.uom_base);
+                                      const recFmt = formatReceiptQty(it.received_qty, it.uom_base);
+                                      const rejFmt = rejNum > 0 ? `-${formatReceiptQty(rejNum, it.uom_base)}` : '0';
+                                      return (
                                       <tr key={idx} className="border-b border-slate-200">
                                           <td className="py-1 max-w-[150px]">
                                               <div className="font-bold text-[11px]">{it.sku}</div>
                                               <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
                                           </td>
-                                          <td className="py-1 text-center font-bold">{it.expected_qty}</td>
-                                          <td className="py-1 text-center font-bold text-emerald-700">{it.received_qty}</td>
-                                          <td className="py-1 text-right font-black text-red-600">{it.rejected_qty > 0 ? `-${it.rejected_qty}` : '0'}</td>
+                                          <td className="py-1 text-center font-bold">{pedFmt}</td>
+                                          <td className="py-1 text-center font-bold text-emerald-700">{recFmt}</td>
+                                          <td className="py-1 text-right font-black text-red-600">{rejFmt}</td>
                                       </tr>
-                                  ))}
+                                  );})}
                               </tbody>
                           </table>
                           <div className="my-4 border-b border-dashed border-slate-400"></div>
@@ -1553,6 +1577,9 @@ export default function DirectReceiptPage() {
                               <div>
                                   <p className="border-b border-slate-400 w-full mb-1"></p>
                                   <p className="font-bold text-center">Firma y Cédula Recibidor WMS / Muelle</p>
+                                  <p className="text-center text-[9px] text-slate-600 font-semibold mt-0.5">
+                                      ({ticketData.received_by_name || currentUser?.full_name || currentUser?.email || 'Operador WMS'})
+                                  </p>
                               </div>
                           </div>
                       </>
@@ -1577,7 +1604,7 @@ export default function DirectReceiptPage() {
                                               <div className="font-bold text-[11px]">{it.sku}</div>
                                               <div className="text-[9px] text-slate-600 truncate">{it.product_name}</div>
                                           </td>
-                                          <td className="py-1 text-center font-bold text-slate-800">{it.expected_qty}</td>
+                                          <td className="py-1 text-center font-bold text-slate-800">{formatReceiptQty(it.expected_qty, it.uom_base)}</td>
                                           <td className="py-1 text-right font-bold text-slate-400">[ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ]</td>
                                       </tr>
                                   ))}
@@ -1599,18 +1626,22 @@ export default function DirectReceiptPage() {
                           size="small" 
                           onClick={() => {
                               const isConfirmed = Boolean(ticketData.is_confirmed);
+                              const registeredByName = ticketData.received_by_name || currentUser?.full_name || currentUser?.email || 'Operador WMS';
                               const items = Array.isArray(ticketData.items) ? ticketData.items : [];
                               const rowsHtml = items.map((it: any) => {
                                   const rej = Number(it.rejected_qty || 0);
+                                  const pedFmt = formatReceiptQty(it.expected_qty, it.uom_base);
+                                  const recFmt = formatReceiptQty(it.received_qty, it.uom_base);
+                                  const rejFmt = rej > 0 ? `-${formatReceiptQty(rej, it.uom_base)}` : '0';
                                   return `
                                       <tr>
                                           <td style="padding: 3px 0; border-bottom: 1px dotted #000; max-width: 42mm; word-wrap: break-word;">
                                               <div style="font-weight: 800; font-size: 11px;">${it.sku || ''}</div>
                                               <div style="font-size: 10px;">${it.product_name || ''}</div>
                                           </td>
-                                          <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 700;">${it.expected_qty ?? 0}</td>
-                                          <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 800;">${it.received_qty ?? 0}</td>
-                                          <td style="padding: 3px 0; border-bottom: 1px dotted #000; text-align: right; font-weight: 800;">${rej > 0 ? `-${rej}` : '0'}</td>
+                                          <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 700;">${pedFmt}</td>
+                                          <td style="padding: 3px 2px; border-bottom: 1px dotted #000; text-align: center; font-weight: 800;">${recFmt}</td>
+                                          <td style="padding: 3px 0; border-bottom: 1px dotted #000; text-align: right; font-weight: 800;">${rejFmt}</td>
                                       </tr>
                                   `;
                               }).join('');
@@ -1689,6 +1720,7 @@ export default function DirectReceiptPage() {
     <div class="meta-row"><strong>FECHA:</strong> ${ticketData.created_at || ''}</div>
     <div class="meta-row"><strong>PROVEEDOR:</strong> ${ticketData.supplier_name || ''}</div>
     <div class="meta-row"><strong>SUCURSAL:</strong> ${ticketData.facility_name || ''}</div>
+    <div class="meta-row"><strong>REGISTRADO POR:</strong> ${registeredByName}</div>
     ${isConfirmed && ticketData.has_discrepancies ? '<div class="alert-box">CONTIENE DISCREPANCIAS / RECHAZOS EN MUELLE</div>' : ''}
     <div class="divider"></div>
     <table>
@@ -1704,7 +1736,7 @@ export default function DirectReceiptPage() {
     </table>
     <div class="divider"></div>
     <div class="sig-block"><div class="sig-line"></div><div>Firma y Cédula Chofer / Transportista</div></div>
-    <div class="sig-block"><div class="sig-line"></div><div>Firma y Cédula Recibidor WMS / Muelle</div></div>
+    <div class="sig-block"><div class="sig-line"></div><div>Firma y Cédula Recibidor WMS / Muelle</div><div style="font-size: 9px; font-weight: 700; margin-top: 2px;">(${registeredByName})</div></div>
     <div class="footer-note">Impreso por Neo ERP — ${new Date().toLocaleString('es-VE')}</div>
   </div>
   <script>
