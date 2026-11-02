@@ -52,20 +52,46 @@ def run_arturo_proactive_wms_scan(
     if not worker:
         worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == "ARTURO_WMS").first()
 
+    # Si no es una consulta interactiva directa por chat (specific_chat_id), exigir que el trabajador y la habilidad estén activos
+    if not specific_chat_id:
+        from app.services.digital_worker_service import is_worker_skill_enabled
+        if not is_worker_skill_enabled(db, "ARTURO_WMS", [
+            "arturo_proactive_wms_dispatch",
+            "arturo_morning_wms_scan",
+            "negative_stock_watchdog",
+            "negative_stock_auditor",
+            "dock_returns_and_scrap_guard",
+            "dock_returns_and_scrap_monitor",
+            "3way_unreconciled_watchdog",
+            "3way_unreconciled_auditor"
+        ]):
+            logger.info("[ARTURO PROACTIVO] Escaneo omitido: Arturo WMS o sus habilidades se encuentran deshabilitadas.")
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "Arturo WMS o sus habilidades se encuentran deshabilitadas.",
+                "negative_stock_count": 0,
+                "dock_returns_count": 0,
+                "unreconciled_orders_count": 0,
+                "notifications_sent": 0
+            }
+
     now_caracas = datetime.now(CARACAS_TZ)
     date_str = now_caracas.strftime("%d/%m/%Y %I:%M %p")
     weekday_idx = now_caracas.weekday()
     weekday_name = WEEKDAYS_ES[weekday_idx]
 
-    # 1. Ejecutar auditorías nativas
-    if worker:
+    # 1. Ejecutar auditorías nativas (solo si es consulta interactiva o si la habilidad está habilitada)
+    if specific_chat_id:
+        neg_items = execute_negative_stock_lookup(db)
+        dock_items = execute_returns_lookup(db)
+        unrec_items = execute_unreconciled_orders_lookup(db)
+    elif worker:
         neg_items = audit_negative_stock(db, worker)
         dock_items = audit_dock_returns_and_scrap(db, worker)
         unrec_items = audit_unreconciled_orders(db, worker)
     else:
-        neg_items = execute_negative_stock_lookup(db)
-        dock_items = execute_returns_lookup(db)
-        unrec_items = execute_unreconciled_orders_lookup(db)
+        neg_items, dock_items, unrec_items = [], [], []
 
     has_anomalies = bool(neg_items or dock_items or unrec_items)
 

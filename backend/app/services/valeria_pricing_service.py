@@ -292,6 +292,29 @@ def run_valeria_proactive_pricing_scan(
     if not worker:
         worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == "VALERIA_PRICING").first()
 
+    if not specific_chat_id:
+        from app.services.digital_worker_service import is_worker_skill_enabled
+        if not is_worker_skill_enabled(db, "VALERIA_PRICING", [
+            "valeria_proactive_pricing_dispatch",
+            "valeria_morning_pricing_scan",
+            "pricing_margin_shield",
+            "pricing_cost_spike_watchdog",
+            "pricing_cost_spike_monitor",
+            "pricing_pending_sessions_guard",
+            "pricing_cross_store_consistency"
+        ]):
+            logger.info("[VALERIA PROACTIVO] Escaneo omitido: Valeria Pricing o sus habilidades se encuentran deshabilitadas.")
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "Valeria Pricing o sus habilidades se encuentran deshabilitadas.",
+                "critical_margins_count": 0,
+                "cost_spikes_count": 0,
+                "pending_sessions_count": 0,
+                "discrepancies_count": 0,
+                "notifications_sent": 0
+            }
+
     now_caracas = datetime.now(CARACAS_TZ)
     date_str = now_caracas.strftime("%d/%m/%Y %I:%M %p")
     weekday_idx = now_caracas.weekday()

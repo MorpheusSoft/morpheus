@@ -135,6 +135,12 @@ def trigger_worker_run(
     if not worker:
         raise HTTPException(status_code=404, detail="Usuario Digital no encontrado")
 
+    if not worker.is_autonomous_active or (worker.user and not worker.user.is_active):
+        raise HTTPException(
+            status_code=400,
+            detail=f"El Usuario Digital '{worker.display_title}' se encuentra pausado/deshabilitado. Debe activarlo primero y habilitar al menos una habilidad para ejecutarlo."
+        )
+
     try:
         summary = run_worker_cycle(worker.agent_code, db)
         return WorkerRunResponse(

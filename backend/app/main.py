@@ -35,13 +35,15 @@ async def run_mrp_bot_scheduler():
             if now.hour == 3:
                 db = SessionLocal()
                 try:
-                    today_start = datetime.datetime.combine(now.date(), datetime.time.min).replace(tzinfo=tz)
-                    already_run = db.query(MRPBotLog).filter(
-                        MRPBotLog.executed_at >= today_start
-                    ).first()
-                    if not already_run:
-                        print(f"[MRP BOT SCHEDULER] Ejecutando diagnóstico predictivo de quiebres diario a las {now}...")
-                        await run_mrp_bot(db)
+                    from app.services.digital_worker_service import is_worker_skill_enabled
+                    if is_worker_skill_enabled(db, "CLARA_COMPRAS", ["mrp_purchase_suggester"]):
+                        today_start = datetime.datetime.combine(now.date(), datetime.time.min).replace(tzinfo=tz)
+                        already_run = db.query(MRPBotLog).filter(
+                            MRPBotLog.executed_at >= today_start
+                        ).first()
+                        if not already_run:
+                            print(f"[MRP BOT SCHEDULER] Ejecutando diagnóstico predictivo de quiebres diario a las {now}...")
+                            await run_mrp_bot(db)
                 except Exception as ex:
                     print(f"[MRP BOT SCHEDULER ERROR] Fallo durante ejecución: {ex}")
                 finally:

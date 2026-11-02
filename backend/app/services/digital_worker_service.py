@@ -87,6 +87,44 @@ SKILL_DISPATCHER = {
     'it_invoice_sync_history_audit': audit_store_invoice_history,
 }
 
+def is_worker_active(db: Session, agent_code: str) -> bool:
+    """
+    Valida que el Usuario Digital exista, esté activo (is_autonomous_active=True)
+    y su cuenta de usuario vinculada esté habilitada (user.is_active=True).
+    """
+    worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == agent_code).first()
+    if not worker or not worker.is_autonomous_active:
+        return False
+    if worker.user and not worker.user.is_active:
+        return False
+    return True
+
+
+def is_worker_skill_enabled(db: Session, agent_code: str, skill_codes: List[str]) -> bool:
+    """
+    Valida que el Usuario Digital esté activo y que además tenga al menos una de las
+    habilidades indicadas expresamente habilitada (DigitalWorkerSkill.is_enabled=True).
+    """
+    worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == agent_code).first()
+    if not worker or not worker.is_autonomous_active:
+        return False
+    if worker.user and not worker.user.is_active:
+        return False
+    if not skill_codes:
+        return True
+    active_skill = (
+        db.query(DigitalWorkerSkill)
+        .join(DigitalSkill, DigitalSkill.id == DigitalWorkerSkill.skill_id)
+        .filter(
+            DigitalWorkerSkill.worker_id == worker.id,
+            DigitalWorkerSkill.is_enabled == True,
+            DigitalSkill.skill_code.in_(skill_codes),
+        )
+        .first()
+    )
+    return active_skill is not None
+
+
 def run_worker_cycle(agent_code: str, db: Session) -> Dict[str, Any]:
     """
     Ejecuta el ciclo de auditoría y operaciones autónomas de un Usuario Digital.
@@ -95,6 +133,17 @@ def run_worker_cycle(agent_code: str, db: Session) -> Dict[str, Any]:
     worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == agent_code).first()
     if not worker:
         raise ValueError(f"Trabajador digital no encontrado: {agent_code}")
+
+    if not worker.is_autonomous_active or (worker.user and not worker.user.is_active):
+        logger.info(f"[DIGITAL WORKER DAEMON] Ciclo omitido: {worker.display_title} ({agent_code}) se encuentra pausado o inactivo.")
+        return {
+            "agent_code": worker.agent_code,
+            "display_title": worker.display_title,
+            "skipped": True,
+            "reason": "Usuario Digital pausado o inactivo.",
+            "executed_skills": [],
+            "errors": []
+        }
 
     w_id = worker.id
     w_agent_code = worker.agent_code

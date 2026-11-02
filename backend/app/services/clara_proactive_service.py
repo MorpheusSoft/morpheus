@@ -111,6 +111,23 @@ def run_clara_proactive_purchasing_scan(
     if not worker:
         worker = db.query(DigitalWorker).filter(DigitalWorker.agent_code == "CLARA_COMPRAS").first()
 
+    if not specific_chat_id:
+        from app.services.digital_worker_service import is_worker_skill_enabled
+        if not is_worker_skill_enabled(db, "CLARA_COMPRAS", [
+            "clara_proactive_purchases_dispatch",
+            "clara_morning_purchasing_scan",
+            "mrp_purchase_suggester"
+        ]):
+            logger.info("[CLARA PROACTIVO] Escaneo omitido: Clara Compras o sus habilidades se encuentran deshabilitadas.")
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "Clara Compras o sus habilidades se encuentran deshabilitadas.",
+                "urgent_suppliers_count": 0,
+                "total_capital_required": 0.0,
+                "notifications_sent": 0
+            }
+
     now_caracas = datetime.now(CARACAS_TZ)
     date_str = now_caracas.strftime("%d/%m/%Y %I:%M %p")
     weekday_idx = now_caracas.weekday()
