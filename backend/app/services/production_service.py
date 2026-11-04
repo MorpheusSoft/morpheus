@@ -1,12 +1,12 @@
 from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import and_, or_, text
 
-from app.core.uom import is_weight_uom
+from app.core.uom import is_weight_uom, resolve_mfg_uom_base, resolve_recipe_conversion_factor
 from app.models.core import Facility
 from app.models.inventory import (
     Warehouse,
@@ -25,6 +25,8 @@ from app.models.manufacturing import (
     BOMHeader,
     BOMInput,
     BOMOutput,
+    ProductionPlan,
+    ProductionPlanLine,
     ProductionOrder,
     ProductionOrderInput,
     ProductionOrderOutput,
@@ -32,6 +34,7 @@ from app.models.manufacturing import (
 from app.schemas.manufacturing import (
     AdHocOrderInputCreate,
     AdHocOrderOutputCreate,
+    UpdateOrderInputsRequest,
     SaveOrderAsBOMRequest,
     ExplodePreviewRequest,
     ProductionOrderCreate,
@@ -39,6 +42,10 @@ from app.schemas.manufacturing import (
     CompleteOrderOutputLine,
     ButcherySimulateSettlementRequest,
     ButcherySimulateOutputItem,
+    BatchRunLinePreviewRequest,
+    BatchRunExplodePreviewRequest,
+    BatchRunLineExecuteRequest,
+    BatchRunExecuteRequest,
 )
 from app.api.v1.endpoints.manufacturing import (
     get_active_bcv_rate,
@@ -57,6 +64,7 @@ class ProductionService:
     """
 
     _INFRA_SEEDED: bool = False
+    _SAMPLE_ORDERS_SEEDED: bool = False
 
     @staticmethod
     def ensure_mfg_wms_infrastructure(db: Session, commit: bool = False) -> Dict[str, Any]:
@@ -87,6 +95,8 @@ class ProductionService:
                 "mfg.bom_headers",
                 "mfg.bom_inputs",
                 "mfg.bom_outputs",
+                "mfg.production_plans",
+                "mfg.production_plan_lines",
                 "mfg.production_orders",
                 "mfg.production_order_inputs",
                 "mfg.production_order_outputs",
@@ -422,7 +432,12 @@ class ProductionService:
                 for st_def in extra_stations:
                     exists_wc = (
                         db.query(WorkCenter)
-                        .filter(WorkCenter.code == st_def["code"])
+                        .filter(
+                            or_(
+                                WorkCenter.code == st_def["code"],
+                                WorkCenter.code.like(f"{st_def['code'][:18]}__DEL_%"),
+                            )
+                        )
                         .first()
                     )
                     if not exists_wc:
@@ -564,7 +579,11 @@ class ProductionService:
         return loc
 
     @staticmethod
-    def explode_bom_preview(db: Session, req: ExplodePreviewRequest) -> Dict[str, Any]:
+    def explode_bom_preview(
+        db: Session,
+        req: ExplodePreviewRequest,
+        commit_infra: bool = True,
+    ) -> Dict[str, Any]:
         """
         Motor de Explosión de Materiales y Sugerencia FEFO en Vivo (con o sin BOM):
         - Soporta órdenes basadas en Fórmula (req.bom_id != None) y Transformaciones Libres Ad-Hoc (req.bom_id == None)
@@ -574,7 +593,7 @@ class ProductionService:
         - Calcula semáforo de disponibilidad (AVAILABLE, PARTIAL, SHORTAGE)
         - Proyecta costos NIC 2 (Materiales, Empaque, MOD, CIF, Merma Natural y Nuevo Costo Promedio Ponderado WAVG)
         """
-        ProductionService.ensure_mfg_wms_infrastructure(db, commit=True)
+        ProductionService.ensure_mfg_wms_infrastructure(db, commit=commit_infra)
 
         bom: Optional[BOMHeader] = None
         if req.bom_id is not None:
@@ -709,18 +728,45 @@ class ProductionService:
 
         if bom is not None:
             base_qty = max(0.0001, float(bom.base_qty or 1.0))
-            planned_base_qty = max(0.0001, float(req.planned_base_qty or base_qty))
-            scale_factor = planned_base_qty / base_qty
+            if req.scale_factor is not None and float(req.scale_factor) > 0:
+                if req.planned_base_qty is None or (
+                    abs(float(req.planned_base_qty) - base_qty) < 1e-4
+                    and abs(float(req.scale_factor) - 1.0) > 1e-4
+                ):
+                    scale_factor = float(req.scale_factor)
+                    planned_base_qty = round(max(0.0001, base_qty * scale_factor), 4)
+                else:
+                    planned_base_qty = max(0.0001, float(req.planned_base_qty))
+                    scale_factor = planned_base_qty / base_qty
+            else:
+                planned_base_qty = max(0.0001, float(req.planned_base_qty or base_qty))
+                scale_factor = planned_base_qty / base_qty
             bom_type = bom.bom_type
             sector = bom.sector
 
+            raw_overrides = list(req.input_overrides or []) + list(req.inputs or [])
+            overrides_by_bom_input_id: Dict[int, AdHocOrderInputCreate] = {}
+            overrides_by_variant_id: Dict[int, AdHocOrderInputCreate] = {}
+            for ov in raw_overrides:
+                if ov.bom_input_id is not None:
+                    overrides_by_bom_input_id[int(ov.bom_input_id)] = ov
+                if ov.component_variant_id is not None:
+                    overrides_by_variant_id[int(ov.component_variant_id)] = ov
+
+            bom_variant_ids = set()
+
             for inp in bom.inputs:
+                bom_variant_ids.add(inp.component_variant_id)
                 comp_var = inp.component_variant
                 prod = comp_var.product if comp_var else None
-                uom_base = (prod.uom_base if prod and prod.uom_base else inp.recipe_uom or "UND").strip().upper()
+                uom_base = resolve_mfg_uom_base(
+                    prod.uom_base if prod else None,
+                    inp.recipe_uom,
+                    prod.name if prod else None,
+                )
 
                 scaled_recipe_qty = float(inp.quantity) if inp.is_fixed_qty else float(inp.quantity) * scale_factor
-                conv = float(inp.conversion_factor_to_base or 1.0)
+                conv = resolve_recipe_conversion_factor(inp.recipe_uom, uom_base, inp.conversion_factor_to_base)
                 net_qty_base = scaled_recipe_qty * conv
 
                 scrap_pct = max(0.0, min(95.0, float(inp.scrap_tolerance_pct or 0.0)))
@@ -729,9 +775,32 @@ class ProductionService:
 
                 is_discrete = not is_weight_uom(uom_base)
                 if is_discrete:
-                    gross_qty_base = float(math.ceil(round(raw_gross_qty_base, 2) - 1e-6))
+                    standard_scaled_qty_base = float(math.ceil(round(raw_gross_qty_base, 2) - 1e-6))
                 else:
-                    gross_qty_base = round(raw_gross_qty_base, 4)
+                    standard_scaled_qty_base = round(raw_gross_qty_base, 4)
+
+                ov = overrides_by_bom_input_id.get(inp.id) or overrides_by_variant_id.get(inp.component_variant_id)
+                ov_qty_raw = None
+                if ov is not None:
+                    if ov.consumed_base_qty is not None:
+                        ov_qty_raw = ov.consumed_base_qty
+                    elif ov.planned_base_qty is not None:
+                        ov_qty_raw = ov.planned_base_qty
+                    elif ov.planned_qty is not None:
+                        ov_qty_raw = ov.planned_qty
+                    elif ov.quantity is not None:
+                        ov_qty_raw = ov.quantity
+
+                if ov_qty_raw is not None:
+                    ov_val = max(0.0, float(ov_qty_raw))
+                    if is_discrete and ov_val > 0:
+                        gross_qty_base = float(math.ceil(round(ov_val, 2) - 1e-6))
+                    else:
+                        gross_qty_base = round(ov_val, 4)
+                    is_overridden = abs(gross_qty_base - standard_scaled_qty_base) > 1e-4
+                else:
+                    gross_qty_base = standard_scaled_qty_base
+                    is_overridden = False
 
                 snap = (
                     db.query(InventorySnapshot)
@@ -766,7 +835,13 @@ class ProductionService:
                     .all()
                 )
                 valid_batches = [b for b in batches if not b.expiry_date or b.expiry_date >= today]
-                chosen_batch = valid_batches[0] if valid_batches else (batches[0] if batches else None)
+                chosen_batch = None
+                if ov is not None and ov.batch_id:
+                    chosen_batch = next((b for b in batches if b.id == ov.batch_id), None)
+                    if not chosen_batch:
+                        chosen_batch = db.query(Batch).filter(Batch.id == ov.batch_id).first()
+                if not chosen_batch:
+                    chosen_batch = valid_batches[0] if valid_batches else (batches[0] if batches else None)
 
                 days_to_expiry = (
                     (chosen_batch.expiry_date - today).days
@@ -774,9 +849,24 @@ class ProductionService:
                     else None
                 )
 
-                unit_cost_usd = get_variant_unit_cost_usd(db, comp_var, facility_id)
+                unit_cost_usd = (
+                    float(ov.unit_cost_override_usd)
+                    if (ov is not None and ov.unit_cost_override_usd is not None and ov.unit_cost_override_usd >= 0)
+                    else get_variant_unit_cost_usd(db, comp_var, facility_id)
+                )
                 line_cost_usd = gross_qty_base * unit_cost_usd
-                role = (inp.input_role or "INGREDIENT").upper()
+                standard_cost_usd = standard_scaled_qty_base * unit_cost_usd
+                delta_qty_base = round(gross_qty_base - standard_scaled_qty_base, 4)
+                delta_pct = (
+                    round(((gross_qty_base - standard_scaled_qty_base) / standard_scaled_qty_base) * 100.0, 2)
+                    if standard_scaled_qty_base > 0
+                    else 0.0
+                )
+                delta_cost_usd = round(line_cost_usd - standard_cost_usd, 4)
+
+                role = (
+                    (ov.input_role if (ov is not None and ov.input_role) else inp.input_role) or "INGREDIENT"
+                ).upper()
                 if role == "PACKAGING":
                     packaging_cost_usd += line_cost_usd
                 else:
@@ -797,7 +887,167 @@ class ProductionService:
                     "is_discrete_uom": is_discrete,
                     "net_qty_base": round(net_qty_base, 4),
                     "raw_gross_qty_base": round(raw_gross_qty_base, 4),
+                    "standard_scaled_qty_base": standard_scaled_qty_base,
                     "planned_base_qty": gross_qty_base,
+                    "consumed_base_qty": gross_qty_base,
+                    "delta_qty_base": delta_qty_base,
+                    "delta_pct": delta_pct,
+                    "standard_cost_usd": round(standard_cost_usd, 4),
+                    "delta_cost_usd": delta_cost_usd,
+                    "delta_cost_ves": round(delta_cost_usd * rate, 2),
+                    "is_overridden": is_overridden,
+                    "is_extra_input": False,
+                    "available_stock_qty": round(available_stock_qty, 4),
+                    "shortage_qty": shortage_qty,
+                    "availability_status": availability_status,
+                    "suggested_batch_id": chosen_batch.id if chosen_batch else None,
+                    "suggested_batch_number": chosen_batch.batch_number if chosen_batch else None,
+                    "suggested_batch_expiry_date": chosen_batch.expiry_date.isoformat() if (chosen_batch and chosen_batch.expiry_date) else None,
+                    "days_to_expiry": days_to_expiry,
+                    "available_batches": [
+                        {
+                            "id": b.id,
+                            "batch_number": b.batch_number,
+                            "expiry_date": b.expiry_date.isoformat() if b.expiry_date else None,
+                            "manufacturing_date": b.manufacturing_date.isoformat() if b.manufacturing_date else None,
+                            "days_to_expiry": (b.expiry_date - today).days if b.expiry_date else None,
+                        }
+                        for b in batches
+                    ],
+                    "unit_cost_usd": round(unit_cost_usd, 4),
+                    "unit_cost_ves": round(unit_cost_usd * rate, 2),
+                    "total_cost_usd": round(line_cost_usd, 4),
+                    "total_cost_ves": round(line_cost_usd * rate, 2),
+                })
+
+            # Insumos adicionales fuera de la receta estándar (Extra Ingredients para esta orden puntual)
+            added_extra_variants = set()
+            for extra_inp in raw_overrides:
+                if extra_inp.bom_input_id is not None and extra_inp.bom_input_id in overrides_by_bom_input_id:
+                    if any(bi.id == extra_inp.bom_input_id for bi in bom.inputs):
+                        continue
+                if extra_inp.component_variant_id in bom_variant_ids or extra_inp.component_variant_id in added_extra_variants:
+                    continue
+
+                comp_var = (
+                    db.query(ProductVariant)
+                    .options(selectinload(ProductVariant.product))
+                    .filter(ProductVariant.id == extra_inp.component_variant_id)
+                    .first()
+                )
+                if not comp_var:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Insumo extra (variant_id={extra_inp.component_variant_id}) no encontrado en el catálogo",
+                    )
+                added_extra_variants.add(extra_inp.component_variant_id)
+                prod = comp_var.product
+                uom_base = resolve_mfg_uom_base(
+                    extra_inp.uom_base or (prod.uom_base if prod else None),
+                    None,
+                    prod.name if prod else None,
+                )
+
+                raw_q = (
+                    extra_inp.consumed_base_qty
+                    if extra_inp.consumed_base_qty is not None
+                    else (
+                        extra_inp.planned_base_qty
+                        if extra_inp.planned_base_qty is not None
+                        else (extra_inp.planned_qty if extra_inp.planned_qty is not None else (extra_inp.quantity or 0.0))
+                    )
+                )
+                raw_gross_qty_base = max(0.0001, float(raw_q))
+                is_discrete = not is_weight_uom(uom_base)
+                if is_discrete:
+                    gross_qty_base = float(math.ceil(round(raw_gross_qty_base, 2) - 1e-6))
+                else:
+                    gross_qty_base = round(raw_gross_qty_base, 4)
+
+                snap = (
+                    db.query(InventorySnapshot)
+                    .filter(
+                        InventorySnapshot.variant_id == extra_inp.component_variant_id,
+                        InventorySnapshot.facility_id == src_facility_id,
+                    )
+                    .first()
+                )
+                available_stock_qty = float(snap.stock_qty or 0.0) if snap else 0.0
+
+                if available_stock_qty >= gross_qty_base:
+                    availability_status = "AVAILABLE"
+                    shortage_qty = 0.0
+                elif available_stock_qty > 0:
+                    availability_status = "PARTIAL"
+                    shortage_qty = round(gross_qty_base - available_stock_qty, 4)
+                    has_partial = True
+                else:
+                    availability_status = "SHORTAGE"
+                    shortage_qty = round(gross_qty_base, 4)
+                    has_shortage = True
+
+                batches = (
+                    db.query(Batch)
+                    .filter(
+                        Batch.product_variant_id == extra_inp.component_variant_id,
+                        Batch.is_quarantined == False,
+                    )
+                    .order_by(Batch.expiry_date.asc().nullslast(), Batch.id.asc())
+                    .all()
+                )
+                valid_batches = [b for b in batches if not b.expiry_date or b.expiry_date >= today]
+                chosen_batch = None
+                if extra_inp.batch_id:
+                    chosen_batch = next((b for b in batches if b.id == extra_inp.batch_id), None)
+                    if not chosen_batch:
+                        chosen_batch = db.query(Batch).filter(Batch.id == extra_inp.batch_id).first()
+                if not chosen_batch:
+                    chosen_batch = valid_batches[0] if valid_batches else (batches[0] if batches else None)
+
+                days_to_expiry = (
+                    (chosen_batch.expiry_date - today).days
+                    if (chosen_batch and chosen_batch.expiry_date)
+                    else None
+                )
+
+                unit_cost_usd = (
+                    float(extra_inp.unit_cost_override_usd)
+                    if (extra_inp.unit_cost_override_usd is not None and extra_inp.unit_cost_override_usd >= 0)
+                    else get_variant_unit_cost_usd(db, comp_var, facility_id)
+                )
+                line_cost_usd = gross_qty_base * unit_cost_usd
+                raw_role = (extra_inp.input_role or "INGREDIENT").upper()
+                role = "PRIMARY_RAW_MATERIAL" if raw_role in ("PRIMARY_MATRIX", "PRIMARY_RAW_MATERIAL") else raw_role
+                if role == "PACKAGING":
+                    packaging_cost_usd += line_cost_usd
+                else:
+                    direct_materials_cost_usd += line_cost_usd
+                    total_input_mass_kg += gross_qty_base
+
+                exploded_inputs.append({
+                    "bom_input_id": None,
+                    "component_variant_id": extra_inp.component_variant_id,
+                    "component_sku": comp_var.sku if comp_var else f"VAR-{extra_inp.component_variant_id}",
+                    "component_name": prod.name if prod else "Insumo Extra",
+                    "input_role": role,
+                    "recipe_qty": gross_qty_base,
+                    "recipe_uom": uom_base,
+                    "conversion_factor_to_base": 1.0,
+                    "scrap_tolerance_pct": 0.0,
+                    "uom_base": uom_base,
+                    "is_discrete_uom": is_discrete,
+                    "net_qty_base": gross_qty_base,
+                    "raw_gross_qty_base": gross_qty_base,
+                    "standard_scaled_qty_base": 0.0,
+                    "planned_base_qty": gross_qty_base,
+                    "consumed_base_qty": gross_qty_base,
+                    "delta_qty_base": gross_qty_base,
+                    "delta_pct": 100.0,
+                    "standard_cost_usd": 0.0,
+                    "delta_cost_usd": round(line_cost_usd, 4),
+                    "delta_cost_ves": round(line_cost_usd * rate, 2),
+                    "is_overridden": True,
+                    "is_extra_input": True,
                     "available_stock_qty": round(available_stock_qty, 4),
                     "shortage_qty": shortage_qty,
                     "availability_status": availability_status,
@@ -931,7 +1181,16 @@ class ProductionService:
                     "is_discrete_uom": is_discrete,
                     "net_qty_base": gross_qty_base,
                     "raw_gross_qty_base": gross_qty_base,
+                    "standard_scaled_qty_base": gross_qty_base,
                     "planned_base_qty": gross_qty_base,
+                    "consumed_base_qty": gross_qty_base,
+                    "delta_qty_base": 0.0,
+                    "delta_pct": 0.0,
+                    "standard_cost_usd": round(line_cost_usd, 4),
+                    "delta_cost_usd": 0.0,
+                    "delta_cost_ves": 0.0,
+                    "is_overridden": False,
+                    "is_extra_input": False,
                     "available_stock_qty": round(available_stock_qty, 4),
                     "shortage_qty": shortage_qty,
                     "availability_status": availability_status,
@@ -1437,6 +1696,19 @@ class ProductionService:
             "work_center_id": wc.id if wc else (bom.work_center_id if bom else None),
             "work_center_code": wc.code if wc else None,
             "work_center_name": wc.name if wc else None,
+            "work_center_capacity_per_batch": round(float(wc.capacity_per_batch or 0.0), 4) if wc else 0.0,
+            "work_center_capacity_uom": wc.capacity_uom if wc else None,
+            "estimated_machine_batches": (
+                int(math.ceil(planned_base_qty / float(wc.capacity_per_batch)))
+                if (wc and wc.capacity_per_batch and float(wc.capacity_per_batch) > 0)
+                else 1
+            ),
+            "exceeds_work_center_capacity": bool(
+                wc
+                and wc.capacity_per_batch
+                and float(wc.capacity_per_batch) > 0
+                and planned_base_qty > float(wc.capacity_per_batch)
+            ),
             "hourly_labor_rate": round(float(wc.hourly_labor_rate or 0.0), 4) if wc else 0.0,
             "hourly_overhead_rate": round(float(wc.hourly_overhead_rate or 0.0), 4) if wc else 0.0,
             "overhead_per_kg": round(float(wc.overhead_per_kg or 0.0), 4) if wc else 0.0,
@@ -1515,10 +1787,31 @@ class ProductionService:
         return f"{prefix}{next_seq:04d}"
 
     @staticmethod
+    def _generate_plan_number(db: Session) -> str:
+        year = datetime.now().year
+        prefix = f"PLAN-{year}-"
+        last_plan = (
+            db.query(ProductionPlan)
+            .filter(ProductionPlan.plan_number.like(f"{prefix}%"))
+            .order_by(ProductionPlan.id.desc())
+            .first()
+        )
+        next_seq = 1
+        if last_plan and last_plan.plan_number:
+            tail = last_plan.plan_number.replace(prefix, "")
+            if tail.isdigit():
+                next_seq = int(tail) + 1
+            else:
+                next_seq = db.query(ProductionPlan).count() + 1
+        return f"{prefix}{next_seq:04d}"
+
+    @staticmethod
     def create_order(
         db: Session,
         req: ProductionOrderCreate,
         user_id: Optional[int] = None,
+        plan_line_id: Optional[int] = None,
+        commit: bool = True,
     ) -> Dict[str, Any]:
         """
         Crea una Orden de Producción (con BOM o Transformación Libre Ad-Hoc con bom_id=NULL)
@@ -1529,6 +1822,7 @@ class ProductionService:
             ExplodePreviewRequest(
                 bom_id=req.bom_id,
                 planned_base_qty=req.planned_base_qty,
+                scale_factor=req.scale_factor,
                 facility_id=req.facility_id,
                 work_center_id=req.work_center_id,
                 source_warehouse_id=req.source_warehouse_id,
@@ -1539,8 +1833,10 @@ class ProductionService:
                 standard_labor_hours=req.standard_labor_hours,
                 expected_shrinkage_pct=req.expected_shrinkage_pct,
                 inputs=req.inputs,
+                input_overrides=req.input_overrides,
                 outputs=req.outputs,
             ),
+            commit_infra=commit,
         )
 
         bom = db.query(BOMHeader).filter(BOMHeader.id == req.bom_id).first() if req.bom_id else None
@@ -1559,13 +1855,14 @@ class ProductionService:
         cp = preview["cost_projection"]
         order = ProductionOrder(
             order_number=ProductionService._generate_order_number(db),
+            plan_line_id=plan_line_id,
             facility_id=preview["facility_id"],
             work_center_id=preview["work_center_id"],
             bom_id=req.bom_id,
             order_type=order_type,
             state=initial_state,
             planned_base_qty=Decimal(str(preview["planned_base_qty"])),
-            actual_input_weight_kg=Decimal(str(sum(i["planned_base_qty"] for i in preview["inputs"] if i["input_role"] != "PACKAGING"))),
+            actual_input_weight_kg=Decimal(str(sum(i.get("consumed_base_qty", i["planned_base_qty"]) for i in preview["inputs"] if i["input_role"] != "PACKAGING"))),
             actual_good_output_weight_kg=Decimal(str(preview["expected_good_qty"])),
             actual_byproduct_weight_kg=Decimal(str(preview.get("expected_byproduct_qty", 0.0))),
             natural_shrinkage_qty=Decimal(str(preview["expected_natural_shrinkage_qty"])),
@@ -1588,14 +1885,16 @@ class ProductionService:
         db.flush()
 
         for inp in preview["inputs"]:
+            std_qty = inp.get("standard_scaled_qty_base", inp["planned_base_qty"]) if req.bom_id is not None else inp["planned_base_qty"]
+            cons_qty = inp.get("consumed_base_qty", inp["planned_base_qty"])
             db.add(
                 ProductionOrderInput(
                     production_order_id=order.id,
                     component_variant_id=inp["component_variant_id"],
                     batch_id=inp["suggested_batch_id"],
                     input_role=inp["input_role"],
-                    planned_base_qty=Decimal(str(inp["planned_base_qty"])),
-                    consumed_base_qty=Decimal(str(inp["planned_base_qty"])),
+                    planned_base_qty=Decimal(str(std_qty)),
+                    consumed_base_qty=Decimal(str(cons_qty)),
                     uom_base=inp["uom_base"],
                     unit_cost=Decimal(str(inp["unit_cost_usd"])),
                     total_cost=Decimal(str(inp["total_cost_usd"])),
@@ -1621,7 +1920,10 @@ class ProductionService:
                 )
             )
 
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return ProductionService.get_order_detail(db, order.id)
 
     @staticmethod
@@ -1669,6 +1971,32 @@ class ProductionService:
         db.add(order)
         db.commit()
         return ProductionService.get_order_detail(db, order.id)
+
+    @staticmethod
+    def delete_order(db: Session, order_id: int) -> Dict[str, Any]:
+        order = (
+            db.query(ProductionOrder)
+            .filter(ProductionOrder.id == order_id)
+            .with_for_update()
+            .first()
+        )
+        if not order:
+            raise HTTPException(status_code=404, detail="Orden de Producción no encontrada")
+        if order.state == "COMPLETED":
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede eliminar una orden ya liquidada en Kardex (COMPLETED) porque ya generó lotes y movimientos contables de inventario.",
+            )
+
+        order_num = order.order_number
+        db.delete(order)
+        db.commit()
+        return {
+            "id": order_id,
+            "order_number": order_num,
+            "deleted": True,
+            "message": f"Orden de Producción {order_num} eliminada exitosamente.",
+        }
 
     @staticmethod
     def simulate_butchery_settlement(
@@ -1856,7 +2184,11 @@ class ProductionService:
                 u_cost = float(inp.unit_cost or 0.0)
                 if u_cost <= 0:
                     u_cost = get_variant_unit_cost_usd(db, inp.component_variant, facility_id)
-                base_q = float(inp.consumed_base_qty or inp.planned_base_qty or 0.0)
+                base_q = float(
+                    inp.consumed_base_qty
+                    if inp.consumed_base_qty is not None
+                    else (inp.planned_base_qty or 0.0)
+                )
                 if role == "PACKAGING":
                     packaging_cost_usd += base_q * u_cost
                 else:
@@ -1865,9 +2197,13 @@ class ProductionService:
             for inp in bom.inputs:
                 comp_var = inp.component_variant
                 prod = comp_var.product if comp_var else None
-                uom_base = (prod.uom_base if prod and prod.uom_base else inp.recipe_uom or "UND").strip().upper()
+                uom_base = resolve_mfg_uom_base(
+                    prod.uom_base if prod else None,
+                    inp.recipe_uom,
+                    prod.name if prod else None,
+                )
                 scaled_q = float(inp.quantity) if inp.is_fixed_qty else float(inp.quantity) * scale_factor
-                conv = float(inp.conversion_factor_to_base or 1.0)
+                conv = resolve_recipe_conversion_factor(inp.recipe_uom, uom_base, inp.conversion_factor_to_base)
                 net_q = scaled_q * conv
                 scrap_pct = max(0.0, min(95.0, float(inp.scrap_tolerance_pct or 0.0)))
                 gross_q = net_q / (1.0 - scrap_pct / 100.0) if scrap_pct < 95.0 else net_q
@@ -2368,6 +2704,7 @@ class ProductionService:
         order_id: int,
         req: CompleteOrderRequest,
         user_id: Optional[int] = None,
+        commit: bool = True,
     ) -> Dict[str, Any]:
         """
         Liquidación Atómica al Kardex bajo NIC 2 (Convergente N->1, Desposte Divergente 1->N y Transformaciones Libres Ad-Hoc):
@@ -2455,12 +2792,13 @@ class ProductionService:
                             else get_variant_unit_cost_usd(db, comp_var, src_facility_id)
                         )
                         q_new = round(float(item.consumed_base_qty), 4)
+                        std_planned_new = Decimal("0.0000") if order.bom_id is not None else Decimal(str(q_new))
                         new_inp = ProductionOrderInput(
                             production_order_id=order.id,
                             component_variant_id=comp_var.id,
                             batch_id=item.batch_id,
                             input_role=(item.input_role or "INGREDIENT").upper(),
-                            planned_base_qty=Decimal(str(q_new)),
+                            planned_base_qty=std_planned_new,
                             consumed_base_qty=Decimal(str(q_new)),
                             uom_base=uom_b,
                             unit_cost=Decimal(str(round(u_cost, 4))),
@@ -2525,9 +2863,13 @@ class ProductionService:
             ):
                 consumed_qty = float(req.actual_input_weight_kg)
             else:
-                consumed_qty = float(inp.consumed_base_qty if inp.consumed_base_qty and float(inp.consumed_base_qty) > 0 else inp.planned_base_qty)
+                consumed_qty = float(
+                    inp.consumed_base_qty
+                    if inp.consumed_base_qty is not None
+                    else (inp.planned_base_qty or 0.0)
+                )
 
-            if not is_weight_uom(inp.uom_base):
+            if not is_weight_uom(inp.uom_base) and consumed_qty > 0:
                 consumed_qty = float(math.ceil(round(consumed_qty, 2) - 1e-6))
             else:
                 consumed_qty = round(consumed_qty, 4)
@@ -2592,6 +2934,8 @@ class ProductionService:
                 )
                 db.add(in_move)
                 db.flush()
+                if in_snap is not None:
+                    db.refresh(in_snap)
                 inp.stock_move_id = in_move.id
 
         if req.actual_input_weight_kg is not None and req.actual_input_weight_kg > 0 and actual_input_weight_kg <= 0:
@@ -2609,10 +2953,10 @@ class ProductionService:
 
         if req.actual_labor_hours is not None and req.actual_labor_hours >= 0:
             actual_labor_hours = float(req.actual_labor_hours)
-        elif bom:
-            actual_labor_hours = float(bom.standard_labor_hours or 0.0) * scale_factor
         elif float(order.total_direct_labor_cost or 0.0) > 0 and hourly_labor_rate > 0:
             actual_labor_hours = float(order.total_direct_labor_cost) / hourly_labor_rate
+        elif bom:
+            actual_labor_hours = float(bom.standard_labor_hours or 0.0) * scale_factor
         else:
             actual_labor_hours = 0.5 if wc else 0.0
 
@@ -3083,7 +3427,10 @@ class ProductionService:
             order.notes = f"{order.notes or ''}\n[Liquidación]: {req.notes}".strip()
 
         db.add(order)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return ProductionService.get_order_detail(db, order.id)
 
     @staticmethod
@@ -3124,8 +3471,20 @@ class ProductionService:
         src_wh = db.query(Warehouse).filter(Warehouse.id == order.source_warehouse_id).first()
         src_facility_id = src_wh.facility_id if (src_wh and src_wh.facility_id) else order.facility_id
 
-        uom_base = (req.uom_base or (comp_var.product.uom_base if comp_var.product else "UND") or "UND").strip().upper()
-        req_qty_val = req.planned_base_qty if req.planned_base_qty is not None else (req.planned_qty or 0.0)
+        uom_base = resolve_mfg_uom_base(
+            req.uom_base or (comp_var.product.uom_base if comp_var.product else None),
+            None,
+            comp_var.product.name if comp_var.product else None,
+        )
+        req_qty_val = (
+            req.consumed_base_qty
+            if req.consumed_base_qty is not None
+            else (
+                req.planned_base_qty
+                if req.planned_base_qty is not None
+                else (req.planned_qty if req.planned_qty is not None else (req.quantity or 0.0))
+            )
+        )
         qty = max(0.0001, float(req_qty_val))
         if not is_weight_uom(uom_base):
             qty = float(math.ceil(round(qty, 2) - 1e-6))
@@ -3158,24 +3517,253 @@ class ProductionService:
         role = "PRIMARY_RAW_MATERIAL" if raw_role in ("PRIMARY_MATRIX", "PRIMARY_RAW_MATERIAL") else raw_role
         line_cost = round(qty * u_cost, 4)
 
-        new_inp = ProductionOrderInput(
-            production_order_id=order.id,
-            component_variant_id=comp_var.id,
-            batch_id=batch_id,
-            input_role=role,
-            planned_base_qty=Decimal(str(qty)),
-            consumed_base_qty=Decimal(str(qty)),
-            uom_base=uom_base,
-            unit_cost=Decimal(str(round(u_cost, 4))),
-            total_cost=Decimal(str(line_cost)),
+        existing_inp = next(
+            (i for i in order.inputs if i.component_variant_id == comp_var.id),
+            None,
         )
-        db.add(new_inp)
+        if existing_inp is not None:
+            new_cons_qty = round(float(existing_inp.consumed_base_qty or 0.0) + qty, 4)
+            if not is_weight_uom(existing_inp.uom_base) and new_cons_qty > 0:
+                new_cons_qty = float(math.ceil(round(new_cons_qty, 2) - 1e-6))
+            existing_inp.consumed_base_qty = Decimal(str(new_cons_qty))
+            if order.bom_id is None:
+                existing_inp.planned_base_qty = Decimal(str(new_cons_qty))
+            if req.batch_id is not None:
+                existing_inp.batch_id = req.batch_id
+            if req.unit_cost_override_usd is not None and req.unit_cost_override_usd >= 0:
+                existing_inp.unit_cost = Decimal(str(round(u_cost, 4)))
+            eff_uc = float(existing_inp.unit_cost or u_cost)
+            existing_inp.total_cost = Decimal(str(round(new_cons_qty * eff_uc, 4)))
+            db.add(existing_inp)
+        else:
+            # Si la orden proviene de una Fórmula BOM y este insumo es un ingrediente extra fuera de la receta,
+            # planned_base_qty guarda 0.0000 para preservar trazabilidad Estándar vs Orden/Real.
+            std_planned_qty = Decimal("0.0000") if order.bom_id is not None else Decimal(str(qty))
+            new_inp = ProductionOrderInput(
+                production_order_id=order.id,
+                component_variant_id=comp_var.id,
+                batch_id=batch_id,
+                input_role=role,
+                planned_base_qty=std_planned_qty,
+                consumed_base_qty=Decimal(str(qty)),
+                uom_base=uom_base,
+                unit_cost=Decimal(str(round(u_cost, 4))),
+                total_cost=Decimal(str(line_cost)),
+            )
+            db.add(new_inp)
+
         if role == "PACKAGING":
             order.total_packaging_cost = Decimal(str(round(float(order.total_packaging_cost or 0.0) + line_cost, 4)))
         else:
             order.total_direct_material_cost = Decimal(str(round(float(order.total_direct_material_cost or 0.0) + line_cost, 4)))
             order.actual_input_weight_kg = Decimal(str(round(float(order.actual_input_weight_kg or 0.0) + qty, 4)))
         order.net_production_cost = Decimal(str(round(float(order.net_production_cost or 0.0) + line_cost, 4)))
+        db.add(order)
+        db.commit()
+        return ProductionService.get_order_detail(db, order.id)
+
+    @staticmethod
+    def update_order_inputs(
+        db: Session,
+        order_id: int,
+        req: Union[UpdateOrderInputsRequest, List[AdHocOrderInputCreate]],
+    ) -> Dict[str, Any]:
+        """
+        Actualiza en piso las cantidades de insumos, lotes FEFO o agrega ingredientes extra
+        a una Orden de Producción en estado DRAFT, PLANNED o IN_PROGRESS sin alterar la Receta Maestra (BOM),
+        manteniendo planned_base_qty con la cantidad estándar escalada y actualizando consumed_base_qty + costos.
+        """
+        order = (
+            db.query(ProductionOrder)
+            .options(
+                selectinload(ProductionOrder.work_center),
+                selectinload(ProductionOrder.bom).selectinload(BOMHeader.work_center),
+                selectinload(ProductionOrder.inputs),
+                selectinload(ProductionOrder.outputs),
+            )
+            .filter(ProductionOrder.id == order_id)
+            .with_for_update()
+            .first()
+        )
+        if not order:
+            raise HTTPException(status_code=404, detail="Orden de Producción no encontrada")
+        if order.state in ("COMPLETED", "CANCELLED"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"No se pueden modificar los insumos de una orden en estado {order.state}",
+            )
+
+        items = req if isinstance(req, list) else (req.inputs or [])
+        src_wh = db.query(Warehouse).filter(Warehouse.id == order.source_warehouse_id).first()
+        src_facility_id = src_wh.facility_id if (src_wh and src_wh.facility_id) else order.facility_id
+        today = date.today()
+
+        inputs_by_id = {inp.id: inp for inp in order.inputs if inp.id is not None}
+        inputs_by_variant = {inp.component_variant_id: inp for inp in order.inputs}
+
+        for item in items:
+            target_inp = None
+            if item.input_id is not None and item.input_id in inputs_by_id:
+                target_inp = inputs_by_id[item.input_id]
+            elif item.component_variant_id in inputs_by_variant:
+                target_inp = inputs_by_variant[item.component_variant_id]
+
+            raw_q = (
+                item.consumed_base_qty
+                if item.consumed_base_qty is not None
+                else (
+                    item.planned_base_qty
+                    if item.planned_base_qty is not None
+                    else (item.planned_qty if item.planned_qty is not None else item.quantity)
+                )
+            )
+
+            if target_inp is not None:
+                if raw_q is not None:
+                    q_val = max(0.0, float(raw_q))
+                    if not is_weight_uom(target_inp.uom_base) and q_val > 0:
+                        q_val = float(math.ceil(round(q_val, 2) - 1e-6))
+                    else:
+                        q_val = round(q_val, 4)
+                    target_inp.consumed_base_qty = Decimal(str(q_val))
+                    if order.bom_id is None and item.planned_base_qty is not None and item.consumed_base_qty is None:
+                        target_inp.planned_base_qty = Decimal(str(q_val))
+
+                if item.batch_id is not None:
+                    target_inp.batch_id = item.batch_id
+                if item.input_role:
+                    raw_role = item.input_role.upper()
+                    target_inp.input_role = (
+                        "PRIMARY_RAW_MATERIAL" if raw_role in ("PRIMARY_MATRIX", "PRIMARY_RAW_MATERIAL") else raw_role
+                    )
+                if item.unit_cost_override_usd is not None and item.unit_cost_override_usd >= 0:
+                    target_inp.unit_cost = Decimal(str(round(float(item.unit_cost_override_usd), 4)))
+
+                u_c = float(target_inp.unit_cost or 0.0)
+                c_q = float(target_inp.consumed_base_qty or 0.0)
+                target_inp.total_cost = Decimal(str(round(c_q * u_c, 4)))
+                db.add(target_inp)
+            else:
+                comp_var = (
+                    db.query(ProductVariant)
+                    .options(selectinload(ProductVariant.product))
+                    .filter(ProductVariant.id == item.component_variant_id)
+                    .first()
+                )
+                if not comp_var:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Insumo (variant_id={item.component_variant_id}) no encontrado en el catálogo",
+                    )
+                uom_base = (
+                    item.uom_base or (comp_var.product.uom_base if comp_var.product else "UND") or "UND"
+                ).strip().upper()
+                qty = max(0.0001, float(raw_q if raw_q is not None else 1.0))
+                if not is_weight_uom(uom_base):
+                    qty = float(math.ceil(round(qty, 2) - 1e-6))
+                else:
+                    qty = round(qty, 4)
+
+                batch_id = item.batch_id
+                if not batch_id:
+                    batches = (
+                        db.query(Batch)
+                        .filter(
+                            Batch.product_variant_id == comp_var.id,
+                            Batch.is_quarantined == False,
+                        )
+                        .order_by(Batch.expiry_date.asc().nullslast(), Batch.id.asc())
+                        .all()
+                    )
+                    valid_batches = [b for b in batches if not b.expiry_date or b.expiry_date >= today]
+                    chosen = valid_batches[0] if valid_batches else (batches[0] if batches else None)
+                    if chosen:
+                        batch_id = chosen.id
+
+                u_cost = (
+                    float(item.unit_cost_override_usd)
+                    if (item.unit_cost_override_usd is not None and item.unit_cost_override_usd >= 0)
+                    else get_variant_unit_cost_usd(db, comp_var, src_facility_id)
+                )
+                raw_role = (item.input_role or "INGREDIENT").upper()
+                role = "PRIMARY_RAW_MATERIAL" if raw_role in ("PRIMARY_MATRIX", "PRIMARY_RAW_MATERIAL") else raw_role
+                line_cost = round(qty * u_cost, 4)
+                std_planned = Decimal("0.0000") if order.bom_id is not None else Decimal(str(qty))
+
+                new_inp = ProductionOrderInput(
+                    production_order_id=order.id,
+                    component_variant_id=comp_var.id,
+                    batch_id=batch_id,
+                    input_role=role,
+                    planned_base_qty=std_planned,
+                    consumed_base_qty=Decimal(str(qty)),
+                    uom_base=uom_base,
+                    unit_cost=Decimal(str(round(u_cost, 4))),
+                    total_cost=Decimal(str(line_cost)),
+                )
+                db.add(new_inp)
+                order.inputs.append(new_inp)
+                inputs_by_variant[comp_var.id] = new_inp
+
+        db.flush()
+
+        mat_cost = sum(
+            float(i.total_cost or 0.0) for i in order.inputs if (i.input_role or "").upper() != "PACKAGING"
+        )
+        pkg_cost = sum(
+            float(i.total_cost or 0.0) for i in order.inputs if (i.input_role or "").upper() == "PACKAGING"
+        )
+        in_mass_kg = sum(
+            float(i.consumed_base_qty or 0.0) for i in order.inputs if (i.input_role or "").upper() != "PACKAGING"
+        )
+
+        order.total_direct_material_cost = Decimal(str(round(mat_cost, 4)))
+        order.total_packaging_cost = Decimal(str(round(pkg_cost, 4)))
+        order.actual_input_weight_kg = Decimal(str(round(in_mass_kg, 4)))
+
+        wc = order.work_center or (order.bom.work_center if order.bom else None)
+        if not isinstance(req, list) and req.actual_labor_hours is not None and req.actual_labor_hours >= 0:
+            labor_h = float(req.actual_labor_hours)
+            if wc:
+                order.total_direct_labor_cost = Decimal(str(round(labor_h * float(wc.hourly_labor_rate or 0.0), 4)))
+                cif = (labor_h * float(wc.hourly_overhead_rate or 0.0)) + (
+                    in_mass_kg * float(wc.overhead_per_kg or 0.0)
+                )
+                order.total_indirect_overhead_cost = Decimal(str(round(cif, 4)))
+        elif wc and float(wc.overhead_per_kg or 0.0) > 0:
+            hourly_lab = float(wc.hourly_labor_rate or 0.0)
+            est_h = (
+                float(order.total_direct_labor_cost or 0.0) / hourly_lab
+                if hourly_lab > 0
+                else 0.5
+            )
+            cif = (est_h * float(wc.hourly_overhead_rate or 0.0)) + (
+                in_mass_kg * float(wc.overhead_per_kg or 0.0)
+            )
+            order.total_indirect_overhead_cost = Decimal(str(round(cif, 4)))
+
+        gross_c = (
+            float(order.total_direct_material_cost or 0.0)
+            + float(order.total_packaging_cost or 0.0)
+            + float(order.total_direct_labor_cost or 0.0)
+            + float(order.total_indirect_overhead_cost or 0.0)
+        )
+        byp_c = float(order.total_byproduct_credit or 0.0)
+        waste_c = float(order.total_explicit_waste_cost or 0.0)
+        net_c = max(0.0, round(gross_c - byp_c - waste_c, 4))
+        order.net_production_cost = Decimal(str(net_c))
+
+        if len(order.outputs) == 1:
+            out0 = order.outputs[0]
+            out0.allocated_total_cost = Decimal(str(net_c))
+            q_out = float(out0.actual_good_qty or out0.planned_qty or 1.0)
+            if q_out > 0:
+                out0.calculated_unit_cost = Decimal(str(round(net_c / q_out, 4)))
+            db.add(out0)
+
+        if not isinstance(req, list) and req.notes is not None:
+            order.notes = req.notes
+
         db.add(order)
         db.commit()
         return ProductionService.get_order_detail(db, order.id)
@@ -3720,11 +4308,18 @@ class ProductionService:
             else None
         )
 
+        bom_inputs_by_var = {bi.component_variant_id: bi for bi in (bom.inputs if bom and bom.inputs else [])}
         # Detalle de inputs con lotes disponibles FEFO y stock actual
         inputs_detail = []
         for inp in order.inputs:
             comp_var = inp.component_variant
             prod = comp_var.product if comp_var else None
+            bom_inp_ref = bom_inputs_by_var.get(inp.component_variant_id)
+            effective_uom_base = resolve_mfg_uom_base(
+                prod.uom_base if prod else inp.uom_base,
+                bom_inp_ref.recipe_uom if bom_inp_ref else None,
+                prod.name if prod else None,
+            )
             snap = (
                 db.query(InventorySnapshot)
                 .filter(
@@ -3746,6 +4341,16 @@ class ProductionService:
             )
             unit_c = float(inp.unit_cost or 0.0)
             tot_c = float(inp.total_cost or 0.0)
+            std_qty = float(inp.planned_base_qty or 0.0)
+            cons_qty = float(inp.consumed_base_qty or 0.0)
+            std_cost = round(std_qty * unit_c, 4)
+            delta_qty = round(cons_qty - std_qty, 4)
+            delta_pct = (
+                round(((cons_qty - std_qty) / std_qty) * 100.0, 2)
+                if std_qty > 0
+                else (100.0 if (order.bom_id is not None and cons_qty > 0) else 0.0)
+            )
+            delta_cost = round(tot_c - std_cost, 4)
 
             inputs_detail.append({
                 "id": inp.id,
@@ -3753,10 +4358,18 @@ class ProductionService:
                 "component_sku": comp_var.sku if comp_var else f"VAR-{inp.component_variant_id}",
                 "component_name": prod.name if prod else "Insumo",
                 "input_role": inp.input_role,
-                "uom_base": inp.uom_base,
-                "is_discrete_uom": not is_weight_uom(inp.uom_base),
-                "planned_base_qty": float(inp.planned_base_qty or 0.0),
-                "consumed_base_qty": float(inp.consumed_base_qty or 0.0),
+                "uom_base": effective_uom_base,
+                "is_discrete_uom": not is_weight_uom(effective_uom_base),
+                "standard_scaled_qty_base": std_qty,
+                "planned_base_qty": std_qty,
+                "consumed_base_qty": cons_qty,
+                "delta_qty_base": delta_qty,
+                "delta_pct": delta_pct,
+                "standard_cost_usd": std_cost,
+                "delta_cost_usd": delta_cost,
+                "delta_cost_ves": round(delta_cost * rate, 2),
+                "is_extra_input": bool(order.bom_id is not None and std_qty == 0.0),
+                "is_overridden": bool(abs(cons_qty - std_qty) > 1e-4),
                 "available_stock_qty": round(avail_stock, 4),
                 "batch_id": inp.batch_id,
                 "batch_number": inp.batch.batch_number if inp.batch else None,
@@ -3896,6 +4509,8 @@ class ProductionService:
             "dest_warehouse_name": dest_wh.name if dest_wh else f"Almacén #{order.dest_warehouse_id}",
             "work_center_id": order.work_center_id,
             "work_center_name": wc.name if wc else None,
+            "work_center_capacity_per_batch": float(wc.capacity_per_batch or 0.0) if wc else 0.0,
+            "work_center_capacity_uom": wc.capacity_uom if wc else None,
             "work_center_rates": {
                 "hourly_labor_rate": float(wc.hourly_labor_rate or 0.0) if wc else 0.0,
                 "hourly_overhead_rate": float(wc.hourly_overhead_rate or 0.0) if wc else 0.0,
@@ -3905,11 +4520,15 @@ class ProductionService:
             "bom_code": bom.code if bom else "TRANSF-LIBRE",
             "bom_name": bom.name if bom else "Transformación Libre de Materiales",
             "bom_type": bom.bom_type if bom else ("DIVERGENT_DISASSEMBLY" if order.order_type == "MEAT_DISASSEMBLY" else "CONVERGENT_RECIPE"),
+            "bom_instructions": bom.instructions if bom else None,
+            "instructions": bom.instructions if bom else None,
             "uom_id": uom_id,
             "expected_shrinkage_pct": float(bom.expected_shrinkage_pct or 0.0) if bom else 0.0,
             "max_allowed_shrinkage_pct": float(bom.max_allowed_shrinkage_pct or 0.0) if bom else 5.0,
             "shelf_life_days": int(bom.shelf_life_days or 1) if bom else 7,
             "exchange_rate": round(rate, 4),
+            "base_qty": float(bom.base_qty or order.planned_base_qty or 1.0) if bom else float(order.planned_base_qty or 1.0),
+            "scale_factor": round(scale_factor, 4),
             "planned_base_qty": float(order.planned_base_qty or 0.0),
             "actual_input_weight_kg": float(order.actual_input_weight_kg or 0.0),
             "actual_good_output_weight_kg": float(order.actual_good_output_weight_kg or 0.0),
@@ -3964,8 +4583,12 @@ class ProductionService:
         """
         ProductionService.ensure_mfg_wms_infrastructure(db, commit=True)
 
+        if ProductionService._SAMPLE_ORDERS_SEEDED:
+            return
+
         current_db_name = (db.execute(text("SELECT current_database()")).scalar() or "").strip()
         if current_db_name == "morpheus_prod":
+            ProductionService._SAMPLE_ORDERS_SEEDED = True
             return
 
         default_fac = db.query(Facility).order_by(Facility.id.asc()).first()
@@ -4151,6 +4774,1187 @@ class ProductionService:
         except Exception as exc:
             db.rollback()
             print(f"[MFG SAMPLE ORDERS WARNING] No se pudieron sembrar órdenes demo iniciales: {exc}")
+        finally:
+            ProductionService._SAMPLE_ORDERS_SEEDED = True
+
+    # ==========================================================================
+    # FASE 4: CORRIDA DE PRODUCCIÓN MASIVA POR LOTES (MULTI-RECETA + FEFO GLOBAL)
+    # ==========================================================================
+    @staticmethod
+    def explode_batch_run_preview(
+        db: Session,
+        req: BatchRunExplodePreviewRequest,
+    ) -> Dict[str, Any]:
+        """
+        Explosión Consolidada Multi-Receta en Vivo:
+        1. Calcula la explosión individual de cada receta (BOM) en req.lines.
+        2. Consolida la demanda global de cada insumo (component_variant_id) sumando a través de todas las recetas.
+        3. Contrasta la demanda acumulada contra inv.inventory_snapshots de la sucursal y asigna lotes FEFO
+           secuencialmente sin sobre-asignar el mismo stock dos veces.
+        4. Devuelve el detalle por receta (recipe_previews / recipe_Previews), la tabla consolidada de materia prima
+           (consolidated_inputs) y los totales financieros en USD y Bs.
+        """
+        ProductionService.ensure_mfg_wms_infrastructure(db, commit=True)
+
+        rate_info = get_active_bcv_rate(db, req.exchange_rate_override)
+        rate = rate_info["rate"]
+        today = date.today()
+
+        fac = db.query(Facility).filter(Facility.id == req.facility_id).first() if req.facility_id else None
+        if not fac:
+            fac = db.query(Facility).order_by(Facility.id.asc()).first()
+        facility_id = fac.id if fac else 1
+
+        src_wh = None
+        if req.source_warehouse_id:
+            cand_src = db.query(Warehouse).filter(Warehouse.id == req.source_warehouse_id).first()
+            if cand_src and cand_src.facility_id == facility_id:
+                src_wh = cand_src
+        if not src_wh:
+            src_wh = (
+                db.query(Warehouse)
+                .filter(
+                    Warehouse.facility_id == facility_id,
+                    Warehouse.is_scrap == False,
+                    Warehouse.code != "VIRTUAL",
+                )
+                .order_by(Warehouse.id.asc())
+                .first()
+                or db.query(Warehouse).filter(Warehouse.facility_id == facility_id).order_by(Warehouse.id.asc()).first()
+                or db.query(Warehouse).order_by(Warehouse.id.asc()).first()
+            )
+        source_warehouse_id = src_wh.id if src_wh else 1
+
+        dest_wh = None
+        if req.dest_warehouse_id:
+            cand_dest = db.query(Warehouse).filter(Warehouse.id == req.dest_warehouse_id).first()
+            if cand_dest and cand_dest.facility_id == facility_id:
+                dest_wh = cand_dest
+        if not dest_wh:
+            dest_wh = src_wh
+        dest_warehouse_id = dest_wh.id if dest_wh else source_warehouse_id
+
+        src_facility_id = src_wh.facility_id if (src_wh and src_wh.facility_id) else facility_id
+        dest_facility_id = dest_wh.facility_id if (dest_wh and dest_wh.facility_id) else facility_id
+
+        if not req.lines:
+            return {
+                "facility_id": facility_id,
+                "facility_name": fac.name if fac else f"Sucursal #{facility_id}",
+                "source_warehouse_id": source_warehouse_id,
+                "source_warehouse_name": src_wh.name if src_wh else f"Almacén #{source_warehouse_id}",
+                "dest_warehouse_id": dest_warehouse_id,
+                "dest_warehouse_name": dest_wh.name if dest_wh else f"Almacén #{dest_warehouse_id}",
+                "exchange_rate": round(rate, 4),
+                "overall_stock_status": "AVAILABLE",
+                "total_recipes_count": 0,
+                "total_consolidated_inputs_count": 0,
+                "total_direct_materials_usd": 0.0,
+                "total_direct_materials_ves": 0.0,
+                "total_packaging_usd": 0.0,
+                "total_packaging_ves": 0.0,
+                "total_direct_labor_mod_usd": 0.0,
+                "total_direct_labor_mod_ves": 0.0,
+                "total_indirect_overhead_cif_usd": 0.0,
+                "total_indirect_overhead_cif_ves": 0.0,
+                "total_explicit_waste_cost_usd": 0.0,
+                "total_explicit_waste_cost_ves": 0.0,
+                "total_batch_cost_usd": 0.0,
+                "total_batch_cost_ves": 0.0,
+                "net_batch_cost_usd": 0.0,
+                "net_batch_cost_ves": 0.0,
+                "recipe_previews": [],
+                "recipe_Previews": [],
+                "consolidated_inputs": [],
+            }
+
+        recipe_previews: List[Dict[str, Any]] = []
+        consolidated_map: Dict[int, Dict[str, Any]] = {}
+
+        # Track cumulative PT stock/value in case the same recipe/product appears multiple times in the batch
+        running_pt_stock_by_var: Dict[int, float] = {}
+        running_pt_wavg_by_var: Dict[int, float] = {}
+
+        total_direct_materials_usd = 0.0
+        total_packaging_usd = 0.0
+        total_direct_labor_mod_usd = 0.0
+        total_indirect_overhead_cif_usd = 0.0
+        total_explicit_waste_cost_usd = 0.0
+        total_batch_cost_usd = 0.0
+        net_batch_cost_usd = 0.0
+
+        for line_idx, line in enumerate(req.lines):
+            if not line.bom_id or line.bom_id <= 0:
+                continue
+
+            single_prev = ProductionService.explode_bom_preview(
+                db,
+                ExplodePreviewRequest(
+                    bom_id=line.bom_id,
+                    work_center_id=line.work_center_id,
+                    scale_factor=line.scale_factor,
+                    planned_base_qty=line.planned_base_qty,
+                    actual_labor_hours=line.actual_labor_hours,
+                    facility_id=facility_id,
+                    source_warehouse_id=source_warehouse_id,
+                    dest_warehouse_id=dest_warehouse_id,
+                    exchange_rate_override=req.exchange_rate_override,
+                ),
+                commit_infra=False,
+            )
+
+            planned_qty = float(single_prev["planned_base_qty"])
+            scale_factor = float(single_prev["scale_factor"])
+            expected_shrink_pct = float(single_prev["expected_shrinkage_pct"])
+            default_good_qty = round(max(0.0001, planned_qty * (1.0 - expected_shrink_pct / 100.0)), 4)
+            is_discrete_pt = not is_weight_uom(single_prev["uom_id"])
+            if is_discrete_pt:
+                default_good_qty = float(max(1, round(default_good_qty)))
+
+            explicit_damaged_qty = max(0.0, float(line.explicit_damaged_qty or 0.0))
+            if is_discrete_pt and explicit_damaged_qty > 0:
+                explicit_damaged_qty = float(round(explicit_damaged_qty))
+            else:
+                explicit_damaged_qty = round(explicit_damaged_qty, 4)
+
+            if line.actual_good_qty is not None and float(line.actual_good_qty) > 0:
+                actual_good_qty = float(line.actual_good_qty)
+            else:
+                actual_good_qty = max(0.0001, round(default_good_qty - explicit_damaged_qty, 4))
+
+            if is_discrete_pt:
+                actual_good_qty = float(max(1, round(actual_good_qty)))
+            else:
+                actual_good_qty = round(actual_good_qty, 4)
+
+            if line.natural_shrinkage_qty is not None and float(line.natural_shrinkage_qty) >= 0:
+                natural_shrinkage_qty = round(float(line.natural_shrinkage_qty), 4)
+            else:
+                natural_shrinkage_qty = round(
+                    max(0.0, planned_qty - actual_good_qty - explicit_damaged_qty),
+                    4,
+                )
+
+            cp = single_prev["cost_projection"]
+            mat_usd = float(cp["direct_materials_usd"])
+            pkg_usd = float(cp["packaging_usd"])
+            mod_usd = float(cp["direct_labor_mod_usd"])
+            cif_usd = float(cp["indirect_overhead_cif_usd"])
+            gross_cost_usd = float(cp["total_batch_cost_usd"])
+            byp_credit_usd = float(cp.get("byproduct_credit_usd", 0.0))
+            joint_before_waste_usd = round(max(0.0, gross_cost_usd - byp_credit_usd), 4)
+
+            effective_coprod_qty = round(actual_good_qty + explicit_damaged_qty, 4)
+            unit_cost_after_natural = (
+                joint_before_waste_usd / effective_coprod_qty
+                if effective_coprod_qty > 0
+                else 0.0
+            )
+            line_waste_cost_usd = (
+                round(explicit_damaged_qty * unit_cost_after_natural, 4)
+                if explicit_damaged_qty > 0
+                else 0.0
+            )
+            line_net_cost_usd = round(max(0.0, joint_before_waste_usd - line_waste_cost_usd), 4)
+            line_unit_cost_usd = (
+                round(line_net_cost_usd / actual_good_qty, 4)
+                if actual_good_qty > 0
+                else float(cp["projected_unit_cost_usd"])
+            )
+
+            pt_var_id = int(single_prev["primary_product_variant_id"])
+            if pt_var_id not in running_pt_stock_by_var:
+                running_pt_stock_by_var[pt_var_id] = max(0.0, float(cp["current_stock_qty"]))
+                running_pt_wavg_by_var[pt_var_id] = max(0.0, float(cp["current_wavg_cost_usd"]))
+
+            prev_pt_stock = running_pt_stock_by_var[pt_var_id]
+            prev_pt_wavg = running_pt_wavg_by_var[pt_var_id]
+            if (prev_pt_stock + actual_good_qty) > 0 and actual_good_qty > 0 and line_unit_cost_usd > 0:
+                if prev_pt_stock > 0 and prev_pt_wavg > 0:
+                    proj_new_wavg_usd = round(
+                        ((prev_pt_stock * prev_pt_wavg) + (actual_good_qty * line_unit_cost_usd))
+                        / (prev_pt_stock + actual_good_qty),
+                        4,
+                    )
+                else:
+                    proj_new_wavg_usd = line_unit_cost_usd
+            else:
+                proj_new_wavg_usd = prev_pt_wavg if prev_pt_wavg > 0 else line_unit_cost_usd
+
+            running_pt_stock_by_var[pt_var_id] = round(prev_pt_stock + actual_good_qty, 4)
+            running_pt_wavg_by_var[pt_var_id] = proj_new_wavg_usd
+
+            pvp_usd = float(cp["current_pvp_usd"])
+            margin_pct = (
+                round(((pvp_usd - line_unit_cost_usd) / pvp_usd) * 100.0, 2)
+                if pvp_usd > 0
+                else 0.0
+            )
+
+            total_direct_materials_usd += mat_usd
+            total_packaging_usd += pkg_usd
+            total_direct_labor_mod_usd += mod_usd
+            total_indirect_overhead_cif_usd += cif_usd
+            total_explicit_waste_cost_usd += line_waste_cost_usd
+            total_batch_cost_usd += gross_cost_usd
+            net_batch_cost_usd += line_net_cost_usd
+
+            # Accumulate inputs for global consolidation
+            for inp in single_prev["inputs"]:
+                vid = int(inp["component_variant_id"])
+                req_qty = float(inp["planned_base_qty"])
+                if vid not in consolidated_map:
+                    consolidated_map[vid] = {
+                        "component_variant_id": vid,
+                        "component_sku": inp["component_sku"],
+                        "component_name": inp["component_name"],
+                        "input_role": inp["input_role"],
+                        "uom_base": inp["uom_base"],
+                        "is_discrete_uom": inp["is_discrete_uom"],
+                        "unit_cost_usd": float(inp["unit_cost_usd"]),
+                        "unit_cost_ves": float(inp["unit_cost_ves"]),
+                        "total_required_base_qty": 0.0,
+                        "used_in_recipes": [],
+                        "recipe_codes": [],
+                    }
+                entry = consolidated_map[vid]
+                entry["total_required_base_qty"] = round(entry["total_required_base_qty"] + req_qty, 4)
+                if single_prev["bom_code"] not in entry["recipe_codes"]:
+                    entry["recipe_codes"].append(single_prev["bom_code"])
+                entry["used_in_recipes"].append({
+                    "line_index": line_idx,
+                    "bom_id": single_prev["bom_id"],
+                    "bom_code": single_prev["bom_code"],
+                    "bom_name": single_prev["bom_name"],
+                    "required_base_qty": round(req_qty, 4),
+                    "uom_base": inp["uom_base"],
+                })
+
+            recipe_previews.append({
+                "line_index": line_idx,
+                "bom_id": single_prev["bom_id"],
+                "bom_code": single_prev["bom_code"],
+                "bom_name": single_prev["bom_name"],
+                "bom_type": single_prev["bom_type"],
+                "sector": single_prev["sector"],
+                "work_center_id": single_prev["work_center_id"],
+                "work_center_code": single_prev["work_center_code"],
+                "work_center_name": single_prev["work_center_name"],
+                "primary_product_variant_id": pt_var_id,
+                "primary_product_sku": single_prev["primary_product_sku"],
+                "primary_product_name": single_prev["primary_product_name"],
+                "base_qty": single_prev["base_qty"],
+                "scale_factor": round(scale_factor, 4),
+                "planned_base_qty": round(planned_qty, 4),
+                "uom_id": single_prev["uom_id"],
+                "expected_shrinkage_pct": expected_shrink_pct,
+                "actual_good_qty": actual_good_qty,
+                "natural_shrinkage_qty": natural_shrinkage_qty,
+                "explicit_damaged_qty": explicit_damaged_qty,
+                "actual_labor_hours": round(float(single_prev["standard_labor_hours"]), 2),
+                "direct_materials_usd": round(mat_usd, 4),
+                "packaging_usd": round(pkg_usd, 4),
+                "direct_labor_mod_usd": round(mod_usd, 4),
+                "indirect_overhead_cif_usd": round(cif_usd, 4),
+                "explicit_waste_cost_usd": line_waste_cost_usd,
+                "estimated_batch_cost_usd": round(gross_cost_usd, 4),
+                "estimated_batch_cost_ves": round(gross_cost_usd * rate, 2),
+                "net_production_cost_usd": line_net_cost_usd,
+                "net_production_cost_ves": round(line_net_cost_usd * rate, 2),
+                "estimated_unit_cost_usd": line_unit_cost_usd,
+                "estimated_unit_cost_ves": round(line_unit_cost_usd * rate, 2),
+                "current_stock_qty": round(prev_pt_stock, 4),
+                "current_wavg_cost_usd": round(prev_pt_wavg, 4),
+                "projected_new_wavg_cost_usd": proj_new_wavg_usd,
+                "projected_new_wavg_cost_ves": round(proj_new_wavg_usd * rate, 2),
+                "current_pvp_usd": round(pvp_usd, 4),
+                "projected_margin_pct": margin_pct,
+                "stock_semaphore": single_prev["stock_semaphore"],
+                "inputs": single_prev["inputs"],
+            })
+
+        # Sequential FEFO & stock allocation across consolidated inputs
+        consolidated_inputs: List[Dict[str, Any]] = []
+        remaining_stock_by_var: Dict[int, float] = {}
+        has_global_shortage = False
+        has_global_partial = False
+
+        for vid, entry in consolidated_map.items():
+            snap = (
+                db.query(InventorySnapshot)
+                .filter(
+                    InventorySnapshot.variant_id == vid,
+                    InventorySnapshot.facility_id == src_facility_id,
+                )
+                .first()
+            )
+            avail_stock = max(0.0, float(snap.stock_qty or 0.0)) if snap else 0.0
+            remaining_stock_by_var[vid] = avail_stock
+
+            tot_req = float(entry["total_required_base_qty"])
+            if avail_stock >= tot_req:
+                status = "AVAILABLE"
+                shortage_qty = 0.0
+            elif avail_stock > 0:
+                status = "PARTIAL"
+                shortage_qty = round(tot_req - avail_stock, 4)
+                has_global_partial = True
+            else:
+                status = "SHORTAGE"
+                shortage_qty = round(tot_req, 4)
+                has_global_shortage = True
+
+            balance_after_batch = round(avail_stock - tot_req, 4)
+
+            batches = (
+                db.query(Batch)
+                .filter(
+                    Batch.product_variant_id == vid,
+                    Batch.is_quarantined == False,
+                )
+                .order_by(Batch.expiry_date.asc().nullslast(), Batch.id.asc())
+                .all()
+            )
+            valid_batches = [b for b in batches if not b.expiry_date or b.expiry_date >= today]
+            ordered_batches = valid_batches if valid_batches else batches
+            primary_batch = ordered_batches[0] if ordered_batches else None
+            days_to_expiry = (
+                (primary_batch.expiry_date - today).days
+                if (primary_batch and primary_batch.expiry_date)
+                else None
+            )
+
+            fefo_batches_list = [
+                {
+                    "batch_id": b.id,
+                    "batch_number": b.batch_number,
+                    "expiry_date": b.expiry_date.isoformat() if b.expiry_date else None,
+                    "days_to_expiry": (b.expiry_date - today).days if b.expiry_date else None,
+                }
+                for b in ordered_batches[:5]
+            ]
+
+            u_cost_usd = float(entry["unit_cost_usd"])
+            tot_cost_usd = round(tot_req * u_cost_usd, 4)
+
+            consolidated_inputs.append({
+                "component_variant_id": vid,
+                "component_sku": entry["component_sku"],
+                "component_name": entry["component_name"],
+                "input_role": entry["input_role"],
+                "uom_base": entry["uom_base"],
+                "is_discrete_uom": entry["is_discrete_uom"],
+                "recipes_count": len(entry["used_in_recipes"]),
+                "recipe_codes": entry["recipe_codes"],
+                "used_in_recipes": entry["used_in_recipes"],
+                "total_required_base_qty": round(tot_req, 4),
+                "available_stock_qty": round(avail_stock, 4),
+                "balance_after_batch_qty": balance_after_batch,
+                "shortage_qty": shortage_qty,
+                "availability_status": status,
+                "suggested_batch_id": primary_batch.id if primary_batch else None,
+                "suggested_batch_number": primary_batch.batch_number if primary_batch else None,
+                "suggested_batch_expiry_date": (
+                    primary_batch.expiry_date.isoformat()
+                    if (primary_batch and primary_batch.expiry_date)
+                    else None
+                ),
+                "days_to_expiry": days_to_expiry,
+                "fefo_batches": fefo_batches_list,
+                "unit_cost_usd": round(u_cost_usd, 4),
+                "unit_cost_ves": round(u_cost_usd * rate, 2),
+                "total_cost_usd": tot_cost_usd,
+                "total_cost_ves": round(tot_cost_usd * rate, 2),
+            })
+
+        # Sequential allocation across recipe_previews so shared inputs don't double-count available stock
+        for r_prev in recipe_previews:
+            line_shortage = False
+            line_partial = False
+            for inp in r_prev["inputs"]:
+                vid = int(inp["component_variant_id"])
+                req_q = float(inp["planned_base_qty"])
+                rem = remaining_stock_by_var.get(vid, 0.0)
+                if rem >= req_q:
+                    inp["batch_allocated_qty"] = round(req_q, 4)
+                    inp["batch_shortage_qty"] = 0.0
+                    inp["availability_status"] = "AVAILABLE"
+                    remaining_stock_by_var[vid] = round(rem - req_q, 4)
+                elif rem > 0:
+                    inp["batch_allocated_qty"] = round(rem, 4)
+                    inp["batch_shortage_qty"] = round(req_q - rem, 4)
+                    inp["availability_status"] = "PARTIAL"
+                    remaining_stock_by_var[vid] = 0.0
+                    line_partial = True
+                else:
+                    inp["batch_allocated_qty"] = 0.0
+                    inp["batch_shortage_qty"] = round(req_q, 4)
+                    inp["availability_status"] = "SHORTAGE"
+                    line_shortage = True
+
+            if line_shortage:
+                r_prev["stock_semaphore"] = "SHORTAGE"
+                has_global_shortage = True
+            elif line_partial:
+                r_prev["stock_semaphore"] = "PARTIAL"
+                has_global_partial = True
+            else:
+                r_prev["stock_semaphore"] = "AVAILABLE"
+
+        overall_stock_status = (
+            "SHORTAGE"
+            if has_global_shortage
+            else ("PARTIAL" if has_global_partial else "AVAILABLE")
+        )
+
+        # Sort consolidated_inputs: shared ingredients (recipes_count > 1) first, then by total_cost_usd DESC
+        consolidated_inputs.sort(
+            key=lambda x: (-int(x["recipes_count"]), -float(x["total_cost_usd"]))
+        )
+
+        return {
+            "facility_id": facility_id,
+            "facility_name": fac.name if fac else f"Sucursal #{facility_id}",
+            "source_warehouse_id": source_warehouse_id,
+            "source_warehouse_name": src_wh.name if src_wh else f"Almacén #{source_warehouse_id}",
+            "dest_warehouse_id": dest_warehouse_id,
+            "dest_warehouse_name": dest_wh.name if dest_wh else f"Almacén #{dest_warehouse_id}",
+            "exchange_rate": round(rate, 4),
+            "overall_stock_status": overall_stock_status,
+            "total_recipes_count": len(recipe_previews),
+            "total_consolidated_inputs_count": len(consolidated_inputs),
+            "total_direct_materials_usd": round(total_direct_materials_usd, 4),
+            "total_direct_materials_ves": round(total_direct_materials_usd * rate, 2),
+            "total_packaging_usd": round(total_packaging_usd, 4),
+            "total_packaging_ves": round(total_packaging_usd * rate, 2),
+            "total_direct_labor_mod_usd": round(total_direct_labor_mod_usd, 4),
+            "total_direct_labor_mod_ves": round(total_direct_labor_mod_usd * rate, 2),
+            "total_indirect_overhead_cif_usd": round(total_indirect_overhead_cif_usd, 4),
+            "total_indirect_overhead_cif_ves": round(total_indirect_overhead_cif_usd * rate, 2),
+            "total_explicit_waste_cost_usd": round(total_explicit_waste_cost_usd, 4),
+            "total_explicit_waste_cost_ves": round(total_explicit_waste_cost_usd * rate, 2),
+            "total_batch_cost_usd": round(total_batch_cost_usd, 4),
+            "total_batch_cost_ves": round(total_batch_cost_usd * rate, 2),
+            "net_batch_cost_usd": round(net_batch_cost_usd, 4),
+            "net_batch_cost_ves": round(net_batch_cost_usd * rate, 2),
+            "recipe_previews": recipe_previews,
+            "recipe_Previews": recipe_previews,
+            "consolidated_inputs": consolidated_inputs,
+        }
+
+    @staticmethod
+    def execute_batch_run(
+        db: Session,
+        req: BatchRunExecuteRequest,
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Ejecución Masiva Transaccional de Corrida de Producción por Lotes:
+        Soporta 2 modos de ejecución:
+        1. LEAVE_IN_PROGRESS:
+           Crea el ProductionPlan (state='ORDERS_GENERATED'), sus ProductionPlanLines y las N ProductionOrders
+           en estado 'IN_PROGRESS' listas para ajuste/liquidación individual desde /orders.
+        2. COMPLETE_AND_SETTLE:
+           Crea el ProductionPlan (state='CLOSED'), sus ProductionPlanLines, las N ProductionOrders y ejecuta
+           inmediatamente ProductionService.complete_order(...) para cada una dentro de la misma transacción
+           atómica, generando los pickings MFG-OUT / MFG-IN, movimientos en inv.stock_moves, lotes sanitarios
+           en inv.batches y actualizando inv.inventory_snapshots + inv.product_variants bajo NIC 2 sin doble conteo.
+        """
+        mode = (req.execution_mode or "LEAVE_IN_PROGRESS").strip().upper()
+        if mode not in ("LEAVE_IN_PROGRESS", "COMPLETE_AND_SETTLE"):
+            raise HTTPException(
+                status_code=400,
+                detail="execution_mode inválido. Use 'LEAVE_IN_PROGRESS' o 'COMPLETE_AND_SETTLE'.",
+            )
+
+        valid_lines = [l for l in req.lines if l.bom_id and l.bom_id > 0]
+        if not valid_lines:
+            raise HTTPException(
+                status_code=400,
+                detail="Debe incluir al menos una receta válida (bom_id) para ejecutar la corrida de producción masiva.",
+            )
+
+        ProductionService.ensure_mfg_wms_infrastructure(db, commit=True)
+
+        rate_info = get_active_bcv_rate(db)
+        rate = rate_info["rate"]
+        today = date.today()
+
+        fac = db.query(Facility).filter(Facility.id == req.facility_id).first() if req.facility_id else None
+        if not fac:
+            fac = db.query(Facility).order_by(Facility.id.asc()).first()
+        facility_id = fac.id if fac else 1
+
+        src_wh = db.query(Warehouse).filter(Warehouse.id == req.source_warehouse_id).first() if req.source_warehouse_id else None
+        if not src_wh or src_wh.facility_id != facility_id:
+            src_wh = (
+                db.query(Warehouse)
+                .filter(
+                    Warehouse.facility_id == facility_id,
+                    Warehouse.is_scrap == False,
+                    Warehouse.code != "VIRTUAL",
+                )
+                .order_by(Warehouse.id.asc())
+                .first()
+                or db.query(Warehouse).filter(Warehouse.facility_id == facility_id).order_by(Warehouse.id.asc()).first()
+                or db.query(Warehouse).order_by(Warehouse.id.asc()).first()
+            )
+        source_warehouse_id = src_wh.id if src_wh else 1
+
+        dest_wh = db.query(Warehouse).filter(Warehouse.id == req.dest_warehouse_id).first() if req.dest_warehouse_id else None
+        if not dest_wh or dest_wh.facility_id != facility_id:
+            dest_wh = src_wh
+        dest_warehouse_id = dest_wh.id if dest_wh else source_warehouse_id
+
+        try:
+            # 1. Sincronizar secuencias antes de insertar
+            for seq_tbl in [
+                "mfg.production_plans",
+                "mfg.production_plan_lines",
+                "mfg.production_orders",
+                "mfg.production_order_inputs",
+                "mfg.production_order_outputs",
+                "inv.batches",
+                "inv.stock_pickings",
+                "inv.stock_moves",
+            ]:
+                db.execute(
+                    text(
+                        f"""
+                        SELECT setval(
+                            pg_get_serial_sequence('{seq_tbl}', 'id'),
+                            COALESCE((SELECT MAX(id) FROM {seq_tbl}), 1),
+                            (SELECT MAX(id) IS NOT NULL FROM {seq_tbl})
+                        )
+                        WHERE pg_get_serial_sequence('{seq_tbl}', 'id') IS NOT NULL
+                        """
+                    )
+                )
+
+            # 2. Crear ProductionPlan maestro
+            plan_number = ProductionService._generate_plan_number(db)
+            plan_state = "CLOSED" if mode == "COMPLETE_AND_SETTLE" else "ORDERS_GENERATED"
+            shift_val = (req.shift or "MORNING").strip().upper()
+            sector_val = (req.sector or "BAKERY").strip().upper()
+
+            plan = ProductionPlan(
+                plan_number=plan_number,
+                facility_id=facility_id,
+                plan_date=today,
+                shift=shift_val,
+                sector=sector_val,
+                state=plan_state,
+                notes=req.notes or f"Corrida de Producción Masiva ({len(valid_lines)} recetas - {mode})",
+                created_by_id=user_id,
+                approved_by_id=user_id,
+            )
+            db.add(plan)
+            db.flush()
+
+            orders_created: List[Dict[str, Any]] = []
+            total_cost_usd = 0.0
+            running_pt_stock_by_var: Dict[int, float] = {}
+            running_pt_wavg_by_var: Dict[int, float] = {}
+
+            # 3. Procesar cada línea del lote masivo
+            for idx, line in enumerate(valid_lines):
+                bom = db.query(BOMHeader).filter(BOMHeader.id == line.bom_id).first()
+                if not bom:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Fórmula / Receta (bom_id={line.bom_id}) no encontrada en la fila #{idx + 1}.",
+                    )
+
+                base_qty = max(0.0001, float(bom.base_qty or 1.0))
+                if line.scale_factor is not None and float(line.scale_factor) > 0:
+                    if line.planned_base_qty is None or (
+                        abs(float(line.planned_base_qty) - base_qty) < 1e-4
+                        and abs(float(line.scale_factor) - 1.0) > 1e-4
+                    ):
+                        scale_factor = round(float(line.scale_factor), 4)
+                        planned_base_qty = round(max(0.0001, base_qty * scale_factor), 4)
+                    else:
+                        planned_base_qty = round(max(0.0001, float(line.planned_base_qty)), 4)
+                        scale_factor = round(planned_base_qty / base_qty, 4)
+                elif line.planned_base_qty is not None and float(line.planned_base_qty) > 0:
+                    planned_base_qty = round(float(line.planned_base_qty), 4)
+                    scale_factor = round(planned_base_qty / base_qty, 4)
+                else:
+                    scale_factor = 1.0
+                    planned_base_qty = round(base_qty, 4)
+
+                pt_snap = (
+                    db.query(InventorySnapshot)
+                    .filter(
+                        InventorySnapshot.variant_id == bom.primary_product_variant_id,
+                        InventorySnapshot.facility_id == facility_id,
+                    )
+                    .first()
+                )
+                curr_pt_stock = float(pt_snap.stock_qty or 0.0) if pt_snap else 0.0
+
+                plan_line = ProductionPlanLine(
+                    plan_id=plan.id,
+                    bom_id=bom.id,
+                    target_variant_id=bom.primary_product_variant_id,
+                    demand_source="MAKE_TO_STOCK",
+                    current_stock_qty=Decimal(str(round(curr_pt_stock, 4))),
+                    suggested_qty=Decimal(str(planned_base_qty)),
+                    planned_qty=Decimal(str(planned_base_qty)),
+                    batches_count=max(1, int(math.ceil(scale_factor))),
+                )
+                db.add(plan_line)
+                db.flush()
+
+                line_notes = (
+                    line.notes
+                    or req.notes
+                    or f"Corrida Masiva {plan_number} ({shift_val}) — Receta {bom.code}"
+                )
+
+                created_op = ProductionService.create_order(
+                    db=db,
+                    req=ProductionOrderCreate(
+                        bom_id=bom.id,
+                        facility_id=facility_id,
+                        work_center_id=line.work_center_id or bom.work_center_id,
+                        source_warehouse_id=source_warehouse_id,
+                        dest_warehouse_id=dest_warehouse_id,
+                        planned_base_qty=planned_base_qty,
+                        scale_factor=scale_factor,
+                        standard_labor_hours=line.actual_labor_hours,
+                        notes=line_notes,
+                        start_immediately=True,
+                    ),
+                    user_id=user_id,
+                    plan_line_id=plan_line.id,
+                    commit=False,
+                )
+
+                op_id = int(created_op["id"])
+                exp_shrink_pct = float(bom.expected_shrinkage_pct or 0.0)
+                default_good = round(max(0.0001, planned_base_qty * (1.0 - exp_shrink_pct / 100.0)), 4)
+                is_discrete_out = not is_weight_uom(bom.uom_id or "UND")
+                if is_discrete_out:
+                    default_good = float(max(1, round(default_good)))
+
+                dmg_qty = max(0.0, float(line.explicit_damaged_qty or 0.0))
+                if is_discrete_out and dmg_qty > 0:
+                    dmg_qty = float(round(dmg_qty))
+                else:
+                    dmg_qty = round(dmg_qty, 4)
+
+                if line.actual_good_qty is not None and float(line.actual_good_qty) > 0:
+                    good_qty = float(line.actual_good_qty)
+                else:
+                    good_qty = max(0.0001, round(default_good - dmg_qty, 4))
+
+                if is_discrete_out:
+                    good_qty = float(max(1, round(good_qty)))
+                else:
+                    good_qty = round(good_qty, 4)
+
+                if line.natural_shrinkage_qty is not None and float(line.natural_shrinkage_qty) >= 0:
+                    nat_shrink_qty = round(float(line.natural_shrinkage_qty), 4)
+                else:
+                    nat_shrink_qty = round(max(0.0, planned_base_qty - good_qty - dmg_qty), 4)
+
+                if mode == "COMPLETE_AND_SETTLE":
+                    final_op = ProductionService.complete_order(
+                        db=db,
+                        order_id=op_id,
+                        req=CompleteOrderRequest(
+                            actual_good_qty=good_qty,
+                            natural_shrinkage_qty=nat_shrink_qty,
+                            explicit_damaged_qty=dmg_qty,
+                            explicit_waste_qty=dmg_qty,
+                            actual_labor_hours=line.actual_labor_hours,
+                            notes=f"Liquidación masiva {plan_number}",
+                        ),
+                        user_id=user_id,
+                        commit=False,
+                    )
+                    prim_out_detail = final_op["outputs"][0] if final_op.get("outputs") else {}
+                    net_cost_usd = float(final_op["cost_summary"]["net_production_cost_usd"])
+                    unit_cost_usd = float(prim_out_detail.get("calculated_unit_cost_usd", 0.0))
+                    new_wavg_usd = float(prim_out_detail.get("current_inventory_wavg_usd", unit_cost_usd))
+                else:
+                    # En modo LEAVE_IN_PROGRESS, guardar las cantidades pre-ajustadas y recalcular costos NIC 2
+                    op_row = db.query(ProductionOrder).filter(ProductionOrder.id == op_id).first()
+                    if op_row:
+                        gross_c = (
+                            float(op_row.total_direct_material_cost or 0.0)
+                            + float(op_row.total_packaging_cost or 0.0)
+                            + float(op_row.total_direct_labor_cost or 0.0)
+                            + float(op_row.total_indirect_overhead_cost or 0.0)
+                        )
+                        byp_c = float(op_row.total_byproduct_credit or 0.0)
+                        joint_before_waste = round(max(0.0, gross_c - byp_c), 4)
+                        eff_coprod_qty = round(good_qty + dmg_qty, 4)
+                        unit_after_nat = (
+                            joint_before_waste / eff_coprod_qty
+                            if eff_coprod_qty > 0
+                            else 0.0
+                        )
+                        waste_cost = round(dmg_qty * unit_after_nat, 4) if dmg_qty > 0 else 0.0
+                        net_c = round(max(0.0, joint_before_waste - waste_cost), 4)
+                        unit_c = round(net_c / good_qty, 4) if good_qty > 0 else 0.0
+
+                        op_row.actual_good_output_weight_kg = Decimal(str(good_qty))
+                        op_row.natural_shrinkage_qty = Decimal(str(nat_shrink_qty))
+                        op_row.explicit_waste_qty = Decimal(str(dmg_qty))
+                        op_row.total_explicit_waste_cost = Decimal(str(waste_cost))
+                        op_row.net_production_cost = Decimal(str(net_c))
+                        db.add(op_row)
+                        if op_row.outputs:
+                            prim_out = op_row.outputs[0]
+                            prim_out.actual_good_qty = Decimal(str(good_qty))
+                            prim_out.explicit_damaged_qty = Decimal(str(dmg_qty))
+                            prim_out.actual_yield_pct = Decimal(
+                                str(round((good_qty / planned_base_qty) * 100.0, 3) if planned_base_qty > 0 else 100.0)
+                            )
+                            if len(op_row.outputs) == 1:
+                                prim_out.allocated_total_cost = Decimal(str(net_c))
+                                prim_out.calculated_unit_cost = Decimal(str(unit_c))
+                            db.add(prim_out)
+                        db.flush()
+                    final_op = ProductionService.get_order_detail(db, op_id)
+                    prim_out_detail = final_op["outputs"][0] if final_op.get("outputs") else {}
+                    net_cost_usd = float(final_op["cost_summary"]["net_production_cost_usd"])
+                    unit_cost_usd = float(prim_out_detail.get("calculated_unit_cost_usd", 0.0))
+
+                    pt_var_id = int(bom.primary_product_variant_id)
+                    if pt_var_id not in running_pt_stock_by_var:
+                        running_pt_stock_by_var[pt_var_id] = max(
+                            0.0, float(prim_out_detail.get("current_inventory_stock_qty", curr_pt_stock))
+                        )
+                        running_pt_wavg_by_var[pt_var_id] = max(
+                            0.0, float(prim_out_detail.get("current_inventory_wavg_usd", 0.0))
+                        )
+                    prev_st = running_pt_stock_by_var[pt_var_id]
+                    prev_wv = running_pt_wavg_by_var[pt_var_id]
+                    if (prev_st + good_qty) > 0 and good_qty > 0 and unit_cost_usd > 0:
+                        if prev_st > 0 and prev_wv > 0:
+                            new_wavg_usd = round(
+                                ((prev_st * prev_wv) + (good_qty * unit_cost_usd)) / (prev_st + good_qty),
+                                4,
+                            )
+                        else:
+                            new_wavg_usd = unit_cost_usd
+                    else:
+                        new_wavg_usd = prev_wv if prev_wv > 0 else unit_cost_usd
+                    running_pt_stock_by_var[pt_var_id] = round(prev_st + good_qty, 4)
+                    running_pt_wavg_by_var[pt_var_id] = new_wavg_usd
+
+                gen_batch_num = prim_out_detail.get("generated_batch_number")
+                k_links = final_op.get("kardex_links", {})
+
+                total_cost_usd += net_cost_usd
+
+                orders_created.append({
+                    "id": final_op["id"],
+                    "order_number": final_op["order_number"],
+                    "state": final_op["state"],
+                    "order_type": final_op["order_type"],
+                    "sector": final_op["sector"],
+                    "work_center_id": final_op["work_center_id"],
+                    "work_center_name": final_op["work_center_name"],
+                    "bom_id": final_op["bom_id"],
+                    "bom_code": final_op["bom_code"],
+                    "bom_name": final_op["bom_name"],
+                    "product_sku": prim_out_detail.get("output_sku"),
+                    "product_name": prim_out_detail.get("output_name") or final_op["bom_name"],
+                    "uom_id": final_op["uom_id"],
+                    "scale_factor": final_op["scale_factor"],
+                    "planned_base_qty": final_op["planned_base_qty"],
+                    "actual_good_qty": float(prim_out_detail.get("actual_good_qty", good_qty)),
+                    "natural_shrinkage_qty": final_op["natural_shrinkage_qty"],
+                    "explicit_damaged_qty": final_op["explicit_waste_qty"],
+                    "net_production_cost_usd": round(net_cost_usd, 4),
+                    "net_production_cost_ves": round(net_cost_usd * rate, 2),
+                    "unit_cost_usd": round(unit_cost_usd, 4),
+                    "unit_cost_ves": round(unit_cost_usd * rate, 2),
+                    "new_wavg_cost_usd": round(new_wavg_usd, 4),
+                    "new_wavg_cost_ves": round(new_wavg_usd * rate, 2),
+                    "generated_batch_number": gen_batch_num,
+                    "picking_consumption_name": k_links.get("picking_consumption_folio"),
+                    "picking_output_name": k_links.get("picking_output_folio"),
+                })
+
+            db.commit()
+
+            completed_count = sum(1 for o in orders_created if o["state"] == "COMPLETED")
+            return {
+                "plan_id": plan.id,
+                "plan_number": plan.plan_number,
+                "plan_date": plan.plan_date.isoformat(),
+                "shift": plan.shift,
+                "sector": plan.sector,
+                "state": plan.state,
+                "execution_mode": mode,
+                "facility_id": facility_id,
+                "facility_name": fac.name if fac else f"Sucursal #{facility_id}",
+                "source_warehouse_id": source_warehouse_id,
+                "source_warehouse_name": src_wh.name if src_wh else f"Almacén #{source_warehouse_id}",
+                "dest_warehouse_id": dest_warehouse_id,
+                "dest_warehouse_name": dest_wh.name if dest_wh else f"Almacén #{dest_warehouse_id}",
+                "exchange_rate": round(rate, 4),
+                "orders_count": len(orders_created),
+                "completed_orders_count": completed_count,
+                "total_cost_usd": round(total_cost_usd, 4),
+                "total_cost_ves": round(total_cost_usd * rate, 2),
+                "orders_created": orders_created,
+            }
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error ejecutando corrida de producción masiva: {exc}",
+            )
+
+    @staticmethod
+    def _serialize_batch_run_plan(
+        db: Session,
+        p: ProductionPlan,
+        orders_by_plan_line_id: Dict[int, List[ProductionOrder]],
+        wh_map: Dict[int, str],
+        picking_map: Dict[int, str],
+        rate: float,
+    ) -> Dict[str, Any]:
+        plan_orders: List[Dict[str, Any]] = []
+        total_cost_usd = 0.0
+        total_mat_usd = 0.0
+        total_pkg_usd = 0.0
+        total_mod_usd = 0.0
+        total_cif_usd = 0.0
+        total_waste_usd = 0.0
+        completed_count = 0
+        in_progress_count = 0
+        src_wh_id: Optional[int] = None
+        dest_wh_id: Optional[int] = None
+
+        cons_by_var: Dict[int, Dict[str, Any]] = {}
+
+        for pl in (p.lines or []):
+            ops = orders_by_plan_line_id.get(int(pl.id), [])
+            for op in ops:
+                if src_wh_id is None and op.source_warehouse_id:
+                    src_wh_id = int(op.source_warehouse_id)
+                if dest_wh_id is None and op.dest_warehouse_id:
+                    dest_wh_id = int(op.dest_warehouse_id)
+
+                net_c = float(op.net_production_cost or 0.0)
+                total_cost_usd += net_c
+                total_mat_usd += float(op.total_direct_material_cost or 0.0)
+                total_pkg_usd += float(op.total_packaging_cost or 0.0)
+                total_mod_usd += float(op.total_direct_labor_cost or 0.0)
+                total_cif_usd += float(op.total_indirect_overhead_cost or 0.0)
+                total_waste_usd += float(op.total_explicit_waste_cost or 0.0)
+
+                if op.state == "COMPLETED":
+                    completed_count += 1
+                elif op.state in ("IN_PROGRESS", "PLANNED", "DRAFT"):
+                    in_progress_count += 1
+
+                prim_out = op.outputs[0] if op.outputs else None
+                out_var = prim_out.output_variant if prim_out else pl.target_variant
+                prod_name = (
+                    out_var.product.name
+                    if (out_var and out_var.product)
+                    else (op.bom.name if op.bom else "Producto Terminado")
+                )
+                unit_c = float(prim_out.calculated_unit_cost or 0.0) if prim_out else 0.0
+                gb = prim_out.generated_batch if prim_out else None
+                gen_batch = gb.batch_number if gb else None
+                gen_mfg_date = gb.manufacturing_date.isoformat() if (gb and gb.manufacturing_date) else None
+                gen_exp_date = gb.expiry_date.isoformat() if (gb and gb.expiry_date) else None
+
+                bom_base = float(op.bom.base_qty or 1.0) if (op.bom and op.bom.base_qty) else 1.0
+                planned_q = float(op.planned_base_qty or pl.planned_qty or 0.0)
+                scale_f = round(planned_q / bom_base, 4) if bom_base > 0 else 1.0
+                wc_obj = op.work_center or (op.bom.work_center if op.bom else None)
+                bom_code = op.bom.code if op.bom else (pl.bom.code if pl.bom else "BOM")
+                bom_name = op.bom.name if op.bom else (pl.bom.name if pl.bom else prod_name)
+
+                for inp in (op.inputs or []):
+                    vid = int(inp.component_variant_id)
+                    c_var = inp.component_variant
+                    c_prod = c_var.product if c_var else None
+                    eff_uom = resolve_mfg_uom_base(
+                        c_prod.uom_base if c_prod else inp.uom_base,
+                        None,
+                        c_prod.name if c_prod else None,
+                    )
+                    req_q = float(inp.consumed_base_qty if op.state == "COMPLETED" else (inp.consumed_base_qty or inp.planned_base_qty or 0.0))
+                    u_cost = float(inp.unit_cost or 0.0)
+                    l_cost = float(inp.total_cost or (req_q * u_cost))
+                    b_obj = inp.batch
+                    entry = cons_by_var.get(vid)
+                    if not entry:
+                        entry = {
+                            "component_variant_id": vid,
+                            "component_sku": c_var.sku if c_var else f"VAR-{vid}",
+                            "component_name": c_prod.name if c_prod else "Insumo",
+                            "input_role": inp.input_role or "INGREDIENT",
+                            "uom_base": eff_uom,
+                            "is_discrete_uom": not is_weight_uom(eff_uom),
+                            "recipes_count": 0,
+                            "recipe_codes": [],
+                            "used_in_recipes": [],
+                            "total_required_base_qty": 0.0,
+                            "available_stock_qty": 0.0,
+                            "balance_after_batch_qty": 0.0,
+                            "shortage_qty": 0.0,
+                            "availability_status": "AVAILABLE",
+                            "suggested_batch_id": inp.batch_id,
+                            "suggested_batch_number": b_obj.batch_number if b_obj else None,
+                            "suggested_batch_expiry_date": b_obj.expiry_date.isoformat() if (b_obj and b_obj.expiry_date) else None,
+                            "unit_cost_usd": round(u_cost, 4),
+                            "unit_cost_ves": round(u_cost * rate, 2),
+                            "total_cost_usd": 0.0,
+                            "total_cost_ves": 0.0,
+                        }
+                        cons_by_var[vid] = entry
+                    entry["recipes_count"] += 1
+                    if bom_code not in entry["recipe_codes"]:
+                        entry["recipe_codes"].append(bom_code)
+                    entry["used_in_recipes"].append({
+                        "line_index": len(entry["used_in_recipes"]),
+                        "bom_id": op.bom_id or 0,
+                        "bom_code": bom_code,
+                        "bom_name": bom_name,
+                        "required_base_qty": round(req_q, 4),
+                        "uom_base": eff_uom,
+                    })
+                    entry["total_required_base_qty"] = round(entry["total_required_base_qty"] + req_q, 4)
+                    entry["total_cost_usd"] = round(entry["total_cost_usd"] + l_cost, 4)
+                    entry["total_cost_ves"] = round(entry["total_cost_usd"] * rate, 2)
+                    if not entry["suggested_batch_number"] and b_obj:
+                        entry["suggested_batch_id"] = inp.batch_id
+                        entry["suggested_batch_number"] = b_obj.batch_number
+                        entry["suggested_batch_expiry_date"] = b_obj.expiry_date.isoformat() if b_obj.expiry_date else None
+
+                plan_orders.append({
+                    "id": op.id,
+                    "order_number": op.order_number,
+                    "state": op.state,
+                    "order_type": op.order_type,
+                    "sector": op.bom.sector if op.bom else p.sector,
+                    "work_center_id": op.work_center_id,
+                    "work_center_name": wc_obj.name if wc_obj else "Estación Planta",
+                    "bom_id": op.bom_id,
+                    "bom_code": bom_code,
+                    "bom_name": bom_name,
+                    "product_sku": out_var.sku if out_var else None,
+                    "product_name": prod_name,
+                    "uom_id": op.bom.uom_id if op.bom else (prim_out.uom_base if prim_out else "UND"),
+                    "scale_factor": scale_f,
+                    "planned_base_qty": planned_q,
+                    "actual_good_qty": float(prim_out.actual_good_qty if prim_out else (op.actual_good_output_weight_kg or 0.0)),
+                    "natural_shrinkage_qty": float(op.natural_shrinkage_qty or 0.0),
+                    "explicit_damaged_qty": float(op.explicit_waste_qty or 0.0),
+                    "net_production_cost_usd": round(net_c, 4),
+                    "net_production_cost_ves": round(net_c * rate, 2),
+                    "unit_cost_usd": round(unit_c, 4),
+                    "unit_cost_ves": round(unit_c * rate, 2),
+                    "generated_batch_number": gen_batch,
+                    "generated_batch_manufacturing_date": gen_mfg_date,
+                    "generated_batch_expiry_date": gen_exp_date,
+                    "picking_consumption_name": picking_map.get(int(op.picking_consumption_id)) if op.picking_consumption_id else None,
+                    "picking_output_name": picking_map.get(int(op.picking_output_id)) if op.picking_output_id else None,
+                })
+
+        return {
+            "id": p.id,
+            "plan_id": p.id,
+            "plan_number": p.plan_number,
+            "plan_date": p.plan_date.isoformat() if p.plan_date else None,
+            "shift": p.shift,
+            "sector": p.sector,
+            "state": p.state,
+            "facility_id": p.facility_id,
+            "facility_name": p.facility.name if p.facility else f"Sucursal #{p.facility_id}",
+            "source_warehouse_id": src_wh_id,
+            "source_warehouse_name": wh_map.get(src_wh_id, "Almacén MP") if src_wh_id else "Almacén MP",
+            "dest_warehouse_id": dest_wh_id,
+            "dest_warehouse_name": wh_map.get(dest_wh_id, "Almacén PT") if dest_wh_id else "Almacén PT",
+            "exchange_rate": round(rate, 4),
+            "notes": p.notes,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+            "lines_count": len(p.lines or []),
+            "orders_count": len(plan_orders),
+            "completed_orders_count": completed_count,
+            "in_progress_orders_count": in_progress_count,
+            "total_direct_materials_usd": round(total_mat_usd, 4),
+            "total_direct_materials_ves": round(total_mat_usd * rate, 2),
+            "total_packaging_usd": round(total_pkg_usd, 4),
+            "total_packaging_ves": round(total_pkg_usd * rate, 2),
+            "total_direct_labor_mod_usd": round(total_mod_usd, 4),
+            "total_direct_labor_mod_ves": round(total_mod_usd * rate, 2),
+            "total_indirect_overhead_cif_usd": round(total_cif_usd, 4),
+            "total_indirect_overhead_cif_ves": round(total_cif_usd * rate, 2),
+            "total_explicit_waste_cost_usd": round(total_waste_usd, 4),
+            "total_explicit_waste_cost_ves": round(total_waste_usd * rate, 2),
+            "total_cost_usd": round(total_cost_usd, 4),
+            "total_cost_ves": round(total_cost_usd * rate, 2),
+            "orders": plan_orders,
+            "consolidated_inputs": list(cons_by_var.values()),
+        }
+
+    @staticmethod
+    def list_batch_runs(
+        db: Session,
+        facility_id: Optional[int] = None,
+        limit: int = 30,
+    ) -> Dict[str, Any]:
+        """
+        Lista el historial reciente de Corridas / Planes de Producción Masiva (mfg.production_plans)
+        con sus órdenes de producción vinculadas e insumos consolidados.
+        """
+        ProductionService.ensure_mfg_wms_infrastructure(db, commit=True)
+
+        rate_info = get_active_bcv_rate(db)
+        rate = rate_info["rate"]
+
+        query = db.query(ProductionPlan).options(
+            selectinload(ProductionPlan.facility),
+            selectinload(ProductionPlan.lines).selectinload(ProductionPlanLine.bom).selectinload(BOMHeader.work_center),
+            selectinload(ProductionPlan.lines).selectinload(ProductionPlanLine.target_variant).selectinload(ProductVariant.product),
+        )
+        if facility_id:
+            fac = db.query(Facility).filter(Facility.id == facility_id).first()
+            if not fac:
+                fac = db.query(Facility).order_by(Facility.id.asc()).first()
+            if fac:
+                query = query.filter(ProductionPlan.facility_id == fac.id)
+
+        plans = query.order_by(ProductionPlan.id.desc()).limit(limit).all()
+        plan_line_ids = [line.id for p in plans for line in (p.lines or [])]
+
+        orders_by_plan_line_id: Dict[int, List[ProductionOrder]] = {}
+        picking_ids: set[int] = set()
+        wh_ids: set[int] = set()
+
+        if plan_line_ids:
+            linked_orders = (
+                db.query(ProductionOrder)
+                .options(
+                    selectinload(ProductionOrder.bom).selectinload(BOMHeader.work_center),
+                    selectinload(ProductionOrder.work_center),
+                    selectinload(ProductionOrder.inputs).selectinload(ProductionOrderInput.component_variant).selectinload(ProductVariant.product),
+                    selectinload(ProductionOrder.inputs).selectinload(ProductionOrderInput.batch),
+                    selectinload(ProductionOrder.outputs).selectinload(ProductionOrderOutput.output_variant).selectinload(ProductVariant.product),
+                    selectinload(ProductionOrder.outputs).selectinload(ProductionOrderOutput.generated_batch),
+                )
+                .filter(ProductionOrder.plan_line_id.in_(plan_line_ids))
+                .order_by(ProductionOrder.id.asc())
+                .all()
+            )
+            for op in linked_orders:
+                if op.plan_line_id is not None:
+                    orders_by_plan_line_id.setdefault(int(op.plan_line_id), []).append(op)
+                if op.picking_consumption_id:
+                    picking_ids.add(int(op.picking_consumption_id))
+                if op.picking_output_id:
+                    picking_ids.add(int(op.picking_output_id))
+                if op.source_warehouse_id:
+                    wh_ids.add(int(op.source_warehouse_id))
+                if op.dest_warehouse_id:
+                    wh_ids.add(int(op.dest_warehouse_id))
+
+        wh_map = (
+            {w.id: w.name for w in db.query(Warehouse).filter(Warehouse.id.in_(wh_ids)).all()}
+            if wh_ids
+            else {}
+        )
+        picking_map = (
+            {pk.id: pk.name for pk in db.query(StockPicking).filter(StockPicking.id.in_(picking_ids)).all()}
+            if picking_ids
+            else {}
+        )
+
+        items = [
+            ProductionService._serialize_batch_run_plan(
+                db, p, orders_by_plan_line_id, wh_map, picking_map, rate
+            )
+            for p in plans
+        ]
+
+        return {
+            "exchange_rate": round(rate, 4),
+            "items": items,
+            "total": len(items),
+        }
+
+    @staticmethod
+    def get_batch_run_detail(db: Session, plan_id: int) -> Dict[str, Any]:
+        ProductionService.ensure_mfg_wms_infrastructure(db, commit=True)
+        rate_info = get_active_bcv_rate(db)
+        rate = rate_info["rate"]
+
+        p = (
+            db.query(ProductionPlan)
+            .options(
+                selectinload(ProductionPlan.facility),
+                selectinload(ProductionPlan.lines).selectinload(ProductionPlanLine.bom).selectinload(BOMHeader.work_center),
+                selectinload(ProductionPlan.lines).selectinload(ProductionPlanLine.target_variant).selectinload(ProductVariant.product),
+            )
+            .filter(ProductionPlan.id == plan_id)
+            .first()
+        )
+        if not p:
+            raise HTTPException(status_code=404, detail="Plan / Corrida Masiva no encontrada")
+
+        plan_line_ids = [line.id for line in (p.lines or [])]
+        orders_by_plan_line_id: Dict[int, List[ProductionOrder]] = {}
+        picking_ids: set[int] = set()
+        wh_ids: set[int] = set()
+
+        if plan_line_ids:
+            linked_orders = (
+                db.query(ProductionOrder)
+                .options(
+                    selectinload(ProductionOrder.bom).selectinload(BOMHeader.work_center),
+                    selectinload(ProductionOrder.work_center),
+                    selectinload(ProductionOrder.inputs).selectinload(ProductionOrderInput.component_variant).selectinload(ProductVariant.product),
+                    selectinload(ProductionOrder.inputs).selectinload(ProductionOrderInput.batch),
+                    selectinload(ProductionOrder.outputs).selectinload(ProductionOrderOutput.output_variant).selectinload(ProductVariant.product),
+                    selectinload(ProductionOrder.outputs).selectinload(ProductionOrderOutput.generated_batch),
+                )
+                .filter(ProductionOrder.plan_line_id.in_(plan_line_ids))
+                .order_by(ProductionOrder.id.asc())
+                .all()
+            )
+            for op in linked_orders:
+                if op.plan_line_id is not None:
+                    orders_by_plan_line_id.setdefault(int(op.plan_line_id), []).append(op)
+                if op.picking_consumption_id:
+                    picking_ids.add(int(op.picking_consumption_id))
+                if op.picking_output_id:
+                    picking_ids.add(int(op.picking_output_id))
+                if op.source_warehouse_id:
+                    wh_ids.add(int(op.source_warehouse_id))
+                if op.dest_warehouse_id:
+                    wh_ids.add(int(op.dest_warehouse_id))
+
+        wh_map = (
+            {w.id: w.name for w in db.query(Warehouse).filter(Warehouse.id.in_(wh_ids)).all()}
+            if wh_ids
+            else {}
+        )
+        picking_map = (
+            {pk.id: pk.name for pk in db.query(StockPicking).filter(StockPicking.id.in_(picking_ids)).all()}
+            if picking_ids
+            else {}
+        )
+
+        return ProductionService._serialize_batch_run_plan(
+            db, p, orders_by_plan_line_id, wh_map, picking_map, rate
+        )
+
 
 
 

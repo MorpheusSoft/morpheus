@@ -37,6 +37,7 @@ interface BOMItem {
     component_variant_id: number;
     component_sku?: string;
     component_name?: string;
+    component_uom_base?: string;
     input_role: string;
     quantity: number;
     recipe_uom: string;
@@ -82,6 +83,8 @@ function RecipesCatalogContent() {
   const [typeFilter, setTypeFilter] = useState<string>(paramType);
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [expandedBomId, setExpandedBomId] = useState<number | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     setSectorFilter(paramSector);
@@ -114,11 +117,25 @@ function RecipesCatalogContent() {
 
   async function handleDelete(bom: BOMItem) {
     if (!window.confirm(`¿Deseas eliminar la fórmula "${bom.code} - ${bom.name}"?`)) return;
+    setActionNotice(null);
+    setActionError(null);
     try {
-      await api.delete(`/mfg/boms/${bom.id}`);
+      const res = await api.delete(`/mfg/boms/${bom.id}`);
+      const msg =
+        res.data?.message || `Fórmula "${bom.code} - ${bom.name}" eliminada del catálogo activo.`;
+      setActionNotice(msg);
+      if (expandedBomId === bom.id) {
+        setExpandedBomId(null);
+      }
       await loadBoms();
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Error eliminando fórmula:", err);
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      setActionError(
+        typeof detail === "string"
+          ? detail
+          : "No se pudo eliminar la fórmula seleccionada. Intente nuevamente."
+      );
     }
   }
 
@@ -159,6 +176,38 @@ function RecipesCatalogContent() {
           Crear Nueva Fórmula / Simulador
         </Link>
       </div>
+
+      {actionNotice && (
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <i className="pi pi-check-circle text-emerald-600"></i>
+            {actionNotice}
+          </span>
+          <button
+            type="button"
+            onClick={() => setActionNotice(null)}
+            className="text-emerald-700 hover:text-emerald-900 cursor-pointer"
+          >
+            <i className="pi pi-times text-xs"></i>
+          </button>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <i className="pi pi-exclamation-triangle text-red-600"></i>
+            {actionError}
+          </span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="text-red-700 hover:text-red-900 cursor-pointer"
+          >
+            <i className="pi pi-times text-xs"></i>
+          </button>
+        </div>
+      )}
 
       {/* BARRA DE BÚSQUEDA Y FILTROS */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
@@ -411,7 +460,7 @@ function RecipesCatalogContent() {
                                   {inp.scrap_tolerance_pct}%
                                 </td>
                                 <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-700">
-                                  {inp.gross_qty_base.toFixed(3)}
+                                  {inp.gross_qty_base.toFixed(3)} {inp.component_uom_base || (inp.recipe_uom === "ML" ? "LT" : inp.recipe_uom === "G" ? "KG" : inp.recipe_uom)}
                                 </td>
                                 <td className="py-2.5 px-3 text-right font-mono text-slate-600">
                                   ${inp.unit_cost_usd.toFixed(4)}

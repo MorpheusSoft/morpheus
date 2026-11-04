@@ -271,13 +271,16 @@ def import_products_legacy(
         legacy_stellar_code = p.c_Codigo.strip()
         if not legacy_stellar_code or legacy_stellar_code.lower() in ('codigo', 'sku'): continue
         
-        # Validar tipo de producto (n_tipopeso): 0 = Unidad (UND), 1 y 2 = Volumen/Pesado (KG), 3, 4 y 5 = Omitir
+        # Validar tipo de producto (n_tipopeso): 0 = Unidad (UND), 1 y 2 = Volumen/Pesado (KG o LT), 3, 4 y 5 = Omitir
         tipopeso = int(p.n_tipopeso) if p.n_tipopeso is not None else 0
         if tipopeso in (3, 4, 5):
             continue
-        uom_base = 'KG' if tipopeso in (1, 2) else 'UND'
-        
         name = p.c_Descri.strip()
+        from app.core.uom import has_volume_marker_in_name
+        if tipopeso in (1, 2):
+            uom_base = 'LT' if has_volume_marker_in_name(name) else 'KG'
+        else:
+            uom_base = 'UND'
         raw_cost = p.n_CostoAct if (p.n_CostoAct is not None and p.n_CostoAct > 0) else (p.n_CostoRep or 0.0)
         cost = Decimal(str(raw_cost or 0.0))
         price = Decimal(str(p.n_precio1 or 0.0))
@@ -323,7 +326,9 @@ def import_products_legacy(
                 if existing_product.currency_id != curr_id:
                     existing_product.currency_id = curr_id
                 if existing_product.uom_base != uom_base:
-                    existing_product.uom_base = uom_base
+                    # Preservar 'LT' si el producto ya fue clasificado en Litros en Neo ERP y Stellar envía tipopeso 1 o 2
+                    if not (tipopeso in (1, 2) and (existing_product.uom_base or '').strip().upper() == 'LT'):
+                        existing_product.uom_base = uom_base
                 if img and existing_product.image_main != img:
                     existing_product.image_main = img
                 
@@ -602,12 +607,207 @@ def import_inventory_baseline(
     # Validate the session immediately to apply stock
     inv_session.state = 'DONE'
     inv_session.date_end = datetime.now()
+
+    # Al aplicar Baseline en firme, deshabilitar automáticamente el Modo Espejo (Snapshot Directo) para esta sede
+    cfg = session.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == fac_id).first()
+    if cfg and getattr(cfg, "snapshot_sync_enabled", False):
+        cfg.snapshot_sync_enabled = False
+
     session.commit()
     
     print(f"✅ ¡Carga de Inventario Baseline terminada! Insertados: {count}, No encontrados: {not_found}, Omitidos inactivos/no mapeados: {ignored_inactive}, Omitidos por no afectar stock: {ignored_no_affects}")
     return {
         "message": "Success",
         "imported": count,
+        "not_found": not_found,
+        "ignored_inactive": ignored_inactive,
+        "ignored_no_affects": ignored_no_affects
+    }
+
+
+class LegacyInventorySnapshotItem(BaseModel):
+    facility_id: Optional[int] = None
+    facility_code: Optional[str] = None
+    cutoff_date: Optional[str] = None
+    c_deposito: Optional[str] = None
+    c_codArticulo: str
+    Cantidad: float
+    ventas_30d: Optional[float] = None
+    run_rate: Optional[float] = None
+
+
+@router.post("/inventory-snapshot-direct")
+@router.post("/inventory-snapshot-legacy")
+def import_inventory_snapshot_direct(
+    snapshot_in: List[LegacyInventorySnapshotItem],
+    facility_id: Optional[int] = None,
+    force: Optional[bool] = False,
+    session: Session = Depends(deps.get_db)
+):
+    """
+    Modo Espejo de Existencias (Snapshot Directo Stellar -> Neo Compras):
+    Actualiza directamente inv.inventory_snapshots (stock_qty y opcionalmente run_rate)
+    sin crear sesiones de inventario ni movimientos en el Kardex (inv.stock_moves).
+    CANDADO DE SEGURIDAD: Si la sucursal ya posee un Inventario Inicial (Baseline) activo,
+    la operación se bloquea automáticamente y deshabilita snapshot_sync_enabled.
+    """
+    from app.models.inventory import InventorySession, InventorySnapshot, StoreDepositMapping
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    if not snapshot_in:
+        return {"status": "EMPTY", "message": "No se recibieron registros de existencias.", "imported": 0}
+
+    first_item = snapshot_in[0]
+    req_fac_id = facility_id or getattr(first_item, "facility_id", None)
+    req_fac_code = getattr(first_item, "facility_code", None)
+    fac = resolve_facility(session, req_fac_id, req_fac_code)
+    fac_id = fac.id if fac else (req_fac_id or 1)
+    fac_name = fac.name if fac else f"Sucursal #{fac_id}"
+
+    # 1. CANDADO ESTRICTO DE BASELINE: Si la tienda ya tiene Baseline en Neo, prohibir Snapshot Directo
+    has_baseline = session.query(InventorySession.id).filter(
+        InventorySession.facility_id == fac_id,
+        InventorySession.name.ilike('%Baseline%'),
+        InventorySession.state.in_(["DONE", "CLOSED", "APPLIED"])
+    ).first() is not None
+
+    cfg = session.query(StoreAgentConfig).filter(StoreAgentConfig.facility_id == fac_id).first()
+
+    if has_baseline:
+        if cfg and getattr(cfg, "snapshot_sync_enabled", False):
+            cfg.snapshot_sync_enabled = False
+            session.commit()
+        print(f"🔒 [SNAPSHOT BLOQUEADO] La sede {fac_name} (ID={fac_id}) ya posee Baseline activo en Neo ERP.")
+        return {
+            "status": "BLOCKED_BY_BASELINE",
+            "blocked": True,
+            "message": f"Operación bloqueada: La sucursal {fac_name} ya posee un Inventario Inicial (Baseline) en Neo ERP.",
+            "imported": 0
+        }
+
+    # 2. Verificar pausa o interruptor deshabilitado
+    if not force and is_facility_sync_paused(session, fac_id):
+        return {"status": "PAUSED", "paused": True, "message": f"Sincronización pausada para {fac_name}.", "imported": 0}
+
+    if not force and cfg and not getattr(cfg, "snapshot_sync_enabled", False):
+        return {
+            "status": "DISABLED",
+            "disabled": True,
+            "message": f"El Modo Foto Viva (Snapshot) está deshabilitado para {fac_name}.",
+            "imported": 0
+        }
+
+    # 3. Pre-cachear mapeo de variantes por STELLAR_CODE y SKU
+    stellar_codes_db = session.query(
+        ProductBarcode.barcode,
+        ProductBarcode.product_variant_id
+    ).filter(ProductBarcode.code_type == 'STELLAR_CODE').all()
+
+    variant_map = {}
+    for bc_code, vid in stellar_codes_db:
+        if bc_code:
+            clean_c = bc_code.strip()
+            variant_map[clean_c] = vid
+            variant_map[clean_c.lstrip('0') or '0'] = vid
+
+    # Complementar con SKU directo por si algún producto fue creado con SKU igual al código
+    for vid, sku in session.query(ProductVariant.id, ProductVariant.sku).all():
+        if sku:
+            clean_s = sku.strip()
+            if clean_s not in variant_map:
+                variant_map[clean_s] = vid
+
+    # 4. Pre-cachear mapeo de depósitos válidos de la sucursal
+    mappings_db = session.query(StoreDepositMapping).filter(StoreDepositMapping.facility_id == fac_id).all()
+    dep_map = {m.external_deposit_code.strip(): m for m in mappings_db if m.external_deposit_code}
+
+    aggregated_stock = {}
+    aggregated_sales_30d = {}
+    aggregated_run_rate = {}
+    not_found = 0
+    ignored_inactive = 0
+    ignored_no_affects = 0
+
+    unique_deposits = { (item.c_deposito or "").strip() for item in snapshot_in if item.c_deposito }
+
+    for item in snapshot_in:
+        raw_code = (item.c_codArticulo or "").strip()
+        if not raw_code:
+            continue
+
+        variant_id = variant_map.get(raw_code) or variant_map.get(raw_code.lstrip('0') or '0')
+        if not variant_id:
+            not_found += 1
+            continue
+
+        dep_code = (item.c_deposito or "").strip()
+        if dep_map and dep_code:
+            mapping = dep_map.get(dep_code)
+            if not mapping or not mapping.is_active:
+                ignored_inactive += 1
+                continue
+            if not mapping.affects_inventory:
+                ignored_no_affects += 1
+                continue
+
+        qty_dec = Decimal(str(round(float(item.Cantidad or 0.0), 4)))
+        aggregated_stock[variant_id] = aggregated_stock.get(variant_id, Decimal("0.0000")) + qty_dec
+
+        if item.ventas_30d is not None and item.ventas_30d >= 0:
+            s30_dec = Decimal(str(round(float(item.ventas_30d), 4)))
+            aggregated_sales_30d[variant_id] = aggregated_sales_30d.get(variant_id, Decimal("0.0000")) + s30_dec
+
+        if item.run_rate is not None and item.run_rate >= 0:
+            rr_dec = Decimal(str(round(float(item.run_rate), 4)))
+            aggregated_run_rate[variant_id] = max(aggregated_run_rate.get(variant_id, Decimal("0.0000")), rr_dec)
+
+    for vid, total_s30 in aggregated_sales_30d.items():
+        calc_rr = Decimal(str(round(float(total_s30) / 30.0, 4)))
+        if vid not in aggregated_run_rate or calc_rr > aggregated_run_rate[vid]:
+            aggregated_run_rate[vid] = calc_rr
+
+    # 5. Si es una foto general de la tienda (no de un único depósito aislado), poner en 0 los SKUs que ya no tienen saldo
+    is_partial_single_deposit = (len(unique_deposits) == 1 and len(dep_map) > 1)
+    if not is_partial_single_deposit and aggregated_stock:
+        session.query(InventorySnapshot).filter(
+            InventorySnapshot.facility_id == fac_id,
+            ~InventorySnapshot.variant_id.in_(list(aggregated_stock.keys()))
+        ).update({InventorySnapshot.stock_qty: Decimal("0.0000")}, synchronize_session=False)
+
+    # 6. Bulk UPSERT en inv.inventory_snapshots por bloques de 2000 para máxima velocidad
+    rows_to_upsert = []
+    for vid, total_qty in aggregated_stock.items():
+        row_data = {
+            "variant_id": vid,
+            "facility_id": fac_id,
+            "stock_qty": total_qty,
+            "run_rate": aggregated_run_rate.get(vid, None)
+        }
+        rows_to_upsert.append(row_data)
+
+    chunk_size = 2000
+    for i in range(0, len(rows_to_upsert), chunk_size):
+        chunk = rows_to_upsert[i:i + chunk_size]
+        stmt = pg_insert(InventorySnapshot).values(chunk)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["variant_id", "facility_id"],
+            set_={
+                "stock_qty": stmt.excluded.stock_qty,
+                "run_rate": text("COALESCE(EXCLUDED.run_rate, inv.inventory_snapshots.run_rate)")
+            }
+        )
+        session.execute(stmt)
+
+    session.commit()
+    print(
+        f"✅ [SNAPSHOT DIRECTO] {fac_name}: {len(rows_to_upsert)} SKUs actualizados en inv.inventory_snapshots "
+        f"(No encontrados: {not_found}, Depósitos omitidos: {ignored_inactive + ignored_no_affects})"
+    )
+    return {
+        "status": "SUCCESS",
+        "facility_id": fac_id,
+        "facility_name": fac_name,
+        "imported": len(rows_to_upsert),
         "not_found": not_found,
         "ignored_inactive": ignored_inactive,
         "ignored_no_affects": ignored_no_affects
@@ -1479,15 +1679,29 @@ def import_purchase_orders_legacy(
                     variant_by_code[sku] = vid
                     variant_by_code[sku.lstrip('0') or '0'] = vid
 
-    # 5. Pre-cargar órdenes existentes por reference para garantizar IDEMPOTENCIA
+    # 5. Pre-cargar órdenes existentes por reference (y por ID si provienen de Neo: NEO0000045) para garantizar IDEMPOTENCIA
     references = [f"ODC-{odc.c_DOCUMENTO.strip()}" for odc in orders_in if odc.c_DOCUMENTO]
+    neo_id_map = {}
+    for odc in orders_in:
+        if odc.c_DOCUMENTO:
+            d_clean = odc.c_DOCUMENTO.strip().upper()
+            if d_clean.startswith("NEO") and d_clean[3:].isdigit():
+                neo_id_map[int(d_clean[3:])] = f"ODC-{odc.c_DOCUMENTO.strip()}"
+
     existing_orders = {}
     received_picking_names = set()
     if references:
         po_rows = session.query(PurchaseOrder).filter(PurchaseOrder.reference.in_(references)).all()
         for po in po_rows:
             existing_orders[po.reference] = po
-        picking_names = [f"IN-{r}" for r in references]
+        if neo_id_map:
+            neo_po_rows = session.query(PurchaseOrder).filter(PurchaseOrder.id.in_(list(neo_id_map.keys()))).all()
+            for po in neo_po_rows:
+                mapped_ref = neo_id_map.get(po.id)
+                if mapped_ref:
+                    existing_orders[mapped_ref] = po
+        all_known_refs = list({po.reference for po in existing_orders.values()} | set(references))
+        picking_names = [f"IN-{r}" for r in all_known_refs]
         pick_rows = session.query(StockPicking.name).filter(
             StockPicking.name.in_(picking_names),
             StockPicking.status == 'DONE'
@@ -1499,6 +1713,15 @@ def import_purchase_orders_legacy(
     skipped_count = 0
     total_lines_created = 0
 
+    # Auto-cerrar por vencimiento cualquier ODC previa en tránsito cuya fecha de vencimiento ya expiró
+    if target_facility_id:
+        session.query(PurchaseOrder).filter(
+            PurchaseOrder.dest_facility_id == target_facility_id,
+            PurchaseOrder.status.in_(['approved', 'sent', 'viewed', 'confirmed', 'partial']),
+            PurchaseOrder.expiration_date.isnot(None),
+            PurchaseOrder.expiration_date < today
+        ).update({PurchaseOrder.status: 'expired'}, synchronize_session=False)
+
     for odc in orders_in:
         doc_num = odc.c_DOCUMENTO.strip()
         if not doc_num:
@@ -1507,10 +1730,15 @@ def import_purchase_orders_legacy(
 
         ref = f"ODC-{doc_num}"
         raw_status = (odc.c_status or "DPE").strip().upper()
+        existing_po = existing_orders.get(ref)
 
-        # Descartar órdenes completadas en Stellar o anuladas
+        # Descartar órdenes completadas en Stellar o anuladas (actualizando su estado si ya existían en Neo)
         if raw_status in ('DCO', 'ANU'):
-            skipped_count += 1
+            if existing_po and existing_po.status in ('approved', 'sent', 'viewed', 'confirmed', 'partial'):
+                existing_po.status = 'received' if raw_status == 'DCO' else 'cancelled'
+                updated_count += 1
+            else:
+                skipped_count += 1
             continue
 
         # Validar fecha de vencimiento (a menos que se permita vencidas para testing)
@@ -1560,12 +1788,25 @@ def import_purchase_orders_legacy(
         else:
             target_status = 'approved'
 
-        # Si ya fue totalmente recibida en Stellar o Neo, no la mostramos como pendiente
-        if target_status == 'received':
-            skipped_count += 1
-            continue
-
         existing_po = existing_orders.get(ref)
+
+        # Si ya fue totalmente recibida en Stellar o Neo, actualizar si existía como pendiente o descartar si es nueva
+        if target_status == 'received':
+            if existing_po and existing_po.status in ('approved', 'sent', 'viewed', 'confirmed', 'partial'):
+                existing_po.status = 'received'
+                for l in odc.lines:
+                    art_code = l.c_CODARTICULO.strip()
+                    var_id = variant_by_code.get(art_code) or variant_by_code.get(art_code.lstrip('0') or '0')
+                    if not var_id:
+                        continue
+                    for pol in existing_po.lines:
+                        if pol.variant_id == var_id:
+                            pol.received_base_qty = Decimal(str(l.n_CANT_RECIBIDA or l.n_CANTIDAD or 0.0))
+                            pol.expected_base_qty = Decimal("0.0000")
+                updated_count += 1
+            else:
+                skipped_count += 1
+            continue
 
         if existing_po:
             # Si en Neo ya fue recibida (total o parcialmente), conciliada o tiene recepción WMS activa, no sobreescribir

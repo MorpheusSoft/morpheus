@@ -77,6 +77,47 @@ interface SimulationResult {
   }>;
 }
 
+function getPrimaryBaseWeight(rows: InputRow[]): number {
+  return rows
+    .filter((r) => r.input_role === "PRIMARY_RAW_MATERIAL")
+    .reduce(
+      (acc, r) =>
+        acc +
+        (Number(r.quantity) || 0) *
+          (Number(r.conversion_factor_to_base) ||
+            (r.recipe_uom === "G" || r.recipe_uom === "ML" ? 0.001 : 1)),
+      0
+    );
+}
+
+function recalculateBakersPercentages(rows: InputRow[]): InputRow[] {
+  const primaryBaseWeight = getPrimaryBaseWeight(rows);
+
+  return rows.map((row) => {
+    if (row.input_role === "PACKAGING") {
+      return { ...row, bakers_percentage: 0 };
+    }
+    if (primaryBaseWeight <= 0) {
+      return row;
+    }
+    const factor =
+      Number(row.conversion_factor_to_base) ||
+      (row.recipe_uom === "G" || row.recipe_uom === "ML" ? 0.001 : 1);
+    const rowBaseWeight = (Number(row.quantity) || 0) * factor;
+
+    if (
+      row.input_role === "PRIMARY_RAW_MATERIAL" ||
+      row.input_role === "INGREDIENT" ||
+      row.input_role === "SEMI_FINISHED"
+    ) {
+      const pct =
+        Math.round(((rowBaseWeight / primaryBaseWeight) * 100 + Number.EPSILON) * 100) / 100;
+      return { ...row, bakers_percentage: pct };
+    }
+    return row;
+  });
+}
+
 function RecipeBuilderContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -101,6 +142,11 @@ function RecipeBuilderContent() {
 
   const [inputs, setInputs] = useState<InputRow[]>([]);
   const [outputs, setOutputs] = useState<OutputRow[]>([]);
+  const [editingCell, setEditingCell] = useState<{
+    row: number;
+    field: "quantity" | "conversion_factor_to_base" | "bakers_percentage";
+    raw: string;
+  } | null>(null);
 
   const [simResult, setSimResult] = useState<SimulationResult | null>(null);
   const [simulating, setSimulating] = useState(false);
@@ -206,17 +252,18 @@ function RecipeBuilderContent() {
           setStandardLaborHours(b.standard_labor_hours);
           setShelfLifeDays(b.shelf_life_days);
           setInstructions(b.instructions || "");
-          setInputs(
-            (b.inputs || []).map((i: InputRow) => ({
-              component_variant_id: i.component_variant_id,
-              input_role: i.input_role,
-              quantity: i.quantity,
-              recipe_uom: i.recipe_uom,
-              conversion_factor_to_base: i.conversion_factor_to_base || 1.0,
-              bakers_percentage: i.bakers_percentage,
-              scrap_tolerance_pct: i.scrap_tolerance_pct || 0,
-            }))
-          );
+          const loadedInputs: InputRow[] = (b.inputs || []).map((i: InputRow) => ({
+            component_variant_id: i.component_variant_id,
+            input_role: i.input_role,
+            quantity: i.quantity,
+            recipe_uom: i.recipe_uom,
+            conversion_factor_to_base:
+              i.conversion_factor_to_base ||
+              (i.recipe_uom === "G" || i.recipe_uom === "ML" ? 0.001 : 1.0),
+            bakers_percentage: i.bakers_percentage,
+            scrap_tolerance_pct: i.scrap_tolerance_pct || 0,
+          }));
+          setInputs(recalculateBakersPercentages(loadedInputs));
           setOutputs(
             (b.outputs || []).map((o: OutputRow & { current_sales_price_usd?: number }) => ({
               output_variant_id: o.output_variant_id,
@@ -260,15 +307,15 @@ function RecipeBuilderContent() {
       if (Array.isArray(res.data) && res.data.length > 0) {
         setVariants((prev) => {
           const map = new Map<number, CatalogVariant>();
-          prev.forEach((v) => map.set(v.id, v));
-          let changed = false;
           for (const v of res.data as CatalogVariant[]) {
-            if (!map.has(v.id)) {
-              changed = true;
-            }
             map.set(v.id, v);
           }
-          return changed ? Array.from(map.values()) : prev;
+          for (const v of prev) {
+            if (!map.has(v.id)) {
+              map.set(v.id, v);
+            }
+          }
+          return Array.from(map.values());
         });
       }
     } catch (err) {
@@ -317,29 +364,81 @@ function RecipeBuilderContent() {
   ]);
 
   function addInputRow() {
-    const defaultVar = variants[0]?.id || 0;
-    setInputs([
+    const firstVar = variants[0];
+    const defaultVar = firstVar?.id || 0;
+    const defaultUom = (firstVar?.uom_base || "KG").toUpperCase();
+    const nextRows: InputRow[] = [
       ...inputs,
       {
         component_variant_id: defaultVar,
         input_role: "INGREDIENT",
         quantity: 1.0,
-        recipe_uom: "KG",
+        recipe_uom: ["KG", "G", "LT", "ML", "UND"].includes(defaultUom) ? defaultUom : "KG",
         conversion_factor_to_base: 1.0,
         bakers_percentage: sector === "BAKERY" ? 10.0 : null,
         scrap_tolerance_pct: 0.0,
       },
-    ]);
+    ];
+    setInputs(recalculateBakersPercentages(nextRows));
   }
 
   function updateInputRow(idx: number, patch: Partial<InputRow>) {
     const next = [...inputs];
-    next[idx] = { ...next[idx], ...patch };
-    setInputs(next);
+    const current = next[idx];
+    const updatedRow: InputRow = { ...current, ...patch };
+
+    // Sincronización inversa: si el usuario edita manualmente el campo % PAN en un ingrediente, calcular cantidad
+    const isManualBakersEdit =
+      "bakers_percentage" in patch &&
+      !("quantity" in patch) &&
+      !("recipe_uom" in patch) &&
+      !("conversion_factor_to_base" in patch) &&
+      !("input_role" in patch);
+
+    if (isManualBakersEdit) {
+      if (updatedRow.input_role === "PACKAGING") {
+        updatedRow.bakers_percentage = 0;
+        next[idx] = updatedRow;
+        setInputs(next);
+        return;
+      }
+      const primaryBaseWeight = getPrimaryBaseWeight(next);
+      if (
+        primaryBaseWeight > 0 &&
+        (updatedRow.input_role === "INGREDIENT" || updatedRow.input_role === "SEMI_FINISHED") &&
+        patch.bakers_percentage !== null &&
+        patch.bakers_percentage !== undefined &&
+        !Number.isNaN(patch.bakers_percentage)
+      ) {
+        const factor =
+          Number(updatedRow.conversion_factor_to_base) ||
+          (updatedRow.recipe_uom === "G" || updatedRow.recipe_uom === "ML" ? 0.001 : 1);
+        const newBaseQty = primaryBaseWeight * (patch.bakers_percentage / 100);
+        updatedRow.quantity =
+          Math.round((newBaseQty / factor + Number.EPSILON) * 1000) / 1000;
+      }
+      next[idx] = updatedRow;
+      setInputs(next);
+      return;
+    }
+
+    // Cálculo automático de % PAN cuando cambia cantidad, UoM, factor base o rol
+    next[idx] = updatedRow;
+    if (
+      "quantity" in patch ||
+      "recipe_uom" in patch ||
+      "conversion_factor_to_base" in patch ||
+      "input_role" in patch
+    ) {
+      setInputs(recalculateBakersPercentages(next));
+    } else {
+      setInputs(next);
+    }
   }
 
   function removeInputRow(idx: number) {
-    setInputs(inputs.filter((_, i) => i !== idx));
+    const filtered = inputs.filter((_, i) => i !== idx);
+    setInputs(recalculateBakersPercentages(filtered));
   }
 
   function addOutputRow() {
@@ -370,37 +469,49 @@ function RecipeBuilderContent() {
 
   // Escalar por Porcentaje Panadero cuando se cambia la cantidad de Harina Base (100%)
   function applyBakersScaling(newFlourQtyKg: number) {
-    const flourRow = inputs.find(
-      (i) => i.bakers_percentage && Math.abs(i.bakers_percentage - 100) < 0.01
-    );
-    const oldFlourQtyKg = flourRow
-      ? flourRow.recipe_uom === "G" || flourRow.recipe_uom === "ML"
-        ? flourRow.quantity * 0.001
-        : flourRow.quantity
-      : 0;
+    const syncedInputs = recalculateBakersPercentages(inputs);
+    const primaryBaseWeight = getPrimaryBaseWeight(syncedInputs);
+    const oldFlourQtyKg =
+      primaryBaseWeight > 0
+        ? primaryBaseWeight
+        : (() => {
+            const flourRow = syncedInputs.find(
+              (i) => i.bakers_percentage && Math.abs(i.bakers_percentage - 100) < 0.01
+            );
+            return flourRow
+              ? flourRow.quantity *
+                  (flourRow.conversion_factor_to_base ||
+                    (flourRow.recipe_uom === "G" || flourRow.recipe_uom === "ML" ? 0.001 : 1))
+              : 0;
+          })();
 
     if (oldFlourQtyKg > 0) {
       setBaseQty((prev) => Math.max(1, Math.round(prev * (newFlourQtyKg / oldFlourQtyKg))));
     }
 
-    const updated = inputs.map((inp) => {
-      const isGramOrMl = inp.recipe_uom === "G" || inp.recipe_uom === "ML";
-      if (inp.bakers_percentage && Math.abs(inp.bakers_percentage - 100) < 0.01) {
+    const updated = syncedInputs.map((inp) => {
+      const factor =
+        inp.conversion_factor_to_base ||
+        (inp.recipe_uom === "G" || inp.recipe_uom === "ML" ? 0.001 : 1);
+      if (
+        inp.input_role === "PRIMARY_RAW_MATERIAL" ||
+        (inp.bakers_percentage && Math.abs(inp.bakers_percentage - 100) < 0.01)
+      ) {
+        const pct = inp.bakers_percentage && inp.bakers_percentage > 0 ? inp.bakers_percentage : 100;
+        const targetBaseQty = newFlourQtyKg * (pct / 100.0);
         return {
           ...inp,
-          quantity: isGramOrMl ? Number((newFlourQtyKg * 1000).toFixed(2)) : newFlourQtyKg,
+          quantity: Number((targetBaseQty / factor).toFixed(3)),
         };
       }
       if (inp.bakers_percentage && inp.bakers_percentage > 0 && inp.input_role !== "PACKAGING") {
         const targetWeightKg = newFlourQtyKg * (inp.bakers_percentage / 100.0);
-        const scaledRecipeQty = isGramOrMl
-          ? Number((targetWeightKg * 1000).toFixed(2))
-          : Number(targetWeightKg.toFixed(3));
+        const scaledRecipeQty = Number((targetWeightKg / factor).toFixed(3));
         return { ...inp, quantity: scaledRecipeQty };
       }
       return inp;
     });
-    setInputs(updated);
+    setInputs(recalculateBakersPercentages(updated));
   }
 
   async function handleSaveBOM(e: React.FormEvent) {
@@ -486,7 +597,7 @@ function RecipeBuilderContent() {
   };
 
   return (
-    <div className="p-2 sm:p-6 w-full max-w-[1480px] mx-auto space-y-6">
+    <div className="p-2 sm:p-4 xl:p-6 w-full max-w-[1600px] mx-auto space-y-6">
       {/* BARRA SUPERIOR DE TÍTULO Y ACCIONES */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-2 h-full bg-gradient-to-b from-orange-500 to-red-600"></div>
@@ -533,11 +644,11 @@ function RecipeBuilderContent() {
       )}
 
       {/* LAYOUT 2 COLUMNAS: IZQUIERDA (FICHA TÉCNICA + INGREDIENTES) | DERECHA (SIMULADOR BIMONETARIO EN VIVO) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 xl:gap-6 items-start">
         {/* COLUMNA IZQUIERDA (8 COLS) */}
-        <div className="lg:col-span-8 space-y-6">
+        <div className="lg:col-span-8 min-w-0 space-y-6">
           {/* FICHA TÉCNICA DE LA FÓRMULA */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-6 space-y-4 min-w-0">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
               <h2 className="text-base font-black text-slate-800 uppercase tracking-wide flex items-center gap-2">
                 <i className="pi pi-sliders-h text-orange-600"></i>
@@ -680,9 +791,9 @@ function RecipeBuilderContent() {
               />
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Lote Base *</label>
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 items-end">
+              <div className="flex flex-col justify-end">
+                <label className="block text-[11px] font-bold text-slate-600 mb-1 leading-tight">Lote Base *</label>
                 <input
                   type="number"
                   step="0.01"
@@ -692,8 +803,8 @@ function RecipeBuilderContent() {
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono"
                 />
               </div>
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Unidad (UoM)</label>
+              <div className="flex flex-col justify-end">
+                <label className="block text-[11px] font-bold text-slate-600 mb-1 leading-tight">Unidad (UoM)</label>
                 <select
                   value={uomId}
                   onChange={(e) => setUomId(e.target.value)}
@@ -704,8 +815,8 @@ function RecipeBuilderContent() {
                   <option value="LT">LT</option>
                 </select>
               </div>
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Merma Horno/Oreo (%)</label>
+              <div className="flex flex-col justify-end">
+                <label className="block text-[11px] font-bold text-slate-600 mb-1 leading-tight">Merma Horno/Oreo (%)</label>
                 <input
                   type="number"
                   step="0.1"
@@ -722,8 +833,8 @@ function RecipeBuilderContent() {
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono"
                 />
               </div>
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Merma Máx. (%)</label>
+              <div className="flex flex-col justify-end">
+                <label className="block text-[11px] font-bold text-slate-600 mb-1 leading-tight">Merma Máx. (%)</label>
                 <input
                   type="number"
                   step="0.1"
@@ -734,8 +845,8 @@ function RecipeBuilderContent() {
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono"
                 />
               </div>
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Horas MOD Lote</label>
+              <div className="flex flex-col justify-end">
+                <label className="block text-[11px] font-bold text-slate-600 mb-1 leading-tight">Horas MOD Lote</label>
                 <input
                   type="number"
                   step="0.1"
@@ -745,8 +856,8 @@ function RecipeBuilderContent() {
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm font-mono"
                 />
               </div>
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Vida Útil (Días)</label>
+              <div className="flex flex-col justify-end">
+                <label className="block text-[11px] font-bold text-slate-600 mb-1 leading-tight">Vida Útil (Días)</label>
                 <input
                   type="number"
                   min="1"
@@ -759,7 +870,7 @@ function RecipeBuilderContent() {
           </div>
 
           {/* SECCIÓN DE INGREDIENTES, SUB-RECETAS Y EMPAQUES */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-5 space-y-4 min-w-0">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
               <div>
                 <h2 className="text-base font-black text-slate-800 uppercase tracking-wide flex items-center gap-2">
@@ -812,20 +923,31 @@ function RecipeBuilderContent() {
               </div>
             )}
 
-            <div className="overflow-visible">
-              <table className="w-full text-left border-collapse text-xs">
+            <div className="w-full overflow-x-auto md:overflow-visible">
+              <table className="w-full min-w-[680px] md:min-w-0 table-fixed text-left border-collapse text-xs">
+                <colgroup>
+                  <col className="w-[29%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[8.5%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[11.5%]" />
+                  <col className="w-[3%]" />
+                </colgroup>
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase text-[10px]">
-                    <th className="py-2.5 px-2">Insumo / Sub-receta</th>
-                    <th className="py-2.5 px-2">Rol</th>
-                    <th className="py-2.5 px-2 text-right">Cant.</th>
-                    <th className="py-2.5 px-2">UoM</th>
-                    <th className="py-2.5 px-2 text-right">Factor Base</th>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase text-[9.5px] xl:text-[10px] leading-tight">
+                    <th className="py-2.5 px-1">Insumo / Sub-receta</th>
+                    <th className="py-2.5 px-1">Rol</th>
+                    <th className="py-2.5 px-1 text-right">Cant.</th>
+                    <th className="py-2.5 px-1">UoM</th>
+                    <th className="py-2.5 px-1 text-right">Factor Base</th>
                     <th
-                      className="py-2.5 px-2 text-right cursor-help group relative"
+                      className="py-2.5 px-1 text-right cursor-help group relative"
                       title="Porcentaje Panadero (Baker's %): Expresa el peso de cada ingrediente como proporción de la Harina Base, la cual siempre se define como 100%."
                     >
-                      <span className="inline-flex items-center gap-1">
+                      <span className="inline-flex items-center justify-end gap-0.5">
                         % Pan <i className="pi pi-question-circle text-[9px] text-orange-500" />
                       </span>
                       <div className="hidden group-hover:block group-focus-within:block absolute right-0 top-full mt-1 w-64 p-2.5 rounded-xl bg-slate-900 text-white text-[11px] font-normal normal-case text-left shadow-xl z-50 pointer-events-none leading-relaxed">
@@ -835,9 +957,9 @@ function RecipeBuilderContent() {
                         La <strong>Harina Base</strong> siempre equivale al <strong>100%</strong> y el resto de los ingredientes se expresan en proporción a su peso (ej: 60% agua = 600g por cada 1 Kg de harina).
                       </div>
                     </th>
-                    <th className="py-2.5 px-2 text-right">Merma %</th>
-                    <th className="py-2.5 px-2 text-right">Subtotal ($)</th>
-                    <th className="py-2.5 px-2 text-center"></th>
+                    <th className="py-2.5 px-1 text-right">Merma %</th>
+                    <th className="py-2.5 px-1 text-right">Subtotal ($)</th>
+                    <th className="py-2.5 px-0.5 text-center"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -845,23 +967,32 @@ function RecipeBuilderContent() {
                     const simLine = simResult?.inputs_breakdown?.[idx];
                     return (
                       <tr key={idx} className="hover:bg-slate-50/70">
-                        <td className="py-2.5 px-2 min-w-[220px]">
+                        <td className="py-2 px-1 min-w-0">
                           <VariantCombobox
                             compact
                             value={inp.component_variant_id}
                             variants={variants}
-                            onChange={(variantId) =>
-                              updateInputRow(idx, { component_variant_id: variantId })
-                            }
+                            onChange={(variantId) => {
+                              const picked = variants.find((v) => v.id === variantId);
+                              const baseUom = (picked?.uom_base || "").toUpperCase();
+                              const validUom = ["KG", "G", "LT", "ML", "UND"].includes(baseUom)
+                                ? baseUom
+                                : inp.recipe_uom;
+                              updateInputRow(idx, {
+                                component_variant_id: variantId,
+                                recipe_uom: validUom,
+                                conversion_factor_to_base: 1.0,
+                              });
+                            }}
                             onSearchCatalog={handleSearchVariants}
                             placeholder="Buscar materia prima o insumo..."
                           />
                         </td>
-                        <td className="py-2.5 px-2">
+                        <td className="py-2 px-1 min-w-0">
                           <select
                             value={inp.input_role}
                             onChange={(e) => updateInputRow(idx, { input_role: e.target.value })}
-                            className="px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-semibold"
+                            className="w-full min-w-0 px-1 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-semibold truncate"
                           >
                             <option value="PRIMARY_RAW_MATERIAL">MP Primaria</option>
                             <option value="INGREDIENT">Ingrediente</option>
@@ -869,30 +1000,48 @@ function RecipeBuilderContent() {
                             <option value="PACKAGING">Empaque</option>
                           </select>
                         </td>
-                        <td className="py-2.5 px-2 text-right">
+                        <td className="py-2 px-1 text-right min-w-0">
                           <input
                             type="number"
                             step="0.001"
                             min="0"
-                            value={inp.quantity}
-                            onChange={(e) =>
-                              updateInputRow(idx, { quantity: parseFloat(e.target.value) || 0 })
+                            value={
+                              editingCell?.row === idx && editingCell?.field === "quantity"
+                                ? editingCell.raw
+                                : inp.quantity
                             }
-                            className="w-20 px-2 py-1.5 rounded-lg border border-slate-300 text-right font-mono"
+                            onFocus={(e) =>
+                              setEditingCell({ row: idx, field: "quantity", raw: e.target.value })
+                            }
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              setEditingCell({ row: idx, field: "quantity", raw });
+                              const parsed = parseFloat(raw);
+                              updateInputRow(idx, {
+                                quantity: Number.isNaN(parsed) ? 0 : parsed,
+                              });
+                            }}
+                            onBlur={() => setEditingCell(null)}
+                            className="w-full min-w-0 px-1.5 py-1.5 rounded-lg border border-slate-300 text-right font-mono text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
                         </td>
-                        <td className="py-2.5 px-2">
+                        <td className="py-2 px-1 min-w-0">
                           <select
                             value={inp.recipe_uom}
                             onChange={(e) => {
                               const newUom = e.target.value;
-                              const autoFactor = newUom === "G" || newUom === "ML" ? 0.001 : 1.0;
+                              const selectedVar = variants.find((v) => v.id === inp.component_variant_id);
+                              const baseUom = (selectedVar?.uom_base || "KG").toUpperCase();
+                              const autoFactor =
+                                (newUom === "G" || newUom === "ML") && baseUom !== "G" && baseUom !== "ML"
+                                  ? 0.001
+                                  : 1.0;
                               updateInputRow(idx, {
                                 recipe_uom: newUom,
                                 conversion_factor_to_base: autoFactor,
                               });
                             }}
-                            className="px-2 py-1.5 rounded-lg border border-slate-300 bg-white font-mono text-xs"
+                            className="w-full min-w-0 px-1 py-1.5 rounded-lg border border-slate-300 bg-white font-mono text-[11px]"
                           >
                             <option value="KG">KG</option>
                             <option value="G">G</option>
@@ -901,36 +1050,100 @@ function RecipeBuilderContent() {
                             <option value="UND">UND</option>
                           </select>
                         </td>
-                        <td className="py-2.5 px-2 text-right">
+                        <td className="py-2 px-1 text-right min-w-0">
                           <input
                             type="number"
                             step="0.0001"
                             min="0.0001"
-                            value={inp.conversion_factor_to_base}
-                            onChange={(e) =>
-                              updateInputRow(idx, {
-                                conversion_factor_to_base: parseFloat(e.target.value) || 1.0,
+                            value={
+                              editingCell?.row === idx &&
+                              editingCell?.field === "conversion_factor_to_base"
+                                ? editingCell.raw
+                                : inp.conversion_factor_to_base
+                            }
+                            onFocus={(e) =>
+                              setEditingCell({
+                                row: idx,
+                                field: "conversion_factor_to_base",
+                                raw: e.target.value,
                               })
                             }
-                            className="w-16 px-2 py-1.5 rounded-lg border border-slate-300 text-right font-mono"
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              setEditingCell({
+                                row: idx,
+                                field: "conversion_factor_to_base",
+                                raw,
+                              });
+                              const parsed = parseFloat(raw);
+                              if (!Number.isNaN(parsed) && parsed > 0) {
+                                updateInputRow(idx, {
+                                  conversion_factor_to_base: parsed,
+                                });
+                              }
+                            }}
+                            onBlur={(e) => {
+                              const parsed = parseFloat(e.target.value);
+                              if (Number.isNaN(parsed) || parsed <= 0) {
+                                const fallback =
+                                  inp.recipe_uom === "G" || inp.recipe_uom === "ML"
+                                    ? 0.001
+                                    : 1.0;
+                                updateInputRow(idx, {
+                                  conversion_factor_to_base: fallback,
+                                });
+                              }
+                              setEditingCell(null);
+                            }}
+                            className="w-full min-w-0 px-1.5 py-1.5 rounded-lg border border-slate-300 text-right font-mono text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
                         </td>
-                        <td className="py-2.5 px-2 text-right">
+                        <td className="py-2 px-1 text-right min-w-0">
                           <input
                             type="number"
-                            step="0.1"
+                            step="0.01"
+                            min="0"
                             placeholder="—"
-                            value={inp.bakers_percentage ?? ""}
-                            onChange={(e) =>
-                              updateInputRow(idx, {
-                                bakers_percentage:
-                                  e.target.value === "" ? null : parseFloat(e.target.value),
+                            disabled={inp.input_role === "PACKAGING"}
+                            value={
+                              editingCell?.row === idx &&
+                              editingCell?.field === "bakers_percentage"
+                                ? editingCell.raw
+                                : (inp.bakers_percentage ?? "")
+                            }
+                            onFocus={(e) =>
+                              setEditingCell({
+                                row: idx,
+                                field: "bakers_percentage",
+                                raw: e.target.value,
                               })
                             }
-                            className="w-16 px-2 py-1.5 rounded-lg border border-slate-300 text-right font-mono"
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              setEditingCell({
+                                row: idx,
+                                field: "bakers_percentage",
+                                raw,
+                              });
+                              const parsed = parseFloat(raw);
+                              updateInputRow(idx, {
+                                bakers_percentage:
+                                  raw === "" || Number.isNaN(parsed) ? null : parsed,
+                              });
+                            }}
+                            onBlur={() => {
+                              setEditingCell(null);
+                              if (
+                                inp.input_role === "PRIMARY_RAW_MATERIAL" ||
+                                inp.input_role === "PACKAGING"
+                              ) {
+                                setInputs((prev) => recalculateBakersPercentages(prev));
+                              }
+                            }}
+                            className="w-full min-w-0 px-1.5 py-1.5 rounded-lg border border-slate-300 text-right font-mono text-[11px] disabled:bg-slate-100 disabled:text-slate-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
                         </td>
-                        <td className="py-2.5 px-2 text-right">
+                        <td className="py-2 px-1 text-right min-w-0">
                           <input
                             type="number"
                             step="0.5"
@@ -942,22 +1155,23 @@ function RecipeBuilderContent() {
                                 scrap_tolerance_pct: parseFloat(e.target.value) || 0,
                               })
                             }
-                            className="w-16 px-2 py-1.5 rounded-lg border border-slate-300 text-right font-mono"
+                            className="w-full min-w-0 px-1.5 py-1.5 rounded-lg border border-slate-300 text-right font-mono text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
                         </td>
-                        <td className="py-2.5 px-2 text-right font-mono">
-                          <div className="font-bold text-slate-800">
+                        <td className="py-2 px-1 text-right font-mono min-w-0">
+                          <div className="font-bold text-slate-800 text-[11px] truncate">
                             ${(simLine?.line_cost_usd ?? 0).toFixed(2)}
                           </div>
-                          <div className="text-[10px] text-slate-400">
+                          <div className="text-[10px] text-slate-400 truncate">
                             Bs. {(simLine?.line_cost_ves ?? 0).toFixed(2)}
                           </div>
                         </td>
-                        <td className="py-2.5 px-2 text-center">
+                        <td className="py-2 px-0.5 text-center min-w-0">
                           <button
                             type="button"
                             onClick={() => removeInputRow(idx)}
                             className="text-red-400 hover:text-red-600 cursor-pointer"
+                            title="Eliminar insumo"
                           >
                             <i className="pi pi-trash text-xs"></i>
                           </button>
@@ -972,7 +1186,7 @@ function RecipeBuilderContent() {
 
           {/* SI ES DESPOSTE DIVERGENTE (1 -> N), MOSTRAR MATRIZ DE CORTES Y VALOR DE MERCADO */}
           {bomType === "DIVERGENT_DISASSEMBLY" && (
-            <div className="bg-white rounded-2xl border border-red-200 shadow-sm p-6 space-y-4">
+            <div className="bg-white rounded-2xl border border-red-200 shadow-sm p-4 sm:p-5 space-y-4 min-w-0">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-red-100">
                 <div>
                   <h2 className="text-base font-black text-slate-800 uppercase tracking-wide flex items-center gap-2">
@@ -994,18 +1208,28 @@ function RecipeBuilderContent() {
                 </button>
               </div>
 
-              <div className="overflow-visible">
-                <table className="w-full text-left border-collapse text-xs">
+              <div className="w-full overflow-x-auto md:overflow-visible">
+                <table className="w-full min-w-[680px] md:min-w-0 table-fixed text-left border-collapse text-xs">
+                  <colgroup>
+                    <col className="w-[28%]" />
+                    <col className="w-[16%]" />
+                    <col className="w-[9%]" />
+                    <col className="w-[8%]" />
+                    <col className="w-[10%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[3%]" />
+                  </colgroup>
                   <thead>
-                    <tr className="bg-red-50/60 border-b border-red-200 text-slate-600 font-bold uppercase text-[10px]">
-                      <th className="py-2.5 px-2">Corte / Producto Obtenido</th>
-                      <th className="py-2.5 px-2">Clasificación</th>
-                      <th className="py-2.5 px-2 text-right">Kg Esp.</th>
-                      <th className="py-2.5 px-2 text-right">Yield %</th>
-                      <th className="py-2.5 px-2 text-right">PVP Ref ($/Kg)</th>
-                      <th className="py-2.5 px-2 text-right">% Absorción</th>
-                      <th className="py-2.5 px-2 text-right">Costo Asig. ($/Kg)</th>
-                      <th className="py-2.5 px-2 text-center"></th>
+                    <tr className="bg-red-50/60 border-b border-red-200 text-slate-600 font-bold uppercase text-[9.5px] xl:text-[10px] leading-tight">
+                      <th className="py-2.5 px-1">Corte / Producto Obtenido</th>
+                      <th className="py-2.5 px-1">Clasificación</th>
+                      <th className="py-2.5 px-1 text-right">Kg Esp.</th>
+                      <th className="py-2.5 px-1 text-right">Yield %</th>
+                      <th className="py-2.5 px-1 text-right">PVP Ref ($/Kg)</th>
+                      <th className="py-2.5 px-1 text-right">% Absorción</th>
+                      <th className="py-2.5 px-1 text-right">Costo Asig. ($/Kg)</th>
+                      <th className="py-2.5 px-0.5 text-center"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1013,7 +1237,7 @@ function RecipeBuilderContent() {
                       const simOut = simResult?.outputs_breakdown?.[idx];
                       return (
                         <tr key={idx}>
-                          <td className="py-2.5 px-2 min-w-[220px]">
+                          <td className="py-2 px-1 min-w-0">
                             <VariantCombobox
                               compact
                               value={out.output_variant_id}
@@ -1030,7 +1254,7 @@ function RecipeBuilderContent() {
                               placeholder="Buscar corte o subproducto..."
                             />
                           </td>
-                          <td className="py-2.5 px-2">
+                          <td className="py-2 px-1 min-w-0">
                             <select
                               value={out.output_type}
                               onChange={(e) =>
@@ -1040,14 +1264,14 @@ function RecipeBuilderContent() {
                                     e.target.value === "BY_PRODUCT" ? "FIXED_NRV" : "MARKET_VALUE_INDEX",
                                 })
                               }
-                              className="px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-bold"
+                              className="w-full min-w-0 px-1 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-bold truncate"
                             >
                               <option value="PRIMARY_PRODUCT">🟢 Corte 1ra Extra</option>
                               <option value="CO_PRODUCT">🔵 Co-Producto (1ra/2da)</option>
                               <option value="BY_PRODUCT">🟡 Subproducto (VNR)</option>
                             </select>
                           </td>
-                          <td className="py-2.5 px-2 text-right">
+                          <td className="py-2 px-1 text-right min-w-0">
                             <input
                               type="number"
                               step="0.1"
@@ -1057,13 +1281,13 @@ function RecipeBuilderContent() {
                                 const yPct = baseQty > 0 ? Number(((q / baseQty) * 100).toFixed(2)) : 0;
                                 updateOutputRow(idx, { expected_qty: q, expected_yield_pct: yPct });
                               }}
-                              className="w-20 px-2 py-1.5 rounded-lg border border-slate-300 text-right font-mono"
+                              className="w-full min-w-0 px-1.5 py-1.5 rounded-lg border border-slate-300 text-right font-mono text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             />
                           </td>
-                          <td className="py-2.5 px-2 text-right font-mono font-bold text-slate-700">
+                          <td className="py-2 px-1 text-right font-mono font-bold text-slate-700 text-[11px] min-w-0 truncate">
                             {out.expected_yield_pct.toFixed(1)}%
                           </td>
-                          <td className="py-2.5 px-2 text-right">
+                          <td className="py-2 px-1 text-right min-w-0">
                             <input
                               type="number"
                               step="0.1"
@@ -1073,27 +1297,28 @@ function RecipeBuilderContent() {
                                   standard_reference_price: parseFloat(e.target.value) || 0,
                                 })
                               }
-                              className="w-20 px-2 py-1.5 rounded-lg border border-slate-300 text-right font-mono"
+                              className="w-full min-w-0 px-1.5 py-1.5 rounded-lg border border-slate-300 text-right font-mono text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             />
                           </td>
-                          <td className="py-2.5 px-2 text-right font-mono text-slate-600">
+                          <td className="py-2 px-1 text-right font-mono text-slate-600 text-[11px] min-w-0 truncate">
                             {out.output_type === "BY_PRODUCT"
                               ? "Crédito VNR"
                               : `${(simOut?.cost_allocation_pct ?? 0).toFixed(2)}%`}
                           </td>
-                          <td className="py-2.5 px-2 text-right font-mono">
-                            <div className="font-black text-orange-600">
+                          <td className="py-2 px-1 text-right font-mono min-w-0">
+                            <div className="font-black text-orange-600 text-[11px] truncate">
                               ${(simOut?.calculated_unit_cost_usd ?? 0).toFixed(2)}/Kg
                             </div>
-                            <div className="text-[10px] text-slate-400">
+                            <div className="text-[10px] text-slate-400 truncate">
                               Bs. {(simOut?.calculated_unit_cost_ves ?? 0).toFixed(2)}
                             </div>
                           </td>
-                          <td className="py-2.5 px-2 text-center">
+                          <td className="py-2 px-0.5 text-center min-w-0">
                             <button
                               type="button"
                               onClick={() => removeOutputRow(idx)}
                               className="text-red-400 hover:text-red-600 cursor-pointer"
+                              title="Eliminar corte"
                             >
                               <i className="pi pi-trash text-xs"></i>
                             </button>

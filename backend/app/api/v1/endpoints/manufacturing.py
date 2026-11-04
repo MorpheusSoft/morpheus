@@ -1,25 +1,30 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import func, or_
-from typing import Any, List, Optional
+from sqlalchemy import and_, case, func, or_
+from typing import Any, List, Optional, Union
 from decimal import Decimal
 
 from app.api import deps
+from app.core.barcode import get_barcode_candidates
+from app.core.uom import resolve_mfg_uom_base, resolve_recipe_conversion_factor
 from app.models.core import Currency, ExchangeRate, Facility, User
 from app.models.inventory import (
     Warehouse,
     Product,
     ProductVariant,
+    ProductBarcode,
     ProductFacilityPrice,
     InventorySnapshot,
     Category,
 )
+from app.models.purchasing import SupplierProduct
 from app.models.manufacturing import (
     WorkCenter,
     BOMHeader,
     BOMInput,
     BOMOutput,
     ProductionPlan,
+    ProductionPlanLine,
     ProductionOrder,
 )
 from app.schemas.manufacturing import (
@@ -33,12 +38,15 @@ from app.schemas.manufacturing import (
     BOMOutputResponse,
     SimulateCostRequest,
     AdHocOrderInputCreate,
+    UpdateOrderInputsRequest,
     AdHocOrderOutputCreate,
     SaveOrderAsBOMRequest,
     ExplodePreviewRequest,
     ProductionOrderCreate,
     CompleteOrderRequest,
     ButcherySimulateSettlementRequest,
+    BatchRunExplodePreviewRequest,
+    BatchRunExecuteRequest,
 )
 
 router = APIRouter()
@@ -202,7 +210,12 @@ def simulate_bom_cost_calculation(db: Session, req: SimulateCostRequest) -> dict
             if inp.unit_cost_override_usd is not None and inp.unit_cost_override_usd >= 0
             else get_variant_unit_cost_usd(db, comp_var, facility_id)
         )
-        conv = float(inp.conversion_factor_to_base or 1.0)
+        comp_uom_base = resolve_mfg_uom_base(
+            comp_var.product.uom_base if comp_var and comp_var.product else None,
+            inp.recipe_uom,
+            comp_var.product.name if comp_var and comp_var.product else None,
+        )
+        conv = resolve_recipe_conversion_factor(inp.recipe_uom, comp_uom_base, inp.conversion_factor_to_base)
         net_qty_base = float(inp.quantity or 0.0) * conv
 
         scrap_pct = max(0.0, min(95.0, float(inp.scrap_tolerance_pct or 0.0)))
@@ -235,7 +248,7 @@ def simulate_bom_cost_calculation(db: Session, req: SimulateCostRequest) -> dict
             "component_variant_id": inp.component_variant_id,
             "component_sku": comp_var.sku if comp_var else f"VAR-{inp.component_variant_id}",
             "component_name": comp_var.product.name if comp_var and comp_var.product else "Insumo",
-            "component_uom_base": comp_var.product.uom_base if comp_var and comp_var.product else inp.recipe_uom,
+            "component_uom_base": comp_uom_base,
             "input_role": role,
             "quantity": round(float(inp.quantity), 4),
             "recipe_uom": inp.recipe_uom,
@@ -590,6 +603,7 @@ def get_mfg_facilities_and_warehouses(
             selectinload(WorkCenter.warehouse_wip),
             selectinload(WorkCenter.boms),
         )
+        .filter(WorkCenter.is_active == True)
         .order_by(WorkCenter.facility_id.asc(), WorkCenter.id.asc())
         .all()
     )
@@ -632,7 +646,7 @@ def get_mfg_facilities_and_warehouses(
                 "hourly_overhead_rate": float(wc.hourly_overhead_rate or 0),
                 "overhead_per_kg": float(wc.overhead_per_kg or 0),
                 "is_active": bool(wc.is_active),
-                "boms_count": len(wc.boms) if wc.boms else 0,
+                "boms_count": sum(1 for b in (wc.boms or []) if b.is_active),
             }
             for wc in work_centers
         ],
@@ -646,7 +660,7 @@ def get_mfg_facilities_and_warehouses(
 def list_work_centers(
     sector: Optional[str] = None,
     facility_id: Optional[int] = None,
-    active_only: bool = False,
+    active_only: bool = True,
     db: Session = Depends(deps.get_db),
 ) -> Any:
     from app.services.production_service import ProductionService
@@ -683,7 +697,7 @@ def list_work_centers(
             "hourly_overhead_rate": float(wc.hourly_overhead_rate or 0),
             "overhead_per_kg": float(wc.overhead_per_kg or 0),
             "is_active": wc.is_active,
-            "boms_count": len(wc.boms) if wc.boms else 0,
+            "boms_count": sum(1 for b in (wc.boms or []) if b.is_active),
             "created_at": wc.created_at,
         })
     return result
@@ -779,7 +793,7 @@ def update_work_center(
         "hourly_overhead_rate": float(wc.hourly_overhead_rate or 0),
         "overhead_per_kg": float(wc.overhead_per_kg or 0),
         "is_active": wc.is_active,
-        "boms_count": len(wc.boms) if wc.boms else 0,
+        "boms_count": sum(1 for b in (wc.boms or []) if b.is_active),
         "created_at": wc.created_at,
     }
 
@@ -794,11 +808,26 @@ def delete_work_center(
     if not wc:
         raise HTTPException(status_code=404, detail="Centro de Trabajo no encontrado")
 
-    if wc.boms and len(wc.boms) > 0:
+    boms_count = db.query(BOMHeader).filter(BOMHeader.work_center_id == wc_id).count()
+    orders_count = db.query(ProductionOrder).filter(ProductionOrder.work_center_id == wc_id).count()
+    seeded_demo_codes = {
+        "PANADERIA_HORNO_PISO",
+        "DESPOSTE_MESA_VACIO_2",
+        "CUMBOTO_PANADERIA_1",
+        "CUMBOTO_DESPOSTE_1",
+    }
+
+    if boms_count > 0 or orders_count > 0 or (wc.code in seeded_demo_codes):
         wc.is_active = False
+        if "__DEL_" not in (wc.code or ""):
+            wc.code = f"{wc.code[:18]}__DEL_{wc.id}"
         db.add(wc)
         db.commit()
-        return {"message": "Centro de trabajo desactivado porque posee recetas asociadas.", "deactivated": True}
+        return {
+            "message": "Centro de trabajo eliminado del catálogo activo.",
+            "deleted": True,
+            "deactivated": True,
+        }
 
     db.delete(wc)
     db.commit()
@@ -814,6 +843,7 @@ def list_boms(
     bom_type: Optional[str] = None,
     work_center_id: Optional[int] = None,
     search: Optional[str] = None,
+    active_only: bool = True,
     db: Session = Depends(deps.get_db),
 ) -> Any:
     query = db.query(BOMHeader).options(
@@ -822,6 +852,8 @@ def list_boms(
         selectinload(BOMHeader.inputs).selectinload(BOMInput.component_variant).selectinload(ProductVariant.product),
         selectinload(BOMHeader.outputs).selectinload(BOMOutput.output_variant).selectinload(ProductVariant.product),
     )
+    if active_only:
+        query = query.filter(BOMHeader.is_active == True)
     if sector:
         query = query.filter(BOMHeader.sector == sector)
     if bom_type:
@@ -887,6 +919,18 @@ def create_bom(
     db.flush()
 
     for inp in bom_in.inputs:
+        comp_var = (
+            db.query(ProductVariant)
+            .options(selectinload(ProductVariant.product))
+            .filter(ProductVariant.id == inp.component_variant_id)
+            .first()
+        )
+        comp_uom_base = resolve_mfg_uom_base(
+            comp_var.product.uom_base if comp_var and comp_var.product else None,
+            inp.recipe_uom,
+            comp_var.product.name if comp_var and comp_var.product else None,
+        )
+        conv_val = resolve_recipe_conversion_factor(inp.recipe_uom, comp_uom_base, inp.conversion_factor_to_base)
         db.add(
             BOMInput(
                 bom_id=bom.id,
@@ -894,7 +938,7 @@ def create_bom(
                 input_role=inp.input_role,
                 quantity=Decimal(str(inp.quantity)),
                 recipe_uom=inp.recipe_uom,
-                conversion_factor_to_base=Decimal(str(inp.conversion_factor_to_base)),
+                conversion_factor_to_base=Decimal(str(conv_val)),
                 bakers_percentage=Decimal(str(inp.bakers_percentage)) if inp.bakers_percentage is not None else None,
                 scrap_tolerance_pct=Decimal(str(inp.scrap_tolerance_pct)),
                 is_fixed_qty=inp.is_fixed_qty,
@@ -960,6 +1004,18 @@ def update_bom(
     if bom_in.inputs is not None:
         db.query(BOMInput).filter(BOMInput.bom_id == bom.id).delete()
         for inp in bom_in.inputs:
+            comp_var = (
+                db.query(ProductVariant)
+                .options(selectinload(ProductVariant.product))
+                .filter(ProductVariant.id == inp.component_variant_id)
+                .first()
+            )
+            comp_uom_base = resolve_mfg_uom_base(
+                comp_var.product.uom_base if comp_var and comp_var.product else None,
+                inp.recipe_uom,
+                comp_var.product.name if comp_var and comp_var.product else None,
+            )
+            conv_val = resolve_recipe_conversion_factor(inp.recipe_uom, comp_uom_base, inp.conversion_factor_to_base)
             db.add(
                 BOMInput(
                     bom_id=bom.id,
@@ -967,7 +1023,7 @@ def update_bom(
                     input_role=inp.input_role,
                     quantity=Decimal(str(inp.quantity)),
                     recipe_uom=inp.recipe_uom,
-                    conversion_factor_to_base=Decimal(str(inp.conversion_factor_to_base)),
+                    conversion_factor_to_base=Decimal(str(conv_val)),
                     bakers_percentage=Decimal(str(inp.bakers_percentage)) if inp.bakers_percentage is not None else None,
                     scrap_tolerance_pct=Decimal(str(inp.scrap_tolerance_pct)),
                     is_fixed_qty=inp.is_fixed_qty,
@@ -1021,6 +1077,30 @@ def delete_bom(
     if not bom:
         raise HTTPException(status_code=404, detail="Fórmula / Receta no encontrada")
 
+    orders_count = db.query(ProductionOrder).filter(ProductionOrder.bom_id == bom_id).count()
+    plan_lines = db.query(ProductionPlanLine).filter(ProductionPlanLine.bom_id == bom_id).all()
+
+    if orders_count > 0:
+        bom.is_active = False
+        if "__DEL_" not in (bom.code or ""):
+            bom.code = f"{bom.code[:35]}__DEL_{bom.id}"
+        db.add(bom)
+        db.commit()
+        return {
+            "message": "Fórmula eliminada del catálogo activo (conservada en historial de órdenes de producción).",
+            "deleted": True,
+            "deactivated": True,
+        }
+
+    if plan_lines:
+        plan_line_ids = [pl.id for pl in plan_lines]
+        db.query(ProductionOrder).filter(ProductionOrder.plan_line_id.in_(plan_line_ids)).update(
+            {ProductionOrder.plan_line_id: None}, synchronize_session=False
+        )
+        for pl in plan_lines:
+            db.delete(pl)
+        db.flush()
+
     db.delete(bom)
     db.commit()
     return {"message": "Fórmula eliminada exitosamente", "deleted": True}
@@ -1059,26 +1139,90 @@ def search_catalog_variants_for_mfg(
         .options(selectinload(ProductVariant.product).selectinload(Product.category))
         .filter(ProductVariant.is_active == True)
     )
+    priority_expr = None
+
     if ids and ids.strip():
         parsed_ids = [int(x.strip()) for x in ids.split(",") if x.strip().isdigit()]
         if parsed_ids:
             query = query.filter(ProductVariant.id.in_(parsed_ids))
     elif search and search.strip():
-        tokens = [tok.strip() for tok in search.strip().split() if tok.strip()]
+        clean_q = search.strip()
+        tokens = [tok.strip() for tok in clean_q.split() if tok.strip()]
+        token_filters = []
         for tok in tokens:
-            s = f"%{tok}%"
-            query = query.filter(
+            candidates = get_barcode_candidates(tok)
+            if tok not in candidates:
+                candidates.append(tok)
+
+            barcode_vids = db.query(ProductBarcode.product_variant_id).filter(
                 or_(
-                    Product.name.ilike(s),
-                    ProductVariant.sku.ilike(s),
-                    ProductVariant.barcode.ilike(s),
-                    Category.name.ilike(s),
+                    ProductBarcode.barcode.in_(candidates),
+                    ProductBarcode.barcode.ilike(f"%{tok}%"),
+                )
+            )
+            supplier_vids = db.query(SupplierProduct.variant_id).filter(
+                or_(
+                    SupplierProduct.supplier_sku.in_(candidates),
+                    SupplierProduct.supplier_sku.ilike(f"%{tok}%"),
                 )
             )
 
-    variants = query.order_by(Product.name.asc()).limit(limit).all()
+            s = f"%{tok}%"
+            tok_conds = [
+                Product.name.ilike(s),
+                Product.brand.ilike(s),
+                Category.name.ilike(s),
+                ProductVariant.sku.ilike(s),
+                ProductVariant.barcode.ilike(s),
+                ProductVariant.part_number.ilike(s),
+                ProductVariant.barcode.in_(candidates),
+                ProductVariant.sku.in_(candidates),
+                ProductVariant.id.in_(barcode_vids),
+                ProductVariant.id.in_(supplier_vids),
+            ]
+            if tok.isdigit() and len(tok) <= 9:
+                num_id = int(tok)
+                tok_conds.append(ProductVariant.sku.ilike(f"PRD-{num_id}"))
+
+            token_filters.append(or_(*tok_conds))
+
+        if token_filters:
+            query = query.filter(and_(*token_filters))
+
+        q_candidates = get_barcode_candidates(clean_q)
+        if clean_q not in q_candidates:
+            q_candidates.append(clean_q)
+        exact_bc_vids = db.query(ProductBarcode.product_variant_id).filter(
+            ProductBarcode.barcode.in_(q_candidates)
+        )
+        exact_sup_vids = db.query(SupplierProduct.variant_id).filter(
+            SupplierProduct.supplier_sku.in_(q_candidates)
+        )
+        exact_conds = [
+            ProductVariant.sku.ilike(clean_q),
+            ProductVariant.barcode.in_(q_candidates),
+            ProductVariant.part_number.ilike(clean_q),
+            ProductVariant.id.in_(exact_bc_vids),
+            ProductVariant.id.in_(exact_sup_vids),
+        ]
+        if clean_q.isdigit() and len(clean_q) <= 9:
+            q_num = int(clean_q)
+            exact_conds.append(ProductVariant.sku.ilike(f"PRD-{q_num}"))
+
+        priority_expr = case(
+            (or_(*exact_conds), 0),
+            (or_(Product.name.ilike(f"{clean_q}%"), ProductVariant.sku.ilike(f"{clean_q}%")), 1),
+            else_=2,
+        )
+
+    if priority_expr is not None:
+        variants = query.order_by(priority_expr.asc(), Product.name.asc()).limit(limit).all()
+    else:
+        variants = query.order_by(Product.name.asc()).limit(limit).all()
+
     variant_ids = [v.id for v in variants]
     stock_by_variant: dict[int, float] = {}
+    alt_codes_by_variant: dict[int, list[str]] = {}
     if variant_ids:
         snap_q = db.query(
             InventorySnapshot.variant_id,
@@ -1089,17 +1233,54 @@ def search_catalog_variants_for_mfg(
         for vid, total_stock in snap_q.group_by(InventorySnapshot.variant_id).all():
             stock_by_variant[int(vid)] = float(total_stock or 0.0)
 
+        barcodes_rows = (
+            db.query(ProductBarcode.product_variant_id, ProductBarcode.barcode)
+            .filter(ProductBarcode.product_variant_id.in_(variant_ids))
+            .all()
+        )
+        for vid, bc in barcodes_rows:
+            if bc:
+                lst = alt_codes_by_variant.setdefault(int(vid), [])
+                if bc not in lst:
+                    lst.append(bc)
+
+        sup_rows = (
+            db.query(SupplierProduct.variant_id, SupplierProduct.supplier_sku)
+            .filter(
+                SupplierProduct.variant_id.in_(variant_ids),
+                SupplierProduct.supplier_sku.isnot(None),
+            )
+            .all()
+        )
+        for vid, ssku in sup_rows:
+            if ssku:
+                lst = alt_codes_by_variant.setdefault(int(vid), [])
+                if ssku not in lst:
+                    lst.append(ssku)
+
     results = []
     for v in variants:
         unit_cost_usd = get_variant_unit_cost_usd(db, v, facility_id=facility_id)
         pvp_usd = get_variant_sales_price_usd(db, v, facility_id=facility_id)
+        alt_list = list(alt_codes_by_variant.get(v.id, []))
+        if v.part_number and v.part_number not in alt_list:
+            alt_list.insert(0, v.part_number)
+        if v.barcode and v.barcode != v.sku and v.barcode not in alt_list:
+            alt_list.insert(0, v.barcode)
+
         results.append({
             "id": v.id,
             "sku": v.sku,
             "barcode": v.barcode,
+            "part_number": v.part_number,
+            "alternate_codes": alt_list,
             "name": v.product.name if v.product else v.sku,
             "category_name": v.product.category.name if v.product and v.product.category else "General",
-            "uom_base": v.product.uom_base if v.product else "UND",
+            "uom_base": resolve_mfg_uom_base(
+                v.product.uom_base if v.product else None,
+                None,
+                v.product.name if v.product else None,
+            ),
             "facility_id": facility_id,
             "stock_qty": round(stock_by_variant.get(v.id, 0.0), 4),
             "unit_cost_usd": round(unit_cost_usd, 4),
@@ -1149,6 +1330,7 @@ def get_mfg_dashboard_summary(
             selectinload(BOMHeader.inputs).selectinload(BOMInput.component_variant).selectinload(ProductVariant.product),
             selectinload(BOMHeader.outputs).selectinload(BOMOutput.output_variant).selectinload(ProductVariant.product),
         )
+        .filter(BOMHeader.is_active == True)
         .all()
     )
 
@@ -1175,7 +1357,7 @@ def get_mfg_dashboard_summary(
         "exchange_rate": round(rate, 4),
         "exchange_rate_effective_date": rate_info["effective_date"],
         "kpis": {
-            "total_work_centers": len(work_centers),
+            "total_work_centers": len(active_wc),
             "active_work_centers": len(active_wc),
             "total_boms": len(boms),
             "convergent_recipes_count": convergent_count,
@@ -1214,7 +1396,7 @@ def get_mfg_dashboard_summary(
                 "overhead_per_kg": float(w.overhead_per_kg or 0),
                 "is_active": w.is_active,
             }
-            for w in work_centers
+            for w in active_wc
         ],
         "recent_boms": serialized_boms[:10],
         "recent_orders": orders_list_res["items"][:10],
@@ -1324,6 +1506,17 @@ def cancel_production_order(
     return ProductionService.cancel_order(db, order_id, notes)
 
 
+@router.delete("/orders/{order_id}")
+def delete_production_order(
+    *,
+    db: Session = Depends(deps.get_db),
+    order_id: int,
+) -> Any:
+    from app.services.production_service import ProductionService
+
+    return ProductionService.delete_order(db, order_id)
+
+
 @router.post("/orders/{order_id}/inputs")
 def add_production_order_input(
     *,
@@ -1334,6 +1527,18 @@ def add_production_order_input(
     from app.services.production_service import ProductionService
 
     return ProductionService.add_order_input(db, order_id, req)
+
+
+@router.put("/orders/{order_id}/inputs")
+def update_production_order_inputs(
+    *,
+    db: Session = Depends(deps.get_db),
+    order_id: int,
+    req: Union[UpdateOrderInputsRequest, List[AdHocOrderInputCreate]],
+) -> Any:
+    from app.services.production_service import ProductionService
+
+    return ProductionService.update_order_inputs(db, order_id, req)
 
 
 @router.post("/orders/{order_id}/outputs")
@@ -1361,3 +1566,47 @@ def save_production_order_as_bom(
     return ProductionService.save_order_as_bom(db, order_id, payload)
 
 
+# ==============================================================================
+# 7. FASE 4: PRODUCCIÓN MASIVA POR LOTES (EXPLOSIÓN CONSOLIDADA FEFO + EJECUCIÓN)
+# ==============================================================================
+@router.get("/batch-runs")
+def list_mfg_batch_runs(
+    facility_id: Optional[int] = Query(None),
+    limit: int = Query(30, le=100),
+    db: Session = Depends(deps.get_db),
+) -> Any:
+    from app.services.production_service import ProductionService
+
+    return ProductionService.list_batch_runs(db=db, facility_id=facility_id, limit=limit)
+
+
+@router.get("/batch-runs/{plan_id}")
+def get_mfg_batch_run_detail(
+    plan_id: int,
+    db: Session = Depends(deps.get_db),
+) -> Any:
+    from app.services.production_service import ProductionService
+
+    return ProductionService.get_batch_run_detail(db=db, plan_id=plan_id)
+
+
+@router.post("/batch-runs/explode-preview")
+def explode_mfg_batch_run_preview(
+    *,
+    db: Session = Depends(deps.get_db),
+    req: BatchRunExplodePreviewRequest,
+) -> Any:
+    from app.services.production_service import ProductionService
+
+    return ProductionService.explode_batch_run_preview(db=db, req=req)
+
+
+@router.post("/batch-runs/execute")
+def execute_mfg_batch_run(
+    *,
+    db: Session = Depends(deps.get_db),
+    req: BatchRunExecuteRequest,
+) -> Any:
+    from app.services.production_service import ProductionService
+
+    return ProductionService.execute_batch_run(db=db, req=req)
