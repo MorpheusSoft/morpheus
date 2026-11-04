@@ -2,9 +2,13 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import api from "@/lib/api";
 import { VariantCombobox, CatalogVariant } from "@/components/ui/VariantCombobox";
+import {
+  ProductionPrintModal,
+  PrintableOrderData,
+} from "@/components/print/ProductionPrintModal";
 
 interface BatchOption {
   id: number;
@@ -21,8 +25,16 @@ interface OrderInputDetail {
   input_role: string;
   uom_base: string;
   is_discrete_uom: boolean;
+  standard_scaled_qty_base?: number;
   planned_base_qty: number;
   consumed_base_qty: number;
+  delta_qty_base?: number;
+  delta_pct?: number;
+  standard_cost_usd?: number;
+  delta_cost_usd?: number;
+  delta_cost_ves?: number;
+  is_extra_input?: boolean;
+  is_overridden?: boolean;
   available_stock_qty: number;
   batch_id: number | null;
   batch_number: string | null;
@@ -80,6 +92,8 @@ interface OrderDetailResponse {
   dest_warehouse_name: string;
   work_center_id: number | null;
   work_center_name: string | null;
+  work_center_capacity_per_batch?: number;
+  work_center_capacity_uom?: string | null;
   work_center_rates: {
     hourly_labor_rate: number;
     hourly_overhead_rate: number;
@@ -89,11 +103,14 @@ interface OrderDetailResponse {
   bom_code: string;
   bom_name: string;
   bom_type: string;
+  bom_instructions?: string | null;
   uom_id: string;
   expected_shrinkage_pct: number;
   max_allowed_shrinkage_pct: number;
   shelf_life_days: number;
   exchange_rate: number;
+  base_qty?: number;
+  scale_factor?: number;
   planned_base_qty: number;
   actual_input_weight_kg: number;
   actual_good_output_weight_kg: number;
@@ -142,6 +159,7 @@ const FLOW_STEPS = [
 
 export default function ProductionOrderExecutionConsole() {
   const params = useParams();
+  const router = useRouter();
   const orderId = Number(params?.id);
 
   const [order, setOrder] = useState<OrderDetailResponse | null>(null);
@@ -176,6 +194,7 @@ export default function ProductionOrderExecutionConsole() {
   const [newInputRole, setNewInputRole] = useState<string>("INGREDIENT");
   const [showSaveBomForm, setShowSaveBomForm] = useState<boolean>(false);
   const [saveBomName, setSaveBomName] = useState<string>("");
+  const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
 
   const searchCatalogVariants = useCallback(
     async (queryText: string) => {
@@ -186,8 +205,10 @@ export default function ProductionOrderExecutionConsole() {
         const fetched: CatalogVariant[] = res.data.items || [];
         setVariants((prev) => {
           const map = new Map<number, CatalogVariant>();
-          for (const v of prev) map.set(v.id, v);
           for (const v of fetched) map.set(v.id, v);
+          for (const v of prev) {
+            if (!map.has(v.id)) map.set(v.id, v);
+          }
           return Array.from(map.values());
         });
       } catch (err) {
@@ -220,7 +241,7 @@ export default function ProductionOrderExecutionConsole() {
         input_id: inp.id,
         component_variant_id: inp.component_variant_id,
         batch_id: inp.batch_id,
-        consumed_base_qty: inp.consumed_base_qty > 0 ? inp.consumed_base_qty : inp.planned_base_qty,
+        consumed_base_qty: inp.consumed_base_qty ?? inp.planned_base_qty,
         unit_cost_usd: inp.unit_cost_usd,
         input_role: inp.input_role,
         is_discrete_uom: inp.is_discrete_uom,
@@ -496,6 +517,64 @@ export default function ProductionOrderExecutionConsole() {
     }
   };
 
+  const handleSaveFloorInputs = async () => {
+    if (!order) return;
+    setSubmitting(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const res = await api.put(`/mfg/orders/${order.id}/inputs`, {
+        inputs: editableInputs.map((i) => ({
+          input_id: i.input_id,
+          component_variant_id: i.component_variant_id,
+          batch_id: i.batch_id,
+          consumed_base_qty: i.consumed_base_qty,
+          input_role: i.input_role,
+        })),
+        actual_labor_hours: actualLaborHours,
+        notes: settlementNotes.trim() || order.notes || undefined,
+      });
+      const updated: OrderDetailResponse = res.data;
+      setOrder(updated);
+      setEditableInputs(
+        updated.inputs.map((inp) => ({
+          input_id: inp.id,
+          component_variant_id: inp.component_variant_id,
+          batch_id: inp.batch_id,
+          consumed_base_qty: inp.consumed_base_qty,
+          unit_cost_usd: inp.unit_cost_usd,
+          input_role: inp.input_role,
+          is_discrete_uom: inp.is_discrete_uom,
+        }))
+      );
+      setSuccessMsg(
+        "💾 Ajustes de insumos y lotes en piso guardados en la Orden (la Receta Maestra BOM permanece intacta)."
+      );
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "No se pudieron guardar los ajustes de insumos en piso.";
+      setErrorMsg(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRestoreStandardFormula = () => {
+    if (!order) return;
+    setEditableInputs(
+      order.inputs.map((inp) => ({
+        input_id: inp.id,
+        component_variant_id: inp.component_variant_id,
+        batch_id: inp.batch_id,
+        consumed_base_qty: inp.planned_base_qty,
+        unit_cost_usd: inp.unit_cost_usd,
+        input_role: inp.input_role,
+        is_discrete_uom: inp.is_discrete_uom,
+      }))
+    );
+  };
+
   const handleCancelOrder = async () => {
     if (!order) return;
     setSubmitting(true);
@@ -510,6 +589,29 @@ export default function ProductionOrderExecutionConsole() {
         "No se pudo cancelar la orden.";
       setErrorMsg(msg);
     } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteOrder = async () => {
+    if (!order) return;
+    if (
+      !window.confirm(
+        `¿Deseas eliminar definitivamente la Orden de Producción "${order.order_number}"?`
+      )
+    ) {
+      return;
+    }
+    setSubmitting(true);
+    setErrorMsg(null);
+    try {
+      await api.delete(`/mfg/orders/${order.id}`);
+      router.push("/orders");
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "No se pudo eliminar la orden de producción.";
+      setErrorMsg(msg);
       setSubmitting(false);
     }
   };
@@ -555,11 +657,26 @@ export default function ProductionOrderExecutionConsole() {
             <span className="font-mono text-orange-600">{order.order_number}</span>
             <span>•</span>
             <span className="text-slate-600">{order.work_center_name || "Planta Central"}</span>
-            {isAdHoc && (
+            {isAdHoc ? (
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 text-[11px] font-black">
                 ⚡ Transformación Libre (Sin Fórmula)
               </span>
+            ) : (
+              order.scale_factor !== undefined && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200 text-[11px] font-mono font-black tabular-nums">
+                  Escala: x {Number(order.scale_factor.toFixed(4))} Batches ({order.planned_base_qty} {order.uom_id})
+                </span>
+              )
             )}
+            {order.work_center_capacity_per_batch &&
+              order.work_center_capacity_per_batch > 0 &&
+              order.planned_base_qty > order.work_center_capacity_per_batch && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-300 text-[11px] font-bold">
+                  <i className="pi pi-info-circle text-[10px] text-amber-600"></i>~
+                  {Math.ceil(order.planned_base_qty / order.work_center_capacity_per_batch)} corridas de máquina (Cap.{" "}
+                  {order.work_center_capacity_per_batch} {order.work_center_capacity_uom || order.uom_id})
+                </span>
+              )}
           </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight flex flex-wrap items-center gap-3">
             <span>{order.order_number}</span>
@@ -617,8 +734,21 @@ export default function ProductionOrderExecutionConsole() {
           )}
         </div>
 
-        {/* Stepper de Estado del Flujo */}
+        {/* Stepper de Estado del Flujo y Botón de Impresión */}
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowPrintModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black border border-slate-800 shadow-sm transition-all cursor-pointer"
+          >
+            <i className="pi pi-print text-orange-400"></i>
+            <span>
+              {isCompleted
+                ? "🖨️ Imprimir Acta NIC 2"
+                : "🖨️ Imprimir Orden / Hoja de Piso"}
+            </span>
+          </button>
+
           {FLOW_STEPS.map((st, idx) => {
             const active = st.key === order.state;
             const passed = currentStepIdx > idx || isCompleted;
@@ -670,6 +800,14 @@ export default function ProductionOrderExecutionConsole() {
               <div className="text-xs text-slate-400">
                 {order.completed_at ? new Date(order.completed_at).toLocaleString("es-VE") : "Hoy"}
               </div>
+              <button
+                type="button"
+                onClick={() => setShowPrintModal(true)}
+                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-400/40 text-[11px] font-black transition-all cursor-pointer"
+              >
+                <i className="pi pi-print text-[10px]"></i>
+                Imprimir Acta Oficial (Carta / 80mm)
+              </button>
             </div>
           </div>
 
@@ -730,7 +868,26 @@ export default function ProductionOrderExecutionConsole() {
                   <code className="font-mono text-orange-600">VIRT_PRODUCTION</code> con asignación de lote FEFO.
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {isEditable && !isAdHoc && (
+                  <button
+                    type="button"
+                    onClick={handleRestoreStandardFormula}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-orange-700 border border-orange-300 text-xs font-bold cursor-pointer"
+                  >
+                    ↺ Restaurar según Fórmula
+                  </button>
+                )}
+                {isEditable && (
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={handleSaveFloorInputs}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50"
+                  >
+                    💾 Guardar Ajustes en Piso
+                  </button>
+                )}
                 {isEditable && (
                   <button
                     type="button"
@@ -810,8 +967,9 @@ export default function ProductionOrderExecutionConsole() {
                     <th className="py-3 px-4">Insumo / Rol</th>
                     <th className="py-3 px-3">Lote FEFO Asignado</th>
                     <th className="py-3 px-3 text-right">Stock Almacén</th>
-                    <th className="py-3 px-3 text-right">Planificado</th>
-                    <th className="py-3 px-3 text-right">Consumo Real</th>
+                    <th className="py-3 px-3 text-right">Estándar Fórmula</th>
+                    <th className="py-3 px-3 text-right">Consumo Orden / Real</th>
+                    <th className="py-3 px-3 text-right">Desviación (Δ Cant / Δ $ USD)</th>
                     <th className="py-3 px-4 text-right">Costo Subtotal</th>
                   </tr>
                 </thead>
@@ -823,13 +981,38 @@ export default function ProductionOrderExecutionConsole() {
                       batch_id: inp.batch_id,
                       unit_cost_usd: inp.unit_cost_usd,
                     };
-                    const lineUsd = editItem.consumed_base_qty * editItem.unit_cost_usd;
+                    const stdQty = inp.planned_base_qty;
+                    const currQty = isEditable ? editItem.consumed_base_qty : inp.consumed_base_qty;
+                    const lineUsd = currQty * editItem.unit_cost_usd;
                     const lineVes = lineUsd * liveNic2.rate;
+                    const stdUsd = stdQty * editItem.unit_cost_usd;
+                    const deltaQty = Number((currQty - stdQty).toFixed(4));
+                    const deltaPct =
+                      stdQty > 0
+                        ? Number((((currQty - stdQty) / stdQty) * 100).toFixed(1))
+                        : !isAdHoc && currQty > 0
+                        ? 100.0
+                        : 0.0;
+                    const deltaCostUsd = Number((lineUsd - stdUsd).toFixed(2));
+                    const isExtra = !isAdHoc && stdQty === 0;
+                    const isModified = Math.abs(currQty - stdQty) > 0.0001;
 
                     return (
-                      <tr key={inp.id} className="hover:bg-slate-50/80">
+                      <tr key={inp.id} className={`hover:bg-slate-50/80 ${isModified ? "bg-amber-50/30" : ""}`}>
                         <td className="py-3 px-4">
-                          <div className="font-bold text-slate-800 text-sm">{inp.component_name}</div>
+                          <div className="font-bold text-slate-800 text-sm flex flex-wrap items-center gap-1.5">
+                            <span>{inp.component_name}</span>
+                            {isExtra && (
+                              <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-300 text-[9px] font-black uppercase">
+                                EXTRA ORDEN
+                              </span>
+                            )}
+                            {!isExtra && isModified && (
+                              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-black uppercase">
+                                AJUSTADO
+                              </span>
+                            )}
+                          </div>
                           <div className="text-[11px] text-slate-400 font-mono">
                             {inp.component_sku} • {inp.input_role}
                           </div>
@@ -864,15 +1047,21 @@ export default function ProductionOrderExecutionConsole() {
                           )}
                         </td>
 
-                        <td className="py-3 px-3 text-right font-mono text-slate-600">
+                        <td className="py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap text-slate-600">
                           {inp.available_stock_qty} {inp.uom_base}
                         </td>
 
-                        <td className="py-3 px-3 text-right font-mono text-slate-600">
-                          {inp.planned_base_qty} {inp.uom_base}
+                        <td className="py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap text-slate-600">
+                          {isExtra ? (
+                            <span className="text-purple-700 font-bold">0 {inp.uom_base} (Extra)</span>
+                          ) : (
+                            <span>
+                              {stdQty} {inp.uom_base}
+                            </span>
+                          )}
                         </td>
 
-                        <td className="py-3 px-3 text-right">
+                        <td className="py-3 px-3 text-right tabular-nums whitespace-nowrap">
                           {isEditable ? (
                             <div className="inline-flex items-center gap-1">
                               <input
@@ -881,18 +1070,37 @@ export default function ProductionOrderExecutionConsole() {
                                 min="0"
                                 value={editItem.consumed_base_qty}
                                 onChange={(e) => handleInputQtyChange(inp.id, Number(e.target.value))}
-                                className="w-24 text-right bg-orange-50/50 border border-orange-300 rounded-lg px-2 py-1 font-mono font-black text-slate-800 focus:outline-none focus:border-orange-500"
+                                className="w-24 text-right bg-orange-50/50 border border-orange-300 rounded-lg px-2 py-1 font-mono tabular-nums font-black text-slate-800 focus:outline-none focus:border-orange-500"
                               />
                               <span className="font-mono text-[11px] text-slate-500">{inp.uom_base}</span>
                             </div>
                           ) : (
-                            <span className="font-mono font-black text-slate-800">
+                            <span className="font-mono tabular-nums font-black text-slate-800">
                               {inp.consumed_base_qty} {inp.uom_base}
                             </span>
                           )}
                         </td>
 
-                        <td className="py-3 px-4 text-right font-mono">
+                        <td className="py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                          {isModified ? (
+                            <div className={deltaQty >= 0 ? "text-amber-700 font-bold" : "text-blue-700 font-bold"}>
+                              <div>
+                                {deltaQty >= 0 ? "+" : ""}
+                                {deltaQty} {inp.uom_base} ({deltaPct >= 0 ? "+" : ""}
+                                {deltaPct}%)
+                              </div>
+                              <div className="text-[10px]">
+                                {deltaCostUsd >= 0 ? "+" : ""}${deltaCostUsd.toFixed(2)} USD
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-emerald-600 text-[11px] font-semibold">
+                              = Estándar (0%)
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-4 text-right font-mono tabular-nums whitespace-nowrap">
                           <div className="font-bold text-slate-800">${lineUsd.toFixed(2)}</div>
                           <div className="text-[10px] text-slate-500">Bs. {lineVes.toFixed(2)}</div>
                         </td>
@@ -1175,6 +1383,15 @@ export default function ProductionOrderExecutionConsole() {
 
                   <button
                     type="button"
+                    disabled={submitting}
+                    onClick={handleSaveFloorInputs}
+                    className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-orange-300 border border-orange-500/40 font-black text-xs uppercase tracking-wider transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    💾 Guardar Ajustes en Piso (Sin Liquidar aún)
+                  </button>
+
+                  <button
+                    type="button"
                     disabled={submitting || actualGoodQty <= 0}
                     onClick={handleCompleteOrder}
                     className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-black text-xs uppercase tracking-wider shadow-lg shadow-orange-500/25 transition-all cursor-pointer disabled:opacity-50"
@@ -1195,10 +1412,112 @@ export default function ProductionOrderExecutionConsole() {
                   </button>
                 </div>
               )}
+
+              {!isCompleted && (
+                <div className="pt-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={handleDeleteOrder}
+                    className="w-full py-2 px-4 rounded-xl bg-red-950/50 hover:bg-red-900/70 text-red-300 hover:text-white border border-red-800/60 text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <i className="pi pi-trash text-xs"></i>
+                    Eliminar Orden de Producción
+                  </button>
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowPrintModal(true)}
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 text-xs font-black flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  <i className="pi pi-print text-orange-400"></i>
+                  {isCompleted
+                    ? "🖨️ Imprimir Acta de Liquidación NIC 2"
+                    : "🖨️ Imprimir Hoja de Trabajo (Carta / 80mm)"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* MODAL DE IMPRESIÓN DINÁMICA (CARTA / A4 & TICKET TÉRMICO 80MM) */}
+      <ProductionPrintModal
+        open={showPrintModal}
+        onClose={() => setShowPrintModal(false)}
+        mode="ORDER"
+        order={
+          {
+            ...order,
+            actual_good_output_weight_kg: isCompleted
+              ? order.actual_good_output_weight_kg
+              : actualGoodQty,
+            natural_shrinkage_qty: isCompleted
+              ? order.natural_shrinkage_qty
+              : naturalShrinkageQty,
+            explicit_waste_qty: isCompleted
+              ? order.explicit_waste_qty
+              : explicitDamagedQty,
+            actual_labor_hours: isCompleted
+              ? order.actual_labor_hours
+              : actualLaborHours,
+            notes: settlementNotes.trim() || order.notes,
+            cost_summary: isCompleted
+              ? order.cost_summary
+              : {
+                  direct_materials_usd: liveNic2.matUsd,
+                  direct_materials_ves: liveNic2.matUsd * liveNic2.rate,
+                  packaging_usd: liveNic2.pkgUsd,
+                  packaging_ves: liveNic2.pkgUsd * liveNic2.rate,
+                  direct_labor_mod_usd: liveNic2.modUsd,
+                  direct_labor_mod_ves: liveNic2.modUsd * liveNic2.rate,
+                  indirect_overhead_cif_usd: liveNic2.cifUsd,
+                  indirect_overhead_cif_ves: liveNic2.cifUsd * liveNic2.rate,
+                  gross_production_cost_usd: liveNic2.grossCostUsd,
+                  gross_production_cost_ves: liveNic2.grossCostUsd * liveNic2.rate,
+                  explicit_waste_cost_usd: liveNic2.explicitWasteCostUsd,
+                  explicit_waste_cost_ves: liveNic2.explicitWasteCostUsd * liveNic2.rate,
+                  net_production_cost_usd: liveNic2.netCapitalizableCostUsd,
+                  net_production_cost_ves: liveNic2.netCapitalizableCostUsd * liveNic2.rate,
+                },
+            inputs: order.inputs.map((inp) => {
+              const edited = editableInputs.find((e) => e.input_id === inp.id);
+              const qty =
+                !isCompleted && edited
+                  ? edited.consumed_base_qty
+                  : inp.consumed_base_qty || inp.planned_base_qty;
+              const selectedBatch =
+                !isCompleted && edited && edited.batch_id
+                  ? inp.available_batches?.find((b) => b.id === edited.batch_id)
+                  : null;
+              return {
+                ...inp,
+                consumed_base_qty: qty,
+                batch_number: selectedBatch ? selectedBatch.batch_number : inp.batch_number,
+                batch_expiry_date: selectedBatch ? selectedBatch.expiry_date : inp.batch_expiry_date,
+                total_cost_usd: qty * inp.unit_cost_usd,
+                total_cost_ves: qty * inp.unit_cost_usd * liveNic2.rate,
+              };
+            }),
+            outputs: order.outputs.map((out, idx) =>
+              idx === 0 && !isCompleted
+                ? {
+                    ...out,
+                    actual_good_qty: actualGoodQty,
+                    explicit_damaged_qty: explicitDamagedQty,
+                    allocated_total_cost_usd: liveNic2.netCapitalizableCostUsd,
+                    allocated_total_cost_ves: liveNic2.netCapitalizableCostUsd * liveNic2.rate,
+                    calculated_unit_cost_usd: liveNic2.finalUnitCostUsd,
+                    calculated_unit_cost_ves: liveNic2.finalUnitCostUsd * liveNic2.rate,
+                  }
+                : out
+            ),
+          } as PrintableOrderData
+        }
+      />
     </div>
   );
 }

@@ -25,12 +25,28 @@ const FEATURE_ALIASES: Record<string, string[]> = {
   pricing_kiosk: ['pricing_kiosk', 'pricing_tags', 'pricing_prices'],
 };
 
-export function isSuperUser(user: any): boolean {
+export interface NeoRole {
+  name?: string;
+  is_active?: boolean;
+  permissions?: Record<string, string[] | Record<string, boolean | { read?: boolean; write?: boolean }>>;
+}
+
+export interface NeoUser {
+  id?: number;
+  email?: string;
+  full_name?: string;
+  is_superuser?: boolean;
+  must_change_password?: boolean;
+  active_role?: { name?: string } | null;
+  roles?: NeoRole[];
+}
+
+export function isSuperUser(user: NeoUser | null | undefined): boolean {
   if (!user) return false;
   return Boolean(user.is_superuser);
 }
 
-export function canAccessModule(user: any, moduleKey: NeoModuleKey | string): boolean {
+export function canAccessModule(user: NeoUser | null | undefined, moduleKey: NeoModuleKey | string): boolean {
   if (!user) return false;
   if (isSuperUser(user)) return true;
 
@@ -64,7 +80,7 @@ export function canAccessModule(user: any, moduleKey: NeoModuleKey | string): bo
 }
 
 export function canReadFeature(
-  user: any,
+  user: NeoUser | null | undefined,
   moduleKey: NeoModuleKey | string,
   featureKeys?: string | string[]
 ): boolean {

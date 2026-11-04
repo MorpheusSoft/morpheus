@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import api from "@/lib/api";
 import { VariantCombobox, CatalogVariant } from "@/components/ui/VariantCombobox";
+import {
+  ProductionPrintModal,
+  PrintableOrderData,
+} from "@/components/print/ProductionPrintModal";
 
 interface ButcheryOrderListItem {
   id: number;
@@ -277,6 +281,8 @@ export default function ButcheryDisassemblyDashboardPage() {
       market_reference_price: 6.5,
     },
   ]);
+  const [printingOrder, setPrintingOrder] = useState<PrintableOrderData | null>(null);
+  const [loadingPrintId, setLoadingPrintId] = useState<number | null>(null);
 
   const loadInfrastructure = useCallback(async () => {
     try {
@@ -308,8 +314,10 @@ export default function ButcheryDisassemblyDashboardPage() {
         const fetched: CatalogVariant[] = res.data.items || [];
         setVariants((prev) => {
           const map = new Map<number, CatalogVariant>();
-          for (const v of prev) map.set(v.id, v);
           for (const v of fetched) map.set(v.id, v);
+          for (const v of prev) {
+            if (!map.has(v.id)) map.set(v.id, v);
+          }
           return Array.from(map.values());
         });
       } catch (err) {
@@ -748,6 +756,42 @@ export default function ButcheryDisassemblyDashboardPage() {
     }
   };
 
+  const handleDeleteOrder = async (op: ButcheryOrderListItem) => {
+    if (
+      !window.confirm(
+        `¿Deseas eliminar definitivamente la Orden de Desposte "${op.order_number}"?`
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    try {
+      await api.delete(`/mfg/orders/${op.id}`);
+      await fetchButcheryOrders();
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "No se pudo eliminar la Orden de Desposte.";
+      setActionError(msg);
+    }
+  };
+
+  const handlePrintOrder = async (op: ButcheryOrderListItem) => {
+    setLoadingPrintId(op.id);
+    setActionError(null);
+    try {
+      const res = await api.get(`/mfg/orders/${op.id}`);
+      setPrintingOrder(res.data);
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "No se pudo cargar el detalle para imprimir la orden de desposte.";
+      setActionError(msg);
+    } finally {
+      setLoadingPrintId(null);
+    }
+  };
+
   const facilityWarehouses = warehouses.filter(
     (w) => w.facility_id === selectedFacilityId && !w.is_scrap && !w.is_scrap_warehouse
   );
@@ -798,6 +842,22 @@ export default function ButcheryDisassemblyDashboardPage() {
           </button>
         </div>
       </div>
+
+      {actionError && !showCreateModal && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <i className="pi pi-exclamation-triangle text-red-600"></i>
+            {actionError}
+          </span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="text-red-700 hover:text-red-900 cursor-pointer"
+          >
+            <i className="pi pi-times text-xs"></i>
+          </button>
+        </div>
+      )}
 
       {/* TARJETAS KPI DE SALA DE DESPOSTE */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1050,17 +1110,48 @@ export default function ButcheryDisassemblyDashboardPage() {
                       </td>
 
                       <td className="py-3.5 px-4 text-center">
-                        <Link
-                          href={`/butchery/${op.id}`}
-                          className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
-                            op.state === "COMPLETED"
-                              ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
-                              : "bg-gradient-to-r from-red-600 to-orange-500 text-white hover:from-red-700 hover:to-orange-600 shadow-sm"
-                          }`}
-                        >
-                          <i className={`pi ${op.state === "COMPLETED" ? "pi-verified" : "pi-sliders-h"} text-xs`}></i>
-                          {op.state === "COMPLETED" ? "Ver Liquidación NIC 2" : "Pesar y Liquidar"}
-                        </Link>
+                        <div className="inline-flex items-center justify-center gap-1.5">
+                          <Link
+                            href={`/butchery/${op.id}`}
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                              op.state === "COMPLETED"
+                                ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
+                                : "bg-gradient-to-r from-red-600 to-orange-500 text-white hover:from-red-700 hover:to-orange-600 shadow-sm"
+                            }`}
+                          >
+                            <i className={`pi ${op.state === "COMPLETED" ? "pi-verified" : "pi-sliders-h"} text-xs`}></i>
+                            {op.state === "COMPLETED" ? "Ver Liquidación NIC 2" : "Pesar y Liquidar"}
+                          </Link>
+                          <button
+                            type="button"
+                            disabled={loadingPrintId === op.id}
+                            onClick={() => handlePrintOrder(op)}
+                            title={
+                              op.state === "COMPLETED"
+                                ? `Imprimir Acta de Desposte NIC 2 (${op.order_number})`
+                                : `Imprimir Planilla de Sala de Desposte (${op.order_number})`
+                            }
+                            className="w-8 h-8 rounded-xl bg-slate-900 hover:bg-slate-800 text-white border border-slate-800 flex items-center justify-center transition-colors cursor-pointer disabled:opacity-50"
+                          >
+                            <i
+                              className={`pi ${
+                                loadingPrintId === op.id
+                                  ? "pi-spin pi-spinner"
+                                  : "pi-print text-orange-400"
+                              } text-xs`}
+                            ></i>
+                          </button>
+                          {op.state !== "COMPLETED" && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteOrder(op)}
+                              title={`Eliminar orden ${op.order_number}`}
+                              className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-600 border border-slate-200 hover:border-red-200 flex items-center justify-center transition-colors cursor-pointer"
+                            >
+                              <i className="pi pi-trash text-xs"></i>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1127,15 +1218,15 @@ export default function ButcheryDisassemblyDashboardPage() {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="flex flex-col justify-end">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5 whitespace-nowrap truncate">
                       🏢 Sucursal / Sede *
                     </label>
                     <select
                       value={selectedFacilityId}
                       onChange={(e) => handleFacilitySelectChange(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-red-500"
+                      className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-3.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-red-500"
                     >
                       {facilities.map((fac) => (
                         <option key={fac.id} value={fac.id}>
@@ -1145,14 +1236,14 @@ export default function ButcheryDisassemblyDashboardPage() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <div className="flex flex-col justify-end">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5 whitespace-nowrap truncate">
                       ⚙️ Estación / Mesa ({facilityWorkCenters.length} en Sede)
                     </label>
                     <select
                       value={selectedWorkCenterId}
                       onChange={(e) => handleWorkCenterSelectChange(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-red-500"
+                      className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-3.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-red-500"
                     >
                       <option value={0}>
                         {createMode === "BOM"
@@ -1167,14 +1258,14 @@ export default function ButcheryDisassemblyDashboardPage() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <div className="flex flex-col justify-end">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5 whitespace-nowrap truncate">
                       📦 Cava / Almacén Origen Canal (MFG-OUT) *
                     </label>
                     <select
                       value={sourceWarehouseId}
                       onChange={(e) => setSourceWarehouseId(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-red-500"
+                      className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-3.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-red-500"
                     >
                       {(facilityWarehouses.length > 0 ? facilityWarehouses : warehouses).map((w) => (
                         <option key={w.id} value={w.id}>
@@ -1184,14 +1275,14 @@ export default function ButcheryDisassemblyDashboardPage() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <div className="flex flex-col justify-end">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5 whitespace-nowrap truncate">
                       🏪 Almacén Destino Cortes (MFG-IN) *
                     </label>
                     <select
                       value={destWarehouseId}
                       onChange={(e) => setDestWarehouseId(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-red-500"
+                      className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-3.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-red-500"
                     >
                       {(facilityWarehouses.length > 0 ? facilityWarehouses : warehouses).map((w) => (
                         <option key={w.id} value={w.id}>
@@ -1230,15 +1321,15 @@ export default function ButcheryDisassemblyDashboardPage() {
               </div>
 
               {createMode === "BOM" ? (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="md:col-span-2">
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+                  <div className="md:col-span-2 flex flex-col">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
                       Plantilla de Desposte Divergente (1 → N)
                     </label>
                     <select
                       value={selectedBomId}
                       onChange={(e) => handleBomSelectChange(Number(e.target.value))}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-red-500"
+                      className="w-full h-[42px] bg-slate-50 border border-slate-300 rounded-xl px-3.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-red-500"
                     >
                       {boms.map((b) => (
                         <option key={b.id} value={b.id}>
@@ -1248,8 +1339,8 @@ export default function ButcheryDisassemblyDashboardPage() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  <div className="flex flex-col">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
                       Peso de Entrada de la Canal ({explodePreview?.uom_id || "KG"})
                     </label>
                     <input
@@ -1258,7 +1349,7 @@ export default function ButcheryDisassemblyDashboardPage() {
                       min="1"
                       value={carcassWeightKg}
                       onChange={(e) => setCarcassWeightKg(Math.max(1, Number(e.target.value)))}
-                      className="w-full bg-red-50/50 border border-red-300 rounded-xl px-3.5 py-2.5 text-base font-mono font-black text-red-700 focus:outline-none focus:border-red-600"
+                      className="w-full h-[42px] bg-red-50/50 border border-red-300 rounded-xl px-3.5 text-base font-mono font-black text-red-700 focus:outline-none focus:border-red-600"
                     />
                   </div>
                 </div>
@@ -1273,9 +1364,9 @@ export default function ButcheryDisassemblyDashboardPage() {
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-                    <div className="md:col-span-7">
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
+                    <div className="md:col-span-7 flex flex-col">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
                         Pieza Matriz / Canal de Entrada (`PRIMARY_MATRIX`)
                       </label>
                       <VariantCombobox
@@ -1286,8 +1377,8 @@ export default function ButcheryDisassemblyDashboardPage() {
                         placeholder="Seleccionar canal o pieza matriz..."
                       />
                     </div>
-                    <div className="md:col-span-3">
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    <div className="md:col-span-3 flex flex-col">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
                         Peso de Entrada (Kg)
                       </label>
                       <input
@@ -1296,11 +1387,11 @@ export default function ButcheryDisassemblyDashboardPage() {
                         min="0.1"
                         value={adhocInputWeightKg}
                         onChange={(e) => setAdhocInputWeightKg(Math.max(0.1, Number(e.target.value)))}
-                        className="w-full bg-white border border-red-300 rounded-xl px-3 py-2.5 text-sm font-mono font-black text-red-700"
+                        className="w-full h-[42px] bg-white border border-red-300 rounded-xl px-3 text-sm font-mono font-black text-red-700"
                       />
                     </div>
-                    <div className="md:col-span-2">
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    <div className="md:col-span-2 flex flex-col">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
                         Merma Oreo %
                       </label>
                       <input
@@ -1310,7 +1401,7 @@ export default function ButcheryDisassemblyDashboardPage() {
                         max="50"
                         value={adhocExpectedShrinkagePct}
                         onChange={(e) => setAdhocExpectedShrinkagePct(Math.max(0, Number(e.target.value)))}
-                        className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-mono font-bold text-slate-700"
+                        className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-3 text-sm font-mono font-bold text-slate-700"
                       />
                     </div>
                   </div>
@@ -1453,7 +1544,7 @@ export default function ButcheryDisassemblyDashboardPage() {
                 </div>
               )}
 
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <label className="flex items-center gap-2.5 bg-red-50/70 border border-red-200 rounded-xl px-3.5 py-2.5 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1698,6 +1789,14 @@ export default function ButcheryDisassemblyDashboardPage() {
           </div>
         )}
       </dialog>
+
+      {/* MODAL DE IMPRESIÓN DINÁMICA (CARTA / A4 & TICKET TÉRMICO 80MM) */}
+      <ProductionPrintModal
+        open={Boolean(printingOrder)}
+        onClose={() => setPrintingOrder(null)}
+        mode="ORDER"
+        order={printingOrder}
+      />
     </div>
   );
 }

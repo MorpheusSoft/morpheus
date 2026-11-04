@@ -3,7 +3,7 @@ import React, { Suspense } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSidebar } from '@/context/SidebarContext';
-import { canReadFeature } from '@/lib/rbac';
+import { canReadFeature, type NeoUser } from '@/lib/rbac';
 
 interface NavItem {
   label: string;
@@ -19,7 +19,7 @@ function AppSidebarContent() {
   const [userName, setUserName] = React.useState('Cargando...');
   const [userRole, setUserRole] = React.useState('Verificando...');
   const [userInitials, setUserInitials] = React.useState('--');
-  const [currentUser, setCurrentUser] = React.useState<any>(null);
+  const [currentUser, setCurrentUser] = React.useState<NeoUser | null>(null);
 
   React.useEffect(() => {
     import('@/lib/api').then(({ default: api }) => {
@@ -66,6 +66,7 @@ function AppSidebarContent() {
 
   const roadmapItems: NavItem[] = [
     { label: 'Órdenes de Producción', icon: 'pi pi-cog', href: '/orders', featureKey: 'production_orders' },
+    { label: 'Producción Masiva / Lotes', icon: 'pi pi-bolt', href: '/batch-run', featureKey: 'production_orders' },
     { label: 'Sala de Desposte', icon: 'pi pi-percentage', href: '/butchery', badge: 'Fase 3', featureKey: 'butchery' },
   ];
 

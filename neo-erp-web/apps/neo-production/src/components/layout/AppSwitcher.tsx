@@ -1,12 +1,12 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 import { resolveDomain, type DomainConfig } from '@/lib/domain';
-import { canAccessModule, canReadFeature } from '@/lib/rbac';
+import { canAccessModule, canReadFeature, type NeoUser } from '@/lib/rbac';
 
 export function AppSwitcher() {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<NeoUser | null>(null);
   const [userLoaded, setUserLoaded] = useState(false);
 
   const [domainConfig, setDomainConfig] = useState<DomainConfig>(() => resolveDomain());

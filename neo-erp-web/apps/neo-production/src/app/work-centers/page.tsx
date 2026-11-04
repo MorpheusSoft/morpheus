@@ -164,12 +164,19 @@ export default function WorkCentersPage() {
   }
 
   async function handleDelete(wc: WorkCenter) {
-    if (!window.confirm(`¿Deseas eliminar o desactivar la estación "${wc.name}"?`)) return;
+    if (!window.confirm(`¿Deseas eliminar la estación "${wc.name}"?`)) return;
+    setErrorMsg(null);
     try {
       await api.delete(`/mfg/work-centers/${wc.id}`);
       await loadData();
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Error eliminando estación:", err);
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      setErrorMsg(
+        typeof detail === "string"
+          ? detail
+          : "No se pudo eliminar el Centro de Trabajo seleccionado."
+      );
     }
   }
 
@@ -206,6 +213,22 @@ export default function WorkCentersPage() {
           Nuevo Centro de Trabajo
         </button>
       </div>
+
+      {errorMsg && !isModalOpen && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <i className="pi pi-exclamation-triangle text-red-600"></i>
+            {errorMsg}
+          </span>
+          <button
+            type="button"
+            onClick={() => setErrorMsg(null)}
+            className="text-red-700 hover:text-red-900 cursor-pointer"
+          >
+            <i className="pi pi-times text-xs"></i>
+          </button>
+        </div>
+      )}
 
       {/* FILTROS POR SECTOR Y SUCURSAL */}
       <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">

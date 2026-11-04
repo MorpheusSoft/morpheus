@@ -202,6 +202,14 @@ export default function NeoProductionDashboard() {
           </Link>
 
           <Link
+            href="/batch-run"
+            className="inline-flex items-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold px-4 py-3 rounded-xl transition-all text-sm shadow-xs"
+          >
+            <i className="pi pi-bolt text-orange-600"></i>
+            ⚡ Producción Masiva (Multi-Receta)
+          </Link>
+
+          <Link
             href="/orders"
             className="inline-flex items-center gap-2 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-bold px-5 py-3 rounded-xl shadow-md shadow-orange-500/20 transition-all text-sm"
           >

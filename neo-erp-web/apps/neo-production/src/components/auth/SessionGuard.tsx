@@ -10,7 +10,7 @@ import {
   recordSharedActivity,
   getSharedLastActivity,
 } from '@/lib/domain';
-import { canAccessModule, canReadFeature } from '@/lib/rbac';
+import { canAccessModule, canReadFeature, type NeoUser } from '@/lib/rbac';
 import { ChangePasswordModal } from './ChangePasswordModal';
 
 const MODULE_KEY: string = 'neo_production';
@@ -43,7 +43,7 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
   const pathname = usePathname() || '';
   const [isExpired, setIsExpired] = useState(false);
   const [isForbidden, setIsForbidden] = useState(false);
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<NeoUser | null>(null);
   const [warningSecondsLeft, setWarningSecondsLeft] = useState<number | null>(null);
 
   const redirectingRef = useRef(false);
@@ -306,7 +306,7 @@ export function SessionGuard({ children, inactivityTimeoutMinutes = 30 }: Sessio
   }
 
   const handlePasswordChanged = () => {
-    setCurrentUser((prev: any) => (prev ? { ...prev, must_change_password: false } : null));
+    setCurrentUser((prev) => (prev ? { ...prev, must_change_password: false } : null));
   };
 
   return (

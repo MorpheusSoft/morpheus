@@ -2,9 +2,13 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import api from "@/lib/api";
 import { VariantCombobox, CatalogVariant } from "@/components/ui/VariantCombobox";
+import {
+  ProductionPrintModal,
+  PrintableOrderData,
+} from "@/components/print/ProductionPrintModal";
 
 interface BatchOption {
   id: number;
@@ -95,6 +99,7 @@ interface OrderDetailResponse {
   bom_code: string;
   bom_name: string;
   bom_type: string;
+  bom_instructions?: string | null;
   uom_id: string;
   expected_shrinkage_pct: number;
   max_allowed_shrinkage_pct: number;
@@ -250,6 +255,7 @@ const OUTPUT_TYPE_BADGES: Record<string, { label: string; color: string }> = {
 
 export default function ButcherySettlementConsolePage() {
   const params = useParams();
+  const router = useRouter();
   const orderId = Number(params?.id);
 
   const [order, setOrder] = useState<OrderDetailResponse | null>(null);
@@ -295,6 +301,7 @@ export default function ButcherySettlementConsolePage() {
   const [newOutputRefPrice, setNewOutputRefPrice] = useState<number>(6.5);
   const [showSaveBomForm, setShowSaveBomForm] = useState<boolean>(false);
   const [saveBomName, setSaveBomName] = useState<string>("");
+  const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
 
   const searchCatalogVariants = useCallback(
     async (queryText: string) => {
@@ -305,8 +312,10 @@ export default function ButcherySettlementConsolePage() {
         const fetched: CatalogVariant[] = res.data.items || [];
         setVariants((prev) => {
           const map = new Map<number, CatalogVariant>();
-          for (const v of prev) map.set(v.id, v);
           for (const v of fetched) map.set(v.id, v);
+          for (const v of prev) {
+            if (!map.has(v.id)) map.set(v.id, v);
+          }
           return Array.from(map.values());
         });
       } catch (err) {
@@ -581,6 +590,29 @@ export default function ButcherySettlementConsolePage() {
     }
   };
 
+  const handleDeleteOrder = async () => {
+    if (!order) return;
+    if (
+      !window.confirm(
+        `¿Deseas eliminar definitivamente la Orden de Desposte "${order.order_number}"?`
+      )
+    ) {
+      return;
+    }
+    setSubmitting(true);
+    setErrorMsg(null);
+    try {
+      await api.delete(`/mfg/orders/${order.id}`);
+      router.push("/butchery");
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "No se pudo eliminar la Orden de Desposte.";
+      setErrorMsg(msg);
+      setSubmitting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-8 text-center text-slate-400">
@@ -755,8 +787,21 @@ export default function ButcherySettlementConsolePage() {
           )}
         </div>
 
-        {/* Stepper de Estado del Flujo */}
+        {/* Stepper de Estado del Flujo y Botón de Impresión */}
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowPrintModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black border border-slate-800 shadow-sm transition-all cursor-pointer"
+          >
+            <i className="pi pi-print text-orange-400"></i>
+            <span>
+              {isCompleted
+                ? "🖨️ Imprimir Acta Desposte NIC 2"
+                : "🖨️ Imprimir Planilla de Sala"}
+            </span>
+          </button>
+
           {FLOW_STEPS.map((st, idx) => {
             const active = st.key === order.state;
             const passed = currentStepIdx > idx || isCompleted;
@@ -808,6 +853,14 @@ export default function ButcherySettlementConsolePage() {
               <div className="text-xs text-slate-400">
                 {order.completed_at ? new Date(order.completed_at).toLocaleString("es-VE") : "Liquidada"}
               </div>
+              <button
+                type="button"
+                onClick={() => setShowPrintModal(true)}
+                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-400/40 text-[11px] font-black transition-all cursor-pointer"
+              >
+                <i className="pi pi-print text-[10px]"></i>
+                Imprimir Acta Oficial (Carta / 80mm)
+              </button>
             </div>
           </div>
 
@@ -1599,9 +1652,131 @@ export default function ButcherySettlementConsolePage() {
                 </button>
               </div>
             )}
+
+            {!isCompleted && (
+              <div className="pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={handleDeleteOrder}
+                  className="w-full py-2 px-4 rounded-xl bg-red-950/50 hover:bg-red-900/70 text-red-300 hover:text-white border border-red-800/60 text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <i className="pi pi-trash text-xs"></i>
+                  Eliminar Orden de Desposte
+                </button>
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowPrintModal(true)}
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 text-xs font-black flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                <i className="pi pi-print text-orange-400"></i>
+                {isCompleted
+                  ? "🖨️ Imprimir Acta de Desposte NIC 2"
+                  : "🖨️ Imprimir Planilla de Sala (Carta / 80mm)"}
+              </button>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* MODAL DE IMPRESIÓN DINÁMICA (CARTA / A4 & TICKET TÉRMICO 80MM) */}
+      <ProductionPrintModal
+        open={showPrintModal}
+        onClose={() => setShowPrintModal(false)}
+        mode="ORDER"
+        order={
+          {
+            ...order,
+            actual_input_weight_kg: isCompleted
+              ? order.actual_input_weight_kg
+              : mb.input_weight_kg,
+            actual_good_output_weight_kg: isCompleted
+              ? order.actual_good_output_weight_kg
+              : mb.good_cuts_weight_kg,
+            actual_byproduct_weight_kg: isCompleted
+              ? order.actual_byproduct_weight_kg
+              : mb.byproducts_weight_kg,
+            natural_shrinkage_qty: isCompleted
+              ? order.natural_shrinkage_qty
+              : mb.natural_shrinkage_qty,
+            explicit_waste_qty: isCompleted
+              ? order.explicit_waste_qty
+              : mb.explicit_waste_qty,
+            actual_labor_hours: isCompleted
+              ? order.actual_labor_hours
+              : actualLaborHours,
+            notes: settlementNotes.trim() || order.notes,
+            cost_summary: isCompleted
+              ? order.cost_summary
+              : {
+                  ...order.cost_summary,
+                  direct_materials_usd: cs.direct_materials_usd,
+                  direct_materials_ves: cs.direct_materials_ves,
+                  packaging_usd: cs.packaging_usd,
+                  packaging_ves: cs.packaging_ves,
+                  direct_labor_mod_usd: cs.direct_labor_mod_usd,
+                  direct_labor_mod_ves: cs.direct_labor_mod_ves,
+                  indirect_overhead_cif_usd: cs.indirect_overhead_cif_usd,
+                  indirect_overhead_cif_ves: cs.indirect_overhead_cif_ves,
+                  gross_production_cost_usd: cs.gross_production_cost_usd,
+                  gross_production_cost_ves: cs.gross_production_cost_ves,
+                  byproduct_credit_usd: cs.byproduct_credit_usd,
+                  byproduct_credit_ves: cs.byproduct_credit_ves,
+                  explicit_waste_cost_usd: cs.explicit_waste_cost_usd,
+                  explicit_waste_cost_ves: cs.explicit_waste_cost_ves,
+                  net_production_cost_usd: cs.net_joint_cost_to_distribute_usd,
+                  net_production_cost_ves: cs.net_joint_cost_to_distribute_ves,
+                },
+            inputs: order.inputs.map((inp) => {
+              const edited = editableInputs.find((e) => e.input_id === inp.id);
+              const qty =
+                !isCompleted && edited
+                  ? edited.consumed_base_qty
+                  : inp.consumed_base_qty || inp.planned_base_qty;
+              return {
+                ...inp,
+                consumed_base_qty: qty,
+                total_cost_usd: qty * inp.unit_cost_usd,
+                total_cost_ves: qty * inp.unit_cost_usd * rate,
+              };
+            }),
+            outputs: order.outputs.map((out) => {
+              const simOut = simulation?.outputs?.find(
+                (s) => s.output_variant_id === out.output_variant_id
+              );
+              const editOut = editableOutputs.find(
+                (e) => e.output_variant_id === out.output_variant_id
+              );
+              if (!isCompleted && (simOut || editOut)) {
+                return {
+                  ...out,
+                  actual_good_qty:
+                    editOut?.actual_good_qty ?? simOut?.actual_good_qty ?? out.actual_good_qty,
+                  explicit_damaged_qty:
+                    editOut?.explicit_damaged_qty ??
+                    simOut?.explicit_damaged_qty ??
+                    out.explicit_damaged_qty,
+                  actual_yield_pct: simOut?.actual_yield_pct ?? out.actual_yield_pct,
+                  cost_allocation_pct: simOut?.cost_allocation_pct ?? out.cost_allocation_pct,
+                  allocated_total_cost_usd:
+                    simOut?.allocated_total_cost_usd ?? out.allocated_total_cost_usd,
+                  allocated_total_cost_ves:
+                    simOut?.allocated_total_cost_ves ?? out.allocated_total_cost_ves,
+                  calculated_unit_cost_usd:
+                    simOut?.calculated_unit_cost_usd ?? out.calculated_unit_cost_usd,
+                  calculated_unit_cost_ves:
+                    simOut?.calculated_unit_cost_ves ?? out.calculated_unit_cost_ves,
+                };
+              }
+              return out;
+            }),
+          } as PrintableOrderData
+        }
+      />
     </div>
   );
 }

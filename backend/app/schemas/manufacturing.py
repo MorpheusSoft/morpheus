@@ -198,14 +198,24 @@ class SimulateCostRequest(BaseModel):
 # FASE 2: EXPLOSIÓN DE MATERIALES FEFO & ÓRDENES DE PRODUCCIÓN CONVERGENTES / LIBRES
 # ==============================================================================
 class AdHocOrderInputCreate(BaseModel):
+    input_id: Optional[int] = None
+    bom_input_id: Optional[int] = None
     component_variant_id: int
     planned_base_qty: Optional[float] = None
     planned_qty: Optional[float] = None
+    consumed_base_qty: Optional[float] = None
+    quantity: Optional[float] = None
     uom_base: Optional[str] = None
     scrap_factor_pct: Optional[float] = 0.0
     input_role: str = "PRIMARY_RAW_MATERIAL"  # 'PRIMARY_RAW_MATERIAL', 'INGREDIENT', 'PACKAGING', 'SEMI_FINISHED'
     batch_id: Optional[int] = None
     unit_cost_override_usd: Optional[float] = None
+
+
+class UpdateOrderInputsRequest(BaseModel):
+    inputs: List[AdHocOrderInputCreate] = Field(default_factory=list)
+    actual_labor_hours: Optional[float] = None
+    notes: Optional[str] = None
 
 
 class AdHocOrderOutputCreate(BaseModel):
@@ -221,17 +231,19 @@ class AdHocOrderOutputCreate(BaseModel):
 class ExplodePreviewRequest(BaseModel):
     bom_id: Optional[int] = None
     planned_base_qty: Optional[float] = None
+    scale_factor: Optional[float] = None
     facility_id: Optional[int] = None
     work_center_id: Optional[int] = None
     source_warehouse_id: Optional[int] = None
     dest_warehouse_id: Optional[int] = None
     actual_labor_hours: Optional[float] = None
-    standard_labor_hours: Optional[float] = 0.5
+    standard_labor_hours: Optional[float] = None
     shelf_life_days: Optional[int] = 7
     expected_shrinkage_pct: Optional[float] = 0.0
     sector: Optional[str] = "GASTRONOMY"
     order_type: Optional[str] = None
     exchange_rate_override: Optional[float] = None
+    input_overrides: Optional[List[AdHocOrderInputCreate]] = None
     inputs: Optional[List[AdHocOrderInputCreate]] = None
     outputs: Optional[List[AdHocOrderOutputCreate]] = None
 
@@ -243,12 +255,14 @@ class ProductionOrderCreate(BaseModel):
     source_warehouse_id: Optional[int] = None
     dest_warehouse_id: Optional[int] = None
     planned_base_qty: Optional[float] = None
+    scale_factor: Optional[float] = None
+    input_overrides: Optional[List[AdHocOrderInputCreate]] = None
     inputs: Optional[List[AdHocOrderInputCreate]] = None
     outputs: Optional[List[AdHocOrderOutputCreate]] = None
     sector: Optional[str] = "GASTRONOMY"
     order_type: Optional[str] = None
     shelf_life_days: Optional[int] = 7
-    standard_labor_hours: Optional[float] = 0.5
+    standard_labor_hours: Optional[float] = None
     expected_shrinkage_pct: Optional[float] = 0.0
     scheduled_date: Optional[datetime] = None
     notes: Optional[str] = None
@@ -329,3 +343,46 @@ class ButcherySimulateSettlementRequest(BaseModel):
     outputs: Optional[List[ButcherySimulateOutputItem]] = None
 
 
+# ==============================================================================
+# FASE 4: CORRIDA DE PRODUCCIÓN MASIVA POR LOTES (MULTI-RECETA + FEFO CONSOLIDADO)
+# ==============================================================================
+class BatchRunLinePreviewRequest(BaseModel):
+    bom_id: int
+    work_center_id: Optional[int] = None
+    scale_factor: Optional[float] = 1.0
+    planned_base_qty: Optional[float] = None
+    actual_good_qty: Optional[float] = None
+    natural_shrinkage_qty: Optional[float] = None
+    explicit_damaged_qty: Optional[float] = 0.0
+    actual_labor_hours: Optional[float] = None
+
+
+class BatchRunExplodePreviewRequest(BaseModel):
+    facility_id: int = 1
+    source_warehouse_id: Optional[int] = None
+    dest_warehouse_id: Optional[int] = None
+    exchange_rate_override: Optional[float] = None
+    lines: List[BatchRunLinePreviewRequest] = Field(default_factory=list)
+
+
+class BatchRunLineExecuteRequest(BaseModel):
+    bom_id: int
+    work_center_id: Optional[int] = None
+    scale_factor: Optional[float] = 1.0
+    planned_base_qty: Optional[float] = None
+    actual_good_qty: Optional[float] = None
+    natural_shrinkage_qty: Optional[float] = None
+    explicit_damaged_qty: Optional[float] = 0.0
+    actual_labor_hours: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class BatchRunExecuteRequest(BaseModel):
+    facility_id: int = 1
+    source_warehouse_id: int = 1
+    dest_warehouse_id: int = 1
+    shift: str = "MORNING"  # 'MORNING', 'AFTERNOON', 'NIGHT', 'FULL_DAY'
+    sector: str = "BAKERY"  # 'BAKERY', 'GASTRONOMY', 'ALL', 'MEAT_PROCESSING'
+    execution_mode: str = "LEAVE_IN_PROGRESS"  # 'LEAVE_IN_PROGRESS' | 'COMPLETE_AND_SETTLE'
+    notes: Optional[str] = None
+    lines: List[BatchRunLineExecuteRequest] = Field(default_factory=list)

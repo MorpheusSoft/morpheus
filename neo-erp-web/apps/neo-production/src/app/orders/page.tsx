@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import api from "@/lib/api";
 import { VariantCombobox, CatalogVariant } from "@/components/ui/VariantCombobox";
+import {
+  ProductionPrintModal,
+  PrintableOrderData,
+} from "@/components/print/ProductionPrintModal";
 
 interface OrderListItem {
   id: number;
@@ -83,6 +87,8 @@ interface WorkCenterOption {
   code: string;
   name: string;
   sector: string;
+  capacity_per_batch?: number;
+  capacity_uom?: string;
   hourly_labor_rate: number;
   hourly_overhead_rate: number;
   overhead_per_kg: number;
@@ -109,7 +115,16 @@ interface ExplodeInputItem {
   is_discrete_uom: boolean;
   net_qty_base: number;
   raw_gross_qty_base: number;
+  standard_scaled_qty_base?: number;
   planned_base_qty: number;
+  consumed_base_qty?: number;
+  delta_qty_base?: number;
+  delta_pct?: number;
+  standard_cost_usd?: number;
+  delta_cost_usd?: number;
+  delta_cost_ves?: number;
+  is_overridden?: boolean;
+  is_extra_input?: boolean;
   available_stock_qty: number;
   shortage_qty: number;
   availability_status: "AVAILABLE" | "PARTIAL" | "SHORTAGE";
@@ -138,6 +153,10 @@ interface ExplodePreviewResponse {
   work_center_id?: number | null;
   work_center_code?: string | null;
   work_center_name?: string | null;
+  work_center_capacity_per_batch?: number;
+  work_center_capacity_uom?: string | null;
+  estimated_machine_batches?: number;
+  exceeds_work_center_capacity?: boolean;
   hourly_labor_rate?: number;
   hourly_overhead_rate?: number;
   primary_product_sku?: string | null;
@@ -221,6 +240,9 @@ export default function ProductionOrdersPage() {
   const [boms, setBoms] = useState<BOMOption[]>([]);
   const [selectedBomId, setSelectedBomId] = useState<number>(0);
   const [plannedQty, setPlannedQty] = useState<number>(100);
+  const [scaleFactor, setScaleFactor] = useState<number>(1);
+  const [bomInputOverrides, setBomInputOverrides] = useState<Record<number, number>>({});
+  const [bomExtraInputs, setBomExtraInputs] = useState<AdHocInputRow[]>([]);
   const [selectedFacilityId, setSelectedFacilityId] = useState<number>(1);
   const [selectedWorkCenterId, setSelectedWorkCenterId] = useState<number>(0);
   const [sourceWarehouseId, setSourceWarehouseId] = useState<number>(1);
@@ -240,6 +262,8 @@ export default function ProductionOrdersPage() {
   const [adhocInputs, setAdhocInputs] = useState<AdHocInputRow[]>([
     { component_variant_id: 0, planned_qty: 5, input_role: "INGREDIENT" },
   ]);
+  const [printingOrder, setPrintingOrder] = useState<PrintableOrderData | null>(null);
+  const [loadingPrintId, setLoadingPrintId] = useState<number | null>(null);
 
   const loadInfrastructure = useCallback(async () => {
     try {
@@ -271,8 +295,10 @@ export default function ProductionOrdersPage() {
         const fetched: CatalogVariant[] = res.data.items || [];
         setVariants((prev) => {
           const map = new Map<number, CatalogVariant>();
-          for (const v of prev) map.set(v.id, v);
           for (const v of fetched) map.set(v.id, v);
+          for (const v of prev) {
+            if (!map.has(v.id)) map.set(v.id, v);
+          }
           return Array.from(map.values());
         });
       } catch (err) {
@@ -418,6 +444,9 @@ export default function ProductionOrdersPage() {
       if (activeBom && !selectedBomId) {
         setSelectedBomId(activeBom.id);
         setPlannedQty(activeBom.base_qty || 100);
+        setScaleFactor(1);
+        setBomInputOverrides({});
+        setBomExtraInputs([]);
       }
 
       syncFacilityDependencies(defaultFacId, whList, wcList, activeBom);
@@ -452,9 +481,11 @@ export default function ProductionOrdersPage() {
     try {
       const selectedIds = Array.from(
         new Set(
-          [adhocOutputVariantId, ...adhocInputs.map((i) => i.component_variant_id)].filter(
-            (id) => id > 0
-          )
+          [
+            adhocOutputVariantId,
+            ...adhocInputs.map((i) => i.component_variant_id),
+            ...bomExtraInputs.map((i) => i.component_variant_id),
+          ].filter((id) => id > 0)
         )
       );
       const [baseRes, extraRes] = await Promise.all([
@@ -495,6 +526,21 @@ export default function ProductionOrdersPage() {
     }
   };
 
+  const buildBomOverridesPayload = useCallback(() => {
+    const overrides = Object.entries(bomInputOverrides).map(([vid, qty]) => ({
+      component_variant_id: Number(vid),
+      consumed_base_qty: Math.max(0, Number(qty)),
+    }));
+    const extras = bomExtraInputs
+      .filter((i) => i.component_variant_id > 0 && i.planned_qty > 0)
+      .map((i) => ({
+        component_variant_id: i.component_variant_id,
+        consumed_base_qty: i.planned_qty,
+        input_role: i.input_role,
+      }));
+    return [...overrides, ...extras];
+  }, [bomInputOverrides, bomExtraInputs]);
+
   useEffect(() => {
     if (!showCreateModal) return;
     let active = true;
@@ -506,13 +552,16 @@ export default function ProductionOrdersPage() {
         }
         setLoadingPreview(true);
         try {
+          const overridePayload = buildBomOverridesPayload();
           const res = await api.post("/mfg/orders/explode-preview", {
             bom_id: selectedBomId,
             planned_base_qty: plannedQty,
+            scale_factor: scaleFactor,
             facility_id: selectedFacilityId,
             work_center_id: selectedWorkCenterId > 0 ? selectedWorkCenterId : undefined,
             source_warehouse_id: sourceWarehouseId,
             dest_warehouse_id: destWarehouseId,
+            input_overrides: overridePayload.length > 0 ? overridePayload : undefined,
           });
           if (active) {
             setExplodePreview(res.data);
@@ -576,6 +625,8 @@ export default function ProductionOrdersPage() {
     createMode,
     selectedBomId,
     plannedQty,
+    scaleFactor,
+    buildBomOverridesPayload,
     selectedFacilityId,
     selectedWorkCenterId,
     sourceWarehouseId,
@@ -586,8 +637,28 @@ export default function ProductionOrdersPage() {
     adhocInputs,
   ]);
 
+  const activeBomObj = boms.find((b) => b.id === selectedBomId) || null;
+  const currentBomBaseQty = Math.max(0.0001, activeBomObj?.base_qty || explodePreview?.base_qty || 100);
+
+  const handleScaleFactorChange = (newFactor: number) => {
+    const validFactor = Math.max(0.01, Number(newFactor.toFixed(4)));
+    setScaleFactor(validFactor);
+    setPlannedQty(Number((currentBomBaseQty * validFactor).toFixed(4)));
+    setBomInputOverrides({});
+  };
+
+  const handlePlannedQtyChange = (newQty: number) => {
+    const validQty = Math.max(0.01, Number(newQty));
+    setPlannedQty(validQty);
+    setScaleFactor(Number((validQty / currentBomBaseQty).toFixed(4)));
+    setBomInputOverrides({});
+  };
+
   const handleBomSelectChange = (bomId: number) => {
     setSelectedBomId(bomId);
+    setScaleFactor(1);
+    setBomInputOverrides({});
+    setBomExtraInputs([]);
     const found = boms.find((b) => b.id === bomId);
     if (found) {
       setPlannedQty(found.base_qty || 100);
@@ -622,6 +693,7 @@ export default function ProductionOrdersPage() {
           setCreatingOrder(false);
           return;
         }
+        const overridePayload = buildBomOverridesPayload();
         const res = await api.post("/mfg/orders", {
           bom_id: selectedBomId,
           facility_id: selectedFacilityId,
@@ -629,6 +701,8 @@ export default function ProductionOrdersPage() {
           source_warehouse_id: sourceWarehouseId,
           dest_warehouse_id: destWarehouseId,
           planned_base_qty: plannedQty,
+          scale_factor: scaleFactor,
+          input_overrides: overridePayload.length > 0 ? overridePayload : undefined,
           start_immediately: startImmediately,
           notes: orderNotes.trim() || undefined,
         });
@@ -688,6 +762,42 @@ export default function ProductionOrdersPage() {
     }
   };
 
+  const handleDeleteOrder = async (op: OrderListItem) => {
+    if (
+      !window.confirm(
+        `¿Deseas eliminar definitivamente la Orden de Producción "${op.order_number}"?`
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    try {
+      await api.delete(`/mfg/orders/${op.id}`);
+      await fetchOrders();
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "No se pudo eliminar la Orden de Producción.";
+      setActionError(msg);
+    }
+  };
+
+  const handlePrintOrder = async (op: OrderListItem) => {
+    setLoadingPrintId(op.id);
+    setActionError(null);
+    try {
+      const res = await api.get(`/mfg/orders/${op.id}`);
+      setPrintingOrder(res.data);
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "No se pudo cargar el detalle para imprimir la orden.";
+      setActionError(msg);
+    } finally {
+      setLoadingPrintId(null);
+    }
+  };
+
   const facilityWarehouses = warehouses.filter(
     (w) => w.facility_id === selectedFacilityId && !w.is_scrap && !w.is_scrap_warehouse
   );
@@ -736,6 +846,14 @@ export default function ProductionOrdersPage() {
             Sala de Desposte
           </Link>
 
+          <Link
+            href="/batch-run"
+            className="inline-flex items-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold px-4 py-3 rounded-xl transition-all text-sm shadow-xs"
+          >
+            <i className="pi pi-bolt text-orange-600"></i>
+            ⚡ Producción Masiva (Multi-Receta)
+          </Link>
+
           <button
             type="button"
             onClick={openNewOrderModal}
@@ -746,6 +864,22 @@ export default function ProductionOrdersPage() {
           </button>
         </div>
       </div>
+
+      {actionError && !showCreateModal && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <i className="pi pi-exclamation-triangle text-red-600"></i>
+            {actionError}
+          </span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="text-red-700 hover:text-red-900 cursor-pointer"
+          >
+            <i className="pi pi-times text-xs"></i>
+          </button>
+        </div>
+      )}
 
       {/* TARJETAS KPI */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1009,23 +1143,54 @@ export default function ProductionOrdersPage() {
                       </td>
 
                       <td className="py-3.5 px-4 text-center">
-                        <Link
-                          href={consoleHref}
-                          className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
-                            op.state === "COMPLETED"
-                              ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
-                              : "bg-gradient-to-r from-orange-500 to-red-600 text-white hover:from-orange-600 hover:to-red-700 shadow-sm"
-                          }`}
-                        >
-                          <i className={`pi ${op.state === "COMPLETED" ? "pi-eye" : "pi-bolt"} text-xs`}></i>
-                          {op.order_type === "MEAT_DISASSEMBLY"
-                            ? op.state === "COMPLETED"
-                              ? "Ver Desposte NIC 2"
-                              : "Liquidar Desposte"
-                            : op.state === "COMPLETED"
-                            ? "Ver Liquidación"
-                            : "Ejecutar / Liquidar"}
-                        </Link>
+                        <div className="inline-flex items-center justify-center gap-1.5">
+                          <Link
+                            href={consoleHref}
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                              op.state === "COMPLETED"
+                                ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
+                                : "bg-gradient-to-r from-orange-500 to-red-600 text-white hover:from-orange-600 hover:to-red-700 shadow-sm"
+                            }`}
+                          >
+                            <i className={`pi ${op.state === "COMPLETED" ? "pi-eye" : "pi-bolt"} text-xs`}></i>
+                            {op.order_type === "MEAT_DISASSEMBLY"
+                              ? op.state === "COMPLETED"
+                                ? "Ver Desposte NIC 2"
+                                : "Liquidar Desposte"
+                              : op.state === "COMPLETED"
+                              ? "Ver Liquidación"
+                              : "Ejecutar / Liquidar"}
+                          </Link>
+                          <button
+                            type="button"
+                            disabled={loadingPrintId === op.id}
+                            onClick={() => handlePrintOrder(op)}
+                            title={
+                              op.state === "COMPLETED"
+                                ? `Imprimir Acta de Liquidación NIC 2 (${op.order_number})`
+                                : `Imprimir Hoja de Trabajo en Piso (${op.order_number})`
+                            }
+                            className="w-8 h-8 rounded-xl bg-slate-900 hover:bg-slate-800 text-white border border-slate-800 flex items-center justify-center transition-colors cursor-pointer disabled:opacity-50"
+                          >
+                            <i
+                              className={`pi ${
+                                loadingPrintId === op.id
+                                  ? "pi-spin pi-spinner"
+                                  : "pi-print text-orange-400"
+                              } text-xs`}
+                            ></i>
+                          </button>
+                          {op.state !== "COMPLETED" && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteOrder(op)}
+                              title={`Eliminar orden ${op.order_number}`}
+                              className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-red-50 text-slate-500 hover:text-red-600 border border-slate-200 hover:border-red-200 flex items-center justify-center transition-colors cursor-pointer"
+                            >
+                              <i className="pi pi-trash text-xs"></i>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1092,15 +1257,15 @@ export default function ProductionOrdersPage() {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="flex flex-col justify-end">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5 whitespace-nowrap truncate">
                       🏢 Sucursal / Sede *
                     </label>
                     <select
                       value={selectedFacilityId}
                       onChange={(e) => handleFacilitySelectChange(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
+                      className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-3.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
                     >
                       {facilities.map((fac) => (
                         <option key={fac.id} value={fac.id}>
@@ -1110,14 +1275,14 @@ export default function ProductionOrdersPage() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <div className="flex flex-col justify-end">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5 whitespace-nowrap truncate">
                       ⚙️ Estación / Centro ({facilityWorkCenters.length} en Sede)
                     </label>
                     <select
                       value={selectedWorkCenterId}
                       onChange={(e) => handleWorkCenterSelectChange(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
+                      className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-3.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
                     >
                       <option value={0}>
                         {createMode === "BOM"
@@ -1132,14 +1297,14 @@ export default function ProductionOrdersPage() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <div className="flex flex-col justify-end">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5 whitespace-nowrap truncate">
                       📦 Almacén Origen Insumos (MFG-OUT) *
                     </label>
                     <select
                       value={sourceWarehouseId}
                       onChange={(e) => setSourceWarehouseId(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
+                      className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-3.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
                     >
                       {(facilityWarehouses.length > 0 ? facilityWarehouses : warehouses).map((w) => (
                         <option key={w.id} value={w.id}>
@@ -1149,14 +1314,14 @@ export default function ProductionOrdersPage() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <div className="flex flex-col justify-end">
+                    <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5 whitespace-nowrap truncate">
                       🏪 Almacén Destino PT (MFG-IN) *
                     </label>
                     <select
                       value={destWarehouseId}
                       onChange={(e) => setDestWarehouseId(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
+                      className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-3.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500"
                     >
                       {(facilityWarehouses.length > 0 ? facilityWarehouses : warehouses).map((w) => (
                         <option key={w.id} value={w.id}>
@@ -1195,37 +1360,129 @@ export default function ProductionOrdersPage() {
               </div>
 
               {createMode === "BOM" ? (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="md:col-span-2">
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      Fórmula / Receta Maestra (BOM)
-                    </label>
-                    <select
-                      value={selectedBomId}
-                      onChange={(e) => handleBomSelectChange(Number(e.target.value))}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-orange-500"
-                    >
-                      {boms.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          [{b.code}] {b.name} — Base: {b.base_qty} {b.uom_id} ({b.sector})
-                        </option>
-                      ))}
-                    </select>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
+                    <div className="md:col-span-4 flex flex-col">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
+                        Fórmula / Receta Maestra (BOM)
+                      </label>
+                      <select
+                        value={selectedBomId}
+                        onChange={(e) => handleBomSelectChange(Number(e.target.value))}
+                        className="w-full h-[42px] bg-slate-50 border border-slate-300 rounded-xl px-3.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-orange-500"
+                      >
+                        {boms.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            [{b.code}] {b.name} — Base: {b.base_qty} {b.uom_id} ({b.sector})
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-[11px] text-slate-500 mt-1 block">
+                        Receta base estándar:{" "}
+                        <strong className="font-mono text-slate-700">
+                          {currentBomBaseQty} {activeBomObj?.uom_id || explodePreview?.uom_id || "UND"}
+                        </strong>{" "}
+                        (La receta maestra no se altera al ajustar esta orden)
+                      </span>
+                    </div>
+
+                    <div className="md:col-span-5 flex flex-col">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
+                        Multiplicador de Tanda (`x` Receta)
+                      </label>
+                      <div className="flex items-center gap-1.5 h-[42px]">
+                        <div className="relative w-20 shrink-0 h-full">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-black text-orange-600 pointer-events-none">
+                            ×
+                          </span>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0.01"
+                            value={scaleFactor}
+                            onChange={(e) => handleScaleFactorChange(Math.max(0.01, Number(e.target.value)))}
+                            className="w-full h-full pl-6 pr-2 bg-orange-50/70 border border-orange-300 rounded-xl text-sm font-mono font-black text-orange-700 focus:outline-none focus:border-orange-500"
+                          />
+                        </div>
+                        <div className="grid grid-cols-6 gap-1 flex-1 h-full">
+                          {[0.5, 1, 1.5, 2, 3, 5].map((mult) => (
+                            <button
+                              key={mult}
+                              type="button"
+                              onClick={() => handleScaleFactorChange(mult)}
+                              className={`h-full px-1 rounded-xl text-[11px] font-mono font-black transition-all cursor-pointer border flex items-center justify-center whitespace-nowrap ${
+                                Math.abs(scaleFactor - mult) < 0.001
+                                  ? "bg-orange-600 text-white border-orange-600 shadow-xs"
+                                  : "bg-white text-slate-700 border-slate-300 hover:bg-orange-50 hover:border-orange-300"
+                              }`}
+                            >
+                              {mult}x
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <span className="text-[11px] text-slate-500 mt-1 block">
+                        Escala automáticamente la meta y todos los ingredientes
+                      </span>
+                    </div>
+
+                    <div className="md:col-span-3 flex flex-col">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
+                        Cantidad Total Planificada ({explodePreview?.uom_id || activeBomObj?.uom_id || "UND/KG"})
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0.01"
+                        value={plannedQty}
+                        onChange={(e) => handlePlannedQtyChange(Math.max(0.01, Number(e.target.value)))}
+                        className="w-full h-[42px] bg-slate-50 border border-slate-300 rounded-xl px-3.5 text-sm font-mono font-black text-orange-600 focus:outline-none focus:border-orange-500"
+                      />
+                      <span className="text-[11px] text-slate-500 mt-1 block font-mono">
+                        = {currentBomBaseQty} × {scaleFactor}x
+                      </span>
+                    </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      Cantidad Meta a Producir ({explodePreview?.uom_id || "UND/KG"})
-                    </label>
-                    <input
-                      type="number"
-                      step="any"
-                      min="0.01"
-                      value={plannedQty}
-                      onChange={(e) => setPlannedQty(Math.max(0.01, Number(e.target.value)))}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm font-mono font-black text-orange-600 focus:outline-none focus:border-orange-500"
-                    />
-                  </div>
+                  {/* Alerta informativa de capacidad física de máquina / estación */}
+                  {(() => {
+                    const selectedWcObj = workCenters.find((w) => w.id === selectedWorkCenterId);
+                    const capPerBatch =
+                      explodePreview?.work_center_capacity_per_batch ||
+                      selectedWcObj?.capacity_per_batch ||
+                      0;
+                    const capUom =
+                      explodePreview?.work_center_capacity_uom ||
+                      selectedWcObj?.capacity_uom ||
+                      explodePreview?.uom_id ||
+                      activeBomObj?.uom_id ||
+                      "KG";
+                    if (capPerBatch > 0 && plannedQty > capPerBatch) {
+                      const runs = Math.ceil(plannedQty / capPerBatch);
+                      return (
+                        <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2.5">
+                            <i className="pi pi-exclamation-circle text-amber-600 text-base"></i>
+                            <div>
+                              <span className="font-black uppercase tracking-wider block text-[11px] text-amber-800">
+                                Aviso de Capacidad Física de Máquina / Estación ({explodePreview?.work_center_name || selectedWcObj?.name})
+                              </span>
+                              <span>
+                                La estación tiene una capacidad máxima de{" "}
+                                <strong className="font-mono">{capPerBatch} {capUom}</strong> por lote. Producir{" "}
+                                <strong className="font-mono">{plannedQty} {explodePreview?.uom_id || capUom}</strong> equivale a{" "}
+                                <strong className="font-mono underline">{runs} corridas / tandas físicas de máquina</strong>.
+                              </span>
+                            </div>
+                          </div>
+                          <span className="px-2.5 py-1 rounded-lg bg-amber-200/70 text-amber-900 font-mono font-black text-xs shrink-0">
+                            {runs} Tandas Físicas
+                          </span>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
               ) : (
                 <div className="space-y-4 p-4 rounded-2xl bg-purple-50/40 border border-purple-200/80">
@@ -1240,9 +1497,9 @@ export default function ProductionOrdersPage() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-                    <div className="md:col-span-7">
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
+                    <div className="md:col-span-7 flex flex-col">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
                         Producto Resultante a Obtener (Salida PT)
                       </label>
                       <VariantCombobox
@@ -1253,8 +1510,8 @@ export default function ProductionOrdersPage() {
                         placeholder="Buscar producto resultante..."
                       />
                     </div>
-                    <div className="md:col-span-2">
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    <div className="md:col-span-2 flex flex-col">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
                         Cant. Meta ({explodePreview?.uom_id || "UND/KG"})
                       </label>
                       <input
@@ -1263,17 +1520,17 @@ export default function ProductionOrdersPage() {
                         min="0.01"
                         value={adhocOutputQty}
                         onChange={(e) => setAdhocOutputQty(Math.max(0.01, Number(e.target.value)))}
-                        className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-mono font-black text-orange-600"
+                        className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-3 text-sm font-mono font-black text-orange-600"
                       />
                     </div>
-                    <div className="md:col-span-3">
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    <div className="md:col-span-3 flex flex-col">
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wide mb-1.5 whitespace-nowrap truncate">
                         Sector Operativo
                       </label>
                       <select
                         value={adhocSector}
                         onChange={(e) => setAdhocSector(e.target.value)}
-                        className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2.5 text-xs font-bold text-slate-700"
+                        className="w-full h-[42px] bg-white border border-slate-300 rounded-xl px-2.5 text-xs font-bold text-slate-700"
                       >
                         <option value="GASTRONOMY">Cocina & Gastronomía</option>
                         <option value="BAKERY">Panadería & Pastelería</option>
@@ -1384,7 +1641,7 @@ export default function ProductionOrdersPage() {
                 </div>
               )}
 
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <label className="flex items-center gap-2.5 bg-orange-50/70 border border-orange-200 rounded-xl px-3.5 py-2.5 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1408,7 +1665,7 @@ export default function ProductionOrdersPage() {
               </div>
 
               {/* SEMÁFORO Y RESUMEN DE EXPLOSIÓN FEFO */}
-              {loadingPreview ? (
+              {loadingPreview && !explodePreview ? (
                 <div className="p-8 text-center text-slate-400 text-sm bg-slate-50 rounded-2xl border border-slate-200">
                   Calculando explosión de materiales y lotes FEFO...
                 </div>
@@ -1453,6 +1710,150 @@ export default function ProductionOrdersPage() {
                     </div>
                   </div>
 
+                  {/* Barra de control de ajustes de ingredientes de la Orden (sin alterar BOM) */}
+                  {createMode === "BOM" && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 bg-orange-50/70 border border-orange-200 px-3.5 py-2.5 rounded-xl">
+                      <div className="text-xs text-slate-700">
+                        <strong className="font-black text-slate-900">
+                          🎛️ Ajuste de Ingredientes en la Orden:
+                        </strong>{" "}
+                        Puedes modificar cualquier cantidad en la tabla o agregar un insumo extra para esta tanda sin alterar la Receta Maestra.
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(Object.keys(bomInputOverrides).length > 0 || bomExtraInputs.length > 0) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBomInputOverrides({});
+                              setBomExtraInputs([]);
+                            }}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-orange-700 border border-orange-300 text-xs font-bold cursor-pointer"
+                          >
+                            ↺ Restaurar según Fórmula
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const stdIds = new Set(
+                              (explodePreview?.inputs || [])
+                                .filter((i) => !i.is_extra_input)
+                                .map((i) => i.component_variant_id)
+                            );
+                            setBomExtraInputs((prev) => {
+                              const candidate = variants.find(
+                                (v) =>
+                                  !stdIds.has(v.id) &&
+                                  !prev.some((p) => p.component_variant_id === v.id)
+                              );
+                              return [
+                                ...prev,
+                                {
+                                  component_variant_id: candidate?.id || 0,
+                                  planned_qty: 1,
+                                  input_role: "INGREDIENT",
+                                },
+                              ];
+                            });
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                        >
+                          <i className="pi pi-plus text-[10px]"></i>
+                          Añadir Insumo Extra a esta Orden
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Editor de Insumos Extra agregados a una Orden con BOM */}
+                  {createMode === "BOM" && bomExtraInputs.length > 0 && (
+                    <div className="p-3 rounded-xl bg-purple-50/60 border border-purple-200 space-y-2">
+                      <span className="text-[11px] font-black text-purple-900 uppercase tracking-wider block">
+                        ➕ Insumos Extra Puntuales para esta Orden (Fuera de la Receta Estándar)
+                      </span>
+                      {bomExtraInputs.map((row, idx) => {
+                        const stdIds = new Set(
+                          (explodePreview?.inputs || [])
+                            .filter((i) => !i.is_extra_input)
+                            .map((i) => i.component_variant_id)
+                        );
+                        const extraOptions = variants.filter(
+                          (v) => !stdIds.has(v.id) || v.id === row.component_variant_id
+                        );
+                        return (
+                          <div
+                            key={idx}
+                            className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white p-2 rounded-lg border border-purple-200"
+                          >
+                            <div className="sm:col-span-7">
+                              <VariantCombobox
+                                value={row.component_variant_id}
+                                variants={extraOptions}
+                                compact
+                                onChange={(vid) =>
+                                  setBomExtraInputs((prev) =>
+                                    prev.map((r, i) =>
+                                      i === idx ? { ...r, component_variant_id: vid } : r
+                                    )
+                                  )
+                                }
+                                onSearchCatalog={searchCatalogVariants}
+                                placeholder="Seleccionar insumo extra fuera de receta..."
+                              />
+                            </div>
+                            <div className="sm:col-span-2">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0.0001"
+                                value={row.planned_qty}
+                                onChange={(e) =>
+                                  setBomExtraInputs((prev) =>
+                                    prev.map((r, i) =>
+                                      i === idx
+                                        ? { ...r, planned_qty: Math.max(0.0001, Number(e.target.value)) }
+                                        : r
+                                    )
+                                  )
+                                }
+                                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-mono tabular-nums font-bold text-slate-800 text-right"
+                                placeholder="Cant."
+                              />
+                            </div>
+                            <div className="sm:col-span-2">
+                              <select
+                                value={row.input_role}
+                                onChange={(e) =>
+                                  setBomExtraInputs((prev) =>
+                                    prev.map((r, i) =>
+                                      i === idx ? { ...r, input_role: e.target.value } : r
+                                    )
+                                  )
+                                }
+                                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700"
+                              >
+                                <option value="INGREDIENT">INGREDIENT</option>
+                                <option value="PACKAGING">PACKAGING</option>
+                              </select>
+                            </div>
+                            <div className="sm:col-span-1 text-right">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setBomExtraInputs((prev) => prev.filter((_, i) => i !== idx))
+                                }
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
+                                title="Quitar insumo extra"
+                              >
+                                <i className="pi pi-trash text-xs"></i>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {/* Tabla de Insumos Explotados con FEFO */}
                   <div
                     tabIndex={0}
@@ -1464,7 +1865,9 @@ export default function ProductionOrdersPage() {
                       <thead className="sticky top-0 z-10">
                         <tr className="bg-slate-100 border-b border-slate-200 text-[10px] font-bold text-slate-600 uppercase">
                           <th className="py-2.5 px-3">Insumo / SKU</th>
-                          <th className="py-2.5 px-3 text-right">Cant. Bruta Requerida</th>
+                          <th className="py-2.5 px-3 text-right">Estándar Fórmula ({explodePreview.scale_factor}x)</th>
+                          <th className="py-2.5 px-3 text-right">Cant. Orden (Editable)</th>
+                          <th className="py-2.5 px-3 text-right">Desviación (Δ Cant / Δ $ USD)</th>
                           <th className="py-2.5 px-3 text-right">Stock Almacén</th>
                           <th className="py-2.5 px-3">Lote FEFO Sugerido</th>
                           <th className="py-2.5 px-3 text-center">Disponibilidad</th>
@@ -1472,63 +1875,160 @@ export default function ProductionOrdersPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {explodePreview.inputs.map((inp, idx) => (
-                          <tr key={inp.bom_input_id ?? `adhoc-${inp.component_variant_id}-${idx}`} className="hover:bg-slate-50">
-                            <td className="py-2.5 px-3">
-                              <div className="font-bold text-slate-800">{inp.component_name}</div>
-                              <div className="text-[11px] text-slate-400 font-mono">
-                                {inp.component_sku} • {inp.input_role}
-                                {inp.scrap_tolerance_pct > 0 ? ` • Merma Limpieza: ${inp.scrap_tolerance_pct}%` : ""}
-                              </div>
-                            </td>
-                            <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-800">
-                              {inp.planned_base_qty} {inp.uom_base}
-                              {inp.is_discrete_uom && (
-                                <span className="block text-[10px] text-orange-600 font-normal">
-                                  CEIL({inp.raw_gross_qty_base.toFixed(2)})
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-right font-mono text-slate-600">
-                              {inp.available_stock_qty} {inp.uom_base}
-                            </td>
-                            <td className="py-2.5 px-3">
-                              {inp.suggested_batch_number ? (
-                                <div>
-                                  <span className="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                                    {inp.suggested_batch_number}
-                                  </span>
-                                  <span className="block text-[10px] text-slate-500 mt-0.5">
-                                    Vence: {inp.suggested_batch_expiry_date} ({inp.days_to_expiry} días)
-                                  </span>
+                        {explodePreview.inputs.map((inp, idx) => {
+                          const stdQty = inp.standard_scaled_qty_base ?? inp.planned_base_qty;
+                          const deltaQty = inp.delta_qty_base ?? 0;
+                          const deltaPct = inp.delta_pct ?? 0;
+                          const deltaCostUsd = inp.delta_cost_usd ?? 0;
+                          const isOverridden = Boolean(inp.is_overridden);
+                          const isExtra = Boolean(inp.is_extra_input);
+                          return (
+                            <tr
+                              key={inp.bom_input_id ?? `adhoc-${inp.component_variant_id}-${idx}`}
+                              className={`hover:bg-slate-50 ${isOverridden ? "bg-amber-50/30" : ""}`}
+                            >
+                              <td className="py-2.5 px-3">
+                                <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                                  <span>{inp.component_name}</span>
+                                  {isExtra && (
+                                    <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-300 text-[9px] font-black uppercase whitespace-nowrap">
+                                      EXTRA ORDEN
+                                    </span>
+                                  )}
+                                  {!isExtra && isOverridden && (
+                                    <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-black uppercase whitespace-nowrap">
+                                      AJUSTADO
+                                    </span>
+                                  )}
                                 </div>
-                              ) : (
-                                <span className="text-slate-400">Sin lote</span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-center">
-                              <span
-                                className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-black ${
-                                  inp.availability_status === "AVAILABLE"
-                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                <div className="text-[11px] text-slate-400 font-mono">
+                                  {inp.component_sku} • {inp.input_role}
+                                  {inp.scrap_tolerance_pct > 0 ? ` • Merma Limpieza: ${inp.scrap_tolerance_pct}%` : ""}
+                                </div>
+                              </td>
+
+                              <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-600 whitespace-nowrap">
+                                {isExtra ? (
+                                  <span className="text-purple-700 font-bold">0 {inp.uom_base} (Extra)</span>
+                                ) : (
+                                  <>
+                                    {stdQty} {inp.uom_base}
+                                    {inp.is_discrete_uom && (
+                                      <span className="block text-[10px] text-orange-600 font-normal">
+                                        CEIL({inp.raw_gross_qty_base.toFixed(2)})
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+                              </td>
+
+                              <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-slate-800 whitespace-nowrap">
+                                {createMode === "BOM" ? (
+                                  <div className="inline-flex items-center justify-end gap-1">
+                                    <input
+                                      type="number"
+                                      step={inp.is_discrete_uom ? "1" : "any"}
+                                      min={isExtra ? "0.0001" : "0"}
+                                      value={
+                                        isExtra
+                                          ? bomExtraInputs.find(
+                                              (x) => x.component_variant_id === inp.component_variant_id
+                                            )?.planned_qty ?? inp.planned_base_qty
+                                          : bomInputOverrides[inp.component_variant_id] ?? inp.planned_base_qty
+                                      }
+                                      onChange={(e) => {
+                                        const val = Math.max(0, Number(e.target.value));
+                                        if (isExtra) {
+                                          setBomExtraInputs((prev) =>
+                                            prev.map((r) =>
+                                              r.component_variant_id === inp.component_variant_id
+                                                ? { ...r, planned_qty: Math.max(0.0001, val) }
+                                                : r
+                                            )
+                                          );
+                                        } else {
+                                          setBomInputOverrides((prev) => ({
+                                            ...prev,
+                                            [inp.component_variant_id]: val,
+                                          }));
+                                        }
+                                      }}
+                                      aria-label={`Cantidad orden para ${inp.component_name}`}
+                                      className={`w-24 text-right font-mono tabular-nums font-black px-2 py-1 rounded-lg border text-xs ${
+                                        isOverridden
+                                          ? "bg-amber-50 border-amber-400 text-amber-900"
+                                          : "bg-white border-slate-300 text-slate-800"
+                                      }`}
+                                    />
+                                    <span className="text-[11px] text-slate-500">{inp.uom_base}</span>
+                                  </div>
+                                ) : (
+                                  <span>
+                                    {inp.planned_base_qty} {inp.uom_base}
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="py-2.5 px-3 text-right font-mono">
+                                {isOverridden ? (
+                                  <div className={deltaQty >= 0 ? "text-amber-700 font-bold" : "text-blue-700 font-bold"}>
+                                    <div>
+                                      {deltaQty >= 0 ? "+" : ""}
+                                      {deltaQty} {inp.uom_base} ({deltaPct >= 0 ? "+" : ""}
+                                      {deltaPct.toFixed(1)}%)
+                                    </div>
+                                    <div className="text-[10px]">
+                                      {deltaCostUsd >= 0 ? "+" : ""}${deltaCostUsd.toFixed(2)} USD
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-emerald-600 text-[11px] font-semibold">
+                                    = Estándar (0%)
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="py-2.5 px-3 text-right font-mono text-slate-600">
+                                {inp.available_stock_qty} {inp.uom_base}
+                              </td>
+                              <td className="py-2.5 px-3">
+                                {inp.suggested_batch_number ? (
+                                  <div>
+                                    <span className="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                                      {inp.suggested_batch_number}
+                                    </span>
+                                    <span className="block text-[10px] text-slate-500 mt-0.5">
+                                      Vence: {inp.suggested_batch_expiry_date} ({inp.days_to_expiry} días)
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400">Sin lote</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                <span
+                                  className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-black ${
+                                    inp.availability_status === "AVAILABLE"
+                                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                      : inp.availability_status === "PARTIAL"
+                                      ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                      : "bg-red-50 text-red-700 border border-red-500/40"
+                                  }`}
+                                >
+                                  {inp.availability_status === "AVAILABLE"
+                                    ? "DISPONIBLE"
                                     : inp.availability_status === "PARTIAL"
-                                    ? "bg-amber-50 text-amber-700 border border-amber-200"
-                                    : "bg-red-50 text-red-700 border border-red-500/40"
-                                }`}
-                              >
-                                {inp.availability_status === "AVAILABLE"
-                                  ? "DISPONIBLE"
-                                  : inp.availability_status === "PARTIAL"
-                                  ? `PARCIAL (Faltan ${inp.shortage_qty})`
-                                  : "SIN STOCK"}
-                              </span>
-                            </td>
-                            <td className="py-2.5 px-3 text-right font-mono">
-                              <div className="font-bold text-slate-800">${inp.total_cost_usd.toFixed(2)}</div>
-                              <div className="text-[10px] text-slate-500">Bs. {inp.total_cost_ves.toFixed(2)}</div>
-                            </td>
-                          </tr>
-                        ))}
+                                    ? `PARCIAL (Faltan ${inp.shortage_qty})`
+                                    : "SIN STOCK"}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono">
+                                <div className="font-bold text-slate-800">${inp.total_cost_usd.toFixed(2)}</div>
+                                <div className="text-[10px] text-slate-500">Bs. {inp.total_cost_ves.toFixed(2)}</div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1572,6 +2072,14 @@ export default function ProductionOrdersPage() {
           </div>
         )}
       </dialog>
+
+      {/* MODAL DE IMPRESIÓN DINÁMICA (CARTA / A4 & TICKET TÉRMICO 80MM) */}
+      <ProductionPrintModal
+        open={Boolean(printingOrder)}
+        onClose={() => setPrintingOrder(null)}
+        mode="ORDER"
+        order={printingOrder}
+      />
     </div>
   );
 }

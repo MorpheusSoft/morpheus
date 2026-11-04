@@ -6,6 +6,8 @@ export interface CatalogVariant {
   id: number;
   sku: string;
   barcode?: string | null;
+  part_number?: string | null;
+  alternate_codes?: string[];
   name: string;
   category_name: string;
   uom_base: string;
@@ -22,6 +24,32 @@ export function normalizeSearchText(text: string): string {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
+}
+
+export function getVariantAltCodes(v: CatalogVariant): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const rawCodes = [
+    ...(v.alternate_codes || []),
+    v.part_number || "",
+    v.barcode && v.barcode !== v.sku ? v.barcode : "",
+  ];
+  for (const c of rawCodes) {
+    const clean = (c || "").trim();
+    if (!clean) continue;
+    if (!seen.has(clean)) {
+      seen.add(clean);
+      out.push(clean);
+    }
+    if (/^0+\d+$/.test(clean)) {
+      const stripped = clean.replace(/^0+/, "");
+      if (stripped && !seen.has(stripped)) {
+        seen.add(stripped);
+        out.push(stripped);
+      }
+    }
+  }
+  return out;
 }
 
 export interface VariantComboboxProps {
@@ -61,11 +89,42 @@ export function VariantCombobox({
       .split(/\s+/)
       .filter(Boolean);
     if (tokens.length === 0) return variants;
-    return variants.filter((v) => {
+    const qClean = normalizeSearchText(query.trim());
+    const qStripped = /^\d+$/.test(qClean) ? qClean.replace(/^0+/, "") || "0" : qClean;
+
+    const matched = variants.filter((v) => {
+      const altList = getVariantAltCodes(v);
       const haystack = normalizeSearchText(
-        `${v.sku} ${v.name} ${v.category_name || ""} ${v.barcode || ""}`
+        `${v.sku} ${v.name} ${v.category_name || ""} ${v.barcode || ""} ${v.part_number || ""} ${altList.join(" ")}`
       );
-      return tokens.every((tok) => haystack.includes(tok));
+      return tokens.every((tok) => {
+        const tokStripped = /^\d+$/.test(tok) ? tok.replace(/^0+/, "") || "0" : tok;
+        return haystack.includes(tok) || haystack.includes(tokStripped);
+      });
+    });
+
+    return [...matched].sort((a, b) => {
+      const getPriority = (v: CatalogVariant) => {
+        const skuNorm = normalizeSearchText(v.sku);
+        const nameNorm = normalizeSearchText(v.name);
+        const altNorms = getVariantAltCodes(v).map((c) => normalizeSearchText(c));
+        if (
+          skuNorm === qClean ||
+          skuNorm === `prd-${qStripped}` ||
+          altNorms.some((c) => c === qClean || c === qStripped)
+        ) {
+          return 0;
+        }
+        if (
+          skuNorm.startsWith(qClean) ||
+          nameNorm.startsWith(qClean) ||
+          altNorms.some((c) => c.startsWith(qClean) || c.startsWith(qStripped))
+        ) {
+          return 1;
+        }
+        return 2;
+      };
+      return getPriority(a) - getPriority(b);
     });
   }, [variants, query]);
 
@@ -195,7 +254,7 @@ export function VariantCombobox({
       : undefined;
 
   return (
-    <div ref={containerRef} className="relative w-full" onKeyDown={handleKeyDown}>
+    <div ref={containerRef} className="relative w-full min-w-0 max-w-full" onKeyDown={handleKeyDown}>
       <button
         type="button"
         role="combobox"
@@ -204,21 +263,29 @@ export function VariantCombobox({
         aria-activedescendant={activeOptionId}
         aria-haspopup="listbox"
         onClick={() => (isOpen ? closeDropdown() : openDropdown())}
-        className={`w-full text-left flex items-center justify-between gap-2 bg-white border transition-all cursor-pointer ${
+        title={
+          selectedVariant
+            ? `${selectedVariant.name} (${selectedVariant.uom_base}) — ${
+                typeof selectedVariant.stock_qty === "number"
+                  ? `Stock: ${selectedVariant.stock_qty} ${selectedVariant.uom_base} | `
+                  : ""
+              }Costo: $${selectedVariant.unit_cost_usd.toFixed(2)} | PVP: $${selectedVariant.sales_price_usd.toFixed(2)}`
+            : placeholder
+        }
+        className={`w-full max-w-full min-w-0 overflow-hidden text-left flex items-center justify-between gap-1.5 bg-white border transition-all cursor-pointer ${
           isOpen
             ? "border-orange-500 ring-2 ring-orange-500/20"
             : "border-slate-300 hover:border-slate-400"
         } ${
           compact
-            ? "px-2.5 py-1.5 rounded-lg text-xs"
+            ? "px-2 py-1.5 rounded-lg text-[11px]"
             : "px-3.5 py-2.5 rounded-xl text-sm font-medium"
         }`}
       >
-        <span className="truncate text-slate-800">
+        <span className="block truncate min-w-0 flex-1 text-slate-800">
           {selectedVariant ? (
             <>
-              <span className="font-mono font-bold text-orange-700">[{selectedVariant.sku}]</span>{" "}
-              <span>{selectedVariant.name}</span>{" "}
+              <span className="font-semibold text-slate-800">{selectedVariant.name}</span>{" "}
               <span className="text-slate-500">({selectedVariant.uom_base})</span>
               <span className="text-slate-400">
                 {" "}
@@ -244,7 +311,7 @@ export function VariantCombobox({
       {isOpen && (
         <div
           className={`absolute left-0 z-50 mt-1.5 bg-white rounded-xl border border-slate-200 shadow-2xl overflow-hidden max-w-[calc(100vw-2rem)] ${
-            compact ? "w-full min-w-[300px] sm:min-w-[420px]" : "w-full"
+            compact ? "w-full min-w-[360px] sm:min-w-[460px]" : "w-full min-w-[320px]"
           }`}
         >
           {/* Buscador integrado dentro del menú desplegable */}
@@ -254,14 +321,14 @@ export function VariantCombobox({
               ref={searchInputRef}
               type="text"
               value={query}
-              aria-label="Filtrar variantes por SKU, nombre o categoría"
+              aria-label="Filtrar variantes por nombre, SKU Neo, PLU de balanza o código alterno"
               aria-controls={listboxId}
               aria-activedescendant={activeOptionId}
               onChange={(e) => {
                 setQuery(e.target.value);
                 setHighlightedIndex(0);
               }}
-              placeholder="Buscar por SKU, nombre o categoría..."
+              placeholder="Buscar por nombre, SKU Neo, PLU de balanza o código alterno..."
               className="w-full bg-white px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs text-slate-800 focus:outline-none focus:border-orange-500"
             />
             {loading && (
@@ -319,8 +386,7 @@ export function VariantCombobox({
                     }`}
                   >
                     <div className="truncate">
-                      <span className="font-mono font-bold text-orange-700">[{v.sku}]</span>{" "}
-                      <span className="font-medium text-slate-800">{v.name}</span>{" "}
+                      <span className="font-semibold text-slate-800">{v.name}</span>{" "}
                       <span className="text-[11px] font-mono text-slate-500">({v.uom_base})</span>
                       <span className="text-[11px] text-slate-500">
                         {" "}
