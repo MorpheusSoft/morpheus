@@ -1,9 +1,13 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.api import deps
-from app.models.inventory import Category, Warehouse, Location
+from app.models.inventory import (
+    Category, Warehouse, Location, StockMove,
+    InventoryAdjustment, InventorySession, StoreDepositMapping
+)
 from app.models.core import Tribute, Facility, Company, Currency
 from app.schemas import catalog as schemas
 
@@ -208,17 +212,60 @@ def delete_category(
 # =================
 # LOCATIONS & WAREHOUSES
 # =================
+def warehouse_has_movements(db: Session, warehouse_id: int) -> bool:
+    """
+    Determina si un almacén posee movimientos en Kardex, ajustes, conteos físicos
+    o mapeos activos de sincronización de tienda.
+    """
+    loc_ids = [r[0] for r in db.query(Location.id).filter(Location.warehouse_id == warehouse_id).all()]
+    if loc_ids:
+        has_moves = db.query(StockMove.id).filter(
+            or_(
+                StockMove.location_src_id.in_(loc_ids),
+                StockMove.location_dest_id.in_(loc_ids)
+            )
+        ).first() is not None
+        if has_moves:
+            return True
+
+    has_adj = db.query(InventoryAdjustment.id).filter(
+        InventoryAdjustment.warehouse_id == warehouse_id
+    ).first() is not None
+    if has_adj:
+        return True
+
+    has_sess = db.query(InventorySession.id).filter(
+        InventorySession.warehouse_id == warehouse_id
+    ).first() is not None
+    if has_sess:
+        return True
+
+    has_map = db.query(StoreDepositMapping.id).filter(
+        StoreDepositMapping.warehouse_id == warehouse_id
+    ).first() is not None
+    if has_map:
+        return True
+
+    return False
+
+
 @router.get("/warehouses/", response_model=List[schemas.Warehouse])
 def read_warehouses(
     db: Session = Depends(deps.get_db),
     facility_id: Optional[int] = Query(None),
+    include_inactive: bool = Query(False, description="Incluir almacenes inhabilitados"),
     skip: int = 0,
     limit: int = 100,
 ) -> Any:
     query = db.query(Warehouse)
     if facility_id and isinstance(facility_id, int):
         query = query.filter(Warehouse.facility_id == facility_id)
-    return query.offset(skip).limit(limit).all()
+    if not include_inactive:
+        query = query.filter(Warehouse.is_active == True)
+    warehouses = query.order_by(Warehouse.is_active.desc(), Warehouse.id.asc()).offset(skip).limit(limit).all()
+    for wh in warehouses:
+        wh.has_movements = warehouse_has_movements(db, wh.id)
+    return warehouses
 
 @router.post("/warehouses/", response_model=schemas.Warehouse)
 def create_warehouse(
@@ -226,21 +273,27 @@ def create_warehouse(
     db: Session = Depends(deps.get_db),
     warehouse_in: schemas.WarehouseCreate,
 ) -> Any:
-    existing = db.query(Warehouse).filter(Warehouse.code == warehouse_in.code).first()
+    clean_code = warehouse_in.code.strip().upper()
+    existing = db.query(Warehouse).filter(
+        Warehouse.facility_id == warehouse_in.facility_id,
+        Warehouse.code == clean_code
+    ).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Código de almacén ya existe")
+        raise HTTPException(status_code=400, detail="Código de almacén ya existe en esta sucursal")
     db_obj = Warehouse(
-        name=warehouse_in.name,
-        code=warehouse_in.code,
+        name=warehouse_in.name.strip(),
+        code=clean_code,
         facility_id=warehouse_in.facility_id,
         is_scrap=warehouse_in.is_scrap,
         is_transit=warehouse_in.is_transit,
+        is_active=True,
         requires_dock_staging=warehouse_in.requires_dock_staging,
         default_dock_location_id=warehouse_in.default_dock_location_id
     )
     db.add(db_obj)
     db.commit()
     db.refresh(db_obj)
+    db_obj.has_movements = False
     return db_obj
 
 @router.put("/warehouses/{warehouse_id}", response_model=schemas.Warehouse)
@@ -255,16 +308,20 @@ def update_warehouse(
         raise HTTPException(status_code=404, detail="Almacén no encontrado")
     
     update_data = warehouse_in.model_dump(exclude_unset=True)
-    if "code" in update_data and update_data["code"] != warehouse.code:
-        existing = db.query(Warehouse).filter(Warehouse.code == update_data["code"]).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="Código de almacén ya existe")
-            
-    for field, value in update_data.items():
-        setattr(warehouse, field, value)
+
+    # Regla de negocio: al editar un almacén solo se permite modificar su nombre o estado habilitado/inhabilitado
+    if "name" in update_data and update_data["name"] is not None:
+        clean_name = update_data["name"].strip()
+        if not clean_name:
+            raise HTTPException(status_code=400, detail="El nombre del almacén no puede estar vacío")
+        warehouse.name = clean_name
+
+    if "is_active" in update_data and update_data["is_active"] is not None:
+        warehouse.is_active = bool(update_data["is_active"])
         
     db.commit()
     db.refresh(warehouse)
+    warehouse.has_movements = warehouse_has_movements(db, warehouse.id)
     return warehouse
 
 @router.delete("/warehouses/{warehouse_id}", response_model=schemas.Warehouse)
@@ -277,10 +334,14 @@ def delete_warehouse(
     if not warehouse:
         raise HTTPException(status_code=404, detail="Almacén no encontrado")
     
-    locations_count = db.query(Location).filter(Location.warehouse_id == warehouse_id).count()
-    if locations_count > 0:
-        raise HTTPException(status_code=400, detail="No se puede eliminar: el almacén tiene ubicaciones asociadas")
-        
+    if warehouse_has_movements(db, warehouse_id):
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede eliminar este almacén porque posee movimientos de inventario registrados. Puede inhabilitarlo para impedir que se le asigne nuevo inventario."
+        )
+
+    # Si no tiene movimientos históricos, eliminar sus ubicaciones vacías por defecto antes de borrar el almacén
+    db.query(Location).filter(Location.warehouse_id == warehouse_id).delete(synchronize_session=False)
     db.delete(warehouse)
     db.commit()
     return warehouse
@@ -320,6 +381,8 @@ def create_location(
         wh = db.query(Warehouse).filter(Warehouse.id == location_in.warehouse_id).first()
         if not wh:
             raise HTTPException(status_code=404, detail="Almacén no encontrado")
+        if not wh.is_active:
+            raise HTTPException(status_code=400, detail=f"No se pueden crear ubicaciones en el almacén '{wh.name}' porque está inhabilitado.")
             
     raw_type = (location_in.location_type or 'SHELF').strip().upper()
     if raw_type not in VALID_LOCATION_TYPES:

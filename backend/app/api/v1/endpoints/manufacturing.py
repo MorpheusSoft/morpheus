@@ -592,7 +592,7 @@ def get_mfg_facilities_and_warehouses(
     fac_map = {f.id: f.name for f in facilities}
     warehouses = (
         db.query(Warehouse)
-        .filter(Warehouse.code != "VIRTUAL")
+        .filter(Warehouse.code != "VIRTUAL", Warehouse.is_active == True)
         .order_by(Warehouse.facility_id.asc(), Warehouse.id.asc())
         .all()
     )

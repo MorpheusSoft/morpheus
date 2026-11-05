@@ -214,7 +214,8 @@ def get_facility_deposit_mappings(
 
     # 2. Obtener almacenes y ubicaciones disponibles para esta sede
     warehouses_db = db.query(Warehouse).filter(
-        Warehouse.facility_id == facility_id
+        Warehouse.facility_id == facility_id,
+        Warehouse.is_active == True
     ).order_by(Warehouse.name.asc()).all()
 
     # Si la sede no tiene ningún almacén registrado, auto-aprovisionar el Almacén Principal
@@ -341,6 +342,8 @@ def create_or_upsert_deposit_mapping(
     ).first()
     if not wh:
         raise HTTPException(status_code=400, detail="El almacén seleccionado no pertenece a esta sucursal")
+    if not wh.is_active:
+        raise HTTPException(status_code=400, detail=f"El almacén '{wh.name}' está inhabilitado y no se le puede asignar inventario.")
 
     # Validar que la ubicación pertenezca al almacén
     loc = db.query(Location).filter(
@@ -425,6 +428,8 @@ def update_deposit_mapping(
         ).first()
         if not wh:
             raise HTTPException(status_code=400, detail="El almacén no pertenece a esta sucursal")
+        if not wh.is_active:
+            raise HTTPException(status_code=400, detail=f"El almacén '{wh.name}' está inhabilitado y no se le puede asignar inventario.")
         mapping.warehouse_id = wh.id
 
     if payload.location_id is not None:

@@ -333,8 +333,16 @@ def create_inventory_session(
     target_wh = None
     if session_in.warehouse_id:
         target_wh = db.query(Warehouse).filter(Warehouse.id == session_in.warehouse_id).first()
+        if target_wh and not target_wh.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail=f"El almacén '{target_wh.name}' se encuentra inhabilitado y no permite iniciar sesiones de inventario."
+            )
     elif session_in.facility_id:
-        target_wh = db.query(Warehouse).filter(Warehouse.facility_id == session_in.facility_id).first()
+        target_wh = db.query(Warehouse).filter(
+            Warehouse.facility_id == session_in.facility_id,
+            Warehouse.is_active == True
+        ).first()
 
     # Capturar Fotografía Teórica (Snapshot) para la Toma Física
     snapshots_query = db.query(InventorySnapshot)

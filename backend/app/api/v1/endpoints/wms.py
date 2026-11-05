@@ -206,19 +206,26 @@ def create_direct_receipt(
             Warehouse.id == payload.warehouse_id,
             Warehouse.facility_id == payload.facility_id
         ).first()
+        if warehouse and not warehouse.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail=f"El almacén '{warehouse.name}' se encuentra inhabilitado y no se le puede asignar inventario."
+            )
     
     if not warehouse:
         warehouse = db.query(Warehouse).filter(
             Warehouse.facility_id == payload.facility_id,
             Warehouse.is_scrap == False,
-            Warehouse.is_transit == False
+            Warehouse.is_transit == False,
+            Warehouse.is_active == True
         ).first()
 
     if not warehouse:
         warehouse = Warehouse(
             facility_id=payload.facility_id,
             name=f"Almacén Principal {facility.name}",
-            code=f"WH-{payload.facility_id}"
+            code=f"WH-{payload.facility_id}",
+            is_active=True
         )
         db.add(warehouse)
         db.flush()
@@ -469,12 +476,18 @@ def receive_purchase_order(
     warehouse = None
     if payload.warehouse_id:
         warehouse = db.query(Warehouse).filter(Warehouse.id == payload.warehouse_id).first()
+        if warehouse and not warehouse.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail=f"El almacén '{warehouse.name}' se encuentra inhabilitado y no se le puede asignar inventario."
+            )
     
     if not warehouse and order.dest_facility_id:
         warehouse = db.query(Warehouse).filter(
             Warehouse.facility_id == order.dest_facility_id,
             Warehouse.is_scrap == False,
-            Warehouse.is_transit == False
+            Warehouse.is_transit == False,
+            Warehouse.is_active == True
         ).first()
         
     if not warehouse:
@@ -484,17 +497,19 @@ def receive_purchase_order(
             warehouse = db.query(Warehouse).filter(
                 Warehouse.facility_id == user_facility_id,
                 Warehouse.is_scrap == False,
-                Warehouse.is_transit == False
+                Warehouse.is_transit == False,
+                Warehouse.is_active == True
             ).first()
             
     if not warehouse:
         warehouse = db.query(Warehouse).filter(
             Warehouse.is_scrap == False,
-            Warehouse.is_transit == False
+            Warehouse.is_transit == False,
+            Warehouse.is_active == True
         ).order_by(Warehouse.id.asc()).first()
 
     if not warehouse:
-        raise HTTPException(status_code=400, detail="Debe configurar al menos un almacén en el sistema para recibir mercancía.")
+        raise HTTPException(status_code=400, detail="Debe tener al menos un almacén habilitado en la sucursal para recibir mercancía.")
 
     # Resolver facility_id definitivo
     target_facility_id = (warehouse.facility_id if warehouse else None) or order.dest_facility_id
@@ -1324,11 +1339,12 @@ def get_or_create_default_wh_location(wh: Warehouse, db: Session) -> Location:
 
 @router.get("/locations/tree")
 def get_locations_tree(facility_id: Optional[int] = None, db: Session = Depends(get_db)):
+    from app.api.v1.endpoints.catalog import warehouse_has_movements
     warehouses_q = db.query(Warehouse)
     if facility_id:
         warehouses_q = warehouses_q.filter(Warehouse.facility_id == facility_id)
     
-    warehouses = warehouses_q.all()
+    warehouses = warehouses_q.order_by(Warehouse.is_active.desc(), Warehouse.id.asc()).all()
     tree = []
 
     facilities_map = {f.id: f.name for f in db.query(Facility).all()}
@@ -1355,12 +1371,15 @@ def get_locations_tree(facility_id: Optional[int] = None, db: Session = Depends(
             })
         
         fac_name = facilities_map.get(wh.facility_id, f"Sucursal #{wh.facility_id}") if wh.facility_id else "General / Global"
+        is_wh_active = bool(wh.is_active) if wh.is_active is not None else True
         tree.append({
             "id": wh.id,
             "name": wh.name,
             "code": wh.code,
             "facility_id": wh.facility_id,
             "facility_name": fac_name,
+            "is_active": is_wh_active,
+            "has_movements": warehouse_has_movements(db, wh.id),
             "requires_dock_staging": wh.requires_dock_staging,
             "locations": loc_data
         })
@@ -1593,6 +1612,11 @@ def execute_putaway(
     dest_wh = db.query(Warehouse).filter(Warehouse.id == dest_wh_id).first()
     if not dest_wh:
         raise HTTPException(status_code=404, detail="Almacén de destino no encontrado.")
+    if not dest_wh.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail=f"El almacén de destino '{dest_wh.name}' se encuentra inhabilitado y no se le puede asignar inventario."
+        )
 
     if source_wh.facility_id != dest_wh.facility_id:
         raise HTTPException(
@@ -1772,6 +1796,11 @@ def execute_putaway_batch(
     default_dest_wh = db.query(Warehouse).filter(Warehouse.id == default_dest_wh_id).first()
     if not default_dest_wh:
         raise HTTPException(status_code=404, detail="Almacén de destino por defecto no encontrado.")
+    if not default_dest_wh.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail=f"El almacén de destino '{default_dest_wh.name}' se encuentra inhabilitado y no se le puede asignar inventario."
+        )
 
     if src_wh.facility_id != default_dest_wh.facility_id:
         raise HTTPException(
@@ -1875,6 +1904,8 @@ def execute_putaway_batch(
             item_dest_wh = db.query(Warehouse).filter(Warehouse.id == item.dest_warehouse_id).first()
             if not item_dest_wh or item_dest_wh.facility_id != default_dest_wh.facility_id:
                 raise HTTPException(status_code=400, detail=f"Renglón #{idx + 1}: Almacén destino no pertenece a la misma sucursal.")
+            if not item_dest_wh.is_active:
+                raise HTTPException(status_code=400, detail=f"Renglón #{idx + 1}: El almacén destino '{item_dest_wh.name}' se encuentra inhabilitado.")
 
         # Ubicación origen del renglón
         item_src_loc = default_src_loc
@@ -2510,6 +2541,15 @@ def create_inventory_adjustment(
 
     if not payload.lines or len(payload.lines) == 0:
         raise HTTPException(status_code=400, detail="Debe incluir al menos un producto en la solicitud de ajuste.")
+
+    adj_wh = db.query(Warehouse).filter(Warehouse.id == payload.warehouse_id).first()
+    if not adj_wh:
+        raise HTTPException(status_code=404, detail="El almacén seleccionado no existe.")
+    if not adj_wh.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail=f"El almacén '{adj_wh.name}' se encuentra inhabilitado y no permite registrar ajustes de inventario."
+        )
 
     resolved_loc_id = payload.location_id
     if resolved_loc_id:
