@@ -1138,12 +1138,12 @@ export default function NewOrderPage() {
             <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
                <div className="flex-1 flex flex-col sm:flex-row items-center gap-2">
                   <div className="relative w-full sm:w-80">
-                     <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                     <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm z-10 pointer-events-none"></i>
                      <InputText
                         value={batchSearchText}
                         onChange={(e) => setBatchSearchText(e.target.value)}
                         placeholder="Filtrar por SKU, nombre, barras, marca..."
-                        className="w-full pl-9 pr-3 py-2 text-xs border rounded-xl"
+                        className="w-full !pl-10 pr-3 py-2 text-xs border rounded-xl"
                      />
                   </div>
                   <Dropdown
@@ -1612,12 +1612,12 @@ PRD-4297	5`}
 
            <div className="flex flex-wrap items-center gap-2">
               <div className="relative w-full sm:w-64">
-                 <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                 <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs z-10 pointer-events-none"></i>
                  <InputText
                     value={filterLinesText}
                     onChange={(e) => setFilterLinesText(e.target.value)}
                     placeholder="Filtrar en orden..."
-                    className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border"
+                    className="w-full !pl-9 pr-3 py-1.5 text-xs rounded-lg border"
                  />
               </div>
 

@@ -68,6 +68,17 @@ export default function ClaraComprasConsolePage() {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [urgencyFilter, setUrgencyFilter] = useState<string>('BREACH'); // 'BREACH', 'ALL', 'CRITICAL', 'WARNING'
   const [expandedSuppliers, setExpandedSuppliers] = useState<Record<number, boolean>>({});
+  const [facilities, setFacilities] = useState<any[]>([]);
+  const [selectedFacilityId, setSelectedFacilityId] = useState<number | null>(null);
+
+  // Modal de Distribución / Cambio de Localidad del Sugerido
+  const [showDistModal, setShowDistModal] = useState<boolean>(false);
+  const [distSupplier, setDistSupplier] = useState<SupplierDiagnosis | null>(null);
+  const [distMode, setDistMode] = useState<'SINGLE_STORE' | 'CONSOLIDATED_HUB' | 'MULTI_STORE'>('SINGLE_STORE');
+  const [distSourceFacilityId, setDistSourceFacilityId] = useState<number | null>(null);
+  const [distDestFacilityId, setDistDestFacilityId] = useState<number | null>(null);
+  const [distSelectedFacilityIds, setDistSelectedFacilityIds] = useState<number[]>([]);
+  const [executingDist, setExecutingDist] = useState<boolean>(false);
   
   // Modal de auditoría
   const [showLogsDialog, setShowLogsDialog] = useState<boolean>(false);
@@ -76,10 +87,11 @@ export default function ClaraComprasConsolePage() {
 
   const toast = useRef<Toast>(null);
 
-  const fetchDiagnosis = async () => {
+  const fetchDiagnosis = async (facId: number | null = selectedFacilityId) => {
     setLoading(true);
     try {
-      const res = await api.get('/mrp/diagnosis');
+      const url = facId ? `/mrp/diagnosis?facility_id=${facId}` : '/mrp/diagnosis';
+      const res = await api.get(url);
       setDiagnosis(res.data);
       // Expandir por defecto los primeros 3 proveedores críticos
       const initialExpanded: Record<number, boolean> = {};
@@ -112,22 +124,156 @@ export default function ClaraComprasConsolePage() {
   };
 
   useEffect(() => {
-    fetchDiagnosis();
-  }, []);
+    api.get('/facilities/?limit=1000')
+      .then(res => {
+        const list = res.data.data || res.data.items || (Array.isArray(res.data) ? res.data : []);
+        setFacilities(list.filter((f: any) => f.is_active !== false));
+      })
+      .catch(err => console.error('Error loading facilities:', err));
+    fetchDiagnosis(null);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleFacilityFilterChange = (newFacId: number | null) => {
+    setSelectedFacilityId(newFacId);
+    fetchDiagnosis(newFacId);
+  };
+
+  const openDistributionModal = (supplier: SupplierDiagnosis) => {
+    setDistSupplier(supplier);
+    const storesWithDeficit = Array.from(new Set(supplier.items.map(i => i.facility_id)));
+    const defaultFac = selectedFacilityId || storesWithDeficit[0] || facilities[0]?.id || 1;
+    setDistSourceFacilityId(defaultFac);
+    setDistDestFacilityId(defaultFac);
+    setDistSelectedFacilityIds(storesWithDeficit.length > 0 ? storesWithDeficit : facilities.map((f: any) => f.id));
+    setDistMode(storesWithDeficit.length > 1 && !selectedFacilityId ? 'CONSOLIDATED_HUB' : 'SINGLE_STORE');
+    setShowDistModal(true);
+  };
+
+  const handleExecuteDistribution = async () => {
+    if (!distSupplier) return;
+    setExecutingDist(true);
+    try {
+      if (distMode === 'SINGLE_STORE') {
+        const sourceId = distSourceFacilityId || selectedFacilityId || distSupplier.items[0]?.facility_id || 1;
+        const destId = distDestFacilityId || sourceId;
+        const res = await api.post('/mrp/generate-supplier-order', {
+          supplier_id: distSupplier.supplier_id,
+          facility_id: sourceId,
+          dest_facility_id: destId,
+          notes: `Generado desde Consola Clara Compras para ${distSupplier.supplier_name}`
+        });
+        toast.current?.show({
+          severity: 'success',
+          summary: 'ODC Borrador Creada',
+          detail: `Se generó ${res.data.order_reference} (Destino: ${res.data.facility_name}) por $${res.data.total_amount?.toLocaleString()} USD (${res.data.lines_count} renglones).`,
+          life: 5500
+        });
+        setDiagnosis(prev => prev ? ({
+          ...prev,
+          suppliers: prev.suppliers.map(s => s.supplier_id === distSupplier.supplier_id ? {
+            ...s,
+            existing_draft_po_id: res.data.order_id,
+            existing_draft_po_reference: res.data.order_reference
+          } : s)
+        }) : prev);
+      } else if (distMode === 'CONSOLIDATED_HUB') {
+        if (distSelectedFacilityIds.length === 0) {
+          toast.current?.show({ severity: 'warn', summary: 'Seleccione Tiendas', detail: 'Debe marcar al menos una tienda para consolidar.' });
+          setExecutingDist(false);
+          return;
+        }
+        const hubId = distDestFacilityId || facilities[0]?.id || 1;
+        const res = await api.post('/mrp/generate-cendi-order', {
+          supplier_id: distSupplier.supplier_id,
+          cendi_facility_id: hubId,
+          facility_ids: distSelectedFacilityIds,
+          notes: `Orden consolidada multitienda generada desde Consola Clara Compras para ${distSupplier.supplier_name}`
+        });
+        toast.current?.show({
+          severity: 'success',
+          summary: 'ODC Consolidada Creada',
+          detail: `Se generó ${res.data.order_reference} en ${res.data.cendi_facility_name} consolidando ${res.data.stores_count} tiendas ($${res.data.total_amount?.toLocaleString()} USD).`,
+          life: 6000
+        });
+        setDiagnosis(prev => prev ? ({
+          ...prev,
+          suppliers: prev.suppliers.map(s => s.supplier_id === distSupplier.supplier_id ? {
+            ...s,
+            existing_draft_po_id: res.data.order_id,
+            existing_draft_po_reference: res.data.order_reference
+          } : s)
+        }) : prev);
+      } else if (distMode === 'MULTI_STORE') {
+        if (distSelectedFacilityIds.length === 0) {
+          toast.current?.show({ severity: 'warn', summary: 'Seleccione Tiendas', detail: 'Debe marcar al menos una tienda.' });
+          setExecutingDist(false);
+          return;
+        }
+        const createdRefs: string[] = [];
+        let lastOrderId: number | null = null;
+        let lastOrderRef: string | null = null;
+        for (const facId of distSelectedFacilityIds) {
+          try {
+            const res = await api.post('/mrp/generate-supplier-order', {
+              supplier_id: distSupplier.supplier_id,
+              facility_id: facId,
+              dest_facility_id: facId,
+              notes: `Generado por tienda desde Consola Clara Compras para ${distSupplier.supplier_name}`
+            });
+            createdRefs.push(`${res.data.facility_name}: ${res.data.order_reference}`);
+            lastOrderId = res.data.order_id;
+            lastOrderRef = res.data.order_reference;
+          } catch {
+            // Si una tienda no tiene déficit para este proveedor, continuar con las demás
+          }
+        }
+        if (createdRefs.length === 0) {
+          throw new Error('Ninguna de las tiendas seleccionadas presenta déficit para este proveedor.');
+        }
+        toast.current?.show({
+          severity: 'success',
+          summary: `${createdRefs.length} ODCs Creadas por Tienda`,
+          detail: createdRefs.join(' | '),
+          life: 6500
+        });
+        if (lastOrderId) {
+          setDiagnosis(prev => prev ? ({
+            ...prev,
+            suppliers: prev.suppliers.map(s => s.supplier_id === distSupplier.supplier_id ? {
+              ...s,
+              existing_draft_po_id: lastOrderId,
+              existing_draft_po_reference: lastOrderRef
+            } : s)
+          }) : prev);
+        }
+      }
+      setShowDistModal(false);
+    } catch (e: any) {
+      toast.current?.show({
+        severity: 'error',
+        summary: 'Fallo al Generar ODC',
+        detail: e.response?.data?.detail || e.message || 'No se pudo generar la orden.'
+      });
+    } finally {
+      setExecutingDist(false);
+    }
+  };
 
   const handleGenerateOrder = async (supplier: SupplierDiagnosis) => {
     setGeneratingSupplierId(supplier.supplier_id);
     try {
+      const targetFacId = selectedFacilityId || supplier.items[0]?.facility_id || 1;
       const res = await api.post('/mrp/generate-supplier-order', {
         supplier_id: supplier.supplier_id,
-        facility_id: supplier.items[0]?.facility_id || 1,
+        facility_id: targetFacId,
+        dest_facility_id: targetFacId,
         notes: `Generado desde Consola Clara Compras para ${supplier.supplier_name}`
       });
 
       toast.current?.show({
         severity: 'success',
         summary: 'ODC Borrador Creada',
-        detail: `Se generó ${res.data.order_reference} para ${supplier.supplier_name} por $${res.data.total_amount?.toLocaleString()} USD (${res.data.lines_count} renglones).`,
+        detail: `Se generó ${res.data.order_reference} (${res.data.facility_name}) para ${supplier.supplier_name} por $${res.data.total_amount?.toLocaleString()} USD (${res.data.lines_count} renglones).`,
         life: 5000
       });
 
@@ -214,7 +360,7 @@ export default function ClaraComprasConsolePage() {
             label={loading ? 'Analizando...' : 'Diagnosticar en Tiempo Real'}
             icon={loading ? 'pi pi-spin pi-spinner' : 'pi pi-bolt'}
             className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-button-sm px-4 shadow-lg shadow-indigo-600/30"
-            onClick={fetchDiagnosis}
+            onClick={() => fetchDiagnosis(selectedFacilityId)}
             disabled={loading}
           />
         </div>
@@ -296,17 +442,30 @@ export default function ClaraComprasConsolePage() {
       </div>
 
       {/* BARRA DE FILTROS */}
-      <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
-        <div className="flex-1 w-full md:w-auto relative">
-          <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col lg:flex-row gap-4 items-center justify-between">
+        <div className="flex-1 w-full lg:w-auto relative">
+          <i className="pi pi-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 z-10 pointer-events-none text-sm" />
           <InputText
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Buscar por proveedor o SKU..."
-            className="w-full pl-9 pr-4 py-2 border rounded-lg text-sm bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700"
+            className="w-full !pl-10 pr-4 py-2 border rounded-lg text-sm bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700"
           />
         </div>
-        <div className="flex items-center gap-2 w-full md:w-auto">
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full lg:w-auto">
+          <Dropdown
+            value={selectedFacilityId}
+            options={[
+              { label: '🌐 Todas las Sucursales (Consolidado)', value: null },
+              ...facilities.map((f: any) => ({
+                label: `🏪 ${f.name}${f.code ? ` (${f.code})` : ''}`,
+                value: f.id
+              }))
+            ]}
+            onChange={(e) => handleFacilityFilterChange(e.value)}
+            placeholder="Filtrar por Sucursal / Tienda"
+            className="w-full sm:w-72 text-sm font-semibold"
+          />
           <Dropdown
             value={urgencyFilter}
             options={[
@@ -317,7 +476,7 @@ export default function ClaraComprasConsolePage() {
               { label: '🌐 Todos los Proveedores', value: 'ALL' },
             ]}
             onChange={(e) => setUrgencyFilter(e.value)}
-            className="w-full md:w-64 text-sm"
+            className="w-full sm:w-60 text-sm"
           />
         </div>
       </div>
@@ -397,8 +556,8 @@ export default function ClaraComprasConsolePage() {
                   </div>
 
                   {/* ACCIONES DEL PROVEEDOR */}
-                  <div className="flex items-center gap-3 w-full md:w-auto justify-end">
-                    {supplier.existing_draft_po_id ? (
+                  <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
+                    {supplier.existing_draft_po_id && (
                       <Link
                         href={`/orders/${supplier.existing_draft_po_id}`}
                         className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 rounded-lg text-xs font-black hover:bg-emerald-100 transition-colors"
@@ -406,9 +565,24 @@ export default function ClaraComprasConsolePage() {
                         <i className="pi pi-check-circle" />
                         <span>Ver Borrador {supplier.existing_draft_po_reference || `ODC-${supplier.existing_draft_po_id}`}</span>
                       </Link>
-                    ) : (
+                    )}
+                    <Button
+                      label="Distribuir / Destino"
+                      icon="pi pi-sitemap"
+                      outlined
+                      className="p-button-sm text-xs font-bold px-3 rounded-lg border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                      onClick={() => openDistributionModal(supplier)}
+                      disabled={isGenerating || supplier.items.length === 0}
+                    />
+                    {!supplier.existing_draft_po_id && (
                       <Button
-                        label={isGenerating ? 'Generando...' : 'Generar Borrador ODC'}
+                        label={
+                          isGenerating
+                            ? 'Generando...'
+                            : selectedFacilityId
+                            ? `Generar ODC (${facilities.find(f => f.id === selectedFacilityId)?.name || 'Tienda'})`
+                            : 'Generar Borrador ODC'
+                        }
                         icon={isGenerating ? 'pi pi-spin pi-spinner' : 'pi pi-bolt'}
                         className={`p-button-sm text-xs font-bold px-4 rounded-lg shadow-sm ${
                           isCritical

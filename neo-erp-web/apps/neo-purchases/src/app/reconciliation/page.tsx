@@ -559,12 +559,12 @@ export default function ReconciliationPage() {
               className="w-48 text-xs"
             />
             <div className="relative">
-              <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+              <i className="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs z-10 pointer-events-none"></i>
               <InputText
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Buscar ODC, Factura..."
-                className="pl-8 py-1.5 text-xs w-48 font-medium rounded-lg"
+                className="!pl-9 py-1.5 text-xs w-48 font-medium rounded-lg"
               />
             </div>
           </div>

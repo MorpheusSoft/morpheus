@@ -471,7 +471,7 @@ export default function DeadStockIntelligencePage() {
                       value={searchTermDead}
                       onChange={(e) => setSearchTermDead(e.target.value)}
                       placeholder="Filtrar por SKU o producto..."
-                      className="w-full text-xs rounded-xl pl-9"
+                      className="w-full text-xs rounded-xl !pl-10"
                     />
                   </span>
 
@@ -683,7 +683,7 @@ export default function DeadStockIntelligencePage() {
                       value={searchTermShrink}
                       onChange={(e) => setSearchTermShrink(e.target.value)}
                       placeholder="Filtrar por SKU o producto..."
-                      className="w-full text-xs rounded-xl pl-9"
+                      className="w-full text-xs rounded-xl !pl-10"
                     />
                   </span>
 

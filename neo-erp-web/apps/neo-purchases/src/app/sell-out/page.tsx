@@ -488,7 +488,7 @@ export default function SellOutAgreementsPage() {
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Buscar código, título, proveedor..."
-                className="w-full text-sm rounded-xl pl-9"
+                className="w-full text-sm rounded-xl !pl-10"
               />
             </span>
 

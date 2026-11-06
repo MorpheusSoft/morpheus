@@ -1694,7 +1694,7 @@ export default function WmsLocationsPage() {
                         }
                       }}
                       placeholder="Barra, SKU o Código Neo... (Enter o F2)"
-                      className="w-full text-xs font-bold pl-8"
+                      className="w-full text-xs font-bold !pl-9"
                     />
                   </div>
 
@@ -2174,7 +2174,7 @@ export default function WmsLocationsPage() {
                 }
               }}
               placeholder="Escriba código, SKU, nombre de producto..."
-              className="w-full text-xs font-bold pl-8"
+              className="w-full text-xs font-bold !pl-9"
               autoFocus
             />
           </div>

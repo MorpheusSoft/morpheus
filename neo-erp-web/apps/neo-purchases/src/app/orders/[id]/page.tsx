@@ -936,7 +936,7 @@ export default function OrderDetailsPage() {
                         value={lineFilter}
                         onChange={(e) => setLineFilter(e.target.value)}
                         placeholder="Filtrar por Cód. Barra, PLU o Producto..."
-                        className="p-inputtext-sm w-full text-xs pl-8 rounded-lg border-slate-200"
+                        className="p-inputtext-sm w-full text-xs !pl-9 rounded-lg border-slate-200"
                     />
                 </span>
                 {isDraft && <Button icon="pi pi-gift" label="Añadir Regalía (Bonif.)" severity="warning" outlined size="small" onClick={openRegaliaModal} />}
